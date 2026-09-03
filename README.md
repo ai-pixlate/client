@@ -4,7 +4,7 @@ AI 상세페이지 로컬라이제이션 서비스의 프론트엔드입니다.
 
 - **MVP 마일스톤** 2026-09-30 (중간발표)
 - **최종 마일스톤** 2026-12-11 (최종발표)
-- **기준 문서** [docs/reference/requirements.xlsx](docs/reference/requirements.xlsx) — 버전은 계속 바뀌므로 여기서 고정하지 않습니다. 현재 버전은 [docs/reference/README.md](docs/reference/README.md) 참고.
+- **기준 문서** [docs/reference/requirements.xlsx](docs/reference/requirements.xlsx) — 버전은 계속 바뀌므로 여기서 고정하지 않습니다. 현재 버전은 requirements.xlsx 내부 문서정보(00_문서정보 시트)를 기준으로 확인합니다.
 
 ## Requirements
 
@@ -130,7 +130,7 @@ scripts/
   make-ruler.mjs           눈금 이미지 생성 (외부 라이브러리 미사용)
 public/spike/       생성된 눈금 이미지
 docs/fe-spike-01/   결과 보고서·좌표 규약·에러 매트릭스·ERD 선행 확인
-docs/reference/     PM 원본 문서 사본 (요구사항정의서·실행계획 등). 버전은 docs/reference/README.md 에서 관리
+docs/reference/     PM 원본 문서 로컬 사본 보관 위치. requirements.xlsx만 Git에서 추적하고, 그 외 파일은 .gitignore 처리됨
 ```
 
 ## 문서

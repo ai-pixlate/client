@@ -48,5 +48,7 @@ next-env.d.ts
 .vscode/
 .claude/
 
-# PM 원본 문서 사본 — 대용량·비공개 문서라 팀 코드 저장소에서는 제외 (docs/fe-spike-01/**은 제외 대상 아님)
-docs/reference/
+# PM 원본 문서 사본 — 대용량·비공개 문서라 팀 코드 저장소에서는 제외
+# 단 requirements.xlsx는 README가 기준 문서로 링크하므로 추적 대상으로 유지 (docs/fe-spike-01/**은 애초에 제외 대상 아님)
+docs/reference/*
+!docs/reference/requirements.xlsx
