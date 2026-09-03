@@ -18,7 +18,7 @@ main은 운영/배포 기준 브랜치로 유지하고
 6. 팀 반영은 develop 대상 PR로 진행한다.
 7. main 직접 commit/push 금지.
 8. develop 직접 commit/push 금지.
-9. requirements 관련 내용은 repository에서 확인 가능한 파일 형태로 남긴다.
+9. README가 기준 문서로 링크한 requirements 파일은 repository에서 실제로 추적되는 파일로 존재해야 한다.
 
 ## 브랜치
 
@@ -71,15 +71,18 @@ archive push에는 -u를 붙이지 않는다.
 
 ## Requirements 파일
 
-requirements/요구사항 관련 내용은
-팀원이 저장소에서 확인할 수 있도록 파일로 남긴다.
+README에 기준 문서로 링크한 requirements 파일은
+실제 Git repository에서 추적되는 파일로 존재해야 한다.
 
-현재 docs/reference/는 Git ignore 대상이므로
-팀 공유용 requirements 문서를 그 경로에 넣지 않는다.
+현재 기준 경로:
 
-실제 requirements 파일 위치는
-팀 구조에 맞춰 docs/requirements/ 등
-추적 가능한 경로를 사용한다.
+docs/reference/requirements.xlsx
+
+docs/reference/는 기본적으로 Git ignore 대상이지만
+requirements.xlsx만 예외로 추적한다 (.gitignore 참고).
+
+일반적인 요구사항 대화나 그 외 참고 문서를
+모두 파일로 만들라는 규칙은 아니다.
 
 ## 커밋
 
