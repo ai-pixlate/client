@@ -50,3 +50,6 @@ next-env.d.ts
 
 # PM 원본 문서 사본 — 대용량·비공개 문서라 팀 코드 저장소에서는 제외 (docs/fe-spike-01/**은 제외 대상 아님)
 docs/reference/
+
+# 로컬 성능 테스트용 실제 상세페이지 이미지 — 저장소에 올리지 않음
+/perf-assets/
