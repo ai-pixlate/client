@@ -22,3 +22,19 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* N3 — 섹션이 bucket 간 drag & drop으로 이동한 뒤 리스트에 자리잡을 때의 절제된 settle 효과 */
+@keyframes n3-thumb-settle {
+  from {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.n3-thumb-settle {
+  animation: n3-thumb-settle 160ms ease-out;
+}

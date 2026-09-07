@@ -35,7 +35,7 @@ import {
 const sectionState = new Map<string, {
   bucket: SectionBucket;
   exclusionReason: string | null;
-  excludedStage: string | null;
+  excludedStage: JobCurrentStep | null;
 }>(
   mockSectionsResponse.sections.map(s => [
     s.sectionId,
@@ -269,7 +269,8 @@ export const handlers = [
     }
 
     // stage: Mock 검증용 임시 필드. N3 / N5 context를 구분하기 위해 사용.
-    const stage = typeof body.stage === 'string' ? body.stage : null;
+    // 요청 값을 그대로 신뢰하는 캐스팅이며 런타임 검증은 하지 않음(기존 동작 유지).
+    const stage = typeof body.stage === 'string' ? (body.stage as JobCurrentStep) : null;
     sectionState.set(sectionId, {
       bucket,
       exclusionReason: null,

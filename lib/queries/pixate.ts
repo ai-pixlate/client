@@ -3,7 +3,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { createJob, getJobStatus, advanceJobStep, getSections, updateSectionBucket, getReview, updateTranslation, getJobResult, saveJob } from '@/lib/api/pixate';
-import type { SectionBucket, UpdateTranslationRequest, CreateJobRequest } from '@/lib/api/types';
+import type { UpdateSectionBucketRequest, UpdateTranslationRequest, CreateJobRequest, SectionsResponse } from '@/lib/api/types';
 
 // ─────────────────────────────────────────────
 // Query Keys
@@ -149,15 +149,49 @@ export function useSaveJobMutation(jobId: string) {
 
 // ─────────────────────────────────────────────
 // N3 — 섹션 bucket 변경
+//
+// N3 drag & drop에서 즉시 settle 애니메이션을 보여주기 위해
+// sections 캐시를 optimistic하게 갱신한다. 실패 시 이전 값으로 롤백한다.
+// N5(review 캐시)는 이 낙관적 갱신의 영향을 받지 않는다 — 별도 query key.
 // ─────────────────────────────────────────────
 
 export function useUpdateSectionBucketMutation(jobId: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ sectionId, bucket, stage }: { sectionId: string; bucket: SectionBucket; stage?: string }) =>
-      updateSectionBucket(sectionId, bucket, stage),
-    onSuccess: () => {
+    mutationFn: ({ sectionId, ...payload }: { sectionId: string } & UpdateSectionBucketRequest) =>
+      updateSectionBucket(sectionId, payload),
+    onMutate: async ({ sectionId, bucket, stage }) => {
+      await queryClient.cancelQueries({ queryKey: pixateKeys.sections(jobId) });
+      const previous = queryClient.getQueryData<SectionsResponse>(pixateKeys.sections(jobId));
+
+      if (previous) {
+        // 서버(mock) 규칙과 동일하게 맞춘다: bucket을 바꾸는 모든 PATCH는
+        // exclusionReason을 항상 null로 비우고, excludedStage는 stage가
+        // 없으면(=include로 복구) null로 되돌린다. 자동 판정 사유는
+        // 사용자가 직접 조작한 순간 더 이상 유효하지 않기 때문이다.
+        queryClient.setQueryData<SectionsResponse>(pixateKeys.sections(jobId), {
+          sections: previous.sections.map((section) =>
+            section.sectionId === sectionId
+              ? {
+                  ...section,
+                  bucket,
+                  exclusionReason: null,
+                  excludedStage: bucket === 'include' ? null : (stage ?? null),
+                }
+              : section,
+          ),
+        });
+      }
+
+      return { previous };
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(pixateKeys.sections(jobId), context.previous);
+      }
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: pixateKeys.sections(jobId) });
     },
   });

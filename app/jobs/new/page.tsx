@@ -4,6 +4,7 @@ import { use, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
 import { useCreateJobMutation } from '@/lib/queries/pixate';
+import { IMAGE_TYPES } from '@/lib/api/types';
 import type { ImageType } from '@/lib/api/types';
 
 // ─────────────────────────────────────────────────────────────────
@@ -404,7 +405,7 @@ export default function NewJobPage({
 
                     {/* imageType 선택 */}
                     <div className="flex shrink-0 gap-1">
-                      {(['detail', 'thumbnail'] as ImageType[]).map((type) => (
+                      {IMAGE_TYPES.map((type) => (
                         <button
                           key={type}
                           type="button"

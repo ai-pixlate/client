@@ -39,7 +39,8 @@ export function buildN3Sections(count: number): Section[] {
       sectionOrder: order,
       thumbnailUrl: PLACEHOLDER_THUMB,
       bucket: isExcluded ? 'exclude' : 'include',
-      exclusionReason: isExcluded ? '성능 baseline 합성 데이터 — 자동 제외 샘플' : null,
+      // Section.exclusionReason이 ExclusionReasonCode로 좁혀져 값만 유효 코드로 맞춤. harness 로직 변경 아님.
+      exclusionReason: isExcluded ? 'auto_local_irrelevant' : null,
       excludedStage: isExcluded ? 'N3' : null,
       bbox: { x: 0, y: (order - 1) * 600, width: 1000, height: 600 },
       verdicts: hasVerdict

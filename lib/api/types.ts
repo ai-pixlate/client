@@ -12,11 +12,58 @@
 /** 현재 사용자가 머물고 있는 화면 단계 */
 export type JobCurrentStep = 'N1' | 'N2' | 'N3' | 'N4' | 'N5' | 'N6';
 
+/** DB 작업 상태값 (Day 6 확정) */
+export type JobDbStatus = 'draft' | 'processing' | 'review' | 'done' | 'failed' | 'archived';
+
 /** 업로드 원본 이미지 유형. thumbnail 파이프라인은 미확정이므로 N2 이후 동작 단정 안 함 */
 export type ImageType = 'detail' | 'thumbnail';
 
+/** ImageType 런타임 목록. 화면에서 선택지를 순회할 때 이 상수를 재사용한다 */
+export const IMAGE_TYPES = ['detail', 'thumbnail'] as const satisfies readonly ImageType[];
+
 /** 섹션 포함/제외 상태. ERD 기준 문자열 (boolean 사용 안 함) */
 export type SectionBucket = 'include' | 'exclude';
+
+/**
+ * 섹션 자동/수동 제외 사유 코드 (Day 6 확정).
+ * 화면 표시 문구는 이 코드값을 그대로 노출하지 않고 label 매핑을 거친다.
+ * (lib/api/labels.ts의 EXCLUSION_REASON_LABELS 참고)
+ */
+export type ExclusionReasonCode =
+  | 'auto_regulatory'
+  | 'auto_channel'
+  | 'auto_local_irrelevant'
+  | 'user_manual'
+  | 'restored_by_user';
+
+/**
+ * 비동기 처리 항목 상태 (Day 6 확정).
+ * TODO: TextBlock.blockStatus에는 적용하지 않음 — N5 응답 시점엔 이미 완료된
+ * 블록만 내려오는 구조라 'running'이 실제로 쓰이는지 백엔드 확인 필요.
+ */
+export type ProcessingStatus = 'pending' | 'running' | 'done' | 'failed';
+
+/** 섹션 판정 유형 (Day 6 확정) */
+export type SectionVerdictType = 'regulatory' | 'channel_policy' | 'local_irrelevant' | 'needs_fix';
+
+/**
+ * 섹션 경고 뱃지 코드 (Day 6 확정).
+ * TODO: 현재 DTO에 대응 필드가 없음 (UI가 hasFailed/needsReview 등 boolean 조합으로
+ * 파생 표시 중). 필드 연결은 백엔드 계약 확정 후 별도 진행.
+ */
+export type SectionWarningBadge = 'processing_failed' | 'quality_warning';
+
+/**
+ * 산출물 이미지 용도 구분 (Day 6 확정).
+ * TODO: Deliverable에 대응 필드 없음. 9월 MVP는 detail만 다루므로 필드 추가는 보류.
+ */
+export type DeliverableUsageType = 'detail' | 'thumbnail_main' | 'thumbnail_sub';
+
+/**
+ * 검증 적용 범위 (Day 6 확정).
+ * TODO: ValidationItem/ValidationResult에 대응 필드 없음. 필드 추가는 보류.
+ */
+export type ValidationScope = 'detail' | 'thumbnail_main' | 'thumbnail_sub' | 'all';
 
 /** 텍스트 블록 역할. 번역 톤·규제 검증 강도가 이 값에 따라 달라짐 */
 export type BlockRole = 'title' | 'body' | 'caption' | 'price' | 'caution';
@@ -32,26 +79,12 @@ export type FailedItemType = 'section' | 'textBlock';
 // ─────────────────────────────────────────────
 
 /**
- * DB 작업 상태값.
- * TODO: 백엔드 ERD 확정 후 union으로 좁힐 것.
- * 후보: 'draft' | 'processing' | 'review' | 'done' | 'failed' | 'archived'
- */
-export type JobDbStatus = string;
-
-/**
  * 비동기 처리 세부 단계.
  * TODO: 백엔드 파이프라인 명세 확정 후 union으로 좁힐 것.
  * N2 후보: 'ocr' | 'section_decomposition' | 'verdict'
  * N4 후보: 'inpainting' | 'translation' | 'compliance_check' | 'render'
  */
 export type ProcessingSubStep = string;
-
-/**
- * 섹션 판정 유형.
- * TODO: 백엔드 section_verdict 테이블 기준 확정 후 union으로 좁힐 것.
- * 후보: 'regulatory' | 'localization' | 'brand_guideline'
- */
-export type VerdictType = string;
 
 /**
  * 섹션 판정 상태.
@@ -63,6 +96,8 @@ export type VerdictStatus = string;
 /**
  * 텍스트 블록 처리 상태.
  * TODO: 백엔드 text_block.block_status 컬럼 기준 확정 후 union으로 좁힐 것.
+ * ProcessingStatus와 의미는 겹치지만, N5 응답 시점 특성상 'running'이 실제로
+ * 쓰이는지 불확실해 아직 ProcessingStatus를 적용하지 않음.
  * 후보: 'pending' | 'done' | 'failed'
  */
 export type BlockStatus = string;
@@ -93,7 +128,6 @@ export interface FailedItem {
 export interface JobStatusResponse {
   jobId: string;
   currentStep: JobCurrentStep;
-  /** TODO: 백엔드 ERD 확정 후 JobDbStatus union으로 좁힐 것 */
   dbStatus: JobDbStatus;
   /** 0~100 전체 진행률 */
   progress: number;
@@ -137,8 +171,7 @@ export interface CreateJobResponse {
 
 export interface SectionVerdict {
   verdictId: string;
-  /** TODO: 백엔드 확정 후 union으로 좁힐 것 */
-  verdictType: VerdictType;
+  verdictType: SectionVerdictType;
   /** TODO: 백엔드 확정 후 union으로 좁힐 것 */
   verdictStatus: VerdictStatus;
   problemText: string;
@@ -164,16 +197,14 @@ export interface Section {
   thumbnailUrl: string;
   bucket: SectionBucket;
   /** 사용자가 직접 입력하지 않음. 시스템 또는 자동 판정으로 설정 */
-  exclusionReason: string | null;
+  exclusionReason: ExclusionReasonCode | null;
   /**
-   * 어느 단계에서 제외됐는지.
-   * TODO: 백엔드 계약 확정 후 union으로 좁힐 것.
-   * 후보: 'N3' | 'N5' | null
+   * 어느 단계에서 제외됐는지. N1~N6 중 실제로는 N3 / N5만 쓰임.
    * - 'N3': N3에서 제외됨 — N5에 표시되지 않음
    * - 'N5': N5에서 제외됨 — N5에 회색으로 표시됨
    * - null: 제외되지 않음 또는 포함 상태
    */
-  excludedStage: string | null;
+  excludedStage: JobCurrentStep | null;
   /** 원본 이미지 기준 bbox */
   bbox: BoundingBox;
   verdicts: SectionVerdict[];
@@ -188,9 +219,9 @@ export interface UpdateSectionBucketRequest {
   /**
    * 어느 단계에서 bucket을 변경하는지.
    * Mock 검증용 임시 필드. 백엔드 계약 확정 전.
-   * 'N3' | 'N5' — 제외 시 사용. 복구(include) 시 생략.
+   * N3 / N5 — 제외 시 사용. 복구(include) 시 생략.
    */
-  stage?: string;
+  stage?: JobCurrentStep;
 }
 
 // ─────────────────────────────────────────────
@@ -245,9 +276,8 @@ export interface ReviewSection {
   /**
    * N3에서 제외된 섹션은 review 응답에서 제외됨.
    * N5에서 제외된 섹션은 'N5' 값으로 전달됨.
-   * TODO: 백엔드 계약 확정 후 union으로 좁힐 것.
    */
-  excludedStage: string | null;
+  excludedStage: JobCurrentStep | null;
   textBlocks: TextBlock[];
 }
 
@@ -310,8 +340,7 @@ export interface Deliverable {
   format: string;
   colorSpace: string;
   fileSizeBytes: number;
-  /** TODO: 백엔드 확정 후 union으로 좁힐 것. 후보: 'pending' | 'done' | 'failed' */
-  renderStatus: string;
+  renderStatus: ProcessingStatus;
   validationResult: ValidationResult;
 }
 
@@ -334,8 +363,7 @@ export interface ExportArtifact {
 
 export interface JobResultResponse {
   jobId: string;
-  /** TODO: 백엔드 확정 후 union으로 좁힐 것. 후보: 'pending' | 'done' | 'failed' */
-  renderStatus: string;
+  renderStatus: ProcessingStatus;
   /** 화면에 보여줄 결과 이미지 목록 */
   deliverables: Deliverable[];
   /** 다운로드할 산출물 구성요소 목록 (images, content_csv, html) */

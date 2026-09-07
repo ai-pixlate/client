@@ -3,6 +3,7 @@
 import { useState } from 'react';
 
 import type { Section } from '@/lib/api/types';
+import { EXCLUSION_REASON_LABELS } from '@/lib/api/labels';
 
 // ─────────────────────────────────────────────────────────────────
 // N3 — 섹션 카드
@@ -81,9 +82,11 @@ export function SectionCard({
             </button>
           </div>
 
-          {/* 자동 제외 이유 */}
+          {/* 자동 제외 이유 — 코드값을 그대로 노출하지 않고 label로 변환 */}
           {section.exclusionReason && (
-            <p className="text-xs text-gray-500">{section.exclusionReason}</p>
+            <p className="text-xs text-gray-500">
+              {EXCLUSION_REASON_LABELS[section.exclusionReason]}
+            </p>
           )}
 
           {/* 판정 결과 (규제/로컬라이제이션 경고) */}
