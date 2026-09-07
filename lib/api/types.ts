@@ -12,11 +12,60 @@
 /** 현재 사용자가 머물고 있는 화면 단계 */
 export type JobCurrentStep = 'N1' | 'N2' | 'N3' | 'N4' | 'N5' | 'N6';
 
+/** DB 작업 상태값 (Day 6 확정) */
+export type JobDbStatus = 'draft' | 'processing' | 'review' | 'done' | 'failed' | 'archived';
+
 /** 업로드 원본 이미지 유형. thumbnail 파이프라인은 미확정이므로 N2 이후 동작 단정 안 함 */
 export type ImageType = 'detail' | 'thumbnail';
 
 /** 섹션 포함/제외 상태. ERD 기준 문자열 (boolean 사용 안 함) */
 export type SectionBucket = 'include' | 'exclude';
+
+/**
+ * 섹션 자동/수동 제외 사유 코드 (Day 6 확정).
+ * TODO: Section.exclusionReason 필드는 아직 표시용 자유 텍스트를 담고 있어
+ * 이 타입으로 좁히지 않았음. Mock/DTO 교체 커밋에서 코드값 + 별도 표시 매핑으로 분리 예정.
+ */
+export type ExclusionReasonCode =
+  | 'auto_regulatory'
+  | 'auto_channel'
+  | 'auto_local_irrelevant'
+  | 'user_manual'
+  | 'restored_by_user';
+
+/**
+ * 비동기 처리 항목 상태 (Day 6 확정).
+ * TODO: TextBlock.blockStatus에는 적용하지 않음 — N5 응답 시점엔 이미 완료된
+ * 블록만 내려오는 구조라 'running'이 실제로 쓰이는지 백엔드 확인 필요.
+ */
+export type ProcessingStatus = 'pending' | 'running' | 'done' | 'failed';
+
+/**
+ * 섹션 판정 유형 (Day 6 확정).
+ * TODO: 기존 VerdictType(SectionVerdict.verdictType 필드)은 mock 데이터에
+ * 이 확정 셋에 없는 'localization' 값을 쓰고 있어 아직 이 타입으로 좁히지 않았음.
+ * Mock 교정 후 SectionVerdict.verdictType에 적용 예정.
+ */
+export type SectionVerdictType = 'regulatory' | 'channel_policy' | 'local_irrelevant' | 'needs_fix';
+
+/**
+ * 섹션 경고 뱃지 코드 (Day 6 확정).
+ * TODO: 현재 DTO에 대응 필드가 없음 (UI가 hasFailed/needsReview 등 boolean 조합으로
+ * 파생 표시 중). 필드 연결은 백엔드 계약 확정 후 별도 진행.
+ */
+export type SectionWarningBadge = 'processing_failed' | 'quality_warning';
+
+/**
+ * 산출물 이미지 용도 구분 (Day 6 확정).
+ * TODO: Deliverable에 대응 필드 없음. 9월 MVP는 detail만 다루므로 필드 추가는 보류.
+ */
+export type DeliverableUsageType = 'detail' | 'thumbnail_main' | 'thumbnail_sub';
+
+/**
+ * 검증 적용 범위 (Day 6 확정).
+ * TODO: ValidationItem/ValidationResult에 대응 필드 없음. 필드 추가는 보류.
+ */
+export type ValidationScope = 'detail' | 'thumbnail_main' | 'thumbnail_sub' | 'all';
 
 /** 텍스트 블록 역할. 번역 톤·규제 검증 강도가 이 값에 따라 달라짐 */
 export type BlockRole = 'title' | 'body' | 'caption' | 'price' | 'caution';
@@ -32,13 +81,6 @@ export type FailedItemType = 'section' | 'textBlock';
 // ─────────────────────────────────────────────
 
 /**
- * DB 작업 상태값.
- * TODO: 백엔드 ERD 확정 후 union으로 좁힐 것.
- * 후보: 'draft' | 'processing' | 'review' | 'done' | 'failed' | 'archived'
- */
-export type JobDbStatus = string;
-
-/**
  * 비동기 처리 세부 단계.
  * TODO: 백엔드 파이프라인 명세 확정 후 union으로 좁힐 것.
  * N2 후보: 'ocr' | 'section_decomposition' | 'verdict'
@@ -48,8 +90,8 @@ export type ProcessingSubStep = string;
 
 /**
  * 섹션 판정 유형.
- * TODO: 백엔드 section_verdict 테이블 기준 확정 후 union으로 좁힐 것.
- * 후보: 'regulatory' | 'localization' | 'brand_guideline'
+ * TODO: 확정 값 집합은 SectionVerdictType으로 정의됨. 이 필드가 쓰는 mock 데이터에
+ * 아직 그 셋에 없는 'localization' 값이 남아 있어 교정 후 SectionVerdictType으로 좁힐 것.
  */
 export type VerdictType = string;
 
@@ -63,6 +105,8 @@ export type VerdictStatus = string;
 /**
  * 텍스트 블록 처리 상태.
  * TODO: 백엔드 text_block.block_status 컬럼 기준 확정 후 union으로 좁힐 것.
+ * ProcessingStatus와 의미는 겹치지만, N5 응답 시점 특성상 'running'이 실제로
+ * 쓰이는지 불확실해 아직 ProcessingStatus를 적용하지 않음.
  * 후보: 'pending' | 'done' | 'failed'
  */
 export type BlockStatus = string;
