@@ -111,22 +111,20 @@ test('N1에서 N5 검수 화면까지 기본 작업 흐름을 완료한다', asy
   await expect(page.getByRole('heading', { name: '번역을 진행하고 있습니다' })).toBeVisible();
 
   // ── N4 → N5 ───────────────────────────────────────────────
-  await expect(page.getByRole('button', { name: '원문' })).toBeVisible({ timeout: 8_000 });
+  // N5는 7일차 마지막 작업에서 Figma 544:3168 기준 좌/우 workspace shell로 교체됨.
+  // 오늘 범위가 아닌 원문/번역문 toggle·textbox 편집·"다른 번역 보기"는 화면에 없다.
+  await expect(page.locator('[data-testid="n5-panel"]')).toBeVisible({ timeout: 8_000 });
 
-  // ── N5: 기본 검증 ────────────────────────────────────────
-  await expect(page.getByRole('button', { name: '원문' })).toBeVisible();
-  await expect(page.getByRole('button', { name: '번역문' })).toBeVisible();
-  await expect(page.getByRole('textbox')).toHaveCount(6);
-  await expect(page.getByRole('button', { name: /다른 번역 보기/ })).toBeVisible();
-
-  const finishButton = page.getByRole('button', { name: '저장 및 완료 →' });
-  await expect(finishButton).toBeVisible();
-
-  // ── N5: 원문/번역문 toggle ───────────────────────────────
-  await page.getByRole('button', { name: '번역문' }).click();
-  await page.getByRole('button', { name: '원문' }).click();
+  // ── N5: 기본 검증 — 좌(viewer)/우(panel) workspace 골격 ────
+  await expect(page.locator('[data-testid="n5-viewer"]')).toBeVisible();
+  await expect(page.locator('[data-testid="n5-viewer-scroll"]')).toBeVisible();
+  await expect(page.locator('[data-testid="n5-panel"]')).toBeVisible();
+  await expect(page.locator('[data-testid="n5-panel-body"]')).toBeVisible();
+  await expect(page.getByText('번역 결과')).toBeVisible();
 
   // ── 현재 flow 종료 조건: N5 → N6 미구현 확인 ────────────────
+  const finishButton = page.getByRole('button', { name: '저장하러 가기' });
+  await expect(finishButton).toBeVisible();
   await expect(finishButton).toBeDisabled();
   await expect(finishButton).toHaveAttribute('title', 'N6 저장 화면은 아직 구현되지 않았습니다.');
 
