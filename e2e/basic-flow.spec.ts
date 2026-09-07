@@ -17,14 +17,27 @@ async function selectFirstValidOption(page: Page, index: number) {
 const TINY_PNG_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 
-async function excludeAndRestoreSection(section: Locator) {
-  await section.getByRole('button', { name: '제외' }).click();
-  await expect(section.getByText('제외됨')).toBeVisible();
-  await expect(section.getByRole('button', { name: '되살리기' })).toBeVisible();
+// N3 — 썸네일/가운데 상세 보기를 다른 bucket 영역(BG)으로 drag & drop한다.
+// 개별 썸네일이 아니라 영역 경계선 기준으로 drop이 판단되므로
+// source 중심 → target 영역 중심으로만 이동하면 된다.
+async function dragBetweenZones(page: Page, source: Locator, targetZone: Locator) {
+  const sourceBox = await source.boundingBox();
+  const targetBox = await targetZone.boundingBox();
+  if (!sourceBox || !targetBox) {
+    throw new Error('drag source 또는 target 영역의 위치를 찾을 수 없습니다');
+  }
 
-  await section.getByRole('button', { name: '되살리기' }).click();
-  await expect(section.getByText('포함')).toBeVisible();
-  await expect(section.getByRole('button', { name: '제외' })).toBeVisible();
+  const startX = sourceBox.x + sourceBox.width / 2;
+  const startY = sourceBox.y + sourceBox.height / 2;
+  const endX = targetBox.x + targetBox.width / 2;
+  const endY = targetBox.y + targetBox.height / 2;
+
+  await page.mouse.move(startX, startY);
+  await page.mouse.down();
+  // 활성화 거리(4px)를 넘기고 중간 지점을 거쳐 target 영역까지 이동 — 실제 pointer 이벤트로 처리되어야 하므로 step을 나눈다.
+  await page.mouse.move(startX + (endX - startX) / 2, startY + (endY - startY) / 2, { steps: 8 });
+  await page.mouse.move(endX, endY, { steps: 8 });
+  await page.mouse.up();
 }
 
 test('N1에서 N5 검수 화면까지 기본 작업 흐름을 완료한다', async ({ page }) => {
@@ -61,21 +74,39 @@ test('N1에서 N5 검수 화면까지 기본 작업 흐름을 완료한다', asy
   await expect(page.getByRole('progressbar')).toBeVisible();
 
   // N3 고유 UI가 나타날 때까지 대기 (고정 sleep 대신 polling 완료를 기다림)
-  await expect(page.getByRole('button', { name: '번역 시작 →' })).toBeVisible({
+  await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({
     timeout: 8_000,
   });
 
-  // ── N3: 섹션 확인 ─────────────────────────────────────────
-  const sectionArticles = page.getByRole('article');
-  await expect(sectionArticles).toHaveCount(5);
-  await expect(page.getByRole('button', { name: '되살리기' })).toHaveCount(1);
+  // ── N3: 섹션 확인 (2버킷 drag & drop) ───────────────────────
+  // fixture: 삭제 후보(exclude) 1개(sec_03), 번역 대상(include) 4개
+  await expect(page.locator('[data-testid^="n3-thumb-exclude-"]')).toHaveCount(1);
+  await expect(page.locator('[data-testid^="n3-thumb-include-"]')).toHaveCount(4);
 
-  // ── N3: interaction — 포함 섹션 하나를 제외했다가 복원 ──────
-  const section1 = page.getByRole('article').filter({ hasText: '섹션 1' });
-  await excludeAndRestoreSection(section1);
+  const excludeZone = page.locator('[data-testid="n3-exclude-zone"]');
+  const includeZone = page.locator('[data-testid="n3-include-zone"]');
+
+  // ── N3: interaction — 번역 섹션 하나를 삭제 영역으로 이동했다가 복원 ──
+  const includeThumb = page.locator('[data-testid^="n3-thumb-include-"]').first();
+  const movedSectionId = (await includeThumb.getAttribute('data-testid'))!.replace(
+    'n3-thumb-include-',
+    '',
+  );
+
+  await dragBetweenZones(page, includeThumb, excludeZone);
+  await expect(page.locator(`[data-testid="n3-thumb-exclude-${movedSectionId}"]`)).toBeVisible();
+  await expect(page.locator('[data-testid^="n3-thumb-exclude-"]')).toHaveCount(2);
+  await expect(page.locator('[data-testid^="n3-thumb-include-"]')).toHaveCount(3);
+
+  // 방금 이동한 섹션이 가운데 상세 보기에 activeSection으로 표시된다 — 그 상태에서 다시 번역 영역으로 되돌린다.
+  const detailImage = page.locator(`[data-testid="n3-detail-image-${movedSectionId}"]`);
+  await dragBetweenZones(page, detailImage, includeZone);
+  await expect(page.locator(`[data-testid="n3-thumb-include-${movedSectionId}"]`)).toBeVisible();
+  await expect(page.locator('[data-testid^="n3-thumb-exclude-"]')).toHaveCount(1);
+  await expect(page.locator('[data-testid^="n3-thumb-include-"]')).toHaveCount(4);
 
   // ── N3 → N4 ───────────────────────────────────────────────
-  await page.getByRole('button', { name: '번역 시작 →' }).click();
+  await page.getByRole('button', { name: '번역 시작' }).click();
   await expect(page.getByRole('progressbar')).toBeVisible();
   await expect(page.getByRole('heading', { name: '번역을 진행하고 있습니다' })).toBeVisible();
 
