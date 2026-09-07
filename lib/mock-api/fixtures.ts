@@ -65,9 +65,9 @@ export const mockN2VerdictStatus: JobStatusResponse = {
  * 테스트 케이스:
  * - sec_01: 정상 include 섹션 (verdicts 없음)
  * - sec_02: 규제 warning 섹션 (verdicts 있음)
- * - sec_03: 자동 exclude 섹션
+ * - sec_03: 현지 무의미 자동 exclude 섹션 (카카오톡 상담 안내)
  * - sec_04: 정상 include 섹션 (두 번째 소스 이미지)
- * - sec_05: localization warning 섹션 (두 번째 소스 이미지)
+ * - sec_05: 규제 warning 섹션 (두 번째 소스 이미지, sensitive claim)
  */
 export const mockSectionsResponse: SectionsResponse = {
   sections: [
@@ -98,7 +98,6 @@ export const mockSectionsResponse: SectionsResponse = {
       verdicts: [
         {
           verdictId: 'vrd_01',
-          // TODO: 백엔드 확정 후 VerdictType union으로 좁힐 것
           verdictType: 'regulatory',
           // TODO: 백엔드 확정 후 VerdictStatus union으로 좁힐 것
           verdictStatus: 'warning',
@@ -113,7 +112,9 @@ export const mockSectionsResponse: SectionsResponse = {
       sectionOrder: 3,
       thumbnailUrl: '/mock/section-thumb-03.jpg',
       bucket: 'exclude',
-      exclusionReason: '브랜드 로고 전용 영역 — 자동 제외',
+      // 카카오톡 상담 안내 — 미국(도착 시장)에서 의미 없는 채널이라 자동 제외.
+      // 표시 문구는 코드값 그대로 노출하지 않고 EXCLUSION_REASON_LABELS를 거친다.
+      exclusionReason: 'auto_local_irrelevant',
       // N3에서 자동 제외된 섹션. N5 화면에 표시되지 않음.
       excludedStage: 'N3',
       bbox: { x: 0, y: 1100, width: 1000, height: 200 },
@@ -142,7 +143,7 @@ export const mockSectionsResponse: SectionsResponse = {
       verdicts: [
         {
           verdictId: 'vrd_02',
-          verdictType: 'localization',
+          verdictType: 'regulatory',
           verdictStatus: 'warning',
           problemText: '민감성 피부에 적합',
           basis: '미국 시장에서 "sensitive" 표기 시 피부과 테스트 결과 근거 권장',

@@ -23,8 +23,8 @@ export type SectionBucket = 'include' | 'exclude';
 
 /**
  * 섹션 자동/수동 제외 사유 코드 (Day 6 확정).
- * TODO: Section.exclusionReason 필드는 아직 표시용 자유 텍스트를 담고 있어
- * 이 타입으로 좁히지 않았음. Mock/DTO 교체 커밋에서 코드값 + 별도 표시 매핑으로 분리 예정.
+ * 화면 표시 문구는 이 코드값을 그대로 노출하지 않고 label 매핑을 거친다.
+ * (lib/api/labels.ts의 EXCLUSION_REASON_LABELS 참고)
  */
 export type ExclusionReasonCode =
   | 'auto_regulatory'
@@ -40,12 +40,7 @@ export type ExclusionReasonCode =
  */
 export type ProcessingStatus = 'pending' | 'running' | 'done' | 'failed';
 
-/**
- * 섹션 판정 유형 (Day 6 확정).
- * TODO: 기존 VerdictType(SectionVerdict.verdictType 필드)은 mock 데이터에
- * 이 확정 셋에 없는 'localization' 값을 쓰고 있어 아직 이 타입으로 좁히지 않았음.
- * Mock 교정 후 SectionVerdict.verdictType에 적용 예정.
- */
+/** 섹션 판정 유형 (Day 6 확정) */
 export type SectionVerdictType = 'regulatory' | 'channel_policy' | 'local_irrelevant' | 'needs_fix';
 
 /**
@@ -87,13 +82,6 @@ export type FailedItemType = 'section' | 'textBlock';
  * N4 후보: 'inpainting' | 'translation' | 'compliance_check' | 'render'
  */
 export type ProcessingSubStep = string;
-
-/**
- * 섹션 판정 유형.
- * TODO: 확정 값 집합은 SectionVerdictType으로 정의됨. 이 필드가 쓰는 mock 데이터에
- * 아직 그 셋에 없는 'localization' 값이 남아 있어 교정 후 SectionVerdictType으로 좁힐 것.
- */
-export type VerdictType = string;
 
 /**
  * 섹션 판정 상태.
@@ -181,8 +169,7 @@ export interface CreateJobResponse {
 
 export interface SectionVerdict {
   verdictId: string;
-  /** TODO: 백엔드 확정 후 union으로 좁힐 것 */
-  verdictType: VerdictType;
+  verdictType: SectionVerdictType;
   /** TODO: 백엔드 확정 후 union으로 좁힐 것 */
   verdictStatus: VerdictStatus;
   problemText: string;
@@ -208,16 +195,14 @@ export interface Section {
   thumbnailUrl: string;
   bucket: SectionBucket;
   /** 사용자가 직접 입력하지 않음. 시스템 또는 자동 판정으로 설정 */
-  exclusionReason: string | null;
+  exclusionReason: ExclusionReasonCode | null;
   /**
-   * 어느 단계에서 제외됐는지.
-   * TODO: 백엔드 계약 확정 후 union으로 좁힐 것.
-   * 후보: 'N3' | 'N5' | null
+   * 어느 단계에서 제외됐는지. N1~N6 중 실제로는 N3 / N5만 쓰임.
    * - 'N3': N3에서 제외됨 — N5에 표시되지 않음
    * - 'N5': N5에서 제외됨 — N5에 회색으로 표시됨
    * - null: 제외되지 않음 또는 포함 상태
    */
-  excludedStage: string | null;
+  excludedStage: JobCurrentStep | null;
   /** 원본 이미지 기준 bbox */
   bbox: BoundingBox;
   verdicts: SectionVerdict[];
@@ -232,9 +217,9 @@ export interface UpdateSectionBucketRequest {
   /**
    * 어느 단계에서 bucket을 변경하는지.
    * Mock 검증용 임시 필드. 백엔드 계약 확정 전.
-   * 'N3' | 'N5' — 제외 시 사용. 복구(include) 시 생략.
+   * N3 / N5 — 제외 시 사용. 복구(include) 시 생략.
    */
-  stage?: string;
+  stage?: JobCurrentStep;
 }
 
 // ─────────────────────────────────────────────
@@ -289,9 +274,8 @@ export interface ReviewSection {
   /**
    * N3에서 제외된 섹션은 review 응답에서 제외됨.
    * N5에서 제외된 섹션은 'N5' 값으로 전달됨.
-   * TODO: 백엔드 계약 확정 후 union으로 좁힐 것.
    */
-  excludedStage: string | null;
+  excludedStage: JobCurrentStep | null;
   textBlocks: TextBlock[];
 }
 
@@ -354,8 +338,7 @@ export interface Deliverable {
   format: string;
   colorSpace: string;
   fileSizeBytes: number;
-  /** TODO: 백엔드 확정 후 union으로 좁힐 것. 후보: 'pending' | 'done' | 'failed' */
-  renderStatus: string;
+  renderStatus: ProcessingStatus;
   validationResult: ValidationResult;
 }
 
