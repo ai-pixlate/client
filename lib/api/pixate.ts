@@ -2,6 +2,7 @@ import type {
   JobStatusResponse,
   SectionsResponse,
   SectionBucket,
+  UpdateSectionBucketRequest,
   ReviewResponse,
   UpdateTranslationRequest,
   UpdateTranslationResponse,
@@ -79,13 +80,12 @@ export function getSections(jobId: string): Promise<SectionsResponse> {
 
 export function updateSectionBucket(
   sectionId: string,
-  bucket: SectionBucket,
-  stage?: string,
+  payload: UpdateSectionBucketRequest,
 ): Promise<{ sectionId: string; bucket: SectionBucket }> {
   return apiFetch(`/api/sections/${sectionId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ bucket, ...(stage !== undefined ? { stage } : {}) }),
+    body: JSON.stringify(payload),
   });
 }
 

@@ -18,6 +18,9 @@ export type JobDbStatus = 'draft' | 'processing' | 'review' | 'done' | 'failed' 
 /** 업로드 원본 이미지 유형. thumbnail 파이프라인은 미확정이므로 N2 이후 동작 단정 안 함 */
 export type ImageType = 'detail' | 'thumbnail';
 
+/** ImageType 런타임 목록. 화면에서 선택지를 순회할 때 이 상수를 재사용한다 */
+export const IMAGE_TYPES = ['detail', 'thumbnail'] as const satisfies readonly ImageType[];
+
 /** 섹션 포함/제외 상태. ERD 기준 문자열 (boolean 사용 안 함) */
 export type SectionBucket = 'include' | 'exclude';
 
@@ -125,7 +128,6 @@ export interface FailedItem {
 export interface JobStatusResponse {
   jobId: string;
   currentStep: JobCurrentStep;
-  /** TODO: 백엔드 ERD 확정 후 JobDbStatus union으로 좁힐 것 */
   dbStatus: JobDbStatus;
   /** 0~100 전체 진행률 */
   progress: number;
@@ -361,8 +363,7 @@ export interface ExportArtifact {
 
 export interface JobResultResponse {
   jobId: string;
-  /** TODO: 백엔드 확정 후 union으로 좁힐 것. 후보: 'pending' | 'done' | 'failed' */
-  renderStatus: string;
+  renderStatus: ProcessingStatus;
   /** 화면에 보여줄 결과 이미지 목록 */
   deliverables: Deliverable[];
   /** 다운로드할 산출물 구성요소 목록 (images, content_csv, html) */

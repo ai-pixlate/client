@@ -33,7 +33,6 @@ const SRC_B = 'src_mock_002'; // 상세페이지 B
 export const mockN2ProcessingStatus: JobStatusResponse = {
   jobId: MOCK_JOB_ID,
   currentStep: 'N2',
-  // TODO: 백엔드 ERD 확정 후 JobDbStatus union으로 좁힐 것
   dbStatus: 'processing',
   progress: 55,
   // TODO: 백엔드 파이프라인 명세 확정 후 N2 ProcessingSubStep union으로 좁힐 것
@@ -385,7 +384,9 @@ export const mockReviewResponse: ReviewResponse = {
       ],
     },
 
-    // ── 섹션 05: localization warning 섹션 (SRC_B)
+    // ── 섹션 05: 확인 필요 텍스트 블록 섹션 (SRC_B)
+    // complianceFlags: ['LOCALIZATION_WARNING']는 ComplianceFlag(미확정 string) 값이며
+    // SectionVerdictType과는 무관하다.
     {
       sectionId: 'sec_05',
       sourceImageId: SRC_B,
@@ -420,7 +421,6 @@ export const mockReviewResponse: ReviewResponse = {
 /** N6: 렌더링 완료, 전체 검증 통과 */
 export const mockJobResultResponse: JobResultResponse = {
   jobId: MOCK_JOB_ID,
-  // TODO: 백엔드 확정 후 union으로 좁힐 것
   renderStatus: 'done',
 
   // 화면에 표시할 결과 이미지 (exportArtifacts 다운로드 파일과 별개)

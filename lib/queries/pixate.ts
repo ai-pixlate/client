@@ -3,7 +3,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { createJob, getJobStatus, advanceJobStep, getSections, updateSectionBucket, getReview, updateTranslation, getJobResult, saveJob } from '@/lib/api/pixate';
-import type { SectionBucket, UpdateTranslationRequest, CreateJobRequest } from '@/lib/api/types';
+import type { UpdateSectionBucketRequest, UpdateTranslationRequest, CreateJobRequest } from '@/lib/api/types';
 
 // ─────────────────────────────────────────────
 // Query Keys
@@ -155,8 +155,8 @@ export function useUpdateSectionBucketMutation(jobId: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ sectionId, bucket, stage }: { sectionId: string; bucket: SectionBucket; stage?: string }) =>
-      updateSectionBucket(sectionId, bucket, stage),
+    mutationFn: ({ sectionId, ...payload }: { sectionId: string } & UpdateSectionBucketRequest) =>
+      updateSectionBucket(sectionId, payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: pixateKeys.sections(jobId) });
     },
