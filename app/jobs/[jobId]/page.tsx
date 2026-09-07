@@ -1,18 +1,14 @@
 'use client';
 
-import { use, useState } from 'react';
+import { use } from 'react';
+import Link from 'next/link';
 
-import {
-  useJobStatusQuery,
-  useSectionsQuery,
-  useUpdateSectionBucketMutation,
-  useAdvanceJobStepMutation,
-} from '@/lib/queries/pixate';
+import { useJobStatusQuery } from '@/lib/queries/pixate';
 import type { JobStatusResponse } from '@/lib/api/types';
+import { N3View } from './_components/n3/n3-view';
 import { N4ProcessingView } from './_components/n4-processing-view';
 import { N5ReviewView } from './_components/n5-review-view';
 import { N6ResultView } from './_components/n6-result-view';
-import { SectionCard } from './_components/section-card';
 
 // ─────────────────────────────────────────────────────────────────
 // processingSubStep → 사용자 안내 문구
@@ -103,88 +99,9 @@ function N2View({ status }: { status: JobStatusResponse }) {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// N3 — 섹션 확인 화면
-// SectionCard는 ./_components/section-card.tsx로 분리됨 (perf harness와 공유)
+// N3 — 섹션 확인 화면은 ./_components/n3/n3-view.tsx로 분리됨
+// (Figma 540:3119 기준 2버킷 drag & drop 레이아웃)
 // ─────────────────────────────────────────────────────────────────
-function N3View({ jobId }: { jobId: string }) {
-  const { data, isLoading, isError, error } = useSectionsQuery(jobId);
-  const mutation = useUpdateSectionBucketMutation(jobId);
-  const advanceMutation = useAdvanceJobStepMutation(jobId);
-  const [pendingSectionId, setPendingSectionId] = useState<string | null>(null);
-
-  if (isLoading) {
-    return (
-      <div className="flex flex-1 items-center justify-center">
-        <span className="text-sm text-gray-400">섹션 목록을 불러오는 중...</span>
-      </div>
-    );
-  }
-
-  if (isError) {
-    return (
-      <div className="flex flex-1 items-center justify-center">
-        <p className="text-sm text-red-500">
-          {error instanceof Error ? error.message : '오류가 발생했습니다.'}
-        </p>
-      </div>
-    );
-  }
-
-  if (!data) return null;
-
-  const includedCount = data.sections.filter((s) => s.bucket === 'include').length;
-
-  return (
-    <>
-      {/* 섹션 목록 (스크롤 영역) */}
-      <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-2xl space-y-3 px-6 py-6">
-          <p className="text-sm text-gray-500">
-            전체 {data.sections.length}개 섹션 중{' '}
-            <span className="font-semibold text-gray-800">{includedCount}개</span> 포함됩니다.
-          </p>
-
-          {data.sections.map((section) => (
-            <SectionCard
-              key={section.sectionId}
-              section={section}
-              isDisabled={mutation.isPending}
-              isMutating={mutation.isPending && pendingSectionId === section.sectionId}
-              onToggle={() => {
-                setPendingSectionId(section.sectionId);
-                mutation.mutate(
-                  {
-                    sectionId: section.sectionId,
-                    bucket: section.bucket === 'include' ? 'exclude' : 'include',
-                    stage: 'N3',
-                  },
-                  { onSettled: () => setPendingSectionId(null) },
-                );
-              }}
-            />
-          ))}
-        </div>
-      </div>
-
-      {/* 하단 액션 바 */}
-      <div className="shrink-0 border-t bg-white px-6 py-4">
-        <div className="mx-auto flex max-w-2xl justify-between">
-          <p className="text-sm text-gray-500">
-            확인이 끝나면 번역을 시작하세요.
-          </p>
-          <button
-            type="button"
-            disabled={advanceMutation.isPending}
-            onClick={() => advanceMutation.mutate()}
-            className="rounded-lg bg-blue-500 px-5 py-2 text-sm font-medium text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {advanceMutation.isPending ? '번역 시작 중...' : '번역 시작 →'}
-          </button>
-        </div>
-      </div>
-    </>
-  );
-}
 
 // ─────────────────────────────────────────────────────────────────
 // 페이지 루트
@@ -214,22 +131,24 @@ export default function Page({
 
   return (
     <div className="flex h-screen flex-col bg-gray-50">
-      {/* 상단 헤더 */}
-      <header className="flex h-14 shrink-0 items-center gap-4 border-b bg-white px-6 shadow-sm">
-        <a
-          href="/"
-          className="text-sm text-gray-500 transition-colors hover:text-gray-700"
-        >
-          ← 뒤로
-        </a>
-        <div className="h-4 w-px bg-gray-200" />
-        <div className="flex items-center gap-2">
-          <span className="rounded bg-blue-100 px-2 py-0.5 text-xs font-bold text-blue-700">
-            {meta.label}
-          </span>
-          <span className="text-sm font-medium text-gray-700">{meta.desc}</span>
-        </div>
-      </header>
+      {/* 상단 헤더 — N3는 Figma 540:3119 기준 자체 헤더(뒤로가기·제목)를 가지므로 숨긴다 */}
+      {currentStep !== 'N3' && (
+        <header className="flex h-14 shrink-0 items-center gap-4 border-b bg-white px-6 shadow-sm">
+          <Link
+            href="/"
+            className="text-sm text-gray-500 transition-colors hover:text-gray-700"
+          >
+            ← 뒤로
+          </Link>
+          <div className="h-4 w-px bg-gray-200" />
+          <div className="flex items-center gap-2">
+            <span className="rounded bg-blue-100 px-2 py-0.5 text-xs font-bold text-blue-700">
+              {meta.label}
+            </span>
+            <span className="text-sm font-medium text-gray-700">{meta.desc}</span>
+          </div>
+        </header>
+      )}
 
       {/* 본문 */}
       <div className="flex flex-1 flex-col overflow-hidden">
