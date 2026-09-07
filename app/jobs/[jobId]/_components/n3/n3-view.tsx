@@ -21,8 +21,8 @@ import {
   useAdvanceJobStepMutation,
 } from '@/lib/queries/pixate';
 import type { Section, SectionBucket } from '@/lib/api/types';
+import { StepNav } from '../step-nav';
 import { DetailPanel } from './detail-panel';
-import { N3StepNav } from './step-nav';
 import { SectionThumbnail, ThumbnailPlaceholder, thumbWidthFor } from './section-thumbnail';
 
 // ─────────────────────────────────────────────────────────────────
@@ -139,7 +139,7 @@ export function N3View({ jobId }: { jobId: string }) {
       onDragCancel={handleDragCancel}
     >
       <div className="flex h-full w-full bg-white">
-        <N3StepNav />
+        <StepNav currentStep="N3" />
 
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           {/* 헤더 */}
