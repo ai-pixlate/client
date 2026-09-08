@@ -178,7 +178,12 @@ export interface SectionVerdict {
   basis: string;
 }
 
-/** 원본 이미지 좌표 기준 bbox (모듈 좌표 사용 안 함) */
+/**
+ * 사각형 bbox (모듈 좌표 사용 안 함).
+ * 좌표 기준(원본 이미지 절대 좌표 vs 소속 요소 내부 local 좌표)은
+ * 사용하는 필드(Section.bbox / TextBlock.bbox)의 주석을 따른다 — 이 타입 자체는
+ * x/y/width/height 형태만 정의한다.
+ */
 export interface BoundingBox {
   x: number;
   y: number;
@@ -250,13 +255,31 @@ export interface TextBlock {
   autoAdjust: boolean;
   /** 로컬라이징 근거. 읽기 전용 */
   basis: string;
-  /** 원본 이미지 기준 bbox */
+  /**
+   * 소속 section 내부 local 좌표 (원본 픽셀 기준). section 자신의 원본 절대
+   * 위치가 아니다 — 절대 Y가 필요하면 section.displayTop(N5 표시용) 또는
+   * DB의 top_offset(원본 절대용, API DTO에는 없음)과 더해서 구한다.
+   * (좌표계 기준: Pix/ate FE↔BE 구현 기준 v3.3.3)
+   */
   bbox: BoundingBox;
   /**
    * "다른 번역 보기" 기능용 후보 목록.
    * TODO: 생성 개수·기준 백엔드와 협의 필요.
    */
   candidates: TranslationCandidate[];
+}
+
+/**
+ * N5 좌측 뷰어 프리뷰 이미지의 원본/표시 크기.
+ * scaleX = previewWidth / originalWidth, scaleY = previewHeight / originalHeight로
+ * block.bbox(원본 픽셀 기준)를 화면 표시 좌표로 변환할 때 쓴다.
+ * 원본/번역 프리뷰는 같은 크기를 공유한다 (ReviewSourceImage당 하나).
+ */
+export interface ReviewPreview {
+  originalWidth: number;
+  originalHeight: number;
+  previewWidth: number;
+  previewHeight: number;
 }
 
 /** N5 검수 화면의 소스 이미지 단위 미리보기 */
@@ -266,6 +289,8 @@ export interface ReviewSourceImage {
   originalPreviewUrl: string;
   /** 번역 결과 합성 미리보기 */
   translatedPreviewUrl: string;
+  /** 원본/번역 프리뷰가 공유하는 크기·배율 계산용 값 */
+  preview: ReviewPreview;
 }
 
 export interface ReviewSection {
@@ -278,6 +303,15 @@ export interface ReviewSection {
    * N5에서 제외된 섹션은 'N5' 값으로 전달됨.
    */
   excludedStage: JobCurrentStep | null;
+  /**
+   * N5 좌측 뷰어에서 이 section이 시작하는 누적 top 위치 (원본 픽셀 기준).
+   * DB 저장값(top_offset)이 아니라 API가 매 응답마다 계산해 내려주는 값이다.
+   * include section만 높이를 누적하고, exclude section(N3/N5 무관)은 누적하지
+   * 않는다 — 그래서 원본 절대 위치(top_offset)와 다를 수 있다.
+   */
+  displayTop: number;
+  /** section 원본 픽셀 높이. displayTop 누적 계산에 쓰인다 */
+  height: number;
   textBlocks: TextBlock[];
 }
 
