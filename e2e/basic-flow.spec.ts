@@ -122,6 +122,37 @@ test('N1에서 N5 검수 화면까지 기본 작업 흐름을 완료한다', asy
   await expect(page.locator('[data-testid="n5-panel-body"]')).toBeVisible();
   await expect(page.getByText('번역 결과')).toBeVisible();
 
+  // ── N5: Before/After 비교 슬라이더 (8일차) ──────────────────
+  const slider = page.locator('[data-testid="n5-before-after-slider"]');
+  await expect(slider).toHaveAttribute('role', 'slider');
+  await expect(slider).toHaveAttribute('aria-valuenow', '50'); // 기본값 50%
+
+  const stack = page.locator('[data-testid="n5-compare-stack"]');
+  const stackBox = await stack.boundingBox();
+  if (!stackBox) throw new Error('n5-compare-stack 위치를 찾을 수 없습니다');
+
+  // drag로 값이 실제로 바뀌는지 (약 25% 지점으로 이동)
+  await slider.hover();
+  await page.mouse.down();
+  await page.mouse.move(stackBox.x + stackBox.width * 0.25, stackBox.y + 10, { steps: 5 });
+  await page.mouse.up();
+  const draggedValue = Number(await slider.getAttribute('aria-valuenow'));
+  expect(Math.abs(draggedValue - 25)).toBeLessThanOrEqual(3);
+
+  // 왼쪽 끝 훨씬 밖으로 drag -> 0% clamp
+  await slider.hover();
+  await page.mouse.down();
+  await page.mouse.move(stackBox.x - 500, stackBox.y + 10, { steps: 3 });
+  await page.mouse.up();
+  await expect(slider).toHaveAttribute('aria-valuenow', '0');
+
+  // 오른쪽 끝 훨씬 밖으로 drag -> 100% clamp
+  await slider.hover();
+  await page.mouse.down();
+  await page.mouse.move(stackBox.x + stackBox.width + 500, stackBox.y + 10, { steps: 3 });
+  await page.mouse.up();
+  await expect(slider).toHaveAttribute('aria-valuenow', '100');
+
   // ── 현재 flow 종료 조건: N5 → N6 미구현 확인 ────────────────
   const finishButton = page.getByRole('button', { name: '저장하러 가기' });
   await expect(finishButton).toBeVisible();
