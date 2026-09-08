@@ -257,8 +257,8 @@ export interface TextBlock {
   basis: string;
   /**
    * 소속 section 내부 local 좌표 (원본 픽셀 기준). section 자신의 원본 절대
-   * 위치가 아니다 — 절대 Y가 필요하면 section.displayTop(N5 표시용) 또는
-   * DB의 top_offset(원본 절대용, API DTO에는 없음)과 더해서 구한다.
+   * 위치가 아니다 — 절대 Y가 필요하면 section.topOffset(원본 절대용)
+   * 또는 section.displayTop(N5 표시용)과 더해서 구한다.
    * (좌표계 기준: Pix/ate FE↔BE 구현 기준 v3.3.3)
    */
   bbox: BoundingBox;
@@ -304,13 +304,26 @@ export interface ReviewSection {
    */
   excludedStage: JobCurrentStep | null;
   /**
+   * 이 section이 원본 sourceImage 내부에서 실제로 위치한 절대 세로 좌표
+   * (DB section.top_offset을 API가 그대로 전달). exclude 여부와 무관하게
+   * 그 이미지 안에서의 진짜 위치를 가리킨다 — 원본 절대 block Y를 구하려면
+   * topOffset + block.bbox.y를 쓴다.
+   *
+   * displayTop과 절대 혼동하지 않는다: topOffset은 "원본 이미지 crop 위치"용
+   * (Before/After 비교 viewer가 preview 이미지에서 이 section에 해당하는
+   * 부분을 잘라 보여줄 때 씀), displayTop은 "N5 표시 스택 위치"용(exclude
+   * section 누적 제외)이다. section.height로부터 역산하지 않는다 — section이
+   * sourceImage를 빈틈없이 나눈다는 보장이 계약에 없기 때문이다.
+   */
+  topOffset: number;
+  /**
    * N5 좌측 뷰어에서 이 section이 시작하는 누적 top 위치 (원본 픽셀 기준).
    * DB 저장값(top_offset)이 아니라 API가 매 응답마다 계산해 내려주는 값이다.
    * include section만 높이를 누적하고, exclude section(N3/N5 무관)은 누적하지
-   * 않는다 — 그래서 원본 절대 위치(top_offset)와 다를 수 있다.
+   * 않는다 — 그래서 원본 절대 위치(topOffset)와 다를 수 있다.
    */
   displayTop: number;
-  /** section 원본 픽셀 높이. displayTop 누적 계산에 쓰인다 */
+  /** section 원본 픽셀 높이. displayTop 누적 계산과 crop 창 높이에 쓰인다 */
   height: number;
   textBlocks: TextBlock[];
 }
