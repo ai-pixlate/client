@@ -243,6 +243,15 @@ export const mockN4PartialFailureStatus: JobStatusResponse = {
  * 초장축 검증: SRC_A 원본 8500px, SRC_B 원본 7000px(각 이미지 자체의 픽셀
  * 크기 — scale 계산용, displayTop 누적과는 별개). include section만 누적한
  * job 전체 stack height는 12,700px.
+ *
+ * topOffset(원본 이미지 내부 절대 위치)은 displayTop과 달리 손으로 직접
+ * 채워 넣는다 — DB section.top_offset을 그대로 내려주는 값이라 API 계산값이
+ * 아니고, section.height를 누적해서 역산하지 않는다(그 가정은 계약에 없다).
+ * 이 mock에서는 SRC_A/SRC_B 각각 0부터 시작해 실제 페이지 레이아웃과 맞게
+ * 손으로 지정했다 — Before/After 비교 viewer가 preview 이미지에서 이
+ * section에 해당하는 부분을 topOffset 기준으로 crop해서 보여준다
+ * (public/mock/n5/*.png, scripts/make-n5-fixture-images.mjs로 생성한
+ * 눈금 이미지 — 실제 브라우저에서 crop 위치를 눈으로 검증할 수 있다).
  */
 
 // SRC_A: sec_01(include) → sec_02(include) → sec_07(N5 exclude, 높이 누적 안 됨) → sec_03(N3 exclude, 응답 자체에서 필터링)
@@ -253,6 +262,9 @@ const srcASectionDrafts: Omit<ReviewSection, 'displayTop'>[] = [
     sectionOrder: 1,
     bucket: 'include',
     excludedStage: null,
+    // topOffset: DB section.top_offset 그대로 — SRC_A 원본 이미지에서 이
+    // section이 실제로 위치한 절대 y. height 누적으로 역산하지 않는다.
+    topOffset: 0,
     height: 2500,
     textBlocks: [
       {
@@ -297,6 +309,7 @@ const srcASectionDrafts: Omit<ReviewSection, 'displayTop'>[] = [
     sectionOrder: 2,
     bucket: 'include',
     excludedStage: null,
+    topOffset: 2500,
     height: 3200,
     textBlocks: [
       {
@@ -352,6 +365,10 @@ const srcASectionDrafts: Omit<ReviewSection, 'displayTop'>[] = [
     sectionOrder: 3,
     bucket: 'exclude',
     excludedStage: 'N5',
+    // exclude 여부와 무관하게 원본 이미지 안의 실제 위치는 그대로 유지된다
+    // (5700 = sec_01.height + sec_02.height — 이 페이지 레이아웃에서는 우연히
+    // 빈틈없이 이어지지만, 이는 fixture 저자가 정한 값이지 FE가 계산한 값이 아니다).
+    topOffset: 5700,
     height: 1600,
     textBlocks: [
       {
@@ -373,13 +390,14 @@ const srcASectionDrafts: Omit<ReviewSection, 'displayTop'>[] = [
   },
   {
     // 섹션 03: N3에서 자동 제외된 섹션 — review 응답에서 필터링됨.
-    // displayTop/height는 타입상 필요해 채워두지만, handler가 응답 전에
-    // 걸러내므로 FE에는 절대 도달하지 않는다 (아래 msw 핸들러 참고).
+    // topOffset/displayTop/height는 타입상 필요해 채워두지만, handler가 응답
+    // 전에 걸러내므로 FE에는 절대 도달하지 않는다 (아래 msw 핸들러 참고).
     sectionId: 'sec_03',
     sourceImageId: SRC_A,
     sectionOrder: 4,
     bucket: 'exclude',
     excludedStage: 'N3',
+    topOffset: 7300,
     height: 1200,
     textBlocks: [],
   },
@@ -395,6 +413,8 @@ const srcBSectionDrafts: Omit<ReviewSection, 'displayTop'>[] = [
     sectionOrder: 5,
     bucket: 'include',
     excludedStage: null,
+    // SRC_B 원본 이미지 기준 — SRC_A와는 별개 이미지이므로 여기서 0부터 시작한다.
+    topOffset: 0,
     height: 4200,
     textBlocks: [
       {
@@ -423,6 +443,7 @@ const srcBSectionDrafts: Omit<ReviewSection, 'displayTop'>[] = [
     sectionOrder: 6,
     bucket: 'include',
     excludedStage: null,
+    topOffset: 4200,
     height: 2800,
     textBlocks: [
       {
@@ -462,11 +483,17 @@ export const mockReviewResponse: ReviewResponse = {
   // 좌측 뷰어: 소스 이미지 단위 원문/번역문 전환.
   // 원본/번역 프리뷰는 같은 크기를 공유한다 — 슬라이더가 같은 좌표계 위에서
   // 두 레이어를 겹쳐 그려야 하므로 서로 다른 크기를 주지 않는다.
+  //
+  // /mock/n5/*.png는 실제 서비스 asset이 아니라 Before/After 비교 viewer
+  // 검증용 test fixture다 (scripts/make-n5-fixture-images.mjs로 생성).
+  // 원본 이미지 좌표를 라벨로 적은 눈금 이미지라, section.topOffset이
+  // 가리키는 지점이 실제로 그 위치를 crop해서 보여주는지 눈으로 확인할 수
+  // 있고, 원본/번역은 배경색으로 구분된다.
   sourceImages: [
     {
       sourceImageId: SRC_A,
-      originalPreviewUrl: '/mock/detail-a-original.jpg',
-      translatedPreviewUrl: '/mock/detail-a-translated.jpg',
+      originalPreviewUrl: '/mock/n5/detail-a-original.png',
+      translatedPreviewUrl: '/mock/n5/detail-a-translated.png',
       // 원본 8500px(초장축) → 미리보기 3400px, scaleX = scaleY = 0.4
       preview: {
         originalWidth: 1000,
@@ -477,8 +504,8 @@ export const mockReviewResponse: ReviewResponse = {
     },
     {
       sourceImageId: SRC_B,
-      originalPreviewUrl: '/mock/detail-b-original.jpg',
-      translatedPreviewUrl: '/mock/detail-b-translated.jpg',
+      originalPreviewUrl: '/mock/n5/detail-b-original.png',
+      translatedPreviewUrl: '/mock/n5/detail-b-translated.png',
       // 원본 7000px(초장축) → 미리보기 2800px, scaleX = scaleY = 0.4
       preview: {
         originalWidth: 1000,
