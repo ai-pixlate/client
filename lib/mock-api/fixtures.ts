@@ -12,8 +12,10 @@ import type {
   JobStatusResponse,
   SectionsResponse,
   ReviewResponse,
+  ReviewSection,
   JobResultResponse,
 } from '@/lib/api/types';
+import { computeSectionDisplayTops } from '@/lib/n5/coordinates';
 
 // ─────────────────────────────────────────────
 // 공통 ID 상수
@@ -224,7 +226,253 @@ export const mockN4PartialFailureStatus: JobStatusResponse = {
  * 3. blk_03 — 다른 번역 후보 2개가 있는 블록
  * 4. blk_04 — N4 부분 실패로 blockStatus 'failed'인 블록
  * 5. blk_05 — 사용자 수정된 것처럼 표현 (translationStatus: 'userEdited')
+ * 6. blk_06 — 확인 필요 블록 (두 번째 소스 이미지)
+ * 7. blk_07 — N5에서 사용자가 수동 제외한 section에 속한 블록 (displayTop 누적 제외 검증용)
+ *
+ * displayTop은 손으로 계산해 넣지 않고 computeSectionDisplayTops(lib/n5/coordinates.ts)로
+ * 구한다 — 실제로는 백엔드가 계산해 내려주는 값이라, 여기서도 같은 계산 로직을 거쳐야
+ * "API 계산값"이라는 계약과 fixture 값이 어긋나지 않는다.
+ *
+ * displayTop은 job 전체 기준으로 누적된다 (v3.3.3). N5 좌측 뷰어가 여러
+ * sourceImage를 하나의 스택으로 이어 보여주므로, sourceImage가 바뀐다고
+ * 누적을 0으로 리셋하지 않는다 — computeSectionDisplayTops는 sourceImage를
+ * 아예 모르는 순수 함수이고, 반드시 job 전체 section을 한 배열로 모아
+ * "한 번만" 호출해야 한다. (sourceImage별로 나눠 여러 번 호출하면 그때마다
+ * cursor가 0부터 다시 시작해 리셋된 것처럼 보이므로 주의)
+ *
+ * 초장축 검증: SRC_A 원본 8500px, SRC_B 원본 7000px(각 이미지 자체의 픽셀
+ * 크기 — scale 계산용, displayTop 누적과는 별개). include section만 누적한
+ * job 전체 stack height는 12,700px.
+ *
+ * topOffset(원본 이미지 내부 절대 위치)은 displayTop과 달리 손으로 직접
+ * 채워 넣는다 — DB section.top_offset을 그대로 내려주는 값이라 API 계산값이
+ * 아니고, section.height를 누적해서 역산하지 않는다(그 가정은 계약에 없다).
+ * 이 mock에서는 SRC_A/SRC_B 각각 0부터 시작해 실제 페이지 레이아웃과 맞게
+ * 손으로 지정했다 — Before/After 비교 viewer가 preview 이미지에서 이
+ * section에 해당하는 부분을 topOffset 기준으로 crop해서 보여준다
+ * (public/mock/n5/*.png, scripts/make-n5-fixture-images.mjs로 생성한
+ * 눈금 이미지 — 실제 브라우저에서 crop 위치를 눈으로 검증할 수 있다).
  */
+
+// SRC_A: sec_01(include) → sec_02(include) → sec_07(N5 exclude, 높이 누적 안 됨) → sec_03(N3 exclude, 응답 자체에서 필터링)
+const srcASectionDrafts: Omit<ReviewSection, 'displayTop'>[] = [
+  {
+    sectionId: 'sec_01',
+    sourceImageId: SRC_A,
+    sectionOrder: 1,
+    bucket: 'include',
+    excludedStage: null,
+    // topOffset: DB section.top_offset 그대로 — SRC_A 원본 이미지에서 이
+    // section이 실제로 위치한 절대 y. height 누적으로 역산하지 않는다.
+    topOffset: 0,
+    height: 2500,
+    textBlocks: [
+      {
+        // 케이스 1: 정상 번역 블록
+        blockId: 'blk_01',
+        sectionId: 'sec_01',
+        sourceText: '수분 충전 앰플',
+        translatedText: 'Moisture Ampoule',
+        translationStatus: 'machine',
+        role: 'title',
+        // TODO: 백엔드 text_block.block_status 확정 후 union으로 좁힐 것
+        blockStatus: 'done',
+        needsReview: false,
+        complianceFlags: [],
+        autoAdjust: false,
+        basis: '브랜드 톤에 맞게 간결하게 번역했습니다.',
+        bbox: { x: 200, y: 80, width: 600, height: 80 },
+        candidates: [],
+      },
+      {
+        // 케이스 5: 사용자 수정된 블록 (translationStatus: userEdited)
+        blockId: 'blk_05',
+        sectionId: 'sec_01',
+        sourceText: '피부 깊숙이 침투하는 성분',
+        translatedText: 'Deeply penetrating ingredients (edited)',
+        translationStatus: 'userEdited',
+        role: 'body',
+        blockStatus: 'done',
+        needsReview: true,
+        // TODO: 백엔드 규제 DB 기준 코드값 확정 후 union으로 좁힐 것
+        complianceFlags: ['USER_EDITED_PENDING_REVIEW'],
+        autoAdjust: false,
+        basis: '원문의 과학적 주장을 그대로 번역했습니다.',
+        bbox: { x: 100, y: 200, width: 800, height: 120 },
+        candidates: [],
+      },
+    ],
+  },
+  {
+    sectionId: 'sec_02',
+    sourceImageId: SRC_A,
+    sectionOrder: 2,
+    bucket: 'include',
+    excludedStage: null,
+    topOffset: 2500,
+    height: 3200,
+    textBlocks: [
+      {
+        // 케이스 2: 확인 필요 블록 (needsReview: true)
+        blockId: 'blk_02',
+        sectionId: 'sec_02',
+        sourceText: '최고의 수분 공급 효과',
+        translatedText: 'The best moisturizing effect',
+        translationStatus: 'machine',
+        role: 'body',
+        blockStatus: 'done',
+        needsReview: true,
+        complianceFlags: ['PROHIBITED_EXPRESSION'],
+        autoAdjust: false,
+        basis: '최상급 표현을 포함해 수정이 권장됩니다.',
+        bbox: { x: 100, y: 120, width: 800, height: 100 },
+        candidates: [],
+      },
+      {
+        // 케이스 3: 다른 번역 후보 2개가 있는 블록
+        blockId: 'blk_03',
+        sectionId: 'sec_02',
+        sourceText: '임상 시험 완료',
+        translatedText: 'Clinically tested',
+        translationStatus: 'machine',
+        role: 'caption',
+        blockStatus: 'done',
+        needsReview: false,
+        complianceFlags: [],
+        autoAdjust: false,
+        basis: '공인된 임상 시험 문구를 사용했습니다.',
+        bbox: { x: 300, y: 400, width: 400, height: 60 },
+        candidates: [
+          {
+            candidateId: 'cand_03_a',
+            translatedText: 'Dermatologically tested',
+            isSelected: false,
+          },
+          {
+            candidateId: 'cand_03_b',
+            translatedText: 'Clinical trial completed',
+            isSelected: false,
+          },
+        ],
+      },
+    ],
+  },
+  {
+    // 케이스 7: N5에서 사용자가 수동 제외한 section — 회색으로 표시되고,
+    // 뒤따르는 section은 이 section의 height를 건너뛰고 이어서 시작한다.
+    sectionId: 'sec_07',
+    sourceImageId: SRC_A,
+    sectionOrder: 3,
+    bucket: 'exclude',
+    excludedStage: 'N5',
+    // exclude 여부와 무관하게 원본 이미지 안의 실제 위치는 그대로 유지된다
+    // (5700 = sec_01.height + sec_02.height — 이 페이지 레이아웃에서는 우연히
+    // 빈틈없이 이어지지만, 이는 fixture 저자가 정한 값이지 FE가 계산한 값이 아니다).
+    topOffset: 5700,
+    height: 1600,
+    textBlocks: [
+      {
+        blockId: 'blk_07',
+        sectionId: 'sec_07',
+        sourceText: '정기구독 시 10% 할인',
+        translatedText: 'Subscribe & save 10%',
+        translationStatus: 'machine',
+        role: 'caption',
+        blockStatus: 'done',
+        needsReview: false,
+        complianceFlags: [],
+        autoAdjust: false,
+        basis: '정기구독 안내는 도착 시장 채널 정책과 무관해 검수자가 N5에서 제외했습니다.',
+        bbox: { x: 100, y: 100, width: 600, height: 60 },
+        candidates: [],
+      },
+    ],
+  },
+  {
+    // 섹션 03: N3에서 자동 제외된 섹션 — review 응답에서 필터링됨.
+    // topOffset/displayTop/height는 타입상 필요해 채워두지만, handler가 응답
+    // 전에 걸러내므로 FE에는 절대 도달하지 않는다 (아래 msw 핸들러 참고).
+    sectionId: 'sec_03',
+    sourceImageId: SRC_A,
+    sectionOrder: 4,
+    bucket: 'exclude',
+    excludedStage: 'N3',
+    topOffset: 7300,
+    height: 1200,
+    textBlocks: [],
+  },
+];
+
+// SRC_B: sec_04(include) → sec_05(include).
+// displayTop은 job 전체 기준이므로 SRC_A 마지막 include 누적값(5700)에서 이어진다 —
+// sourceImage가 바뀐다고 0으로 리셋하지 않는다.
+const srcBSectionDrafts: Omit<ReviewSection, 'displayTop'>[] = [
+  {
+    sectionId: 'sec_04',
+    sourceImageId: SRC_B,
+    sectionOrder: 5,
+    bucket: 'include',
+    excludedStage: null,
+    // SRC_B 원본 이미지 기준 — SRC_A와는 별개 이미지이므로 여기서 0부터 시작한다.
+    topOffset: 0,
+    height: 4200,
+    textBlocks: [
+      {
+        // 케이스 4: N4 부분 실패 블록 (blockStatus: 'failed')
+        blockId: 'blk_04',
+        sectionId: 'sec_04',
+        sourceText: '순수 비타민 C 15% 함유',
+        translatedText: '',
+        translationStatus: 'machine',
+        role: 'body',
+        blockStatus: 'failed',
+        needsReview: true,
+        complianceFlags: [],
+        autoAdjust: false,
+        basis: '',
+        bbox: { x: 150, y: 300, width: 700, height: 80 },
+        candidates: [],
+      },
+    ],
+  },
+  {
+    // complianceFlags: ['LOCALIZATION_WARNING']는 ComplianceFlag(미확정 string) 값이며
+    // SectionVerdictType과는 무관하다.
+    sectionId: 'sec_05',
+    sourceImageId: SRC_B,
+    sectionOrder: 6,
+    bucket: 'include',
+    excludedStage: null,
+    topOffset: 4200,
+    height: 2800,
+    textBlocks: [
+      {
+        // 케이스 6: 확인 필요 블록 (두 번째 소스 이미지)
+        blockId: 'blk_06',
+        sectionId: 'sec_05',
+        sourceText: '민감성 피부에 적합',
+        translatedText: 'Suitable for sensitive skin',
+        translationStatus: 'machine',
+        role: 'body',
+        blockStatus: 'done',
+        needsReview: true,
+        complianceFlags: ['LOCALIZATION_WARNING'],
+        autoAdjust: false,
+        basis: '미국 시장에서 "sensitive skin" 표기 시 피부과 테스트 결과 근거 권장',
+        bbox: { x: 100, y: 150, width: 800, height: 80 },
+        candidates: [],
+      },
+    ],
+  },
+];
+
+// displayTop은 job 전체 기준으로 누적되므로, sourceImage별로 나눠 각각 호출하면
+// 안 된다 — 그러면 SRC_B의 첫 section이 0부터 다시 시작하는 잘못된 리셋이 생긴다.
+// 반드시 job 전체 section을 표시 순서(= sourceImage 순서 → 그 안에서 sectionOrder
+// 순서)대로 한 배열로 모아 한 번만 호출한다.
+const allSectionDrafts = [...srcASectionDrafts, ...srcBSectionDrafts];
+const allDisplayTops = computeSectionDisplayTops(allSectionDrafts);
+
 export const mockReviewResponse: ReviewResponse = {
   job: {
     jobId: MOCK_JOB_ID,
@@ -232,186 +480,44 @@ export const mockReviewResponse: ReviewResponse = {
     targetLanguage: 'en',
   },
 
-  // 좌측 뷰어: 소스 이미지 단위 원문/번역문 전환
+  // 좌측 뷰어: 소스 이미지 단위 원문/번역문 전환.
+  // 원본/번역 프리뷰는 같은 크기를 공유한다 — 슬라이더가 같은 좌표계 위에서
+  // 두 레이어를 겹쳐 그려야 하므로 서로 다른 크기를 주지 않는다.
+  //
+  // /mock/n5/*.png는 실제 서비스 asset이 아니라 Before/After 비교 viewer
+  // 검증용 test fixture다 (scripts/make-n5-fixture-images.mjs로 생성).
+  // 원본 이미지 좌표를 라벨로 적은 눈금 이미지라, section.topOffset이
+  // 가리키는 지점이 실제로 그 위치를 crop해서 보여주는지 눈으로 확인할 수
+  // 있고, 원본/번역은 배경색으로 구분된다.
   sourceImages: [
     {
       sourceImageId: SRC_A,
-      originalPreviewUrl: '/mock/detail-a-original.jpg',
-      translatedPreviewUrl: '/mock/detail-a-translated.jpg',
+      originalPreviewUrl: '/mock/n5/detail-a-original.png',
+      translatedPreviewUrl: '/mock/n5/detail-a-translated.png',
+      // 원본 8500px(초장축) → 미리보기 3400px, scaleX = scaleY = 0.4
+      preview: {
+        originalWidth: 1000,
+        originalHeight: 8500,
+        previewWidth: 400,
+        previewHeight: 3400,
+      },
     },
     {
       sourceImageId: SRC_B,
-      originalPreviewUrl: '/mock/detail-b-original.jpg',
-      translatedPreviewUrl: '/mock/detail-b-translated.jpg',
+      originalPreviewUrl: '/mock/n5/detail-b-original.png',
+      translatedPreviewUrl: '/mock/n5/detail-b-translated.png',
+      // 원본 7000px(초장축) → 미리보기 2800px, scaleX = scaleY = 0.4
+      preview: {
+        originalWidth: 1000,
+        originalHeight: 7000,
+        previewWidth: 400,
+        previewHeight: 2800,
+      },
     },
   ],
 
-  // 우측 패널: 섹션 단위 텍스트 블록
-  sections: [
-    // ── 섹션 01: 정상 섹션 (SRC_A)
-    {
-      sectionId: 'sec_01',
-      sourceImageId: SRC_A,
-      sectionOrder: 1,
-      bucket: 'include',
-      excludedStage: null,
-      textBlocks: [
-        {
-          // 케이스 1: 정상 번역 블록
-          blockId: 'blk_01',
-          sectionId: 'sec_01',
-          sourceText: '수분 충전 앰플',
-          translatedText: 'Moisture Ampoule',
-          translationStatus: 'machine',
-          role: 'title',
-          // TODO: 백엔드 text_block.block_status 확정 후 union으로 좁힐 것
-          blockStatus: 'done',
-          needsReview: false,
-          complianceFlags: [],
-          autoAdjust: false,
-          basis: '브랜드 톤에 맞게 간결하게 번역했습니다.',
-          bbox: { x: 200, y: 80, width: 600, height: 80 },
-          candidates: [],
-        },
-        {
-          // 케이스 5: 사용자 수정된 블록 (translationStatus: userEdited)
-          blockId: 'blk_05',
-          sectionId: 'sec_01',
-          sourceText: '피부 깊숙이 침투하는 성분',
-          translatedText: 'Deeply penetrating ingredients (edited)',
-          translationStatus: 'userEdited',
-          role: 'body',
-          blockStatus: 'done',
-          needsReview: true,
-          // TODO: 백엔드 규제 DB 기준 코드값 확정 후 union으로 좁힐 것
-          complianceFlags: ['USER_EDITED_PENDING_REVIEW'],
-          autoAdjust: false,
-          basis: '원문의 과학적 주장을 그대로 번역했습니다.',
-          bbox: { x: 100, y: 200, width: 800, height: 120 },
-          candidates: [],
-        },
-      ],
-    },
-
-    // ── 섹션 02: 규제 warning 섹션 (SRC_A)
-    {
-      sectionId: 'sec_02',
-      sourceImageId: SRC_A,
-      sectionOrder: 2,
-      bucket: 'include',
-      excludedStage: null,
-      textBlocks: [
-        {
-          // 케이스 2: 확인 필요 블록 (needsReview: true)
-          blockId: 'blk_02',
-          sectionId: 'sec_02',
-          sourceText: '최고의 수분 공급 효과',
-          translatedText: 'The best moisturizing effect',
-          translationStatus: 'machine',
-          role: 'body',
-          blockStatus: 'done',
-          needsReview: true,
-          complianceFlags: ['PROHIBITED_EXPRESSION'],
-          autoAdjust: false,
-          basis: '최상급 표현을 포함해 수정이 권장됩니다.',
-          bbox: { x: 100, y: 120, width: 800, height: 100 },
-          candidates: [],
-        },
-        {
-          // 케이스 3: 다른 번역 후보 2개가 있는 블록
-          blockId: 'blk_03',
-          sectionId: 'sec_02',
-          sourceText: '임상 시험 완료',
-          translatedText: 'Clinically tested',
-          translationStatus: 'machine',
-          role: 'caption',
-          blockStatus: 'done',
-          needsReview: false,
-          complianceFlags: [],
-          autoAdjust: false,
-          basis: '공인된 임상 시험 문구를 사용했습니다.',
-          bbox: { x: 300, y: 400, width: 400, height: 60 },
-          candidates: [
-            {
-              candidateId: 'cand_03_a',
-              translatedText: 'Dermatologically tested',
-              isSelected: false,
-            },
-            {
-              candidateId: 'cand_03_b',
-              translatedText: 'Clinical trial completed',
-              isSelected: false,
-            },
-          ],
-        },
-      ],
-    },
-
-    // ── 섹션 03: N3에서 자동 제외된 섹션 — review 응답에서 필터링됨
-    {
-      sectionId: 'sec_03',
-      sourceImageId: SRC_A,
-      sectionOrder: 3,
-      bucket: 'exclude',
-      excludedStage: 'N3',
-      textBlocks: [],
-    },
-
-    // ── 섹션 04: 정상 섹션 (SRC_B)
-    {
-      sectionId: 'sec_04',
-      sourceImageId: SRC_B,
-      sectionOrder: 4,
-      bucket: 'include',
-      excludedStage: null,
-      textBlocks: [
-        {
-          // 케이스 4: N4 부분 실패 블록 (blockStatus: 'failed')
-          blockId: 'blk_04',
-          sectionId: 'sec_04',
-          sourceText: '순수 비타민 C 15% 함유',
-          translatedText: '',
-          translationStatus: 'machine',
-          role: 'body',
-          blockStatus: 'failed',
-          needsReview: true,
-          complianceFlags: [],
-          autoAdjust: false,
-          basis: '',
-          bbox: { x: 150, y: 300, width: 700, height: 80 },
-          candidates: [],
-        },
-      ],
-    },
-
-    // ── 섹션 05: 확인 필요 텍스트 블록 섹션 (SRC_B)
-    // complianceFlags: ['LOCALIZATION_WARNING']는 ComplianceFlag(미확정 string) 값이며
-    // SectionVerdictType과는 무관하다.
-    {
-      sectionId: 'sec_05',
-      sourceImageId: SRC_B,
-      sectionOrder: 5,
-      bucket: 'include',
-      excludedStage: null,
-      textBlocks: [
-        {
-          blockId: 'blk_06',
-          sectionId: 'sec_05',
-          sourceText: '민감성 피부에 적합',
-          translatedText: 'Suitable for sensitive skin',
-          translationStatus: 'machine',
-          role: 'body',
-          blockStatus: 'done',
-          needsReview: true,
-          complianceFlags: ['LOCALIZATION_WARNING'],
-          autoAdjust: false,
-          basis: '미국 시장에서 "sensitive skin" 표기 시 피부과 테스트 결과 근거 권장',
-          bbox: { x: 100, y: 150, width: 800, height: 80 },
-          candidates: [],
-        },
-      ],
-    },
-  ],
+  // 우측 패널: 섹션 단위 텍스트 블록. displayTop은 job 전체 기준 누적값이다.
+  sections: allSectionDrafts.map((section, i) => ({ ...section, displayTop: allDisplayTops[i] })),
 };
 
 // ─────────────────────────────────────────────

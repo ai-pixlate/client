@@ -7,7 +7,7 @@ import { useJobStatusQuery } from '@/lib/queries/pixate';
 import type { JobStatusResponse } from '@/lib/api/types';
 import { N3View } from './_components/n3/n3-view';
 import { N4ProcessingView } from './_components/n4-processing-view';
-import { N5ReviewView } from './_components/n5-review-view';
+import { N5View } from './_components/n5/n5-view';
 import { N6ResultView } from './_components/n6-result-view';
 
 // ─────────────────────────────────────────────────────────────────
@@ -131,8 +131,8 @@ export default function Page({
 
   return (
     <div className="flex h-screen flex-col bg-gray-50">
-      {/* 상단 헤더 — N3는 Figma 540:3119 기준 자체 헤더(뒤로가기·제목)를 가지므로 숨긴다 */}
-      {currentStep !== 'N3' && (
+      {/* 상단 헤더 — N3/N5는 Figma 기준 자체 헤더(뒤로가기)를 가지므로 숨긴다 */}
+      {currentStep !== 'N3' && currentStep !== 'N5' && (
         <header className="flex h-14 shrink-0 items-center gap-4 border-b bg-white px-6 shadow-sm">
           <Link
             href="/"
@@ -173,7 +173,7 @@ export default function Page({
             {currentStep === 'N2' && <N2View status={statusQuery.data} />}
             {currentStep === 'N3' && <N3View jobId={jobId} />}
             {currentStep === 'N4' && <N4ProcessingView status={statusQuery.data} />}
-            {currentStep === 'N5' && <N5ReviewView jobId={jobId} />}
+            {currentStep === 'N5' && <N5View jobId={jobId} />}
             {currentStep === 'N6' && <N6ResultView jobId={jobId} />}
           </>
         )}
