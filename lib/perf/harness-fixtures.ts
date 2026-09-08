@@ -17,6 +17,7 @@ import type {
   TextBlock,
   BlockRole,
 } from '@/lib/api/types';
+import { computeSectionDisplayTops } from '@/lib/n5/coordinates';
 import type { PerfManifestProduct } from './manifest-types';
 
 // 1x1 회색 PNG. N3는 이미지 decode 테스트가 아니므로 네트워크 요청 없는 최소 placeholder만 사용한다.
@@ -130,6 +131,13 @@ export function buildN5Fixtures(
       // (렌더링/decode 부하 측정이 목적이며, 실제 번역 합성 이미지 유무는 이번 baseline 범위 밖)
       originalPreviewUrl: img.url,
       translatedPreviewUrl: img.url,
+      // 실제 파일을 원본 그대로 표시하므로 preview == original (scaleX/scaleY = 1)
+      preview: {
+        originalWidth: img.width,
+        originalHeight: img.height,
+        previewWidth: img.width,
+        previewHeight: img.height,
+      },
     })),
   );
 
@@ -143,22 +151,34 @@ export function buildN5Fixtures(
   const remainder = textBlockCount % sectionCount;
 
   let seed = 0;
-  const sections: ReviewSection[] = Array.from({ length: sectionCount }, (_, i) => {
-    const order = i + 1;
-    const countForThisSection = base + (i < remainder ? 1 : 0);
-    const sectionId = `perf_n5_sec_${order}`;
-    const blocks = buildTextBlocks(sectionId, countForThisSection, seed);
-    seed += countForThisSection;
+  const sectionDrafts: Omit<ReviewSection, 'displayTop'>[] = Array.from(
+    { length: sectionCount },
+    (_, i) => {
+      const order = i + 1;
+      const countForThisSection = base + (i < remainder ? 1 : 0);
+      const sectionId = `perf_n5_sec_${order}`;
+      const blocks = buildTextBlocks(sectionId, countForThisSection, seed);
+      seed += countForThisSection;
 
-    return {
-      sectionId,
-      sourceImageId: sourceImages[i % Math.max(1, sourceImages.length)]?.sourceImageId ?? '',
-      sectionOrder: order,
-      bucket: 'include',
-      excludedStage: null,
-      textBlocks: blocks,
-    };
-  });
+      return {
+        sectionId,
+        sourceImageId: sourceImages[i % Math.max(1, sourceImages.length)]?.sourceImageId ?? '',
+        sectionOrder: order,
+        bucket: 'include',
+        excludedStage: null,
+        // synthetic 높이 — DOM 부하 측정용이라 실제 이미지 영역과 무관하게
+        // block 개수에 비례한 값만 있으면 된다. 전부 include라 displayTop은 단순 누적.
+        height: countForThisSection * 80 + 40,
+        textBlocks: blocks,
+      };
+    },
+  );
+
+  const displayTops = computeSectionDisplayTops(sectionDrafts);
+  const sections: ReviewSection[] = sectionDrafts.map((section, i) => ({
+    ...section,
+    displayTop: displayTops[i],
+  }));
 
   return {
     sourceImages,
