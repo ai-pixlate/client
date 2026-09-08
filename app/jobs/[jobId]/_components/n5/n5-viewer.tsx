@@ -1,20 +1,26 @@
-import type { ReviewSourceImage } from '@/lib/api/types';
-import { ImageViewer } from '../image-viewer';
+import type { ReviewSection, ReviewSourceImage } from '@/lib/api/types';
+import { N5CompareStack } from './n5-compare-stack';
 
 // ─────────────────────────────────────────────────────────────────
-// N5 — 중앙 결과 이미지 workspace (Figma 544:3168 기준, 오늘은 골격만)
+// N5 — 중앙 결과 이미지 workspace (Figma 544:3168 기준, 8일차)
 //
-// 포함: 긴 상세페이지 scroll viewport, zoom control 위치, block overlay를
-// 올릴 relative 기준.
-// 미포함(오늘 범위 아님): 전/후 slider, 실제 zoom, block bbox overlay.
+// 포함: 긴 상세페이지 scroll viewport, zoom control 위치, 원본/번역
+// Before/After 비교 스택(N5CompareStack) — 두 레이어를 완전히 겹쳐 그리고
+// 세로 divider로 drag하면 노출 비율이 바뀐다.
+// 미포함(오늘 범위 아님): 실제 zoom 동작, block 선택 interaction.
 //
-// 9/8 TODO: 이 컴포넌트 안에 원본 레이어를 번역 레이어 위에 절대 위치로
-// 겹쳐 그리고 슬라이더로 clip-path를 조절하는 overlap slider를 추가한다.
-// 지금은 번역 결과(mode="translated") 레이어 하나만 렌더링한다 —
-// Figma의 "번역문/원문" 토글은 그 슬라이더로 대체될 예정이라 오늘은 만들지 않는다.
+// 기존 "번역문/원문" toggle(ImageViewer mode prop)은 여기서는 쓰지 않는다 —
+// Before/After 슬라이더가 그 자리를 대체한다. ImageViewer 자체는 perf
+// harness(app/perf/long-page)가 그대로 쓰고 있으므로 건드리지 않는다.
 // ─────────────────────────────────────────────────────────────────
 
-export function N5Viewer({ sourceImages }: { sourceImages: ReviewSourceImage[] }) {
+export function N5Viewer({
+  sourceImages,
+  sections,
+}: {
+  sourceImages: ReviewSourceImage[];
+  sections: ReviewSection[];
+}) {
   return (
     <div
       data-testid="n5-viewer"
@@ -22,12 +28,11 @@ export function N5Viewer({ sourceImages }: { sourceImages: ReviewSourceImage[] }
     >
       <ZoomControl />
 
-      {/* 9/8 TODO: 원본 레이어(overlap) + 슬라이더 핸들이 이 relative 컨테이너 안에 절대 위치로 추가될 예정 */}
       <div
         data-testid="n5-viewer-scroll"
         className="relative min-h-0 flex-1 overflow-y-auto"
       >
-        <ImageViewer sourceImages={sourceImages} mode="translated" />
+        <N5CompareStack sourceImages={sourceImages} sections={sections} />
       </div>
     </div>
   );
