@@ -166,6 +166,10 @@ export function buildN5Fixtures(
         sectionOrder: order,
         bucket: 'include',
         excludedStage: null,
+        // 이 harness는 N5CompareStack(section별 이미지 crop)을 쓰지 않고
+        // 기존 ImageViewer(이미지 통째로 표시)만 쓰므로 topOffset은 실제로
+        // 읽히지 않는다 — 타입 계약을 맞추기 위한 placeholder.
+        topOffset: 0,
         // synthetic 높이 — DOM 부하 측정용이라 실제 이미지 영역과 무관하게
         // block 개수에 비례한 값만 있으면 된다. 전부 include라 displayTop은 단순 누적.
         height: countForThisSection * 80 + 40,
