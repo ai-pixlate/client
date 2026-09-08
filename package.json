@@ -11,6 +11,7 @@
     "start": "next start",
     "lint": "eslint",
     "verify:coords": "node --experimental-strip-types scripts/verify-coordinates.mjs",
+    "verify:n5-coords": "node --experimental-strip-types scripts/verify-n5-coordinates.mjs",
     "make:ruler": "node scripts/make-ruler.mjs",
     "typecheck": "tsc --noEmit",
     "test:e2e": "playwright test"
