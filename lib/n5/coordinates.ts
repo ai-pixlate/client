@@ -14,7 +14,11 @@
  * - preview scale               : scaleX = previewWidth / originalWidth
  *                                 scaleY = previewHeight / originalHeight
  *
- * top_offset은 여기서 다루지 않는다 — N5 표시 위치 계산에는 displayTop만 쓴다.
+ * top_offset은 N5 표시 위치 계산(displayTop)에는 쓰지 않지만, ReviewSection.topOffset
+ * 으로 API가 그대로 내려준다 — Before/After 두 레이어를 section 단위로 잘라 이어붙일 때
+ * "이 section이 원본 이미지의 어느 지점을 보여줘야 하는가"는 이 값을 쓴다 (section
+ * height를 누적해서 추정하지 않는다 — section이 이미지를 빈틈없이 나눈다는 보장이
+ * 계약에 없으므로, 그 추정은 삭제했다. topOffset과 displayTop은 절대 섞어 쓰지 않는다.)
  */
 
 import type { BoundingBox, SectionBucket, TextBlock } from '@/lib/api/types';
