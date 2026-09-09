@@ -11,10 +11,17 @@
     "start": "next start",
     "lint": "eslint",
     "verify:coords": "node --experimental-strip-types scripts/verify-coordinates.mjs",
+    "verify:n5-coords": "node --experimental-strip-types scripts/verify-n5-coordinates.mjs",
+    "verify:n3-verdict": "node --experimental-strip-types scripts/verify-n3-verdict-contract.mjs",
+    "verify:n5-viewport": "node --experimental-strip-types scripts/verify-n5-viewport.mjs",
     "make:ruler": "node scripts/make-ruler.mjs",
-    "typecheck": "tsc --noEmit"
+    "make:n5-fixtures": "node scripts/make-n5-fixture-images.mjs",
+    "typecheck": "tsc --noEmit",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/utilities": "^3.2.2",
     "@hookform/resolvers": "^5.8.0",
     "@tanstack/react-query": "^5.101.4",
     "next": "16.3.1",
@@ -25,6 +32,7 @@
     "zustand": "^5.0.15"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
