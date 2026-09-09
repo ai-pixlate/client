@@ -4,20 +4,23 @@ import Link from 'next/link';
 
 import { useReviewQuery } from '@/lib/queries/pixate';
 import { StepNav } from '../step-nav';
-import { N5Viewer } from './n5-viewer';
+import { N5Viewport } from './n5-viewport';
 import { N5Panel } from './n5-panel';
 
 // ─────────────────────────────────────────────────────────────────
-// N5 — 검수 shell (Figma node 544:3168 기준, 7일차 골격 → 8일차 좌측 viewer)
+// N5 — 검수 shell (Figma node 544:3168 기준, 7일차 골격 → 9일차 캔버스형 viewport)
 //
 // 7일차: 좌/우 workspace 골격 (레이아웃 경계, 6단계 진행 nav, scroll 구조).
-// 8일차: 좌측 viewer에 원본/번역 Before/After 비교 슬라이더를 추가했다
-// (N5Viewer → N5CompareStack). 좌표 검증용 bbox debug overlay는 구현
-// 중 잠깐 썼다가, Day10 selection overlay와 중복될 dead code라 제거했다
-// (좌표 정확성은 npm run verify:n5-coords로 계속 검증한다).
+// 8일차: 좌측 viewer에 원본/번역 Before/After 비교 슬라이더를 추가했었다
+// (N5Viewer → N5CompareStack, BeforeAfterSlider) — 9일차 방향 전환으로 폐기.
+// 9일차: 슬라이더 대신 하나의 캔버스형 viewport(N5Viewport)로 교체했다.
+// 원문/번역문은 같은 viewport에서 image source만 바뀌고, 그 위에
+// zoom(Ctrl/Cmd+Wheel, +/-)·pan(Space+drag)·Fit Width/Height 조작 기반을
+// 얹는다 (좌표 정확성은 npm run verify:n5-coords, viewport 계산은
+// npm run verify:n5-viewport로 계속 검증한다).
 //
-// 아직 범위가 아닌 것: 클릭 선택 연동(block selection), 실제 zoom, 우측
-// 카드 콘텐츠(직접 수정하기/번역근거), 기존 "다른 번역 보기" 후보 UI.
+// 아직 범위가 아닌 것: 클릭 선택 연동(block selection), 우측 block table
+// 콘텐츠, virtualization, 텍스트 수정, delete interaction 완성.
 // ─────────────────────────────────────────────────────────────────
 
 export function N5View({ jobId }: { jobId: string }) {
@@ -63,7 +66,7 @@ export function N5View({ jobId }: { jobId: string }) {
 
         {/* 본문: 중앙 viewer + 우측 panel */}
         <div className="flex min-h-0 flex-1 gap-6 px-8 pb-8">
-          <N5Viewer sourceImages={data.sourceImages} sections={data.sections} />
+          <N5Viewport sourceImages={data.sourceImages} sections={data.sections} />
           <N5Panel job={data.job} blockCount={blockCount} />
         </div>
       </div>

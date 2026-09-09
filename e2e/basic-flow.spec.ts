@@ -111,47 +111,21 @@ test('N1에서 N5 검수 화면까지 기본 작업 흐름을 완료한다', asy
   await expect(page.getByRole('heading', { name: '번역을 진행하고 있습니다' })).toBeVisible();
 
   // ── N4 → N5 ───────────────────────────────────────────────
-  // N5는 7일차 마지막 작업에서 Figma 544:3168 기준 좌/우 workspace shell로 교체됨.
-  // 오늘 범위가 아닌 원문/번역문 toggle·textbox 편집·"다른 번역 보기"는 화면에 없다.
+  // N5는 9일차에 Before/After 비교 슬라이더를 폐기하고 캔버스형 viewport로
+  // 교체됨 — 상세 interaction(zoom/pan/fit/mode) 검증은 e2e/n5-viewport.spec.ts.
+  // 오늘 범위가 아닌 textbox 편집·"다른 번역 보기"는 화면에 없다.
   await expect(page.locator('[data-testid="n5-panel"]')).toBeVisible({ timeout: 8_000 });
 
-  // ── N5: 기본 검증 — 좌(viewer)/우(panel) workspace 골격 ────
-  await expect(page.locator('[data-testid="n5-viewer"]')).toBeVisible();
-  await expect(page.locator('[data-testid="n5-viewer-scroll"]')).toBeVisible();
+  // ── N5: 기본 검증 — 좌(viewport)/우(panel) workspace 골격 ────
+  await expect(page.locator('[data-testid="n5-viewport"]')).toBeVisible();
+  await expect(page.locator('[data-testid="n5-canvas"]')).toBeVisible();
   await expect(page.locator('[data-testid="n5-panel"]')).toBeVisible();
   await expect(page.locator('[data-testid="n5-panel-body"]')).toBeVisible();
   await expect(page.getByText('번역 결과')).toBeVisible();
 
-  // ── N5: Before/After 비교 슬라이더 (8일차) ──────────────────
-  const slider = page.locator('[data-testid="n5-before-after-slider"]');
-  await expect(slider).toHaveAttribute('role', 'slider');
-  await expect(slider).toHaveAttribute('aria-valuenow', '50'); // 기본값 50%
-
-  const stack = page.locator('[data-testid="n5-compare-stack"]');
-  const stackBox = await stack.boundingBox();
-  if (!stackBox) throw new Error('n5-compare-stack 위치를 찾을 수 없습니다');
-
-  // drag로 값이 실제로 바뀌는지 (약 25% 지점으로 이동)
-  await slider.hover();
-  await page.mouse.down();
-  await page.mouse.move(stackBox.x + stackBox.width * 0.25, stackBox.y + 10, { steps: 5 });
-  await page.mouse.up();
-  const draggedValue = Number(await slider.getAttribute('aria-valuenow'));
-  expect(Math.abs(draggedValue - 25)).toBeLessThanOrEqual(3);
-
-  // 왼쪽 끝 훨씬 밖으로 drag -> 0% clamp
-  await slider.hover();
-  await page.mouse.down();
-  await page.mouse.move(stackBox.x - 500, stackBox.y + 10, { steps: 3 });
-  await page.mouse.up();
-  await expect(slider).toHaveAttribute('aria-valuenow', '0');
-
-  // 오른쪽 끝 훨씬 밖으로 drag -> 100% clamp
-  await slider.hover();
-  await page.mouse.down();
-  await page.mouse.move(stackBox.x + stackBox.width + 500, stackBox.y + 10, { steps: 3 });
-  await page.mouse.up();
-  await expect(slider).toHaveAttribute('aria-valuenow', '100');
+  // ── N5: Before/After 비교 슬라이더는 더 이상 존재하지 않는다 (9일차 폐기) ──
+  await expect(page.locator('[data-testid="n5-before-after-slider"]')).toHaveCount(0);
+  await expect(page.locator('[data-testid="n5-compare-stack"]')).toHaveCount(0);
 
   // ── 현재 flow 종료 조건: N5 → N6 미구현 확인 ────────────────
   const finishButton = page.getByRole('button', { name: '저장하러 가기' });
