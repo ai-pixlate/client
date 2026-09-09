@@ -168,7 +168,7 @@ export function buildN5Fixtures(
         sectionOrder: order,
         bucket: 'include',
         excludedStage: null,
-        // 이 harness는 N5CompareStack(section별 이미지 crop)을 쓰지 않고
+        // 이 harness는 production N5 viewport(section별 이미지 crop)를 쓰지 않고
         // 기존 ImageViewer(이미지 통째로 표시)만 쓰므로 topOffset은 실제로
         // 읽히지 않는다 — 타입 계약을 맞추기 위한 placeholder.
         topOffset: 0,
