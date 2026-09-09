@@ -5,7 +5,7 @@
  * 코드값을 화면에 그대로 노출하지 않기 위한 최소한의 공통 위치입니다.
  */
 
-import type { ExclusionReasonCode, SectionVerdictType } from './types';
+import type { ExclusionReasonCode } from './types';
 
 export const EXCLUSION_REASON_LABELS: Record<ExclusionReasonCode, string> = {
   auto_regulatory: '규제 위반',
@@ -15,9 +15,5 @@ export const EXCLUSION_REASON_LABELS: Record<ExclusionReasonCode, string> = {
   restored_by_user: '사용자 되살림',
 };
 
-export const SECTION_VERDICT_TYPE_LABELS: Record<SectionVerdictType, string> = {
-  regulatory: '규제 위반',
-  channel_policy: '채널정책',
-  local_irrelevant: '현지 무의미',
-  needs_fix: '수정 필요',
-};
+// N3 section_verdict 배지 라벨은 lib/n3/verdict.ts(getN3VerdictBadgeLabel)에서
+// verdictStatus로부터 파생한다. 이 파일에서 별도로 관리하지 않는다.

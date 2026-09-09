@@ -5,6 +5,8 @@
  * - 아직 협의 중인 값은 string으로 열어두고 TODO를 달았습니다.
  */
 
+import type { VerdictStatus, VerdictType } from '@/lib/n3/verdict';
+
 // ─────────────────────────────────────────────
 // 확정 가능한 union type
 // ─────────────────────────────────────────────
@@ -42,9 +44,6 @@ export type ExclusionReasonCode =
  * 블록만 내려오는 구조라 'running'이 실제로 쓰이는지 백엔드 확인 필요.
  */
 export type ProcessingStatus = 'pending' | 'running' | 'done' | 'failed';
-
-/** 섹션 판정 유형 (Day 6 확정) */
-export type SectionVerdictType = 'regulatory' | 'channel_policy' | 'local_irrelevant' | 'needs_fix';
 
 /**
  * 섹션 경고 뱃지 코드 (Day 6 확정).
@@ -85,13 +84,6 @@ export type FailedItemType = 'section' | 'textBlock';
  * N4 후보: 'inpainting' | 'translation' | 'compliance_check' | 'render'
  */
 export type ProcessingSubStep = string;
-
-/**
- * 섹션 판정 상태.
- * TODO: 백엔드 section_verdict 테이블 기준 확정 후 union으로 좁힐 것.
- * 후보: 'passed' | 'warning' | 'failed'
- */
-export type VerdictStatus = string;
 
 /**
  * 텍스트 블록 처리 상태.
@@ -171,9 +163,16 @@ export interface CreateJobResponse {
 
 export interface SectionVerdict {
   verdictId: string;
-  verdictType: SectionVerdictType;
-  /** TODO: 백엔드 확정 후 union으로 좁힐 것 */
+  /** verdictStatus에서만 파생된다. lib/n3/verdict.ts의 getVerdictType() 참고 */
+  verdictType: VerdictType;
   verdictStatus: VerdictStatus;
+  /**
+   * policy(채널 정책) 판정에서만 의미를 가진다.
+   * - true: 배지만 표시. section을 exclude 대상으로 보내지 않는다.
+   * - false: 실제 채널 정책 판정. 기본 exclude 대상.
+   * regulated/conditional/irrelevant/needs_fix에서는 사용하지 않는다.
+   */
+  isTeaser: boolean;
   problemText: string;
   basis: string;
 }
