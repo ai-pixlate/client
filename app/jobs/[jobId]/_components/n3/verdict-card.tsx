@@ -1,5 +1,5 @@
 import type { SectionVerdict } from '@/lib/api/types';
-import { SECTION_VERDICT_TYPE_LABELS } from '@/lib/api/labels';
+import { getN3VerdictBadgeLabel } from '@/lib/n3/verdict';
 
 // ─────────────────────────────────────────────────────────────────
 // N3 — AI 판정/근거 카드
@@ -11,7 +11,7 @@ import { SECTION_VERDICT_TYPE_LABELS } from '@/lib/api/labels';
 export function VerdictCard({ verdict }: { verdict: SectionVerdict }) {
   return (
     <div className="flex w-full flex-col items-start gap-3 rounded-[8px] bg-white p-5">
-      <StatusChip label={SECTION_VERDICT_TYPE_LABELS[verdict.verdictType]} />
+      <StatusChip label={getN3VerdictBadgeLabel(verdict.verdictStatus)} />
       <div className="flex w-full flex-col gap-1.5">
         <p className="text-[18px] font-medium tracking-[-0.03em] text-[#171717]">
           {verdict.problemText}

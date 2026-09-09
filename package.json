@@ -12,6 +12,7 @@
     "lint": "eslint",
     "verify:coords": "node --experimental-strip-types scripts/verify-coordinates.mjs",
     "verify:n5-coords": "node --experimental-strip-types scripts/verify-n5-coordinates.mjs",
+    "verify:n3-verdict": "node --experimental-strip-types scripts/verify-n3-verdict-contract.mjs",
     "make:ruler": "node scripts/make-ruler.mjs",
     "make:n5-fixtures": "node scripts/make-n5-fixture-images.mjs",
     "typecheck": "tsc --noEmit",
