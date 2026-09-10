@@ -75,7 +75,17 @@ export const VERDICT_TYPES = [
   'channel_policy',
 ] as const satisfies readonly VerdictType[];
 
-const N3_VERDICT_BADGE_LABELS: Record<VerdictType, string> = {
+/**
+ * verdictType -> 배지 기본 문구. N3 배지뿐 아니라 exclusion reason 라벨
+ * (lib/api/labels.ts의 EXCLUSION_REASON_LABELS) 등 같은 의미를 화면에 다시
+ * 쓰는 곳에서도 이 map을 재사용한다 — 같은 문구를 여러 파일에 따로
+ * 하드코딩하지 않기 위함이다.
+ *
+ * TODO(v3.4.2): regulatory / regulatory_replaceable의 최종 사용자 노출
+ * 문구는 화면문구 ② 확정 전이다. 코드값과 동작은 확정됐으므로 바꾸지
+ * 않되, 화면문구 ② 확정 후 이 두 값만 교체한다.
+ */
+export const VERDICT_BADGE_LABELS: Record<VerdictType, string> = {
   regulatory: '규제 위반',
   regulatory_replaceable: '규제 표현',
   regulatory_conditional: '조건부 규제',
@@ -86,5 +96,5 @@ const N3_VERDICT_BADGE_LABELS: Record<VerdictType, string> = {
 
 /** verdictType -> N3 배지 문구 */
 export function getN3VerdictBadgeLabel(type: VerdictType): string {
-  return N3_VERDICT_BADGE_LABELS[type];
+  return VERDICT_BADGE_LABELS[type];
 }
