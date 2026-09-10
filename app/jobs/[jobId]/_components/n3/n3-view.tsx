@@ -96,7 +96,7 @@ export function N3View({ jobId }: { jobId: string }) {
     } else {
       // 번역 → 삭제: 이동한 섹션을 바로 상세 보기로 노출
       setActiveSectionId(sectionId);
-      mutation.mutate({ sectionId, bucket: 'exclude', stage: 'N3' });
+      mutation.mutate({ sectionId, bucket: 'exclude' });
     }
   }
 

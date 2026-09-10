@@ -160,16 +160,17 @@ export function useUpdateSectionBucketMutation(jobId: string) {
 
   return useMutation({
     mutationFn: ({ sectionId, ...payload }: { sectionId: string } & UpdateSectionBucketRequest) =>
-      updateSectionBucket(sectionId, payload),
-    onMutate: async ({ sectionId, bucket, stage }) => {
+      updateSectionBucket(jobId, sectionId, payload),
+    onMutate: async ({ sectionId, bucket }) => {
       await queryClient.cancelQueries({ queryKey: pixateKeys.sections(jobId) });
       const previous = queryClient.getQueryData<SectionsResponse>(pixateKeys.sections(jobId));
 
       if (previous) {
         // 서버(mock) 규칙과 동일하게 맞춘다: bucket을 바꾸는 모든 PATCH는
-        // exclusionReason을 항상 null로 비우고, excludedStage는 stage가
-        // 없으면(=include로 복구) null로 되돌린다. 자동 판정 사유는
-        // 사용자가 직접 조작한 순간 더 이상 유효하지 않기 때문이다.
+        // exclusionReason을 항상 null로 비운다. excludedStage는 클라이언트가
+        // 보내지 않는다 — 서버가 현재 job 단계를 기준으로 판단한다. 이 mutation은
+        // N3에서만 호출되므로 exclude 시 낙관적으로 'N3'를 반영한다. 자동 판정
+        // 사유는 사용자가 직접 조작한 순간 더 이상 유효하지 않기 때문이다.
         queryClient.setQueryData<SectionsResponse>(pixateKeys.sections(jobId), {
           sections: previous.sections.map((section) =>
             section.sectionId === sectionId
@@ -177,7 +178,7 @@ export function useUpdateSectionBucketMutation(jobId: string) {
                   ...section,
                   bucket,
                   exclusionReason: null,
-                  excludedStage: bucket === 'include' ? null : (stage ?? null),
+                  excludedStage: bucket === 'include' ? null : 'N3',
                 }
               : section,
           ),

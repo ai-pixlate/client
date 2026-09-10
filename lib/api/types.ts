@@ -220,12 +220,6 @@ export interface SectionsResponse {
 
 export interface UpdateSectionBucketRequest {
   bucket: SectionBucket;
-  /**
-   * 어느 단계에서 bucket을 변경하는지.
-   * Mock 검증용 임시 필드. 백엔드 계약 확정 전.
-   * N3 / N5 — 제외 시 사용. 복구(include) 시 생략.
-   */
-  stage?: JobCurrentStep;
 }
 
 // ─────────────────────────────────────────────

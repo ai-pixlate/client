@@ -79,10 +79,11 @@ export function getSections(jobId: string): Promise<SectionsResponse> {
 }
 
 export function updateSectionBucket(
+  jobId: string,
   sectionId: string,
   payload: UpdateSectionBucketRequest,
 ): Promise<{ sectionId: string; bucket: SectionBucket }> {
-  return apiFetch(`/api/sections/${sectionId}`, {
+  return apiFetch(`/jobs/${jobId}/sections/${sectionId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
