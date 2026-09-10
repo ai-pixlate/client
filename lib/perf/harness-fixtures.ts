@@ -15,8 +15,8 @@ import type {
   ReviewSection,
   ReviewSourceImage,
   TextBlock,
-  BlockRole,
 } from '@/lib/api/types';
+import { BLOCK_ROLES } from '@/lib/api/types';
 import { computeSectionDisplayTops } from '@/lib/n5/coordinates';
 import type { PerfManifestProduct } from './manifest-types';
 
@@ -32,17 +32,17 @@ export function buildN3Sections(count: number): Section[] {
   return Array.from({ length: count }, (_, i) => {
     const order = i + 1;
     const hasVerdict = order % 3 === 0;
-    const isExcluded = order % 7 === 0;
+    const isSectionExcluded = order % 7 === 0;
 
     return {
       sectionId: `perf_n3_sec_${order}`,
       sourceImageId: `perf_n3_src_${Math.ceil(order / 10)}`,
       sectionOrder: order,
       thumbnailUrl: PLACEHOLDER_THUMB,
-      bucket: isExcluded ? 'exclude' : 'include',
+      bucket: isSectionExcluded ? 'exclude' : 'include',
       // Section.exclusionReason이 ExclusionReasonCode로 좁혀져 값만 유효 코드로 맞춤. harness 로직 변경 아님.
-      exclusionReason: isExcluded ? 'auto_local_irrelevant' : null,
-      excludedStage: isExcluded ? 'N3' : null,
+      exclusionReason: isSectionExcluded ? 'auto_local_irrelevant' : null,
+      excludedStage: isSectionExcluded ? 'N3' : null,
       bbox: { x: 0, y: (order - 1) * 600, width: 1000, height: 600 },
       verdicts: hasVerdict
         ? [
@@ -63,8 +63,6 @@ export function buildN3Sections(count: number): Section[] {
 // ─────────────────────────────────────────────────────────────────
 // N5 — sourceImages + textBlock fixture
 // ─────────────────────────────────────────────────────────────────
-
-const BLOCK_ROLES: BlockRole[] = ['title', 'body', 'caption', 'price', 'caution'];
 
 function buildTextBlocks(sectionId: string, count: number, seedOffset: number): TextBlock[] {
   return Array.from({ length: count }, (_, i) => {

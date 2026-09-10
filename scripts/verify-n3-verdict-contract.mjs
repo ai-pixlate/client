@@ -1,5 +1,5 @@
 /**
- * N3 section_verdict 계약 자동 검증 (v3.4.1).
+ * N3 section_verdict / role / translation-candidate 계약 자동 검증 (v3.4.1).
  *
  * lib/n3/verdict.ts, lib/api/types.ts 는 React 도 브라우저 API 도 쓰지 않기
  * 때문에 Node 에서 그대로 불러와 확인할 수 있다. (scripts/verify-n5-coordinates.mjs와 같은 패턴)
@@ -18,6 +18,7 @@ import {
   VERDICT_TYPES,
   getN3VerdictBadgeLabel,
 } from '../lib/n3/verdict.ts';
+import { BLOCK_ROLES } from '../lib/api/types.ts';
 import * as verdictModule from '../lib/n3/verdict.ts';
 
 let pass = 0;
@@ -162,6 +163,15 @@ console.log('\n[5] Mock 계약 케이스 (9월 5종) — section.bucket이 UI �
     'channel_policy 케이스가 9월 mock에 없다',
     !cases.some((c) => c.verdictType === 'channel_policy'),
   );
+}
+
+console.log('\n[6] BlockRole은 정확히 6종이다 (v3.4.1, product_label 추가)');
+{
+  const expected = ['title', 'body', 'caption', 'price', 'caution', 'product_label'];
+  check('BLOCK_ROLES.length === 6', BLOCK_ROLES.length === 6, `got ${BLOCK_ROLES.length}`);
+  for (const role of expected) {
+    check(`BLOCK_ROLES에 '${role}' 포함`, BLOCK_ROLES.includes(role));
+  }
 }
 
 console.log(`\n결과: PASS ${pass} / FAIL ${fail}\n`);

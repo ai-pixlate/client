@@ -352,6 +352,7 @@ export const mockN4PartialFailureStatus: JobStatusResponse = {
  * 5. blk_05 — 사용자 수정된 것처럼 표현 (translationStatus: 'userEdited')
  * 6. blk_06 — 확인 필요 블록 (두 번째 소스 이미지)
  * 7. blk_07 — N5에서 사용자가 수동 제외한 section에 속한 블록 (displayTop 누적 제외 검증용)
+ * 8. blk_08 — product_label 역할 블록 (v3.4.1 추가, 번역·인페인팅 대상 제외)
  *
  * displayTop은 손으로 계산해 넣지 않고 computeSectionDisplayTops(lib/n5/coordinates.ts)로
  * 구한다 — 실제로는 백엔드가 계산해 내려주는 값이라, 여기서도 같은 계산 로직을 거쳐야
@@ -478,6 +479,24 @@ const srcASectionDrafts: Omit<ReviewSection, 'displayTop'>[] = [
             isSelected: false,
           },
         ],
+      },
+      {
+        // 케이스 8: product_label 역할 블록 (v3.4.1 추가) — 제품 용기에 인쇄된
+        // 글자라 번역·인페인팅 대상에서 제외되고 원본 상태로 남는다.
+        // 처리 파이프라인은 이번 작업 범위 밖이라 sourceText == translatedText로 둔다.
+        blockId: 'blk_08',
+        sectionId: 'sec_02',
+        sourceText: 'NET WT 50g',
+        translatedText: 'NET WT 50g',
+        translationStatus: 'machine',
+        role: 'product_label',
+        blockStatus: 'done',
+        needsReview: false,
+        complianceFlags: [],
+        autoAdjust: false,
+        basis: '제품 용기 인쇄 문구 — 번역·인페인팅 대상 제외, 원본 유지.',
+        bbox: { x: 750, y: 400, width: 150, height: 40 },
+        candidates: [],
       },
     ],
   },

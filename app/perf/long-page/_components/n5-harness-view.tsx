@@ -34,8 +34,8 @@ export function N5HarnessView({
     setSections((prev) =>
       prev.map((s) => {
         if (s.sectionId !== sectionId) return s;
-        const isExcluded = s.bucket === 'exclude' && s.excludedStage === 'N5';
-        return isExcluded
+        const isSectionExcluded = s.bucket === 'exclude' && s.excludedStage === 'N5';
+        return isSectionExcluded
           ? { ...s, bucket: 'include', excludedStage: null }
           : { ...s, bucket: 'exclude', excludedStage: 'N5' };
       }),

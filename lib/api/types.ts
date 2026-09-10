@@ -64,8 +64,29 @@ export type DeliverableUsageType = 'detail' | 'thumbnail_main' | 'thumbnail_sub'
  */
 export type ValidationScope = 'detail' | 'thumbnail_main' | 'thumbnail_sub' | 'all';
 
-/** 텍스트 블록 역할. 번역 톤·규제 검증 강도가 이 값에 따라 달라짐 */
-export type BlockRole = 'title' | 'body' | 'caption' | 'price' | 'caution';
+/**
+ * 텍스트 블록 역할. 번역 톤·규제 검증 강도가 이 값에 따라 달라짐.
+ * product_label(v3.4.1 추가): 제품 용기/패키지 사진 안에 인쇄된 글자 —
+ * 번역·인페인팅 대상에서 제외하고 원본 상태로 남긴다. 처리 파이프라인은
+ * 이번 작업 범위 밖이며, FE는 타입 수용·표시만 맞춘다.
+ *
+ * product_label의 "제외"는 section.bucket(섹션 단위 포함/제외)과는 다른 축이다
+ * — role=product_label은 text block 단위 번역·인페인팅 제외를 뜻하고, 그 판단은
+ * role 자체가 정본이다(TextBlock에 별도 is_excluded류 API 필드는 없다). 향후
+ * N5에서 block 단위 제외 표시가 필요해지면 role === 'product_label'을 정본으로
+ * 삼는다 — section.bucket에서 파생시키지 않는다.
+ */
+export type BlockRole = 'title' | 'body' | 'caption' | 'price' | 'caution' | 'product_label';
+
+/** BlockRole 런타임 목록. 화면에서 선택지를 순회하거나 fixture를 만들 때 이 상수를 재사용한다 */
+export const BLOCK_ROLES = [
+  'title',
+  'body',
+  'caption',
+  'price',
+  'caution',
+  'product_label',
+] as const satisfies readonly BlockRole[];
 
 /** 번역 상태 */
 export type TranslationStatus = 'machine' | 'userEdited';
