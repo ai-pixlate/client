@@ -5,8 +5,17 @@
  * 코드값을 화면에 그대로 노출하지 않기 위한 최소한의 공통 위치입니다.
  */
 
-import type { ExclusionReasonCode } from './types';
+import type { BlockRole, ExclusionReasonCode } from './types';
 import { VERDICT_BADGE_LABELS } from '@/lib/n3/verdict';
+
+export const BLOCK_ROLE_LABELS: Record<BlockRole, string> = {
+  title: '제목',
+  body: '본문',
+  caption: '캡션',
+  price: '가격',
+  caution: '주의문구',
+  product_label: '제품 라벨',
+};
 
 /**
  * 자동 제외 사유 3종은 N3 배지 기본 문구(VERDICT_BADGE_LABELS)에 "(자동)"만

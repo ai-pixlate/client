@@ -3,6 +3,7 @@
 import { useState } from 'react';
 
 import type { TextBlock } from '@/lib/api/types';
+import { BLOCK_ROLE_LABELS } from '@/lib/api/labels';
 
 // ─────────────────────────────────────────────────────────────────
 // N5 — TextBlock 편집기
@@ -24,10 +25,16 @@ export function TextBlockEditor({
 
   const isDirty = draft !== block.translatedText;
   const isFailed = block.blockStatus === 'failed';
-  const isDisabled = disabled || isSaving;
+  // product_label: 번역·인페인팅 대상 제외, 원본 유지 (v3.4.1) — 이 블록의
+  // 번역문 편집만 막는다. section 단위 disabled(N5 제외)와는 별개 축이다.
+  const isProductLabel = block.role === 'product_label';
+  const isDisabled = disabled || isSaving || isProductLabel;
 
   return (
     <div
+      data-testid="text-block-editor"
+      data-role={block.role}
+      data-needs-review={block.needsReview}
       className={`rounded-lg border p-4 ${
         disabled
           ? 'border-gray-100 bg-gray-50 opacity-60'
@@ -53,8 +60,11 @@ export function TextBlockEditor({
             사용자 수정
           </span>
         )}
-        <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-500">
-          {block.role}
+        <span
+          data-testid="text-block-role-label"
+          className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-500"
+        >
+          {BLOCK_ROLE_LABELS[block.role]}
         </span>
       </div>
 
@@ -98,8 +108,8 @@ export function TextBlockEditor({
           }`}
         />
 
-        {/* 저장 버튼 */}
-        {isDirty && !isSaving && !disabled && (
+        {/* 저장 버튼 — product_label은 편집 대상이 아니므로 노출하지 않는다 */}
+        {isDirty && !isSaving && !disabled && !isProductLabel && (
           <div className="mt-1.5 flex justify-end">
             <button
               type="button"
