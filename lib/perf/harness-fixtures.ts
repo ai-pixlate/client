@@ -82,7 +82,9 @@ function buildTextBlocks(sectionId: string, count: number, seedOffset: number): 
       blockStatus: isFailed ? 'failed' : 'done',
       needsReview: n % 4 === 0,
       complianceFlags: n % 9 === 0 ? ['SYNTHETIC_FLAG'] : [],
-      autoAdjust: n % 6 === 0,
+      // v3.4.1 구조체 계약: 조정이 없었던 블록은 null. n % 6 === 0인 블록만
+      // 실제 조정이 발생한 것처럼 fontScale/lineBreakApplied를 채운다.
+      autoAdjust: n % 6 === 0 ? { fontScale: 0.85, lineBreakApplied: n % 12 === 0 } : null,
       basis: '성능 baseline 측정을 위한 synthetic 근거 텍스트입니다. 실제 로컬라이징 근거가 아닙니다.',
       bbox: { x: 0, y: n * 80, width: 900, height: 60 },
     };

@@ -249,6 +249,18 @@ export interface UpdateSectionBucketRequest {
 // N5 — 검수
 // ─────────────────────────────────────────────
 
+/**
+ * 번역 결과가 영역을 초과할 때 자동 조정된 내역 (구조체 계약, v3.4.1).
+ * DB auto_adjust 컬럼(font_scale/line_break_applied)을 camelCase로 그대로 옮긴다.
+ * fontScale=1이고 lineBreakApplied=false여도 "조정 시도는 했으나 변화 없음"과
+ * "조정 자체가 없었음"을 구분할 수 없으므로, 실제 조정 발생 여부는 객체
+ * 존재만으로 판단하지 않고 fontScale !== 1 || lineBreakApplied로 판단한다.
+ */
+export interface AutoAdjust {
+  fontScale: number;
+  lineBreakApplied: boolean;
+}
+
 export interface TextBlock {
   blockId: string;
   sectionId: string;
@@ -261,8 +273,12 @@ export interface TextBlock {
   needsReview: boolean;
   /** TODO: 백엔드 규제 DB 기준 코드값 확정 후 union으로 좁힐 것 */
   complianceFlags: ComplianceFlag[];
-  /** 번역 결과가 영역을 초과해 자동 축소됐는지 여부 */
-  autoAdjust: boolean;
+  /**
+   * 자동 조정 내역. DB 컬럼이 nullable이라 조정이 필요 없었던 블록은 null이다.
+   * "조정이 실제 발생했는가"는 객체 존재만으로 판정하지 않는다 — 필요하면
+   * fontScale !== 1 || lineBreakApplied로 판단한다. (AutoAdjust 참고)
+   */
+  autoAdjust: AutoAdjust | null;
   /** 로컬라이징 근거. 읽기 전용 */
   basis: string;
   /**
