@@ -34,7 +34,6 @@ export function TextBlockEditor({
     <div
       data-testid="text-block-editor"
       data-role={block.role}
-      data-needs-review={block.needsReview}
       className={`rounded-lg border p-4 ${
         disabled
           ? 'border-gray-100 bg-gray-50 opacity-60'
