@@ -53,24 +53,6 @@ export function N5HarnessView({
     );
   };
 
-  const handleCandidateSelect = (blockId: string, candidateId: string) => {
-    setSections((prev) =>
-      prev.map((s) => ({
-        ...s,
-        textBlocks: s.textBlocks.map((b) => {
-          if (b.blockId !== blockId) return b;
-          const candidate = b.candidates.find((c) => c.candidateId === candidateId);
-          if (!candidate) return b;
-          return {
-            ...b,
-            translatedText: candidate.translatedText,
-            candidates: b.candidates.map((c) => ({ ...c, isSelected: c.candidateId === candidateId })),
-          };
-        }),
-      })),
-    );
-  };
-
   return (
     <div className="flex flex-1 overflow-hidden">
       {/* 왼쪽: 이미지 뷰어 */}
@@ -117,7 +99,6 @@ export function N5HarnessView({
                 isSectionDisabled={false}
                 isSectionMutating={false}
                 onSave={handleSave}
-                onCandidateSelect={handleCandidateSelect}
                 pendingBlockId={null}
                 isTranslationPending={false}
               />

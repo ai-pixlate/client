@@ -249,12 +249,6 @@ export interface UpdateSectionBucketRequest {
 // N5 — 검수
 // ─────────────────────────────────────────────
 
-export interface TranslationCandidate {
-  candidateId: string;
-  translatedText: string;
-  isSelected: boolean;
-}
-
 export interface TextBlock {
   blockId: string;
   sectionId: string;
@@ -278,11 +272,6 @@ export interface TextBlock {
    * (좌표계 기준: Pix/ate FE↔BE 구현 기준 v3.3.3)
    */
   bbox: BoundingBox;
-  /**
-   * "다른 번역 보기" 기능용 후보 목록.
-   * TODO: 생성 개수·기준 백엔드와 협의 필요.
-   */
-  candidates: TranslationCandidate[];
 }
 
 /**
@@ -357,10 +346,8 @@ export interface ReviewResponse {
 }
 
 export interface UpdateTranslationRequest {
-  /** 수동 수정 시 사용 */
-  translatedText?: string;
-  /** "다른 번역 보기"에서 선택 시 사용 */
-  candidateId?: string;
+  /** 번역문 수동 수정 시 사용. 단일 번역문 수정만 허용한다 (v3.2.1부터 후보 계약 폐기) */
+  translatedText: string;
 }
 
 /**
@@ -371,7 +358,6 @@ export interface UpdateTranslationResponse {
   blockId: string;
   translatedText: string;
   translationStatus: TranslationStatus;
-  candidates: TranslationCandidate[];
 }
 
 // ─────────────────────────────────────────────

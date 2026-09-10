@@ -347,7 +347,7 @@ export const mockN4PartialFailureStatus: JobStatusResponse = {
  * 테스트 케이스:
  * 1. blk_01 — 정상 번역 블록 (needsReview: false)
  * 2. blk_02 — 확인 필요 블록 (needsReview: true, complianceFlags 포함)
- * 3. blk_03 — 다른 번역 후보 2개가 있는 블록
+ * 3. blk_03 — 정상 번역 블록 (caption)
  * 4. blk_04 — N4 부분 실패로 blockStatus 'failed'인 블록
  * 5. blk_05 — 사용자 수정된 것처럼 표현 (translationStatus: 'userEdited')
  * 6. blk_06 — 확인 필요 블록 (두 번째 소스 이미지)
@@ -407,7 +407,6 @@ const srcASectionDrafts: Omit<ReviewSection, 'displayTop'>[] = [
         autoAdjust: false,
         basis: '브랜드 톤에 맞게 간결하게 번역했습니다.',
         bbox: { x: 200, y: 80, width: 600, height: 80 },
-        candidates: [],
       },
       {
         // 케이스 5: 사용자 수정된 블록 (translationStatus: userEdited)
@@ -424,7 +423,6 @@ const srcASectionDrafts: Omit<ReviewSection, 'displayTop'>[] = [
         autoAdjust: false,
         basis: '원문의 과학적 주장을 그대로 번역했습니다.',
         bbox: { x: 100, y: 200, width: 800, height: 120 },
-        candidates: [],
       },
     ],
   },
@@ -451,10 +449,9 @@ const srcASectionDrafts: Omit<ReviewSection, 'displayTop'>[] = [
         autoAdjust: false,
         basis: '최상급 표현을 포함해 수정이 권장됩니다.',
         bbox: { x: 100, y: 120, width: 800, height: 100 },
-        candidates: [],
       },
       {
-        // 케이스 3: 다른 번역 후보 2개가 있는 블록
+        // 케이스 3: 정상 번역 블록 (caption)
         blockId: 'blk_03',
         sectionId: 'sec_02',
         sourceText: '임상 시험 완료',
@@ -467,18 +464,6 @@ const srcASectionDrafts: Omit<ReviewSection, 'displayTop'>[] = [
         autoAdjust: false,
         basis: '공인된 임상 시험 문구를 사용했습니다.',
         bbox: { x: 300, y: 400, width: 400, height: 60 },
-        candidates: [
-          {
-            candidateId: 'cand_03_a',
-            translatedText: 'Dermatologically tested',
-            isSelected: false,
-          },
-          {
-            candidateId: 'cand_03_b',
-            translatedText: 'Clinical trial completed',
-            isSelected: false,
-          },
-        ],
       },
       {
         // 케이스 8: product_label 역할 블록 (v3.4.1 추가) — 제품 용기에 인쇄된
@@ -496,7 +481,6 @@ const srcASectionDrafts: Omit<ReviewSection, 'displayTop'>[] = [
         autoAdjust: false,
         basis: '제품 용기 인쇄 문구 — 번역·인페인팅 대상 제외, 원본 유지.',
         bbox: { x: 750, y: 400, width: 150, height: 40 },
-        candidates: [],
       },
     ],
   },
@@ -527,7 +511,6 @@ const srcASectionDrafts: Omit<ReviewSection, 'displayTop'>[] = [
         autoAdjust: false,
         basis: '정기구독 안내는 도착 시장 채널 정책과 무관해 검수자가 N5에서 제외했습니다.',
         bbox: { x: 100, y: 100, width: 600, height: 60 },
-        candidates: [],
       },
     ],
   },
@@ -574,7 +557,6 @@ const srcBSectionDrafts: Omit<ReviewSection, 'displayTop'>[] = [
         autoAdjust: false,
         basis: '',
         bbox: { x: 150, y: 300, width: 700, height: 80 },
-        candidates: [],
       },
     ],
   },
@@ -603,7 +585,6 @@ const srcBSectionDrafts: Omit<ReviewSection, 'displayTop'>[] = [
         autoAdjust: false,
         basis: '미국 시장에서 "sensitive skin" 표기 시 피부과 테스트 결과 근거 권장',
         bbox: { x: 100, y: 150, width: 800, height: 80 },
-        candidates: [],
       },
     ],
   },

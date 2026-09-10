@@ -11,31 +11,20 @@ import type { TextBlock } from '@/lib/api/types';
 export function TextBlockEditor({
   block,
   onSave,
-  onCandidateSelect,
   isSaving,
   disabled,
 }: {
   block: TextBlock;
   onSave: (blockId: string, draft: string) => void;
-  onCandidateSelect: (blockId: string, candidateId: string) => void;
   isSaving: boolean;
   disabled: boolean;
 }) {
   const [draft, setDraft] = useState(block.translatedText);
   const [showBasis, setShowBasis] = useState(false);
-  const [showCandidates, setShowCandidates] = useState(false);
 
   const isDirty = draft !== block.translatedText;
   const isFailed = block.blockStatus === 'failed';
   const isDisabled = disabled || isSaving;
-
-  const handleCandidateClick = (candidateId: string) => {
-    const candidate = block.candidates.find((c) => c.candidateId === candidateId);
-    if (!candidate) return;
-    setDraft(candidate.translatedText);
-    setShowCandidates(false);
-    onCandidateSelect(block.blockId, candidateId);
-  };
 
   return (
     <div
@@ -123,27 +112,16 @@ export function TextBlockEditor({
         )}
       </div>
 
-      {/* 하단 액션: 근거 보기 + 다른 번역 보기 */}
-      {!disabled && (
+      {/* 하단 액션: 근거 보기 */}
+      {!disabled && block.basis && (
         <div className="flex flex-wrap gap-2 border-t border-gray-100 pt-3">
-          {block.basis && (
-            <button
-              type="button"
-              onClick={() => setShowBasis((v) => !v)}
-              className="text-[11px] text-gray-400 underline-offset-2 hover:text-gray-600 hover:underline"
-            >
-              {showBasis ? '근거 닫기' : '근거 보기'}
-            </button>
-          )}
-          {block.candidates.length > 0 && (
-            <button
-              type="button"
-              onClick={() => setShowCandidates((v) => !v)}
-              className="text-[11px] text-blue-500 underline-offset-2 hover:text-blue-700 hover:underline"
-            >
-              {showCandidates ? '후보 닫기' : `다른 번역 보기 (${block.candidates.length})`}
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => setShowBasis((v) => !v)}
+            className="text-[11px] text-gray-400 underline-offset-2 hover:text-gray-600 hover:underline"
+          >
+            {showBasis ? '근거 닫기' : '근거 보기'}
+          </button>
         </div>
       )}
 
@@ -152,31 +130,6 @@ export function TextBlockEditor({
         <p className="mt-2 rounded-md bg-gray-50 px-3 py-2 text-xs leading-relaxed text-gray-600">
           {block.basis}
         </p>
-      )}
-
-      {/* 번역 후보 목록 */}
-      {showCandidates && block.candidates.length > 0 && !disabled && (
-        <ul className="mt-2 space-y-1.5 rounded-md border border-blue-100 bg-blue-50 p-2">
-          {block.candidates.map((candidate) => (
-            <li key={candidate.candidateId}>
-              <button
-                type="button"
-                disabled={isSaving}
-                onClick={() => handleCandidateClick(candidate.candidateId)}
-                className={`w-full rounded-md border px-3 py-2 text-left text-xs transition-colors disabled:opacity-40 ${
-                  candidate.isSelected
-                    ? 'border-blue-400 bg-blue-100 font-medium text-blue-800'
-                    : 'border-blue-200 bg-white text-gray-700 hover:border-blue-300 hover:bg-blue-50'
-                }`}
-              >
-                {candidate.translatedText}
-                {candidate.isSelected && (
-                  <span className="ml-2 text-[10px] text-blue-600">선택됨</span>
-                )}
-              </button>
-            </li>
-          ))}
-        </ul>
       )}
     </div>
   );

@@ -105,7 +105,7 @@ export function useReviewQuery(jobId: string) {
 }
 
 // ─────────────────────────────────────────────
-// N5 — 번역문 수정 / 후보 선택
+// N5 — 번역문 수정
 // ─────────────────────────────────────────────
 
 export function useUpdateTranslationMutation(jobId: string) {

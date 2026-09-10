@@ -69,7 +69,6 @@ function buildTextBlocks(sectionId: string, count: number, seedOffset: number): 
     const n = seedOffset + i;
     const role = BLOCK_ROLES[n % BLOCK_ROLES.length];
     const isFailed = n % 11 === 0;
-    const hasCandidates = n % 3 === 0;
 
     return {
       blockId: `perf_n5_blk_${n}`,
@@ -86,20 +85,6 @@ function buildTextBlocks(sectionId: string, count: number, seedOffset: number): 
       autoAdjust: n % 6 === 0,
       basis: '성능 baseline 측정을 위한 synthetic 근거 텍스트입니다. 실제 로컬라이징 근거가 아닙니다.',
       bbox: { x: 0, y: n * 80, width: 900, height: 60 },
-      candidates: hasCandidates
-        ? [
-            {
-              candidateId: `perf_n5_cand_${n}_1`,
-              translatedText: `Candidate A for sample #${n}`,
-              isSelected: true,
-            },
-            {
-              candidateId: `perf_n5_cand_${n}_2`,
-              translatedText: `Candidate B for sample #${n}`,
-              isSelected: false,
-            },
-          ]
-        : [],
     };
   });
 }

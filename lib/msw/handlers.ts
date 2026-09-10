@@ -6,7 +6,6 @@ import type {
   JobDbStatus,
   SectionBucket,
   TranslationStatus,
-  TranslationCandidate,
 } from '@/lib/api/types';
 import {
   MOCK_JOB_ID,
@@ -43,14 +42,10 @@ const sectionState = new Map<string, {
   ])
 );
 
-/**
- * 텍스트 블록 번역 상태.
- * candidates는 fixture 원본 오염 방지를 위해 structuredClone으로 복사합니다.
- */
+/** 텍스트 블록 번역 상태. */
 const textBlockState = new Map<string, {
   translatedText: string;
   translationStatus: TranslationStatus;
-  candidates: TranslationCandidate[];
 }>();
 
 mockReviewResponse.sections.forEach(sec => {
@@ -58,7 +53,6 @@ mockReviewResponse.sections.forEach(sec => {
     textBlockState.set(blk.blockId, {
       translatedText: blk.translatedText,
       translationStatus: blk.translationStatus,
-      candidates: structuredClone(blk.candidates),
     });
   });
 });
@@ -282,7 +276,7 @@ export const handlers = [
   // N5 — 검수 데이터 조회
   //
   // - section bucket: N3에서 변경한 값이 반영됩니다.
-  // - textBlock: 번역 수정·후보 선택이 반영됩니다.
+  // - textBlock: 번역 수정이 반영됩니다.
   // ──────────────────────────────────────────
   http.get('/api/jobs/:jobId/review', ({ params }) => {
     const jobId = params.jobId as string;
@@ -314,58 +308,27 @@ export const handlers = [
   }),
 
   // ──────────────────────────────────────────
-  // N5 — 번역문 수정 / 번역 후보 선택
+  // N5 — 번역문 수정
   //
-  // 수동 수정: { "translatedText": "..." }
-  //   → translationStatus가 'userEdited'로 변경됩니다.
-  //
-  // 후보 선택: { "candidateId": "cand_..." }
-  //   → 해당 후보의 translatedText로 변경됩니다.
-  //   → translationStatus는 'machine' 유지 (기계 번역 후보 중 선택)
-  //
-  // 둘 다 있으면 400, 둘 다 없으면 400
+  // { "translatedText": "..." } → translationStatus가 'userEdited'로 변경됩니다.
+  // 번역 후보 선택 계약은 v3.2.1부터 폐기되어 단일 번역문 수정만 허용합니다.
   // ──────────────────────────────────────────
   http.patch('/api/text-blocks/:blockId/translation', async ({ params, request }) => {
     const blockId = params.blockId as string;
     if (!textBlockState.has(blockId)) return notFound(`TextBlock '${blockId}' not found`);
 
     const body = await request.json() as Record<string, unknown>;
-    const hasText = 'translatedText' in body;
-    const hasCandidate = 'candidateId' in body;
 
-    if (hasText && hasCandidate) {
-      return badRequest('translatedText와 candidateId를 동시에 전송할 수 없습니다');
-    }
-    if (!hasText && !hasCandidate) {
-      return badRequest('translatedText 또는 candidateId 중 하나가 필요합니다');
+    if (typeof body.translatedText !== 'string') {
+      return badRequest('translatedText는 문자열이어야 합니다');
     }
 
     const current = textBlockState.get(blockId)!;
-
-    if (hasText) {
-      if (typeof body.translatedText !== 'string') {
-        return badRequest('translatedText는 문자열이어야 합니다');
-      }
-      textBlockState.set(blockId, {
-        ...current,
-        translatedText: body.translatedText,
-        translationStatus: 'userEdited',
-      });
-    } else {
-      const candidateId = body.candidateId as string;
-      const candidate = current.candidates.find(c => c.candidateId === candidateId);
-      if (!candidate) return notFound(`Candidate '${candidateId}' not found`);
-
-      textBlockState.set(blockId, {
-        ...current,
-        translatedText: candidate.translatedText,
-        translationStatus: 'machine',
-        candidates: current.candidates.map(c => ({
-          ...c,
-          isSelected: c.candidateId === candidateId,
-        })),
-      });
-    }
+    textBlockState.set(blockId, {
+      ...current,
+      translatedText: body.translatedText,
+      translationStatus: 'userEdited',
+    });
 
     const updated = textBlockState.get(blockId)!;
     return HttpResponse.json({ blockId, ...updated });
