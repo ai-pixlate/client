@@ -4,7 +4,6 @@ import { use, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
 import { useCreateJobMutation } from '@/lib/queries/pixate';
-import { IMAGE_TYPES } from '@/lib/api/types';
 import type { ImageType } from '@/lib/api/types';
 
 // ─────────────────────────────────────────────────────────────────
@@ -57,7 +56,6 @@ const CATEGORY_OPTIONS = [
 interface LocalImage {
   localId: string;
   file: File;
-  imageType: ImageType;
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -132,7 +130,6 @@ export default function NewJobPage({
     const newItems: LocalImage[] = files.map((file, i) => ({
       localId: `local_${Date.now()}_${i}`,
       file,
-      imageType: 'detail' as ImageType,
     }));
     setImages((prev) => [...prev, ...newItems]);
 
@@ -142,12 +139,6 @@ export default function NewJobPage({
 
   const removeImage = (localId: string) => {
     setImages((prev) => prev.filter((img) => img.localId !== localId));
-  };
-
-  const setImageType = (localId: string, imageType: ImageType) => {
-    setImages((prev) =>
-      prev.map((img) => (img.localId === localId ? { ...img, imageType } : img)),
-    );
   };
 
   const moveImage = (localId: string, direction: 'up' | 'down') => {
@@ -177,10 +168,11 @@ export default function NewJobPage({
   const handleSubmit = () => {
     if (!isValid) return;
 
-    const sourceImages = images.map((img, i) => ({
+    // 9월 MVP: 입력 유형 선택 UI는 12월 예정 — imageType은 'multi_section' 고정
+    const sourceImages = images.map((_img, i) => ({
       fileId: `mock_file_${String(i + 1).padStart(3, '0')}`,
       order: i + 1,
-      imageType: img.imageType,
+      imageType: 'multi_section' as ImageType,
     }));
 
     mutation.mutate(
@@ -402,24 +394,6 @@ export default function NewJobPage({
                     <span className="min-w-0 flex-1 truncate text-sm text-gray-700" title={img.file.name}>
                       {img.file.name}
                     </span>
-
-                    {/* imageType 선택 */}
-                    <div className="flex shrink-0 gap-1">
-                      {IMAGE_TYPES.map((type) => (
-                        <button
-                          key={type}
-                          type="button"
-                          onClick={() => setImageType(img.localId, type)}
-                          className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                            img.imageType === type
-                              ? 'bg-blue-500 text-white'
-                              : 'border border-gray-300 bg-white text-gray-500 hover:bg-gray-100'
-                          }`}
-                        >
-                          {type}
-                        </button>
-                      ))}
-                    </div>
 
                     {/* 순서 이동 */}
                     <div className="flex shrink-0 gap-0.5">
