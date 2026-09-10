@@ -18,7 +18,6 @@ import type {
   BlockRole,
 } from '@/lib/api/types';
 import { computeSectionDisplayTops } from '@/lib/n5/coordinates';
-import { getVerdictType } from '@/lib/n3/verdict';
 import type { PerfManifestProduct } from './manifest-types';
 
 // 1x1 회색 PNG. N3는 이미지 decode 테스트가 아니므로 네트워크 요청 없는 최소 placeholder만 사용한다.
@@ -49,9 +48,8 @@ export function buildN3Sections(count: number): Section[] {
         ? [
             {
               verdictId: `perf_n3_vrd_${order}`,
-              verdictType: getVerdictType('regulated'),
+              verdictType: 'regulatory',
               verdictStatus: 'regulated',
-              isTeaser: false,
               problemText: `합성 판정 문구 #${order} — 성능 baseline 측정용`,
               basis:
                 '성능 baseline 측정을 위한 synthetic 근거 텍스트입니다. 실제 규제 판단 근거가 아닙니다.',

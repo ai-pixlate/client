@@ -16,4 +16,4 @@ export const EXCLUSION_REASON_LABELS: Record<ExclusionReasonCode, string> = {
 };
 
 // N3 section_verdict 배지 라벨은 lib/n3/verdict.ts(getN3VerdictBadgeLabel)에서
-// verdictStatus로부터 파생한다. 이 파일에서 별도로 관리하지 않는다.
+// verdictType(서버 정본, v3.4.1)으로부터 매핑한다. 이 파일에서 별도로 관리하지 않는다.

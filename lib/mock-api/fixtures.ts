@@ -17,7 +17,6 @@ import type {
   JobResultResponse,
 } from '@/lib/api/types';
 import { computeSectionDisplayTops } from '@/lib/n5/coordinates';
-import { getVerdictType } from '@/lib/n3/verdict';
 
 // ─────────────────────────────────────────────
 // 공통 ID 상수
@@ -72,7 +71,7 @@ export const mockN2VerdictStatus: JobStatusResponse = {
  * - sec_04: 정상 include 섹션 (두 번째 소스 이미지)
  * - sec_05: regulated 판정 섹션 (두 번째 소스 이미지, sensitive claim)
  *
- * N3 verdictStatus 5종 계약 케이스는 mockN3VerdictContractSections 참고
+ * N3 verdictType 계약 케이스(9월 표시 5종)는 mockN3VerdictContractSections 참고
  * (이 목록에 섞으면 e2e/basic-flow.spec.ts의 include/exclude count 단언이 깨진다).
  */
 export const mockSectionsResponse: SectionsResponse = {
@@ -104,9 +103,8 @@ export const mockSectionsResponse: SectionsResponse = {
       verdicts: [
         {
           verdictId: 'vrd_01',
-          verdictType: getVerdictType('regulated'),
+          verdictType: 'regulatory',
           verdictStatus: 'regulated',
-          isTeaser: false,
           problemText: '최고의 수분 공급 효과',
           basis: '최상급 표현은 FTC 규정상 객관적 근거 없이 사용 불가',
         },
@@ -149,9 +147,8 @@ export const mockSectionsResponse: SectionsResponse = {
       verdicts: [
         {
           verdictId: 'vrd_02',
-          verdictType: getVerdictType('regulated'),
+          verdictType: 'regulatory',
           verdictStatus: 'regulated',
-          isTeaser: false,
           problemText: '민감성 피부에 적합',
           basis: '미국 시장에서 "sensitive" 표기 시 피부과 테스트 결과 근거 권장',
         },
@@ -161,26 +158,31 @@ export const mockSectionsResponse: SectionsResponse = {
 };
 
 /**
- * N3 verdictStatus 5종 계약 검증용 Mock.
+ * N3 verdictType 계약 검증용 Mock (v3.4.1, 9월 표시 5종).
  *
  * 기본 흐름(mockSectionsResponse)과 분리한 이유: 여기 섹션들을 그 목록에
  * 섞으면 e2e/basic-flow.spec.ts의 n3-thumb-include-/n3-thumb-exclude- count
  * 단언이 깨진다. scripts/verify-n3-verdict-contract.mjs 전용으로 쓴다.
  *
- * bucket은 verdictStatus/isTeaser로부터 계산한 값이 아니라 계약서에 명시된
- * "정본" 값을 그대로 하드코딩한다 — section.bucket이 UI 상태의 유일한 정본이라는
- * 규칙을 fixture 레벨에서도 지킨다.
+ * bucket은 verdictType으로부터 계산한 값이 아니라 계약서에 명시된 "정본" 값을
+ * 그대로 하드코딩한다 — section.bucket이 UI 상태의 유일한 정본이라는 규칙을
+ * fixture 레벨에서도 지킨다.
  *
- * - regulated / exclude
- * - conditional / include (조건부 규제는 항상 include 쪽)
- * - irrelevant / exclude
+ * channel_policy는 VerdictType에는 존재하지만 12월 전용이므로 이 목록에는
+ * 판정 행을 만들지 않는다.
+ *
+ * - regulatory / exclude (대체 표현 없음 — 기본 exclude)
+ * - regulatory_replaceable / include — verdictStatus는 'regulated'로 위 regulatory
+ *   케이스와 같다. 대체 표현이 있어 verdictType만 갈리는 v3.4.1 핵심 케이스라,
+ *   status 하나만 보고 type을 계산할 수 없다는 것을 이 fixture가 직접 증명한다.
+ *   대체 표현이 있으므로 기본 bucket은 include다.
+ * - regulatory_conditional / include (조건부 규제는 항상 include 쪽)
+ * - local_irrelevant / exclude
  * - needs_fix / include
- * - policy + isTeaser=true / include (배지만 표시, exclude로 보내지 않음)
- * - policy + isTeaser=false / exclude (실제 채널 정책 판정, 기본 exclude 대상)
  */
 export const mockN3VerdictContractSections: Section[] = [
   {
-    sectionId: 'vc_sec_regulated',
+    sectionId: 'vc_sec_regulatory',
     sourceImageId: SRC_A,
     sectionOrder: 101,
     thumbnailUrl: '/mock/section-thumb-01.jpg',
@@ -190,17 +192,16 @@ export const mockN3VerdictContractSections: Section[] = [
     bbox: { x: 0, y: 0, width: 1000, height: 300 },
     verdicts: [
       {
-        verdictId: 'vc_vrd_regulated',
-        verdictType: getVerdictType('regulated'),
+        verdictId: 'vc_vrd_regulatory',
+        verdictType: 'regulatory',
         verdictStatus: 'regulated',
-        isTeaser: false,
         problemText: '효능 과장 표현',
-        basis: '객관적 근거 없이 최상급 표현 사용 — 규제 위반',
+        basis: '객관적 근거 없이 최상급 표현 사용, 대체 표현 없음 — 규제 위반',
       },
     ],
   },
   {
-    sectionId: 'vc_sec_conditional',
+    sectionId: 'vc_sec_regulatory_replaceable',
     sourceImageId: SRC_A,
     sectionOrder: 102,
     thumbnailUrl: '/mock/section-thumb-02.jpg',
@@ -210,30 +211,47 @@ export const mockN3VerdictContractSections: Section[] = [
     bbox: { x: 0, y: 300, width: 1000, height: 300 },
     verdicts: [
       {
-        verdictId: 'vc_vrd_conditional',
-        verdictType: getVerdictType('conditional'),
+        verdictId: 'vc_vrd_regulatory_replaceable',
+        verdictType: 'regulatory_replaceable',
+        verdictStatus: 'regulated',
+        problemText: '임상적으로 입증됨',
+        basis: '근거 없는 표현이나 "임상 테스트 결과 보고됨" 등 대체 표현으로 교체 가능 — 규제 표현',
+      },
+    ],
+  },
+  {
+    sectionId: 'vc_sec_regulatory_conditional',
+    sourceImageId: SRC_A,
+    sectionOrder: 103,
+    thumbnailUrl: '/mock/section-thumb-03.jpg',
+    bucket: 'include',
+    exclusionReason: null,
+    excludedStage: null,
+    bbox: { x: 0, y: 600, width: 1000, height: 300 },
+    verdicts: [
+      {
+        verdictId: 'vc_vrd_regulatory_conditional',
+        verdictType: 'regulatory_conditional',
         verdictStatus: 'conditional',
-        isTeaser: false,
         problemText: '조건부 사용 가능 표현',
         basis: '면책 문구 병기 시 사용 가능 — 조건부 규제',
       },
     ],
   },
   {
-    sectionId: 'vc_sec_irrelevant',
-    sourceImageId: SRC_A,
-    sectionOrder: 103,
-    thumbnailUrl: '/mock/section-thumb-03.jpg',
+    sectionId: 'vc_sec_local_irrelevant',
+    sourceImageId: SRC_B,
+    sectionOrder: 104,
+    thumbnailUrl: '/mock/section-thumb-04.jpg',
     bucket: 'exclude',
     exclusionReason: 'auto_local_irrelevant',
     excludedStage: 'N3',
-    bbox: { x: 0, y: 600, width: 1000, height: 300 },
+    bbox: { x: 0, y: 0, width: 1000, height: 300 },
     verdicts: [
       {
-        verdictId: 'vc_vrd_irrelevant',
-        verdictType: getVerdictType('irrelevant'),
+        verdictId: 'vc_vrd_local_irrelevant',
+        verdictType: 'local_irrelevant',
         verdictStatus: 'irrelevant',
-        isTeaser: false,
         problemText: '카카오톡 상담 안내',
         basis: '도착 시장에서 의미 없는 채널 — 현지 무의미',
       },
@@ -241,26 +259,6 @@ export const mockN3VerdictContractSections: Section[] = [
   },
   {
     sectionId: 'vc_sec_needs_fix',
-    sourceImageId: SRC_B,
-    sectionOrder: 104,
-    thumbnailUrl: '/mock/section-thumb-04.jpg',
-    bucket: 'include',
-    exclusionReason: null,
-    excludedStage: null,
-    bbox: { x: 0, y: 0, width: 1000, height: 300 },
-    verdicts: [
-      {
-        verdictId: 'vc_vrd_needs_fix',
-        verdictType: getVerdictType('needs_fix'),
-        verdictStatus: 'needs_fix',
-        isTeaser: false,
-        problemText: '단위 표기 미변환 (g -> oz)',
-        basis: '현지 기준 단위로 수정 필요',
-      },
-    ],
-  },
-  {
-    sectionId: 'vc_sec_policy_teaser',
     sourceImageId: SRC_B,
     sectionOrder: 105,
     thumbnailUrl: '/mock/section-thumb-05.jpg',
@@ -270,32 +268,11 @@ export const mockN3VerdictContractSections: Section[] = [
     bbox: { x: 0, y: 300, width: 1000, height: 300 },
     verdicts: [
       {
-        verdictId: 'vc_vrd_policy_teaser',
-        verdictType: getVerdictType('policy'),
-        verdictStatus: 'policy',
-        isTeaser: true,
-        problemText: '채널 정책상 제한 가능 표현 (티저)',
-        basis: '실제 판정 전 배지만 표시 — exclude 대상 아님',
-      },
-    ],
-  },
-  {
-    sectionId: 'vc_sec_policy_real',
-    sourceImageId: SRC_B,
-    sectionOrder: 106,
-    thumbnailUrl: '/mock/section-thumb-06.jpg',
-    bucket: 'exclude',
-    exclusionReason: 'auto_channel',
-    excludedStage: 'N3',
-    bbox: { x: 0, y: 600, width: 1000, height: 300 },
-    verdicts: [
-      {
-        verdictId: 'vc_vrd_policy_real',
-        verdictType: getVerdictType('policy'),
-        verdictStatus: 'policy',
-        isTeaser: false,
-        problemText: '채널 정책 위반 표현',
-        basis: '실제 채널 정책 판정 — 기본 exclude 대상',
+        verdictId: 'vc_vrd_needs_fix',
+        verdictType: 'needs_fix',
+        verdictStatus: 'needs_fix',
+        problemText: '단위 표기 미변환 (g -> oz)',
+        basis: '현지 기준 단위로 수정 필요',
       },
     ],
   },

@@ -11,7 +11,7 @@ import { getN3VerdictBadgeLabel } from '@/lib/n3/verdict';
 export function VerdictCard({ verdict }: { verdict: SectionVerdict }) {
   return (
     <div className="flex w-full flex-col items-start gap-3 rounded-[8px] bg-white p-5">
-      <StatusChip label={getN3VerdictBadgeLabel(verdict.verdictStatus)} />
+      <StatusChip label={getN3VerdictBadgeLabel(verdict.verdictType)} />
       <div className="flex w-full flex-col gap-1.5">
         <p className="text-[18px] font-medium tracking-[-0.03em] text-[#171717]">
           {verdict.problemText}

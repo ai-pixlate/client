@@ -5,7 +5,7 @@
  * - 아직 협의 중인 값은 string으로 열어두고 TODO를 달았습니다.
  */
 
-import type { VerdictStatus, VerdictType } from '@/lib/n3/verdict';
+import type { SectionVerdictStatus, VerdictType } from '@/lib/n3/verdict';
 
 // ─────────────────────────────────────────────
 // 확정 가능한 union type
@@ -163,16 +163,18 @@ export interface CreateJobResponse {
 
 export interface SectionVerdict {
   verdictId: string;
-  /** verdictStatus에서만 파생된다. lib/n3/verdict.ts의 getVerdictType() 참고 */
-  verdictType: VerdictType;
-  verdictStatus: VerdictStatus;
   /**
-   * policy(채널 정책) 판정에서만 의미를 가진다.
-   * - true: 배지만 표시. section을 exclude 대상으로 보내지 않는다.
-   * - false: 실제 채널 정책 판정. 기본 exclude 대상.
-   * regulated/conditional/irrelevant/needs_fix에서는 사용하지 않는다.
+   * 서버/generated column의 정본 (v3.4.1). verdictStatus로부터 파생하지
+   * 않는다 — FE 화면과 export에서 별도로 다시 계산하지 않고 API가 내려준
+   * 6값 union을 그대로 사용한다. (lib/n3/verdict.ts 참고)
    */
-  isTeaser: boolean;
+  verdictType: VerdictType;
+  /**
+   * verdict_status 전체 어휘(7종) 중 실제로 판정 행을 만드는 5종만 받는다.
+   * allowed/cultural은 판정 행 자체를 만들지 않으므로 여기 올 수 없다.
+   * (lib/n3/verdict.ts의 SectionVerdictStatus 참고)
+   */
+  verdictStatus: SectionVerdictStatus;
   problemText: string;
   basis: string;
 }
