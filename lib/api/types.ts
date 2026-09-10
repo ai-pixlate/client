@@ -17,11 +17,11 @@ export type JobCurrentStep = 'N1' | 'N2' | 'N3' | 'N4' | 'N5' | 'N6';
 /** DB 작업 상태값 (Day 6 확정) */
 export type JobDbStatus = 'draft' | 'processing' | 'review' | 'done' | 'failed' | 'archived';
 
-/** 업로드 원본 이미지 유형. thumbnail 파이프라인은 미확정이므로 N2 이후 동작 단정 안 함 */
-export type ImageType = 'detail' | 'thumbnail';
+/** 업로드 원본 이미지 유형. single 파이프라인은 미확정이므로 N2 이후 동작 단정 안 함 */
+export type ImageType = 'multi_section' | 'single';
 
 /** ImageType 런타임 목록. 화면에서 선택지를 순회할 때 이 상수를 재사용한다 */
-export const IMAGE_TYPES = ['detail', 'thumbnail'] as const satisfies readonly ImageType[];
+export const IMAGE_TYPES = ['multi_section', 'single'] as const satisfies readonly ImageType[];
 
 /** 섹션 포함/제외 상태. ERD 기준 문자열 (boolean 사용 안 함) */
 export type SectionBucket = 'include' | 'exclude';
@@ -220,12 +220,6 @@ export interface SectionsResponse {
 
 export interface UpdateSectionBucketRequest {
   bucket: SectionBucket;
-  /**
-   * 어느 단계에서 bucket을 변경하는지.
-   * Mock 검증용 임시 필드. 백엔드 계약 확정 전.
-   * N3 / N5 — 제외 시 사용. 복구(include) 시 생략.
-   */
-  stage?: JobCurrentStep;
 }
 
 // ─────────────────────────────────────────────

@@ -256,8 +256,13 @@ export const handlers = [
   //
   // Request: { "bucket": "include" | "exclude" }
   // exclusionReason은 사용자 입력 필드가 아닙니다.
+  // excludedStage는 클라이언트가 보내지 않는다 — 서버가 현재 job 단계
+  // (mockJobState.currentStep)를 기준으로 판단한다.
   // ──────────────────────────────────────────
-  http.patch('/api/sections/:sectionId', async ({ params, request }) => {
+  http.patch('/jobs/:jobId/sections/:sectionId', async ({ params, request }) => {
+    const jobId = params.jobId as string;
+    if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
+
     const sectionId = params.sectionId as string;
     if (!sectionState.has(sectionId)) return notFound(`Section '${sectionId}' not found`);
 
@@ -268,16 +273,9 @@ export const handlers = [
       return badRequest("bucket은 'include' 또는 'exclude'이어야 합니다");
     }
 
-    // stage: Mock 검증용 임시 필드. N3 / N5 context를 구분하기 위해 사용.
-    // 요청 값을 그대로 신뢰하는 캐스팅이며 런타임 검증은 하지 않음(기존 동작 유지).
-    const stage = typeof body.stage === 'string' ? (body.stage as JobCurrentStep) : null;
-    sectionState.set(sectionId, {
-      bucket,
-      exclusionReason: null,
-      // include로 복구하면 항상 null. exclude이면 요청의 stage 값을 보존.
-      excludedStage: bucket === 'include' ? null : stage,
-    });
-    return HttpResponse.json({ sectionId, bucket, excludedStage: bucket === 'include' ? null : stage });
+    const excludedStage = bucket === 'include' ? null : mockJobState.currentStep;
+    sectionState.set(sectionId, { bucket, exclusionReason: null, excludedStage });
+    return HttpResponse.json({ sectionId, bucket, excludedStage });
   }),
 
   // ──────────────────────────────────────────
