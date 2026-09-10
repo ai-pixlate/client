@@ -6,7 +6,7 @@
  *
  * lib/mock-api/fixtures.ts는 '@/' 경로 alias를 쓰기 때문에 plain node에서 바로
  * import할 수 없다 — 그래서 여기서는 mockN3VerdictContractSections와 동일한
- * 5개 케이스(verdictType/verdictStatus/bucket 조합)를 그대로 옮겨 적어 계약을
+ * 5개 케이스(verdictType/verdictStatus/bucket/exclusionReason 조합)를 그대로 옮겨 적어 계약을
  * 검증한다. lib/mock-api/fixtures.ts를 고칠 때 이 목록도 함께 맞춘다.
  *
  * 실행:  npm run verify:n3-verdict
@@ -114,21 +114,41 @@ console.log('\n[5] Mock 계약 케이스 (9월 5종) — section.bucket이 UI �
   // 표현 있음)=include — v3.4.1이 명시한 기본값. FE가 이 값을 verdict로부터
   // 계산하는 게 아니라, fixture가 "정본 값"을 그대로 담고 있는지만 확인한다.
   const cases = [
-    { name: 'regulatory / exclude', verdictType: 'regulatory', verdictStatus: 'regulated', bucket: 'exclude' },
+    {
+      name: 'regulatory / exclude',
+      verdictType: 'regulatory',
+      verdictStatus: 'regulated',
+      bucket: 'exclude',
+      exclusionReason: 'auto_regulatory',
+    },
     {
       name: 'regulatory_replaceable / include (status는 regulatory와 동일하게 regulated)',
       verdictType: 'regulatory_replaceable',
       verdictStatus: 'regulated',
       bucket: 'include',
+      exclusionReason: null,
     },
     {
       name: 'regulatory_conditional / include',
       verdictType: 'regulatory_conditional',
       verdictStatus: 'conditional',
       bucket: 'include',
+      exclusionReason: null,
     },
-    { name: 'local_irrelevant / exclude', verdictType: 'local_irrelevant', verdictStatus: 'irrelevant', bucket: 'exclude' },
-    { name: 'needs_fix / include', verdictType: 'needs_fix', verdictStatus: 'needs_fix', bucket: 'include' },
+    {
+      name: 'local_irrelevant / exclude',
+      verdictType: 'local_irrelevant',
+      verdictStatus: 'irrelevant',
+      bucket: 'exclude',
+      exclusionReason: 'auto_local_irrelevant',
+    },
+    {
+      name: 'needs_fix / include',
+      verdictType: 'needs_fix',
+      verdictStatus: 'needs_fix',
+      bucket: 'include',
+      exclusionReason: null,
+    },
   ];
 
   check('9월 mock 케이스는 정확히 5개다 (channel_policy 행 없음)', cases.length === 5, `got ${cases.length}`);
@@ -152,11 +172,23 @@ console.log('\n[5] Mock 계약 케이스 (9월 5종) — section.bucket이 UI �
 
   const regulatory = cases.find((c) => c.verdictType === 'regulatory');
   const regulatoryReplaceable = cases.find((c) => c.verdictType === 'regulatory_replaceable');
+  // auto_regulatory invariant (v3.4.1): 이 exclusionReason은 "regulated status
+  // 전체"에 붙는 값이 아니라, 대체 표현이 없는 regulatory에만 허용된다.
+  // regulatory_replaceable(같은 status, 대체 표현 있음)은 auto_regulatory를
+  // 절대 가질 수 없고 include/exclusionReason=null이 정본이다. regulatory와
+  // regulatory_replaceable을 비교하는 기존 검증에 이 invariant를 합쳐 하나로
+  // 정리한다 — 의미가 같은 별도 invariant를 중복 두지 않는다.
   check(
-    'regulatory와 regulatory_replaceable은 같은 verdictStatus(regulated)를 공유하지만 type과 bucket이 다르다 — status만으로 type을 계산할 수 없음을 증명',
+    'regulatory와 regulatory_replaceable은 같은 verdictStatus(regulated)를 공유하지만 type/bucket/exclusionReason이 다르다 — status만으로 type이나 exclusionReason을 계산할 수 없음을 증명',
     regulatory.verdictStatus === regulatoryReplaceable.verdictStatus &&
       regulatory.verdictType !== regulatoryReplaceable.verdictType &&
-      regulatory.bucket !== regulatoryReplaceable.bucket,
+      regulatory.bucket !== regulatoryReplaceable.bucket &&
+      regulatory.exclusionReason === 'auto_regulatory' &&
+      regulatoryReplaceable.exclusionReason !== 'auto_regulatory',
+  );
+  check(
+    "auto_regulatory는 regulatory_replaceable에서 금지된다 (exclusionReason === null, bucket === 'include')",
+    regulatoryReplaceable.exclusionReason === null && regulatoryReplaceable.bucket === 'include',
   );
 
   check(

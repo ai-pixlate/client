@@ -7,8 +7,15 @@ import { SectionCard } from '@/app/jobs/[jobId]/_components/section-card';
 import { buildN3Sections } from '@/lib/perf/harness-fixtures';
 
 /**
- * N3 baseline harness — 프로덕션 SectionCard를 그대로 재사용해
- * section count별 DOM 밀도를 측정한다.
+ * N3 baseline harness — SectionCard(app/jobs/[jobId]/_components/section-card.tsx)를
+ * section count별로 쌓아 DOM 밀도를 측정한다.
+ *
+ * 주의: SectionCard는 실제 N3View(app/jobs/[jobId]/_components/n3/n3-view.tsx)가
+ * 렌더링하는 DOM이 아니다 — 실제 N3View는 SectionThumbnail + DetailPanel +
+ * dnd-kit DragOverlay/DndContext 구조를 쓰고, SectionCard는 어디에서도 쓰이지
+ * 않는다(이 harness 전용). 따라서 이 harness의 baseline 수치는 실제 N3View의
+ * 성능 의사결정 근거로 사용하지 않는다 — 필요하면 향후 실제 N3View 기반으로
+ * 다시 측정한다.
  *
  * 최적화(virtualization/lazy loading/memo 등)를 일부러 적용하지 않는다.
  * 실제 long-page 이미지는 사용하지 않고 최소 placeholder만 사용한다.

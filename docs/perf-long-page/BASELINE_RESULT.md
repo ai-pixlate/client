@@ -46,6 +46,12 @@ GIF 파일은 삭제하지 않았고, 향후 필요하면 별도 stress case로 
 
 ## N3 Baseline
 
+주의: 이 harness는 `SectionCard`(app/jobs/[jobId]/_components/section-card.tsx)를
+section count만큼 쌓아 측정한다. `SectionCard`는 실제 N3View가 렌더링하는 DOM이
+아니다 — 실제 N3View는 SectionThumbnail + DetailPanel + dnd-kit 기반 drag & drop
+구조를 쓴다. 따라서 아래 수치는 실제 N3View의 성능 의사결정 근거로 사용하지
+않는다. 필요하면 향후 실제 N3View 기반으로 다시 측정한다.
+
 | 시나리오 | sections | mount→paint |
 |---|---|---|
 | N3-10 | 10 | 약 3.0ms |
