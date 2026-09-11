@@ -34,8 +34,8 @@ export function N5HarnessView({
     setSections((prev) =>
       prev.map((s) => {
         if (s.sectionId !== sectionId) return s;
-        const isExcluded = s.bucket === 'exclude' && s.excludedStage === 'N5';
-        return isExcluded
+        const isSectionExcluded = s.bucket === 'exclude' && s.excludedStage === 'N5';
+        return isSectionExcluded
           ? { ...s, bucket: 'include', excludedStage: null }
           : { ...s, bucket: 'exclude', excludedStage: 'N5' };
       }),
@@ -49,24 +49,6 @@ export function N5HarnessView({
         textBlocks: s.textBlocks.map((b) =>
           b.blockId === blockId ? { ...b, translatedText: draft, translationStatus: 'userEdited' } : b,
         ),
-      })),
-    );
-  };
-
-  const handleCandidateSelect = (blockId: string, candidateId: string) => {
-    setSections((prev) =>
-      prev.map((s) => ({
-        ...s,
-        textBlocks: s.textBlocks.map((b) => {
-          if (b.blockId !== blockId) return b;
-          const candidate = b.candidates.find((c) => c.candidateId === candidateId);
-          if (!candidate) return b;
-          return {
-            ...b,
-            translatedText: candidate.translatedText,
-            candidates: b.candidates.map((c) => ({ ...c, isSelected: c.candidateId === candidateId })),
-          };
-        }),
       })),
     );
   };
@@ -117,7 +99,6 @@ export function N5HarnessView({
                 isSectionDisabled={false}
                 isSectionMutating={false}
                 onSave={handleSave}
-                onCandidateSelect={handleCandidateSelect}
                 pendingBlockId={null}
                 isTranslationPending={false}
               />

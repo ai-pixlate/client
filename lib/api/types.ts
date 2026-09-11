@@ -5,7 +5,7 @@
  * - 아직 협의 중인 값은 string으로 열어두고 TODO를 달았습니다.
  */
 
-import type { VerdictStatus, VerdictType } from '@/lib/n3/verdict';
+import type { SectionVerdictStatus, VerdictType } from '@/lib/n3/verdict';
 
 // ─────────────────────────────────────────────
 // 확정 가능한 union type
@@ -64,8 +64,29 @@ export type DeliverableUsageType = 'detail' | 'thumbnail_main' | 'thumbnail_sub'
  */
 export type ValidationScope = 'detail' | 'thumbnail_main' | 'thumbnail_sub' | 'all';
 
-/** 텍스트 블록 역할. 번역 톤·규제 검증 강도가 이 값에 따라 달라짐 */
-export type BlockRole = 'title' | 'body' | 'caption' | 'price' | 'caution';
+/**
+ * 텍스트 블록 역할. 번역 톤·규제 검증 강도가 이 값에 따라 달라짐.
+ * product_label(v3.4.1 추가): 제품 용기/패키지 사진 안에 인쇄된 글자 —
+ * 번역·인페인팅 대상에서 제외하고 원본 상태로 남긴다. 처리 파이프라인은
+ * 이번 작업 범위 밖이며, FE는 타입 수용·표시만 맞춘다.
+ *
+ * product_label의 "제외"는 section.bucket(섹션 단위 포함/제외)과는 다른 축이다
+ * — role=product_label은 text block 단위 번역·인페인팅 제외를 뜻하고, 그 판단은
+ * role 자체가 정본이다(TextBlock에 별도 is_excluded류 API 필드는 없다). 향후
+ * N5에서 block 단위 제외 표시가 필요해지면 role === 'product_label'을 정본으로
+ * 삼는다 — section.bucket에서 파생시키지 않는다.
+ */
+export type BlockRole = 'title' | 'body' | 'caption' | 'price' | 'caution' | 'product_label';
+
+/** BlockRole 런타임 목록. 화면에서 선택지를 순회하거나 fixture를 만들 때 이 상수를 재사용한다 */
+export const BLOCK_ROLES = [
+  'title',
+  'body',
+  'caption',
+  'price',
+  'caution',
+  'product_label',
+] as const satisfies readonly BlockRole[];
 
 /** 번역 상태 */
 export type TranslationStatus = 'machine' | 'userEdited';
@@ -163,16 +184,18 @@ export interface CreateJobResponse {
 
 export interface SectionVerdict {
   verdictId: string;
-  /** verdictStatus에서만 파생된다. lib/n3/verdict.ts의 getVerdictType() 참고 */
-  verdictType: VerdictType;
-  verdictStatus: VerdictStatus;
   /**
-   * policy(채널 정책) 판정에서만 의미를 가진다.
-   * - true: 배지만 표시. section을 exclude 대상으로 보내지 않는다.
-   * - false: 실제 채널 정책 판정. 기본 exclude 대상.
-   * regulated/conditional/irrelevant/needs_fix에서는 사용하지 않는다.
+   * 서버/generated column의 정본 (v3.4.1). verdictStatus로부터 파생하지
+   * 않는다 — FE 화면과 export에서 별도로 다시 계산하지 않고 API가 내려준
+   * 6값 union을 그대로 사용한다. (lib/n3/verdict.ts 참고)
    */
-  isTeaser: boolean;
+  verdictType: VerdictType;
+  /**
+   * verdict_status 전체 어휘(7종) 중 실제로 판정 행을 만드는 5종만 받는다.
+   * allowed/cultural은 판정 행 자체를 만들지 않으므로 여기 올 수 없다.
+   * (lib/n3/verdict.ts의 SectionVerdictStatus 참고)
+   */
+  verdictStatus: SectionVerdictStatus;
   problemText: string;
   basis: string;
 }
@@ -226,10 +249,16 @@ export interface UpdateSectionBucketRequest {
 // N5 — 검수
 // ─────────────────────────────────────────────
 
-export interface TranslationCandidate {
-  candidateId: string;
-  translatedText: string;
-  isSelected: boolean;
+/**
+ * 번역 결과가 영역을 초과할 때 자동 조정된 내역 (구조체 계약, v3.4.1).
+ * DB auto_adjust 컬럼(font_scale/line_break_applied)을 camelCase로 그대로 옮긴다.
+ * fontScale=1이고 lineBreakApplied=false여도 "조정 시도는 했으나 변화 없음"과
+ * "조정 자체가 없었음"을 구분할 수 없으므로, 실제 조정 발생 여부는 객체
+ * 존재만으로 판단하지 않고 fontScale !== 1 || lineBreakApplied로 판단한다.
+ */
+export interface AutoAdjust {
+  fontScale: number;
+  lineBreakApplied: boolean;
 }
 
 export interface TextBlock {
@@ -244,8 +273,12 @@ export interface TextBlock {
   needsReview: boolean;
   /** TODO: 백엔드 규제 DB 기준 코드값 확정 후 union으로 좁힐 것 */
   complianceFlags: ComplianceFlag[];
-  /** 번역 결과가 영역을 초과해 자동 축소됐는지 여부 */
-  autoAdjust: boolean;
+  /**
+   * 자동 조정 내역. DB 컬럼이 nullable이라 조정이 필요 없었던 블록은 null이다.
+   * "조정이 실제 발생했는가"는 객체 존재만으로 판정하지 않는다 — 필요하면
+   * fontScale !== 1 || lineBreakApplied로 판단한다. (AutoAdjust 참고)
+   */
+  autoAdjust: AutoAdjust | null;
   /** 로컬라이징 근거. 읽기 전용 */
   basis: string;
   /**
@@ -255,11 +288,6 @@ export interface TextBlock {
    * (좌표계 기준: Pix/ate FE↔BE 구현 기준 v3.3.3)
    */
   bbox: BoundingBox;
-  /**
-   * "다른 번역 보기" 기능용 후보 목록.
-   * TODO: 생성 개수·기준 백엔드와 협의 필요.
-   */
-  candidates: TranslationCandidate[];
 }
 
 /**
@@ -334,10 +362,8 @@ export interface ReviewResponse {
 }
 
 export interface UpdateTranslationRequest {
-  /** 수동 수정 시 사용 */
-  translatedText?: string;
-  /** "다른 번역 보기"에서 선택 시 사용 */
-  candidateId?: string;
+  /** 번역문 수동 수정 시 사용. 단일 번역문 수정만 허용한다 (v3.2.1부터 후보 계약 폐기) */
+  translatedText: string;
 }
 
 /**
@@ -348,7 +374,6 @@ export interface UpdateTranslationResponse {
   blockId: string;
   translatedText: string;
   translationStatus: TranslationStatus;
-  candidates: TranslationCandidate[];
 }
 
 // ─────────────────────────────────────────────

@@ -13,7 +13,6 @@ export function SectionGroup({
   isSectionDisabled,
   isSectionMutating,
   onSave,
-  onCandidateSelect,
   pendingBlockId,
   isTranslationPending,
 }: {
@@ -22,7 +21,6 @@ export function SectionGroup({
   isSectionDisabled: boolean;
   isSectionMutating: boolean;
   onSave: (blockId: string, draft: string) => void;
-  onCandidateSelect: (blockId: string, candidateId: string) => void;
   pendingBlockId: string | null;
   isTranslationPending: boolean;
 }) {
@@ -71,7 +69,6 @@ export function SectionGroup({
               key={block.blockId}
               block={block}
               onSave={onSave}
-              onCandidateSelect={onCandidateSelect}
               isSaving={isTranslationPending && pendingBlockId === block.blockId}
               disabled={isExcludedInN5}
             />

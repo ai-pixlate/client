@@ -113,7 +113,8 @@ test('N1에서 N5 검수 화면까지 기본 작업 흐름을 완료한다', asy
   // ── N4 → N5 ───────────────────────────────────────────────
   // N5는 9일차에 Before/After 비교 슬라이더를 폐기하고 캔버스형 viewport로
   // 교체됨 — 상세 interaction(zoom/pan/fit/mode) 검증은 e2e/n5-viewport.spec.ts.
-  // 오늘 범위가 아닌 textbox 편집·"다른 번역 보기"는 화면에 없다.
+  // 오늘 범위가 아닌 textbox 편집은 화면에 없다. "다른 번역 보기"는 10일차에
+  // 번역 후보 계약이 폐기되어 더 이상 존재하지 않는다.
   await expect(page.locator('[data-testid="n5-panel"]')).toBeVisible({ timeout: 8_000 });
 
   // ── N5: 기본 검증 — 좌(viewport)/우(panel) workspace 골격 ────

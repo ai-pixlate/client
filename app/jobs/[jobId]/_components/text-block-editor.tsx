@@ -3,6 +3,7 @@
 import { useState } from 'react';
 
 import type { TextBlock } from '@/lib/api/types';
+import { BLOCK_ROLE_LABELS } from '@/lib/api/labels';
 
 // ─────────────────────────────────────────────────────────────────
 // N5 — TextBlock 편집기
@@ -11,34 +12,28 @@ import type { TextBlock } from '@/lib/api/types';
 export function TextBlockEditor({
   block,
   onSave,
-  onCandidateSelect,
   isSaving,
   disabled,
 }: {
   block: TextBlock;
   onSave: (blockId: string, draft: string) => void;
-  onCandidateSelect: (blockId: string, candidateId: string) => void;
   isSaving: boolean;
   disabled: boolean;
 }) {
   const [draft, setDraft] = useState(block.translatedText);
   const [showBasis, setShowBasis] = useState(false);
-  const [showCandidates, setShowCandidates] = useState(false);
 
   const isDirty = draft !== block.translatedText;
   const isFailed = block.blockStatus === 'failed';
-  const isDisabled = disabled || isSaving;
-
-  const handleCandidateClick = (candidateId: string) => {
-    const candidate = block.candidates.find((c) => c.candidateId === candidateId);
-    if (!candidate) return;
-    setDraft(candidate.translatedText);
-    setShowCandidates(false);
-    onCandidateSelect(block.blockId, candidateId);
-  };
+  // product_label: 번역·인페인팅 대상 제외, 원본 유지 (v3.4.1) — 이 블록의
+  // 번역문 편집만 막는다. section 단위 disabled(N5 제외)와는 별개 축이다.
+  const isProductLabel = block.role === 'product_label';
+  const isDisabled = disabled || isSaving || isProductLabel;
 
   return (
     <div
+      data-testid="text-block-editor"
+      data-role={block.role}
       className={`rounded-lg border p-4 ${
         disabled
           ? 'border-gray-100 bg-gray-50 opacity-60'
@@ -64,8 +59,11 @@ export function TextBlockEditor({
             사용자 수정
           </span>
         )}
-        <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-500">
-          {block.role}
+        <span
+          data-testid="text-block-role-label"
+          className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-500"
+        >
+          {BLOCK_ROLE_LABELS[block.role]}
         </span>
       </div>
 
@@ -109,8 +107,8 @@ export function TextBlockEditor({
           }`}
         />
 
-        {/* 저장 버튼 */}
-        {isDirty && !isSaving && !disabled && (
+        {/* 저장 버튼 — product_label은 편집 대상이 아니므로 노출하지 않는다 */}
+        {isDirty && !isSaving && !disabled && !isProductLabel && (
           <div className="mt-1.5 flex justify-end">
             <button
               type="button"
@@ -123,27 +121,16 @@ export function TextBlockEditor({
         )}
       </div>
 
-      {/* 하단 액션: 근거 보기 + 다른 번역 보기 */}
-      {!disabled && (
+      {/* 하단 액션: 근거 보기 */}
+      {!disabled && block.basis && (
         <div className="flex flex-wrap gap-2 border-t border-gray-100 pt-3">
-          {block.basis && (
-            <button
-              type="button"
-              onClick={() => setShowBasis((v) => !v)}
-              className="text-[11px] text-gray-400 underline-offset-2 hover:text-gray-600 hover:underline"
-            >
-              {showBasis ? '근거 닫기' : '근거 보기'}
-            </button>
-          )}
-          {block.candidates.length > 0 && (
-            <button
-              type="button"
-              onClick={() => setShowCandidates((v) => !v)}
-              className="text-[11px] text-blue-500 underline-offset-2 hover:text-blue-700 hover:underline"
-            >
-              {showCandidates ? '후보 닫기' : `다른 번역 보기 (${block.candidates.length})`}
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => setShowBasis((v) => !v)}
+            className="text-[11px] text-gray-400 underline-offset-2 hover:text-gray-600 hover:underline"
+          >
+            {showBasis ? '근거 닫기' : '근거 보기'}
+          </button>
         </div>
       )}
 
@@ -152,31 +139,6 @@ export function TextBlockEditor({
         <p className="mt-2 rounded-md bg-gray-50 px-3 py-2 text-xs leading-relaxed text-gray-600">
           {block.basis}
         </p>
-      )}
-
-      {/* 번역 후보 목록 */}
-      {showCandidates && block.candidates.length > 0 && !disabled && (
-        <ul className="mt-2 space-y-1.5 rounded-md border border-blue-100 bg-blue-50 p-2">
-          {block.candidates.map((candidate) => (
-            <li key={candidate.candidateId}>
-              <button
-                type="button"
-                disabled={isSaving}
-                onClick={() => handleCandidateClick(candidate.candidateId)}
-                className={`w-full rounded-md border px-3 py-2 text-left text-xs transition-colors disabled:opacity-40 ${
-                  candidate.isSelected
-                    ? 'border-blue-400 bg-blue-100 font-medium text-blue-800'
-                    : 'border-blue-200 bg-white text-gray-700 hover:border-blue-300 hover:bg-blue-50'
-                }`}
-              >
-                {candidate.translatedText}
-                {candidate.isSelected && (
-                  <span className="ml-2 text-[10px] text-blue-600">선택됨</span>
-                )}
-              </button>
-            </li>
-          ))}
-        </ul>
       )}
     </div>
   );

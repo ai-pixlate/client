@@ -22,12 +22,12 @@ export function SectionCard({
   isMutating: boolean;
 }) {
   const [imgFailed, setImgFailed] = useState(false);
-  const isExcluded = section.bucket === 'exclude';
+  const isSectionExcluded = section.bucket === 'exclude';
 
   return (
     <article
       className={`rounded-xl border bg-white p-4 shadow-sm transition-opacity duration-200 ${
-        isExcluded ? 'opacity-50' : 'opacity-100'
+        isSectionExcluded ? 'opacity-50' : 'opacity-100'
       }`}
     >
       <div className="flex gap-4">
@@ -59,12 +59,12 @@ export function SectionCard({
               </span>
               <span
                 className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${
-                  isExcluded
+                  isSectionExcluded
                     ? 'bg-gray-100 text-gray-500'
                     : 'bg-emerald-100 text-emerald-700'
                 }`}
               >
-                {isExcluded ? '제외됨' : '포함'}
+                {isSectionExcluded ? '제외됨' : '포함'}
               </span>
             </div>
 
@@ -73,12 +73,12 @@ export function SectionCard({
               onClick={onToggle}
               disabled={isDisabled}
               className={`shrink-0 rounded-lg border px-3 py-1 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
-                isExcluded
+                isSectionExcluded
                   ? 'border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100 active:bg-blue-200'
                   : 'border-gray-300 bg-white text-gray-600 hover:bg-gray-50 active:bg-gray-100'
               }`}
             >
-              {isMutating ? '처리 중…' : isExcluded ? '되살리기' : '제외'}
+              {isMutating ? '처리 중…' : isSectionExcluded ? '되살리기' : '제외'}
             </button>
           </div>
 
