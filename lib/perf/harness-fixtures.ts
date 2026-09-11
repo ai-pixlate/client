@@ -39,6 +39,8 @@ export function buildN3Sections(count: number): Section[] {
       sourceImageId: `perf_n3_src_${Math.ceil(order / 10)}`,
       sectionOrder: order,
       thumbnailUrl: PLACEHOLDER_THUMB,
+      imageKey: PLACEHOLDER_THUMB,
+      renderImageKey: PLACEHOLDER_THUMB,
       bucket: isSectionExcluded ? 'exclude' : 'include',
       // Section.exclusionReason이 ExclusionReasonCode로 좁혀져 값만 유효 코드로 맞춤. harness 로직 변경 아님.
       exclusionReason: isSectionExcluded ? 'auto_local_irrelevant' : null,
@@ -53,9 +55,13 @@ export function buildN3Sections(count: number): Section[] {
               problemText: `합성 판정 문구 #${order} — 성능 baseline 측정용`,
               basis:
                 '성능 baseline 측정을 위한 synthetic 근거 텍스트입니다. 실제 규제 판단 근거가 아닙니다.',
+              alternativeExpression: null,
+              evidenceUrl: null,
             },
           ]
         : [],
+      warningBadge: null,
+      originalVerdict: null,
     };
   });
 }
@@ -79,7 +85,9 @@ function buildTextBlocks(sectionId: string, count: number, seedOffset: number): 
         : `Synthetic translated sample #${n} for long-page N5 performance baseline.`,
       translationStatus: n % 5 === 0 ? 'userEdited' : 'machine',
       role,
-      blockStatus: isFailed ? 'failed' : 'done',
+      // v3.4.1: blockStatus는 편집 상태만 표현한다 — 번역 실패는 translationFailed로 따로 표현.
+      blockStatus: n % 5 === 0 ? 'edited' : 'machine',
+      translationFailed: isFailed,
       needsReview: n % 4 === 0,
       complianceFlags: n % 9 === 0 ? ['SYNTHETIC_FLAG'] : [],
       // v3.4.1 구조체 계약: 조정이 없었던 블록은 null. n % 6 === 0인 블록만
