@@ -9,10 +9,17 @@
  * - text_block.bbox            : 소속 section 내부 local 좌표
  * - 원본 절대 Y                 : section.top_offset + block.bbox.y (DB 전용, API DTO에는 없음)
  * - N5 표시 Y                  : section.displayTop + block.bbox.y
- * - section.displayTop         : ReviewPreview 응답값 (API 계산값, DB 저장값 아님)
+ * - section.displayTop         : /preview 응답값 (API 계산값, DB 저장값 아님)
  *                                 include section만 누적하고 exclude section은 건너뛴다
- * - preview scale               : scaleX = previewWidth / originalWidth
- *                                 scaleY = previewHeight / originalHeight
+ *
+ * scale은 두 갈래로 쓰인다 — 혼동하지 않는다:
+ * - getPreviewScale/PreviewScale : /review의 ReviewPreview(originalWidth/Height,
+ *   previewWidth/Height) 원시 크기 쌍으로부터 축별 비율(scaleX/scaleY)을 구하는
+ *   범용 유틸이다. FE 런타임이 아니라 mock 서버 응답 생성(lib/mock-api/fixtures.ts)에서만
+ *   쓰인다.
+ * - getBlockDisplayRect의 scale : /preview(API-CFM-03) 계약의 단일 숫자 scale이다
+ *   (v3.4.1 백엔드 최종 확정 — scaleX/scaleY 두 축이 아니다). PreviewSourceImage.scale을
+ *   그대로 받아 쓴다.
  *
  * top_offset은 N5 표시 위치 계산(displayTop)에는 쓰지 않지만, ReviewSection.topOffset
  * 으로 API가 그대로 내려준다 — Before/After 두 레이어를 section 단위로 잘라 이어붙일 때
@@ -102,23 +109,29 @@ export interface DisplayRect {
 }
 
 /**
- * section-local block bbox를 N5 좌측 뷰어의 표시 좌표로 변환한다.
+ * section-local block bbox를 N5 좌측 뷰어(/preview, API-CFM-03)의 표시
+ * 좌표로 변환한다. v3.4.1 백엔드 최종 확정 — scaleX/scaleY 두 축이 아니라
+ * 가로/세로에 동일하게 적용되는 단일 scale 하나를 쓴다.
  *
- *   displayX = bbox.x * scaleX
- *   displayY = (displayTop + bbox.y) * scaleY
- *   displayWidth  = bbox.width  * scaleX
- *   displayHeight = bbox.height * scaleY
+ * displayTop은 원본 해상도 좌표이므로, bbox.y와 먼저 더한 뒤에 scale을
+ * 적용한다(스케일을 먼저 걸고 더하지 않는다) — top만 이 순서이고 나머지
+ * (left/width/height)는 원본 값에 scale만 곱하면 된다.
+ *
+ *   previewX = bbox.x * scale
+ *   previewY = (displayTop + bbox.y) * scale
+ *   previewW = bbox.width  * scale
+ *   previewH = bbox.height * scale
  */
 export function getBlockDisplayRect(
   bbox: BoundingBox,
   displayTop: number,
-  scale: PreviewScale,
+  scale: number,
 ): DisplayRect {
   return {
-    left: bbox.x * scale.scaleX,
-    top: (displayTop + bbox.y) * scale.scaleY,
-    width: bbox.width * scale.scaleX,
-    height: bbox.height * scale.scaleY,
+    left: bbox.x * scale,
+    top: (displayTop + bbox.y) * scale,
+    width: bbox.width * scale,
+    height: bbox.height * scale,
   };
 }
 
@@ -126,7 +139,7 @@ export function getBlockDisplayRect(
 export function getTextBlockDisplayRect(
   block: Pick<TextBlock, 'bbox'>,
   displayTop: number,
-  scale: PreviewScale,
+  scale: number,
 ): DisplayRect {
   return getBlockDisplayRect(block.bbox, displayTop, scale);
 }

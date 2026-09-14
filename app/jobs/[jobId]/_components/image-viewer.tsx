@@ -20,7 +20,7 @@ export function ImageViewer({
   return (
     <div className="space-y-3 p-4">
       {sourceImages.map((img) => {
-        const url = mode === 'original' ? img.originalPreviewUrl : img.translatedPreviewUrl;
+        const url = mode === 'original' ? img.originalUrl : img.renderedUrl;
         const hasFailed = failed.has(img.sourceImageId);
 
         return (

@@ -120,10 +120,10 @@ export function buildN5Fixtures(
   const sourceImages: ReviewSourceImage[] = products.flatMap((product) =>
     product.images.map((img) => ({
       sourceImageId: `perf_n5_img_${product.id}_${img.path}`,
-      // 원문/번역문 미리보기 구분 자산이 없으므로 같은 실제 파일을 그대로 사용한다.
+      // 번역 전/후 미리보기 구분 자산이 없으므로 같은 실제 파일을 그대로 사용한다.
       // (렌더링/decode 부하 측정이 목적이며, 실제 번역 합성 이미지 유무는 이번 baseline 범위 밖)
-      originalPreviewUrl: img.url,
-      translatedPreviewUrl: img.url,
+      originalUrl: img.url,
+      renderedUrl: img.url,
       // 실제 파일을 원본 그대로 표시하므로 preview == original (scaleX/scaleY = 1)
       preview: {
         originalWidth: img.width,

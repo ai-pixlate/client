@@ -4,6 +4,7 @@ import type {
   SectionBucket,
   UpdateSectionBucketRequest,
   ReviewResponse,
+  PreviewResponse,
   UpdateTranslationRequest,
   UpdateTranslationResponse,
   JobResultResponse,
@@ -96,6 +97,13 @@ export function updateSectionBucket(
 
 export function getReview(jobId: string): Promise<ReviewResponse> {
   return apiFetch<ReviewResponse>(`/api/jobs/${jobId}/review`);
+}
+
+/**
+ * N5 좌측 뷰어 전용 preview 조회 (API-CFM-03). /review와 별개 엔드포인트다.
+ */
+export function getPreview(jobId: string): Promise<PreviewResponse> {
+  return apiFetch<PreviewResponse>(`/api/jobs/${jobId}/preview`);
 }
 
 export function updateTranslation(

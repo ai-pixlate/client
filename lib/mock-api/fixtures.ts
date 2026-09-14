@@ -14,9 +14,10 @@ import type {
   Section,
   ReviewResponse,
   ReviewSection,
+  PreviewResponse,
   JobResultResponse,
 } from '@/lib/api/types';
-import { computeSectionDisplayTops } from '@/lib/n5/coordinates';
+import { computeSectionDisplayTops, getPreviewScale } from '@/lib/n5/coordinates';
 
 // ─────────────────────────────────────────────
 // 공통 ID 상수
@@ -27,6 +28,20 @@ export const MOCK_BRAND_ID = 'brand_mock_001';
 
 const SRC_A = 'src_mock_001'; // 상세페이지 A
 const SRC_B = 'src_mock_002'; // 상세페이지 B
+
+/**
+ * SRC_A/SRC_B의 image_key / render_image_key (v3.4.1, DB section.image_key /
+ * section.render_image_key). /review의 originalUrl/renderedUrl과 /preview의
+ * originalUrl/renderedUrl(mockPreviewResponse)이 서로 다른 URL 문자열을 따로
+ * 관리하다 어긋나지 않도록, 값을 여기 한 번만 선언해 두 응답 모두 재사용한다.
+ * render_image_key는 null일 수 있다(금요일 백 회신 — 렌더 미완료 시). 이
+ * 기본 mock에서는 두 소스 이미지 모두 렌더가 끝난 상태를 재현하므로 null이
+ * 아니다.
+ */
+const SRC_A_IMAGE_KEY = '/mock/n5/detail-a-original.png';
+const SRC_A_RENDER_IMAGE_KEY = '/mock/n5/detail-a-translated.png';
+const SRC_B_IMAGE_KEY = '/mock/n5/detail-b-original.png';
+const SRC_B_RENDER_IMAGE_KEY = '/mock/n5/detail-b-translated.png';
 
 // ─────────────────────────────────────────────
 // N2 — 분석 중 상태
@@ -686,8 +701,8 @@ export const mockReviewResponse: ReviewResponse = {
   sourceImages: [
     {
       sourceImageId: SRC_A,
-      originalPreviewUrl: '/mock/n5/detail-a-original.png',
-      translatedPreviewUrl: '/mock/n5/detail-a-translated.png',
+      originalUrl: SRC_A_IMAGE_KEY,
+      renderedUrl: SRC_A_RENDER_IMAGE_KEY,
       // 원본 8500px(초장축) → 미리보기 3400px, scaleX = scaleY = 0.4
       preview: {
         originalWidth: 1000,
@@ -698,8 +713,8 @@ export const mockReviewResponse: ReviewResponse = {
     },
     {
       sourceImageId: SRC_B,
-      originalPreviewUrl: '/mock/n5/detail-b-original.png',
-      translatedPreviewUrl: '/mock/n5/detail-b-translated.png',
+      originalUrl: SRC_B_IMAGE_KEY,
+      renderedUrl: SRC_B_RENDER_IMAGE_KEY,
       // 원본 7000px(초장축) → 미리보기 2800px, scaleX = scaleY = 0.4
       preview: {
         originalWidth: 1000,
@@ -712,6 +727,44 @@ export const mockReviewResponse: ReviewResponse = {
 
   // 우측 패널: 섹션 단위 텍스트 블록. displayTop은 job 전체 기준 누적값이다.
   sections: allSectionDrafts.map((section, i) => ({ ...section, displayTop: allDisplayTops[i] })),
+};
+
+/**
+ * N5 좌측 뷰어 전용 preview mock (API-CFM-03, /review와 별개 엔드포인트).
+ *
+ * mockReviewResponse와 같은 job의 같은 소스 이미지·section을 가리키므로,
+ * 값을 다시 손으로 채우지 않고 mockReviewResponse/allSectionDrafts/allDisplayTops를
+ * 그대로 재사용해 두 응답이 어긋나지 않게 한다.
+ *
+ * scale은 v3.4.1 백엔드 최종 확정으로 단일 숫자다(scaleX/scaleY 객체가 아니다).
+ * getPreviewScale(원본→프리뷰 축별 비율 계산, lib/n5/coordinates.ts)로 여기(mock
+ * 서버 응답 생성 시점)에서 미리 구한 뒤 scaleX만 취한다 — 이 mock의 SRC_A/SRC_B는
+ * 가로/세로를 같은 비율로 축소했으므로(scaleX === scaleY) 축 하나만 골라도
+ * 정보 손실이 없다. FE 런타임(N5Viewport)은 이 값을 그대로 쓰고 다시 계산하지
+ * 않는다. previewWidth는 이 계약에 없다 — API에 다시 추가하지 않는다.
+ */
+export const mockPreviewResponse: PreviewResponse = {
+  sourceImages: mockReviewResponse.sourceImages.map((image) => {
+    const { scaleX, scaleY } = getPreviewScale(image.preview);
+    if (scaleX !== scaleY) {
+      throw new Error(
+        `mock ${image.sourceImageId}: scaleX(${scaleX})와 scaleY(${scaleY})가 다릅니다 — ` +
+          '단일 scale 계약에서는 가로/세로 비율이 같아야 합니다.',
+      );
+    }
+    return {
+      sourceImageId: image.sourceImageId,
+      originalUrl: image.originalUrl,
+      renderedUrl: image.renderedUrl,
+      scale: scaleX,
+      previewHeight: image.preview.previewHeight,
+    };
+  }),
+  sections: allSectionDrafts.map((section, i) => ({
+    sectionId: section.sectionId,
+    sourceImageId: section.sourceImageId,
+    displayTop: allDisplayTops[i],
+  })),
 };
 
 // ─────────────────────────────────────────────

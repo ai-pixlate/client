@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 
-import { useReviewQuery } from '@/lib/queries/pixate';
+import { useReviewQuery, usePreviewQuery } from '@/lib/queries/pixate';
 import { StepNav } from '../step-nav';
 import { N5Viewport } from './n5-viewport';
 import { N5Panel } from './n5-panel';
@@ -19,14 +19,25 @@ import { N5Panel } from './n5-panel';
 // 얹는다 (좌표 정확성은 npm run verify:n5-coords, viewport 계산은
 // npm run verify:n5-viewport로 계속 검증한다).
 //
+// 10일차: 좌측 뷰어의 이미지 데이터는 /review가 아니라 별도 계약인
+// /preview(API-CFM-03, v3.4.1)에서 온다 — usePreviewQuery. section의
+// bucket/height/topOffset/textBlocks(우측 패널용)는 여전히 /review가
+// 정본이라 useReviewQuery를 그대로 함께 쓴다.
+//
 // 아직 범위가 아닌 것: 클릭 선택 연동(block selection), 우측 block table
 // 콘텐츠, virtualization, 텍스트 수정, delete interaction 완성.
 // ─────────────────────────────────────────────────────────────────
 
 export function N5View({ jobId }: { jobId: string }) {
   const { data, isLoading, isError, error } = useReviewQuery(jobId);
+  const {
+    data: previewData,
+    isLoading: isPreviewLoading,
+    isError: isPreviewError,
+    error: previewError,
+  } = usePreviewQuery(jobId);
 
-  if (isLoading) {
+  if (isLoading || isPreviewLoading) {
     return (
       <div className="flex flex-1 items-center justify-center bg-white">
         <span className="text-sm text-gray-400">검수 데이터를 불러오는 중...</span>
@@ -34,17 +45,18 @@ export function N5View({ jobId }: { jobId: string }) {
     );
   }
 
-  if (isError) {
+  if (isError || isPreviewError) {
+    const err = error ?? previewError;
     return (
       <div className="flex flex-1 items-center justify-center bg-white">
         <p className="text-sm text-red-500">
-          {error instanceof Error ? error.message : '오류가 발생했습니다.'}
+          {err instanceof Error ? err.message : '오류가 발생했습니다.'}
         </p>
       </div>
     );
   }
 
-  if (!data) return null;
+  if (!data || !previewData) return null;
 
   const blockCount = data.sections.flatMap((s) => s.textBlocks).length;
 
@@ -66,7 +78,7 @@ export function N5View({ jobId }: { jobId: string }) {
 
         {/* 본문: 중앙 viewer + 우측 panel */}
         <div className="flex min-h-0 flex-1 gap-6 px-8 pb-8">
-          <N5Viewport sourceImages={data.sourceImages} sections={data.sections} />
+          <N5Viewport sourceImages={previewData.sourceImages} sections={data.sections} />
           <N5Panel job={data.job} blockCount={blockCount} />
         </div>
       </div>

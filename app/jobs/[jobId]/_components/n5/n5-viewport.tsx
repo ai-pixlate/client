@@ -2,8 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import type { ReviewSection, ReviewSourceImage } from '@/lib/api/types';
-import { getPreviewScale } from '@/lib/n5/coordinates';
+import type { ReviewSection, PreviewSourceImage } from '@/lib/api/types';
 import {
   ZOOM_BUTTON_STEP,
   computeWheelZoomFactor,
@@ -11,6 +10,7 @@ import {
   computeUsableViewportSize,
   computeFitWidthScale,
   computeFitHeightScale,
+  hasMissingRenderedPreview,
   type N5ViewMode,
   type Point,
   type Size,
@@ -40,25 +40,81 @@ import { ViewModeToggle, ZoomControls, FitControls } from './n5-toolbar';
 // mode(원문/번역문)는 zoom/pan과 완전히 독립된 state다 — 전환해도 같은
 // transform 값을 그대로 쓰므로 "보고 있던 위치"가 유지된다.
 //
+// sourceImages는 /review가 아니라 /preview(API-CFM-03, v3.4.1) 응답이다 —
+// originalUrl/renderedUrl/scale/previewHeight 모두 서버가 계산해 내려주는
+// 값을 그대로 쓰고, FE는 scale을 다시 계산하지 않는다. scale은 v3.4.1
+// 백엔드 최종 확정으로 단일 숫자다(scaleX/scaleY 두 축이 아니다). section의
+// bucket/height/topOffset/textBlocks는 여전히 /review가 정본이라 sections
+// prop은 그대로 ReviewSection[]을 받는다.
+//
+// previewWidth는 /preview 계약에 없다(v3.4.1 백엔드 최종 확정) — API에 다시
+// 추가하지 않는다. 대신 originalUrl 이미지 "자체의" 실제 픽셀 폭(naturalWidth)을
+// 그대로 쓴다(useNaturalWidths). originalUrl/renderedUrl은 이미 다운스케일된
+// preview 이미지 파일이다(백엔드 최종 확정) — 즉 naturalWidth가 이미 preview
+// 좌표계의 폭이라, 여기에 scale을 또 곱하면 이중 스케일 적용이 된다. scale은
+// section.height/topOffset처럼 "원본 해상도 좌표"를 preview 좌표로 바꿀 때만
+// 쓰고, 이미지 자체의 폭(naturalWidth)에는 쓰지 않는다. CSS transform 결과를
+// 다시 측정하는 것과는 다르다 — naturalWidth는 원본 asset 고유값이라 zoom/pan/fit을
+// 아무리 반복해도 오차가 쌓이지 않는다.
+//
 // 미포함(오늘 범위 아님): block selection overlay, 우측 block table,
 // virtualization, 텍스트 수정, delete interaction, 툴바 전체 기능.
 // ─────────────────────────────────────────────────────────────────
 
+/**
+ * sourceImages의 originalUrl을 로드해 실제 픽셀 폭(naturalWidth)을 얻는다.
+ * /preview가 previewWidth를 내려주지 않으므로, 폭이 필요한 곳(canvas/background
+ * 크기)은 이 값을 그대로 쓴다 — originalUrl/renderedUrl 자체가 이미 다운스케일된
+ * preview 이미지라(백엔드 최종 확정) naturalWidth가 이미 preview 좌표계의
+ * 폭이고, scale을 또 곱하면 안 된다(이중 스케일 적용). originalUrl만
+ * 측정한다 — originalUrl/renderedUrl은 같은 원본 이미지의 전/후 버전이라
+ * 같은 크기를 공유하고, originalUrl은(renderedUrl과 달리) null이 아니므로
+ * 항상 측정 가능하다.
+ */
+function useNaturalWidths(sourceImages: PreviewSourceImage[]): Map<string, number> {
+  const [widths, setWidths] = useState<Map<string, number>>(new Map());
+  const startedRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    sourceImages.forEach((image) => {
+      if (startedRef.current.has(image.sourceImageId)) return;
+      startedRef.current.add(image.sourceImageId);
+
+      const img = new Image();
+      img.onload = () => {
+        setWidths((prev) => {
+          const next = new Map(prev);
+          next.set(image.sourceImageId, img.naturalWidth);
+          return next;
+        });
+      };
+      img.src = image.originalUrl;
+    });
+  }, [sourceImages]);
+
+  return widths;
+}
+
 interface CanvasSlice {
   sectionId: string;
-  /** 스택 안에서 이 section이 차지하는 높이 (scaleY 적용됨) */
+  /** 스택 안에서 이 section이 차지하는 높이 (scale 적용됨) */
   height: number;
-  /** 이 section이 속한 sourceImage의 표시 폭 (scaleX 적용됨) */
+  /**
+   * 이 section이 속한 sourceImage의 표시 폭 (naturalWidth 그대로 — 이미
+   * preview 좌표계 폭이라 scale을 곱하지 않는다).
+   */
   width: number;
   backgroundSize: string;
   backgroundPositionY: number;
   originalUrl: string;
-  translatedUrl: string;
+  /** render_image_key가 없으면(렌더 미완료) null. 「번역 후」가 disabled인 동안은 쓰이지 않는다. */
+  renderedUrl: string | null;
 }
 
 function buildIncludeSlices(
   sections: ReviewSection[],
-  sourceImages: ReviewSourceImage[],
+  sourceImages: PreviewSourceImage[],
+  naturalWidthBySourceImageId: Map<string, number>,
 ): CanvasSlice[] {
   const previewById = new Map(sourceImages.map((image) => [image.sourceImageId, image]));
 
@@ -72,19 +128,30 @@ function buildIncludeSlices(
       const image = previewById.get(section.sourceImageId);
       if (!image) return [];
 
-      const scale = getPreviewScale(image.preview);
+      // naturalWidth를 아직 못 구했으면(이미지 로드 전) 이 section은 잠깐
+      // 건너뛴다 — 로드가 끝나면 useNaturalWidths가 갱신되어 다시 그려진다.
+      const naturalWidth = naturalWidthBySourceImageId.get(image.sourceImageId);
+      if (naturalWidth == null) return [];
+
+      // image.scale은 /preview가 서버에서 계산해 내려준 단일 배율이다 —
+      // 여기서 다시 구하지 않는다. originalUrl/renderedUrl 자체가 이미
+      // 다운스케일된 preview 이미지이므로(백엔드 최종 확정) naturalWidth는
+      // 이미 preview 좌표계의 폭이다 — scale을 또 곱하면 이중 스케일 적용이
+      // 된다. scale은 section.height/topOffset처럼 "원본 해상도 좌표"에만 쓴다.
+      const { scale } = image;
+      const previewWidth = naturalWidth;
 
       return [
         {
           sectionId: section.sectionId,
-          height: section.height * scale.scaleY,
-          width: image.preview.previewWidth,
-          backgroundSize: `${image.preview.previewWidth}px ${image.preview.previewHeight}px`,
+          height: section.height * scale,
+          width: previewWidth,
+          backgroundSize: `${previewWidth}px ${image.previewHeight}px`,
           // section.topOffset(원본 이미지 내부 절대 위치)을 그대로 쓴다 —
           // section.height 누적으로 만든 값이 아니다.
-          backgroundPositionY: -(section.topOffset * scale.scaleY),
-          originalUrl: image.originalPreviewUrl,
-          translatedUrl: image.translatedPreviewUrl,
+          backgroundPositionY: -(section.topOffset * scale),
+          originalUrl: image.originalUrl,
+          renderedUrl: image.renderedUrl,
         },
       ];
     });
@@ -93,21 +160,28 @@ function buildIncludeSlices(
 function ImageLayer({ slices, mode }: { slices: CanvasSlice[]; mode: N5ViewMode }) {
   return (
     <>
-      {slices.map((slice) => (
-        <div
-          key={slice.sectionId}
-          data-testid={`n5-slice-${mode}-${slice.sectionId}`}
-          style={{
-            height: slice.height,
-            width: slice.width,
-            backgroundColor: '#e5e5e5',
-            backgroundImage: `url(${mode === 'original' ? slice.originalUrl : slice.translatedUrl})`,
-            backgroundSize: slice.backgroundSize,
-            backgroundPosition: `0px ${slice.backgroundPositionY}px`,
-            backgroundRepeat: 'no-repeat',
-          }}
-        />
-      ))}
+      {slices.map((slice) => {
+        // renderedUrl이 null인 채로 'translated' 모드가 되는 경우는 없다 —
+        // 상위(N5Viewport)가 hasMissingRenderedPreview일 때 초기 모드를
+        // 'original'로 두고 「번역 후」 버튼도 disabled 처리하기 때문이다.
+        // 그래도 url(null)을 그대로 CSS에 넣지 않도록 방어적으로 처리한다.
+        const url = mode === 'original' ? slice.originalUrl : slice.renderedUrl;
+        return (
+          <div
+            key={slice.sectionId}
+            data-testid={`n5-slice-${mode}-${slice.sectionId}`}
+            style={{
+              height: slice.height,
+              width: slice.width,
+              backgroundColor: '#e5e5e5',
+              backgroundImage: url ? `url(${url})` : 'none',
+              backgroundSize: slice.backgroundSize,
+              backgroundPosition: `0px ${slice.backgroundPositionY}px`,
+              backgroundRepeat: 'no-repeat',
+            }}
+          />
+        );
+      })}
     </>
   );
 }
@@ -139,10 +213,17 @@ export function N5Viewport({
   sourceImages,
   sections,
 }: {
-  sourceImages: ReviewSourceImage[];
+  sourceImages: PreviewSourceImage[];
   sections: ReviewSection[];
 }) {
-  const [viewMode, setViewMode] = useState<N5ViewMode>('translated');
+  // renderedUrl(render_image_key)이 없는 sourceImage가 하나라도 있으면 렌더가
+  // 아직 없다는 뜻이다 — 이때는 기본 진입도 'translated'가 아니라 'original'로
+  // 시작한다(보여줄 이미지가 없으므로). props는 이 컴포넌트가 마운트되는
+  // 시점(N5View가 로딩 완료 후에만 렌더한다)에 이미 최종 값이라 useState
+  // lazy initializer로 한 번만 계산해도 안전하다.
+  const [viewMode, setViewMode] = useState<N5ViewMode>(() =>
+    hasMissingRenderedPreview(sourceImages) ? 'original' : 'translated',
+  );
   const [transform, setTransform] = useState<Transform>(INITIAL_TRANSFORM);
   const [isSpaceHeld, setIsSpaceHeld] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
@@ -159,9 +240,16 @@ export function N5Viewport({
     transformRef.current = transform;
   }, [transform]);
 
+  const naturalWidths = useNaturalWidths(sourceImages);
+
   const slices = useMemo(
-    () => buildIncludeSlices(sections, sourceImages),
-    [sections, sourceImages],
+    () => buildIncludeSlices(sections, sourceImages, naturalWidths),
+    [sections, sourceImages, naturalWidths],
+  );
+
+  const translatedDisabled = useMemo(
+    () => hasMissingRenderedPreview(sourceImages),
+    [sourceImages],
   );
 
   // canvas(원본, zoom과 무관한) 크기 — fit 계산의 기준값. 매 렌더 다시 측정하지 않는다.
@@ -303,19 +391,14 @@ export function N5Viewport({
     setTransform({ zoom: computeFitHeightScale(usable, canvasSize), pan: { x: 0, y: 0 } });
   }, [canvasSize]);
 
-  if (slices.length === 0) {
-    return (
-      <div
-        data-testid="n5-viewport"
-        className="flex h-full min-w-0 flex-1 items-center justify-center rounded-[6px] bg-[#f5f5f5] text-sm text-gray-400"
-      >
-        표시할 include section이 없습니다.
-      </div>
-    );
-  }
-
   const cursor = isPanning ? 'grabbing' : isSpaceHeld ? 'grab' : 'default';
 
+  // slices가 비어 있을 수 있는 두 경우 — (a) include section이 실제로 없음,
+  // (b) naturalWidth 측정이 아직 끝나지 않아 잠깐 비어 있음(useNaturalWidths) —
+  // 어느 쪽이든 이 바깥 div는 그대로 유지한다. 이 div를 통째로 다른 subtree로
+  // 바꿔치기하면(예: 조건부로 완전히 다른 return을 타면) viewportRef가 그
+  // 순간 null이 되고, wheel 리스너 useEffect([])가 마운트 시점의 null을
+  // 캡처해 이후 canvas가 나타나도 wheel이 영영 붙지 않는 버그가 생긴다.
   return (
     <div
       ref={viewportRef}
@@ -327,35 +410,47 @@ export function N5Viewport({
       onPointerUp={endPan}
       onPointerCancel={endPan}
     >
-      <div className="absolute top-5 left-5 z-10">
-        <ViewModeToggle mode={viewMode} onChange={setViewMode} />
-      </div>
+      {slices.length === 0 ? (
+        <div className="flex h-full items-center justify-center text-sm text-gray-400">
+          표시할 include section이 없습니다.
+        </div>
+      ) : (
+        <>
+          <div className="absolute top-5 left-5 z-10">
+            <ViewModeToggle
+              mode={viewMode}
+              onChange={setViewMode}
+              translatedDisabled={translatedDisabled}
+            />
+          </div>
 
-      <div className="absolute top-5 right-5 z-10 flex items-center gap-2">
-        <ZoomControls
-          zoom={transform.zoom}
-          onZoomIn={() => handleZoomButton(1)}
-          onZoomOut={() => handleZoomButton(-1)}
-        />
-        <FitControls onFitWidth={handleFitWidth} onFitHeight={handleFitHeight} />
-      </div>
+          <div className="absolute top-5 right-5 z-10 flex items-center gap-2">
+            <ZoomControls
+              zoom={transform.zoom}
+              onZoomIn={() => handleZoomButton(1)}
+              onZoomOut={() => handleZoomButton(-1)}
+            />
+            <FitControls onFitWidth={handleFitWidth} onFitHeight={handleFitHeight} />
+          </div>
 
-      <div
-        data-testid="n5-canvas"
-        // data-zoom/pan-*은 화면에 보이지 않는 테스트 전용 hook이다 — e2e가
-        // transform CSS 문자열을 파싱하지 않고 현재 zoom/pan 값을 읽을 수 있게 한다.
-        data-zoom={transform.zoom}
-        data-pan-x={transform.pan.x}
-        data-pan-y={transform.pan.y}
-        style={{
-          width: canvasSize.width,
-          height: canvasSize.height,
-          transform: `translate(${transform.pan.x}px, ${transform.pan.y}px) scale(${transform.zoom})`,
-          transformOrigin: '0 0',
-        }}
-      >
-        <ImageLayer slices={slices} mode={viewMode} />
-      </div>
+          <div
+            data-testid="n5-canvas"
+            // data-zoom/pan-*은 화면에 보이지 않는 테스트 전용 hook이다 — e2e가
+            // transform CSS 문자열을 파싱하지 않고 현재 zoom/pan 값을 읽을 수 있게 한다.
+            data-zoom={transform.zoom}
+            data-pan-x={transform.pan.x}
+            data-pan-y={transform.pan.y}
+            style={{
+              width: canvasSize.width,
+              height: canvasSize.height,
+              transform: `translate(${transform.pan.x}px, ${transform.pan.y}px) scale(${transform.zoom})`,
+              transformOrigin: '0 0',
+            }}
+          >
+            <ImageLayer slices={slices} mode={viewMode} />
+          </div>
+        </>
+      )}
     </div>
   );
 }

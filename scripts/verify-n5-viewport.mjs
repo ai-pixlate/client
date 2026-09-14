@@ -16,6 +16,7 @@ import {
   computeUsableViewportSize,
   computeFitWidthScale,
   computeFitHeightScale,
+  hasMissingRenderedPreview,
 } from '../lib/n5/viewport.ts';
 
 let pass = 0;
@@ -114,6 +115,20 @@ console.log('\n[5] fit width / fit height — 원본 canvas size와 viewport siz
   // canvas가 매우 커서 fit이 25% 밑으로 내려가면 clamp된다
   const hugeCanvas = { width: 100_000, height: 100_000 };
   check('fit 결과도 MIN_ZOOM으로 clamp', computeFitHeightScale(viewport, hugeCanvas) === MIN_ZOOM);
+}
+
+console.log('\n[6] hasMissingRenderedPreview — render_image_key(renderedUrl) null 여부로만 판단');
+{
+  const allRendered = [{ renderedUrl: '/a.png' }, { renderedUrl: '/b.png' }];
+  check('모두 렌더 완료면 false', hasMissingRenderedPreview(allRendered) === false);
+
+  const oneMissing = [{ renderedUrl: '/a.png' }, { renderedUrl: null }];
+  check(
+    '하나라도 renderedUrl이 null이면 true(별도 render_failed 신호 없이 null만으로 판단)',
+    hasMissingRenderedPreview(oneMissing) === true,
+  );
+
+  check('빈 배열이면 false', hasMissingRenderedPreview([]) === false);
 }
 
 console.log(`\n결과: PASS ${pass} / FAIL ${fail}\n`);

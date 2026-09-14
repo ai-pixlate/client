@@ -26,15 +26,15 @@ function check(name, condition, detail = '') {
   }
 }
 
-console.log('\n[1] displayTop + section-local bbox -> N5 표시 Y');
+console.log('\n[1] displayTop + section-local bbox -> N5 표시 Y (v3.4.1, 단일 scale)');
 {
   // section.displayTop=2500, block.bbox.y=120 -> N5 표시 Y(원본 픽셀) = 2620
   const bbox = { x: 100, y: 120, width: 800, height: 100 };
   const displayTop = 2500;
-  const scale = { scaleX: 1, scaleY: 1 }; // 배율 없이 원본 픽셀 좌표만 우선 확인
+  const scale = 1; // 배율 없이 원본 픽셀 좌표만 우선 확인
   const rect = getBlockDisplayRect(bbox, displayTop, scale);
-  check('displayY = displayTop + bbox.y', rect.top === 2620, `got ${rect.top}`);
-  check('displayX = bbox.x (scaleX=1)', rect.left === 100, `got ${rect.left}`);
+  check('previewY = displayTop + bbox.y (scale=1)', rect.top === 2620, `got ${rect.top}`);
+  check('previewX = bbox.x (scale=1)', rect.left === 100, `got ${rect.left}`);
 
   // top_offset(원본 절대값)과는 다른 값이어야 한다 — 같은 bbox라도 displayTop만 써야 한다
   const topOffset = 9999; // 만약 실수로 topOffset을 썼다면 이 값이 섞여 나온다
@@ -43,12 +43,36 @@ console.log('\n[1] displayTop + section-local bbox -> N5 표시 Y');
     rect.top !== topOffset + bbox.y,
     `rect.top=${rect.top}`,
   );
+
+  // v3.4.1 백엔드 최종 확정 — scaleX/scaleY 두 축이 아니라 단일 scale 하나가
+  // previewX/Y/W/H 전부에 그대로 곱해진다. displayTop도 원본 해상도 좌표이므로
+  // bbox.y와 먼저 더한 뒤에 scale을 적용해야 한다(스케일을 먼저 걸고 더하면 안 된다).
+  const scale2 = 0.4;
+  const rect2 = getBlockDisplayRect(bbox, displayTop, scale2);
+  check(
+    'previewY = (displayTop + bbox.y) * scale (스케일 나중에 적용)',
+    Math.abs(rect2.top - (displayTop + bbox.y) * scale2) < 1e-9,
+    `got ${rect2.top}`,
+  );
+  check('previewX = bbox.x * scale', Math.abs(rect2.left - bbox.x * scale2) < 1e-9, `got ${rect2.left}`);
+  check(
+    'previewW = bbox.width * scale',
+    Math.abs(rect2.width - bbox.width * scale2) < 1e-9,
+    `got ${rect2.width}`,
+  );
+  check(
+    'previewH = bbox.height * scale (가로/세로 같은 scale)',
+    Math.abs(rect2.height - bbox.height * scale2) < 1e-9,
+    `got ${rect2.height}`,
+  );
 }
 
-console.log('\n[2] scaleX / scaleY — 두 축을 독립적으로 적용한다');
+console.log('\n[2] getPreviewScale — /review(ReviewPreview) 원시 크기 쌍으로부터 축별 비율을 구한다');
 {
-  // 일부러 가로/세로 비율이 다른 preview를 만든다 (실제로는 드물지만, 축을
-  // 하나로 합치면 이런 경우 좌표가 깨지므로 독립 계산을 검증한다)
+  // getPreviewScale/PreviewScale은 /preview의 단일 scale 계약과는 별개다 —
+  // /review의 ReviewPreview(originalWidth/Height, previewWidth/Height)로부터
+  // 축별 비율을 구하는 범용 유틸이고, mock 서버 응답 생성(lib/mock-api/fixtures.ts)
+  // 에서만 쓰인다. 일부러 가로/세로 비율이 다른 preview로 두 축이 독립 계산됨을 검증한다.
   const preview = {
     originalWidth: 1000,
     originalHeight: 8500,
@@ -63,15 +87,6 @@ console.log('\n[2] scaleX / scaleY — 두 축을 독립적으로 적용한다')
     `got ${scale.scaleY}`,
   );
   check('scaleX와 scaleY가 다르게 유지된다', scale.scaleX !== scale.scaleY);
-
-  const bbox = { x: 100, y: 200, width: 800, height: 120 };
-  const rect = getBlockDisplayRect(bbox, 0, scale);
-  check('displayWidth = bbox.width * scaleX', rect.width === 800 * scale.scaleX, `got ${rect.width}`);
-  check(
-    'displayHeight = bbox.height * scaleY',
-    Math.abs(rect.height - 120 * scale.scaleY) < 1e-9,
-    `got ${rect.height}`,
-  );
 
   check(
     'originalWidth/Height가 0이면 에러',
@@ -164,6 +179,33 @@ console.log('\n[4] 여러 sourceImage에 걸친 job 전체 stack — sourceImage
     '(대조군) sourceImage별로 나눠 호출하면 리셋되어 버그와 동일하게 재현된다',
     wrongTopsB[0] === 0,
     `got ${wrongTopsB[0]}`,
+  );
+}
+
+console.log('\n[5] displayTop + bbox.y 결과는 viewMode(번역 전/번역 후)와 무관하다');
+{
+  // getBlockDisplayRect는 애초에 mode 파라미터를 받지 않는다 — 번역 전/번역 후
+  // 전환은 image source만 바꿀 뿐, block 표시 좌표(section.displayTop + block.bbox.y)는
+  // 같은 좌표계(originalUrl/renderedUrl이 공유하는 preview)를 그대로 쓰기 때문이다.
+  // 같은 입력을 "번역 전 화면"/"번역 후 화면" 두 번 호출한 것처럼 반복 호출해도
+  // 항상 같은 결과가 나와야 한다.
+  const bbox = { x: 100, y: 120, width: 800, height: 100 };
+  const displayTop = 2500;
+  const scale = 0.4;
+
+  const rectForOriginal = getBlockDisplayRect(bbox, displayTop, scale);
+  const rectForTranslated = getBlockDisplayRect(bbox, displayTop, scale);
+
+  check(
+    '번역 전/번역 후 어느 모드에서 계산해도 top이 같다',
+    rectForOriginal.top === rectForTranslated.top,
+    `original=${rectForOriginal.top} translated=${rectForTranslated.top}`,
+  );
+  check(
+    '번역 전/번역 후 어느 모드에서 계산해도 left/width/height가 같다',
+    rectForOriginal.left === rectForTranslated.left &&
+      rectForOriginal.width === rectForTranslated.width &&
+      rectForOriginal.height === rectForTranslated.height,
   );
 }
 

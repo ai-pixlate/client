@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 import { reachN5 } from './helpers/reach-n5';
+import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 
 // ─────────────────────────────────────────────────────────────────
 // N5 — 캔버스형 viewport interaction (9일차, Figma 544:3168 기준)
@@ -31,10 +32,15 @@ test.describe('N5 캔버스형 viewport', () => {
     await expect(page.locator('[data-testid="n5-compare-stack"]')).toHaveCount(0);
   });
 
-  test('기본 view mode는 번역문이고, 원문으로 전환 후 다시 복귀할 수 있다', async ({ page }) => {
+  test('토글 라벨은 "번역 전"/"번역 후"이다 (v3.4.1, 원문/번역문 명칭 폐기)', async ({ page }) => {
+    await expect(page.getByTestId('n5-view-mode-translated')).toHaveText('번역 후');
+    await expect(page.getByTestId('n5-view-mode-original')).toHaveText('번역 전');
+  });
+
+  test('기본 view mode는 번역 후이고, 번역 전으로 전환 후 다시 복귀할 수 있다', async ({ page }) => {
     await expect(page.getByTestId('n5-view-mode-translated')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByTestId('n5-view-mode-original')).toHaveAttribute('aria-pressed', 'false');
-    // 번역문 layer만 실제로 렌더된다 (동일 viewport에서 image source만 교체하므로
+    // 번역 후 layer만 실제로 렌더된다 (동일 viewport에서 image source만 교체하므로
     // 두 layer가 동시에 DOM에 있지 않다)
     await expect(page.locator('[data-testid^="n5-slice-translated-"]').first()).toBeVisible();
     await expect(page.locator('[data-testid^="n5-slice-original-"]')).toHaveCount(0);
@@ -47,6 +53,68 @@ test.describe('N5 캔버스형 viewport', () => {
     await page.getByTestId('n5-view-mode-translated').click();
     await expect(page.getByTestId('n5-view-mode-translated')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.locator('[data-testid^="n5-slice-translated-"]').first()).toBeVisible();
+  });
+
+  test('번역 전은 originalUrl, 번역 후는 renderedUrl 이미지를 그린다 (/preview 최종 계약)', async ({
+    page,
+  }) => {
+    // 기본값(번역 후) — ReviewSourceImage.renderedUrl(mock: *-translated.png)을 그린다
+    const translatedSlice = page.locator('[data-testid^="n5-slice-translated-"]').first();
+    const translatedBg = await translatedSlice.evaluate(
+      (el) => getComputedStyle(el).backgroundImage,
+    );
+    expect(translatedBg).toContain('-translated.png');
+
+    // 번역 전으로 전환 — ReviewSourceImage.originalUrl(mock: *-original.png)을 그린다
+    await page.getByTestId('n5-view-mode-original').click();
+    const originalSlice = page.locator('[data-testid^="n5-slice-original-"]').first();
+    const originalBg = await originalSlice.evaluate((el) => getComputedStyle(el).backgroundImage);
+    expect(originalBg).toContain('-original.png');
+  });
+
+  test('토글 전후 canvas height가 바뀌지 않는다 (originalUrl/renderedUrl은 같은 preview 좌표계를 공유)', async ({
+    page,
+  }) => {
+    const canvas = page.locator('[data-testid="n5-canvas"]');
+    const heightBefore = await canvas.evaluate((el) => (el as HTMLElement).style.height);
+
+    await page.getByTestId('n5-view-mode-original').click();
+    const heightAfterOriginal = await canvas.evaluate((el) => (el as HTMLElement).style.height);
+    expect(heightAfterOriginal).toBe(heightBefore);
+
+    await page.getByTestId('n5-view-mode-translated').click();
+    const heightAfterBack = await canvas.evaluate((el) => (el as HTMLElement).style.height);
+    expect(heightAfterBack).toBe(heightBefore);
+  });
+
+  test('canvas width는 originalUrl 이미지의 naturalWidth와 같다 (scale 이중 적용 아님)', async ({
+    page,
+  }) => {
+    // originalUrl/renderedUrl 자체가 이미 다운스케일된 preview 이미지이므로
+    // (백엔드 최종 확정), 그 naturalWidth에는 scale을 다시 곱하면 안 된다 —
+    // canvas width(=각 sourceImage 표시 폭의 최댓값)가 실제 이미지 파일의
+    // naturalWidth와 정확히 같아야 한다(naturalWidth * scale이 되어서는 안 됨).
+    const canvas = page.locator('[data-testid="n5-canvas"]');
+    const canvasWidth = await canvas.evaluate((el) => parseFloat((el as HTMLElement).style.width));
+
+    const maxNaturalWidth = await page.evaluate(async (jobId) => {
+      const res = await fetch(`/api/jobs/${jobId}/preview`);
+      const body = await res.json();
+      const widths = await Promise.all(
+        (body.sourceImages as { originalUrl: string }[]).map(
+          (img) =>
+            new Promise<number>((resolve, reject) => {
+              const el = new Image();
+              el.onload = () => resolve(el.naturalWidth);
+              el.onerror = () => reject(new Error(`이미지 로드 실패: ${img.originalUrl}`));
+              el.src = img.originalUrl;
+            }),
+        ),
+      );
+      return Math.max(...widths);
+    }, MOCK_JOB_ID);
+
+    expect(canvasWidth).toBe(maxNaturalWidth);
   });
 
   test('+/- 로 zoom이 바뀌고 표시값에 반영된다', async ({ page }) => {

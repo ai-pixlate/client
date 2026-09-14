@@ -268,8 +268,10 @@ export interface Section {
    * 섹션 렌더(번역·인페인팅 처리) 결과 이미지 식별자 (v3.4.1, DB
    * section.render_image_key 그대로 camelCase). imageKey와 짝을 이뤄
    * 원본/처리 결과 비교에 쓰인다.
+   * null 가능(v3.4.1, 금요일 백 회신) — 렌더가 아직 완료되지 않은 상태.
+   * 별도 render_failed류 신호는 없다 — null 여부 자체가 정본이다.
    */
-  renderImageKey: string;
+  renderImageKey: string | null;
   bucket: SectionBucket;
   /** 사용자가 직접 입력하지 않음. 시스템 또는 자동 판정으로 설정 */
   exclusionReason: ExclusionReasonCode | null;
@@ -380,14 +382,24 @@ export interface ReviewPreview {
   previewHeight: number;
 }
 
-/** N5 검수 화면의 소스 이미지 단위 미리보기 */
+/**
+ * /review 응답의 소스 이미지 단위 미리보기. N5 좌측 뷰어(N5Viewport)는
+ * 이제 이 타입이 아니라 별도 계약인 PreviewSourceImage(/preview,
+ * API-CFM-03)를 쓴다 — 이 타입의 현재 실사용처는 perf harness의
+ * ImageViewer뿐이라, render_image_key null 가능 계약은 PreviewSourceImage
+ * 쪽에만 반영했다(renderedUrl이 여전히 non-null).
+ */
 export interface ReviewSourceImage {
   sourceImageId: string;
-  /** 원문(원본 텍스트 포함) 미리보기 */
-  originalPreviewUrl: string;
-  /** 번역 결과 합성 미리보기 */
-  translatedPreviewUrl: string;
-  /** 원본/번역 프리뷰가 공유하는 크기·배율 계산용 값 */
+  /** 번역 전 이미지 — 원문(원본 텍스트 포함) 미리보기 */
+  originalUrl: string;
+  /**
+   * 번역 후 렌더 결과 — trans_1(TextBlock.translatedText) 반영 합성 미리보기.
+   * trans_2(12월 예정)는 이 계약 범위 밖이다.
+   */
+  renderedUrl: string;
+  /** 원본/번역 프리뷰가 공유하는 크기·배율 계산용 값. previewWidth/previewHeight는
+   * 서버 응답값을 그대로 쓰고 FE 런타임에서 다시 계산하지 않는다. */
   preview: ReviewPreview;
 }
 
@@ -436,6 +448,58 @@ export interface ReviewResponse {
   sourceImages: ReviewSourceImage[];
   /** 섹션 단위 텍스트 블록 목록 (우측 패널용) */
   sections: ReviewSection[];
+}
+
+/**
+ * N5 좌측 뷰어 전용 preview 계약 (API-CFM-03, GET /api/jobs/:jobId/preview, v3.4.1).
+ * /review와 별개 엔드포인트다 — section bucket/textBlocks 등 우측 패널 데이터는
+ * 여전히 /review가 정본이고, 이 계약은 좌측 뷰어가 이미지를 그리는 데 필요한
+ * 최소 정보(원문/렌더 이미지, 배율, 좌표)만 담는다.
+ */
+export interface PreviewSourceImage {
+  sourceImageId: string;
+  /** 번역 전 이미지. section.image_key 기반(v3.4.1, DB section.image_key). */
+  originalUrl: string;
+  /**
+   * 번역 후 렌더 결과 — section.render_image_key 기반(v3.4.1, DB
+   * section.render_image_key). trans_1(TextBlock.translatedText) 반영 결과이고
+   * trans_2는 범위 밖이다. render_image_key가 null이면(렌더 미완료, 금요일
+   * 백 회신) 이 값도 null이다 — 별도 render_failed류 신호는 만들지 않는다.
+   * 「번역 후」 토글은 이 값이 null이면 비활성화된다(lib/n5/viewport.ts의
+   * hasMissingRenderedPreview 참고).
+   */
+  renderedUrl: string | null;
+  /**
+   * 서버가 계산해 내려주는 원본→프리뷰 단일 배율 (v3.4.1, 백엔드 최종 확정 —
+   * scaleX/scaleY 두 축이 아니라 가로/세로에 동일하게 적용되는 숫자 하나다).
+   * FE는 재계산하지 않는다. previewX = bbox.x * scale, previewY =
+   * (displayTop + bbox.y) * scale, previewW/H도 각각 bbox.width/height * scale
+   * (lib/n5/coordinates.ts의 getBlockDisplayRect 참고).
+   */
+  scale: number;
+  /**
+   * 프리뷰 표시 높이(px). 서버 계산 응답값 — FE 런타임에서 다시 계산하지 않는다.
+   * previewWidth는 이 계약에 없다(v3.4.1 백엔드 최종 확정) — 폭이 필요한
+   * 곳(N5Viewport)은 originalUrl 이미지 자체의 실제 픽셀 폭을 읽어 scale을
+   * 곱해 구한다. API에 previewWidth를 다시 추가하지 않는다.
+   */
+  previewHeight: number;
+}
+
+export interface PreviewSection {
+  sectionId: string;
+  sourceImageId: string;
+  /**
+   * N5 좌측 뷰어에서 이 section이 시작하는 누적 top(원본 픽셀 기준).
+   * 서버 계산 응답값 — FE 런타임에서 다시 누적 계산하지 않는다.
+   * (계산 규칙은 ReviewSection.displayTop과 동일: include section만 누적)
+   */
+  displayTop: number;
+}
+
+export interface PreviewResponse {
+  sourceImages: PreviewSourceImage[];
+  sections: PreviewSection[];
 }
 
 export interface UpdateTranslationRequest {
