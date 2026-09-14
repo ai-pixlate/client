@@ -17,7 +17,16 @@ import {
   mockN6RenderingStatus,
   mockSectionsResponse,
   mockReviewResponse,
+  mockPreviewResponse,
   mockJobResultResponse,
+  MOCK_STRESS_JOB_ID,
+  mockStressJobStatus,
+  mockStressReviewResponse,
+  mockStressPreviewResponse,
+  MOCK_STRESS_TALL_JOB_ID,
+  mockStressTallJobStatus,
+  mockStressTallReviewResponse,
+  mockStressTallPreviewResponse,
 } from '@/lib/mock-api/fixtures';
 
 // ─────────────────────────────────────────────
@@ -178,6 +187,11 @@ export const handlers = [
   // ──────────────────────────────────────────
   http.get('/api/jobs/:jobId/status', ({ params, request }) => {
     const jobId = params.jobId as string;
+    // stress job은 항상 N5에 곧바로 진입한 상태로 고정 응답한다 — mockJobState
+    // (N2~N6 progression 전용, MOCK_JOB_ID 하나만 위한 전역 상태)와 완전히
+    // 분리되어 있어 기본 job의 polling에 영향을 주지 않는다.
+    if (jobId === MOCK_STRESS_JOB_ID) return HttpResponse.json(mockStressJobStatus);
+    if (jobId === MOCK_STRESS_TALL_JOB_ID) return HttpResponse.json(mockStressTallJobStatus);
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
 
     const scenario = new URL(request.url).searchParams.get('scenario');
@@ -280,6 +294,10 @@ export const handlers = [
   // ──────────────────────────────────────────
   http.get('/api/jobs/:jobId/review', ({ params }) => {
     const jobId = params.jobId as string;
+    // stress job(N5 성능 방어 검증 전용)은 sectionState 등 기본 job의 인메모리
+    // 상태와 완전히 분리된 고정 fixture를 그대로 내려준다.
+    if (jobId === MOCK_STRESS_JOB_ID) return HttpResponse.json(mockStressReviewResponse);
+    if (jobId === MOCK_STRESS_TALL_JOB_ID) return HttpResponse.json(mockStressTallReviewResponse);
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
 
     const sections = mockReviewResponse.sections
@@ -305,6 +323,22 @@ export const handlers = [
       });
 
     return HttpResponse.json({ ...mockReviewResponse, sections });
+  }),
+
+  // ──────────────────────────────────────────
+  // N5 — 좌측 뷰어 preview 조회 (API-CFM-03)
+  //
+  // /review와 별개 엔드포인트다. section bucket/textBlocks 등은 여전히 /review가
+  // 정본이므로 이 handler는 section을 include/exclude로 거르지 않는다 — 원본
+  // 계약(sourceImageId, displayTop)만 그대로 내려준다.
+  // ──────────────────────────────────────────
+  http.get('/api/jobs/:jobId/preview', ({ params }) => {
+    const jobId = params.jobId as string;
+    if (jobId === MOCK_STRESS_JOB_ID) return HttpResponse.json(mockStressPreviewResponse);
+    if (jobId === MOCK_STRESS_TALL_JOB_ID) return HttpResponse.json(mockStressTallPreviewResponse);
+    if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
+
+    return HttpResponse.json(mockPreviewResponse);
   }),
 
   // ──────────────────────────────────────────

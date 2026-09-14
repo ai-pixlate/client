@@ -2,7 +2,7 @@
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
-import { createJob, getJobStatus, advanceJobStep, getSections, updateSectionBucket, getReview, updateTranslation, getJobResult, saveJob } from '@/lib/api/pixate';
+import { createJob, getJobStatus, advanceJobStep, getSections, updateSectionBucket, getReview, getPreview, updateTranslation, getJobResult, saveJob } from '@/lib/api/pixate';
 import type { UpdateSectionBucketRequest, UpdateTranslationRequest, CreateJobRequest, SectionsResponse } from '@/lib/api/types';
 
 // ─────────────────────────────────────────────
@@ -16,6 +16,7 @@ export const pixateKeys = {
     ['pixate', 'job', jobId, 'status', scenario] as const,
   sections: (jobId: string) => ['pixate', 'job', jobId, 'sections'] as const,
   review: (jobId: string) => ['pixate', 'job', jobId, 'review'] as const,
+  preview: (jobId: string) => ['pixate', 'job', jobId, 'preview'] as const,
   result: (jobId: string) => ['pixate', 'job', jobId, 'result'] as const,
 };
 
@@ -100,6 +101,18 @@ export function useReviewQuery(jobId: string) {
   return useQuery({
     queryKey: pixateKeys.review(jobId),
     queryFn: () => getReview(jobId),
+    enabled: !!jobId,
+  });
+}
+
+// ─────────────────────────────────────────────
+// N5 — 좌측 뷰어 preview 조회 (API-CFM-03, /review와 별개 엔드포인트)
+// ─────────────────────────────────────────────
+
+export function usePreviewQuery(jobId: string) {
+  return useQuery({
+    queryKey: pixateKeys.preview(jobId),
+    queryFn: () => getPreview(jobId),
     enabled: !!jobId,
   });
 }

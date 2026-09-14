@@ -16,6 +16,7 @@
     "verify:n5-viewport": "node --experimental-strip-types scripts/verify-n5-viewport.mjs",
     "make:ruler": "node scripts/make-ruler.mjs",
     "make:n5-fixtures": "node scripts/make-n5-fixture-images.mjs",
+    "make:n3-fixtures": "node scripts/make-n3-fixture-images.mjs",
     "typecheck": "tsc --noEmit",
     "test:e2e": "playwright test"
   },

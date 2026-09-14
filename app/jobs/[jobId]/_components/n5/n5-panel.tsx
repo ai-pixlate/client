@@ -1,4 +1,6 @@
 import type { ReviewResponse } from '@/lib/api/types';
+import type { N5ViewMode } from '@/lib/n5/viewport';
+import { ViewModeToggle } from './n5-toolbar';
 
 // ─────────────────────────────────────────────────────────────────
 // N5 — 우측 검수 panel (Figma 544:3168 기준, 오늘은 컨테이너 + hierarchy만)
@@ -10,17 +12,38 @@ import type { ReviewResponse } from '@/lib/api/types';
 //
 // 9/9 TODO: 본문 영역을 block table 구조로 교체한다. 오늘은 특정 카드
 // 구조에 결합하지 않기 위해 요약 정보만 표시한다.
+//
+// 11일차: 번역 전/번역 후 토글(ViewModeToggle)이 좌측 뷰어 툴바에서 이
+// 패널 상단으로 옮겨왔다. mode/zoom/pan state는 여전히 각각 다른 곳(mode는
+// 공통 조상 N5View, zoom/pan은 n5-viewport.tsx)이 소유한다 — 이 컴포넌트는
+// mode 값과 onChange 콜백만 받는 순수 presentational이다. 토글을 눌러도
+// zoom/pan은 전혀 건드리지 않으므로 기존 "토글 전환 시 zoom/pan 유지" 계약이
+// 그대로 유지된다.
 // ─────────────────────────────────────────────────────────────────
 
 export function N5Panel({
   job,
   blockCount,
+  viewMode,
+  onViewModeChange,
+  translatedDisabled,
 }: {
   job: ReviewResponse['job'];
   blockCount: number;
+  viewMode: N5ViewMode;
+  onViewModeChange: (mode: N5ViewMode) => void;
+  translatedDisabled: boolean;
 }) {
   return (
     <div data-testid="n5-panel" className="flex h-full w-[430px] shrink-0 flex-col">
+      <div className="shrink-0 pb-4">
+        <ViewModeToggle
+          mode={viewMode}
+          onChange={onViewModeChange}
+          translatedDisabled={translatedDisabled}
+        />
+      </div>
+
       <div className="shrink-0 pb-4">
         <h2 className="text-[18px] font-medium tracking-[-0.03em] text-[#171717]">번역 결과</h2>
         <p className="mt-1 text-[12px] tracking-[-0.02em] text-[#999]">

@@ -14,9 +14,10 @@ import type {
   Section,
   ReviewResponse,
   ReviewSection,
+  PreviewResponse,
   JobResultResponse,
 } from '@/lib/api/types';
-import { computeSectionDisplayTops } from '@/lib/n5/coordinates';
+import { computeSectionDisplayTops, getPreviewScale } from '@/lib/n5/coordinates';
 
 // ─────────────────────────────────────────────
 // 공통 ID 상수
@@ -27,6 +28,36 @@ export const MOCK_BRAND_ID = 'brand_mock_001';
 
 const SRC_A = 'src_mock_001'; // 상세페이지 A
 const SRC_B = 'src_mock_002'; // 상세페이지 B
+
+/**
+ * SRC_A/SRC_B의 image_key / render_image_key (v3.4.1, DB section.image_key /
+ * section.render_image_key). /review의 originalUrl/renderedUrl과 /preview의
+ * originalUrl/renderedUrl(mockPreviewResponse)이 서로 다른 URL 문자열을 따로
+ * 관리하다 어긋나지 않도록, 값을 여기 한 번만 선언해 두 응답 모두 재사용한다.
+ * render_image_key는 null일 수 있다(금요일 백 회신 — 렌더 미완료 시). 이
+ * 기본 mock에서는 두 소스 이미지 모두 렌더가 끝난 상태를 재현하므로 null이
+ * 아니다.
+ */
+const SRC_A_IMAGE_KEY = '/mock/n5/detail-a-original.png';
+const SRC_A_RENDER_IMAGE_KEY = '/mock/n5/detail-a-translated.png';
+const SRC_B_IMAGE_KEY = '/mock/n5/detail-b-original.png';
+const SRC_B_RENDER_IMAGE_KEY = '/mock/n5/detail-b-translated.png';
+
+/**
+ * N3 section 이미지(Section.thumbnailUrl/imageKey/renderImageKey) 실측 크기
+ * fixture (실데이터 방어 검증, 10일차). scripts/make-n3-fixture-images.mjs로
+ * 생성한 실제 PNG 파일이며(npm run make:n3-fixtures), 숫자만 선언해 둔 게
+ * 아니라 브라우저가 실제로 로드했을 때 naturalWidth/naturalHeight가 그대로
+ * 이 값이 된다. 이미지 내용은 색상 채움뿐이라 실서비스 asset이 아니다.
+ *
+ * 212x8000(SECTION_IMG_EXTREME_TALL)은 긴 상세페이지 극단값 — 성능 방어
+ * 검증(스크롤/zoom/pan, 브라우저 멈춤 여부) 전용이다. sec_03(유일한 exclude
+ * bucket section, DetailPanel에 크게 표시됨)에 배정해 실제로 로드되게 한다.
+ */
+const SECTION_IMG_1000x1360 = '/mock/n3/section-1000x1360.png';
+const SECTION_IMG_EXTREME_TALL = '/mock/n3/section-212x8000.png';
+const SECTION_IMG_830x3225 = '/mock/n3/section-830x3225.png';
+const SECTION_IMG_800x220 = '/mock/n3/section-800x220.png';
 
 // ─────────────────────────────────────────────
 // N2 — 분석 중 상태
@@ -84,9 +115,9 @@ export const mockSectionsResponse: SectionsResponse = {
        * 현재는 job 전체 기준 1~N으로 임시 사용.
        */
       sectionOrder: 1,
-      thumbnailUrl: '/mock/section-thumb-01.jpg',
-      imageKey: '/mock/section-01-original.jpg',
-      renderImageKey: '/mock/section-01-render.jpg',
+      thumbnailUrl: SECTION_IMG_1000x1360,
+      imageKey: SECTION_IMG_1000x1360,
+      renderImageKey: SECTION_IMG_1000x1360,
       bucket: 'include',
       exclusionReason: null,
       excludedStage: null,
@@ -99,9 +130,9 @@ export const mockSectionsResponse: SectionsResponse = {
       sectionId: 'sec_02',
       sourceImageId: SRC_A,
       sectionOrder: 2,
-      thumbnailUrl: '/mock/section-thumb-02.jpg',
-      imageKey: '/mock/section-02-original.jpg',
-      renderImageKey: '/mock/section-02-render.jpg',
+      thumbnailUrl: SECTION_IMG_830x3225,
+      imageKey: SECTION_IMG_830x3225,
+      renderImageKey: SECTION_IMG_830x3225,
       bucket: 'include',
       exclusionReason: null,
       excludedStage: null,
@@ -125,9 +156,11 @@ export const mockSectionsResponse: SectionsResponse = {
       sectionId: 'sec_03',
       sourceImageId: SRC_A,
       sectionOrder: 3,
-      thumbnailUrl: '/mock/section-thumb-03.jpg',
-      imageKey: '/mock/section-03-original.jpg',
-      renderImageKey: '/mock/section-03-render.jpg',
+      // 유일한 exclude bucket section — DetailPanel(N3 가운데 상세 보기)에
+      // 크게 표시되므로, 212x8000 극단값 실측 검증을 여기 배정한다.
+      thumbnailUrl: SECTION_IMG_EXTREME_TALL,
+      imageKey: SECTION_IMG_EXTREME_TALL,
+      renderImageKey: SECTION_IMG_EXTREME_TALL,
       bucket: 'exclude',
       // 카카오톡 상담 안내 — 미국(도착 시장)에서 의미 없는 채널이라 자동 제외.
       // 표시 문구는 코드값 그대로 노출하지 않고 EXCLUSION_REASON_LABELS를 거친다.
@@ -143,9 +176,9 @@ export const mockSectionsResponse: SectionsResponse = {
       sectionId: 'sec_04',
       sourceImageId: SRC_B,
       sectionOrder: 4,
-      thumbnailUrl: '/mock/section-thumb-04.jpg',
-      imageKey: '/mock/section-04-original.jpg',
-      renderImageKey: '/mock/section-04-render.jpg',
+      thumbnailUrl: SECTION_IMG_800x220,
+      imageKey: SECTION_IMG_800x220,
+      renderImageKey: SECTION_IMG_800x220,
       bucket: 'include',
       exclusionReason: null,
       excludedStage: null,
@@ -159,9 +192,10 @@ export const mockSectionsResponse: SectionsResponse = {
       sectionId: 'sec_05',
       sourceImageId: SRC_B,
       sectionOrder: 5,
-      thumbnailUrl: '/mock/section-thumb-05.jpg',
-      imageKey: '/mock/section-05-original.jpg',
-      renderImageKey: '/mock/section-05-render.jpg',
+      // 4장만 생성했으므로(요구사항) 하나는 재사용한다 — 내용은 무관하다.
+      thumbnailUrl: SECTION_IMG_1000x1360,
+      imageKey: SECTION_IMG_1000x1360,
+      renderImageKey: SECTION_IMG_1000x1360,
       bucket: 'include',
       exclusionReason: null,
       excludedStage: null,
@@ -686,8 +720,8 @@ export const mockReviewResponse: ReviewResponse = {
   sourceImages: [
     {
       sourceImageId: SRC_A,
-      originalPreviewUrl: '/mock/n5/detail-a-original.png',
-      translatedPreviewUrl: '/mock/n5/detail-a-translated.png',
+      originalUrl: SRC_A_IMAGE_KEY,
+      renderedUrl: SRC_A_RENDER_IMAGE_KEY,
       // 원본 8500px(초장축) → 미리보기 3400px, scaleX = scaleY = 0.4
       preview: {
         originalWidth: 1000,
@@ -698,8 +732,8 @@ export const mockReviewResponse: ReviewResponse = {
     },
     {
       sourceImageId: SRC_B,
-      originalPreviewUrl: '/mock/n5/detail-b-original.png',
-      translatedPreviewUrl: '/mock/n5/detail-b-translated.png',
+      originalUrl: SRC_B_IMAGE_KEY,
+      renderedUrl: SRC_B_RENDER_IMAGE_KEY,
       // 원본 7000px(초장축) → 미리보기 2800px, scaleX = scaleY = 0.4
       preview: {
         originalWidth: 1000,
@@ -712,6 +746,180 @@ export const mockReviewResponse: ReviewResponse = {
 
   // 우측 패널: 섹션 단위 텍스트 블록. displayTop은 job 전체 기준 누적값이다.
   sections: allSectionDrafts.map((section, i) => ({ ...section, displayTop: allDisplayTops[i] })),
+};
+
+/**
+ * N5 좌측 뷰어 전용 preview mock (API-CFM-03, /review와 별개 엔드포인트).
+ *
+ * mockReviewResponse와 같은 job의 같은 소스 이미지·section을 가리키므로,
+ * 값을 다시 손으로 채우지 않고 mockReviewResponse/allSectionDrafts/allDisplayTops를
+ * 그대로 재사용해 두 응답이 어긋나지 않게 한다.
+ *
+ * scale은 v3.4.1 백엔드 최종 확정으로 단일 숫자다(scaleX/scaleY 객체가 아니다).
+ * getPreviewScale(원본→프리뷰 축별 비율 계산, lib/n5/coordinates.ts)로 여기(mock
+ * 서버 응답 생성 시점)에서 미리 구한 뒤 scaleX만 취한다 — 이 mock의 SRC_A/SRC_B는
+ * 가로/세로를 같은 비율로 축소했으므로(scaleX === scaleY) 축 하나만 골라도
+ * 정보 손실이 없다. FE 런타임(N5Viewport)은 이 값을 그대로 쓰고 다시 계산하지
+ * 않는다. previewWidth는 이 계약에 없다 — API에 다시 추가하지 않는다.
+ */
+export const mockPreviewResponse: PreviewResponse = {
+  sourceImages: mockReviewResponse.sourceImages.map((image) => {
+    const { scaleX, scaleY } = getPreviewScale(image.preview);
+    if (scaleX !== scaleY) {
+      throw new Error(
+        `mock ${image.sourceImageId}: scaleX(${scaleX})와 scaleY(${scaleY})가 다릅니다 — ` +
+          '단일 scale 계약에서는 가로/세로 비율이 같아야 합니다.',
+      );
+    }
+    return {
+      sourceImageId: image.sourceImageId,
+      originalUrl: image.originalUrl,
+      renderedUrl: image.renderedUrl,
+      scale: scaleX,
+      previewHeight: image.preview.previewHeight,
+    };
+  }),
+  sections: allSectionDrafts.map((section, i) => ({
+    sectionId: section.sectionId,
+    sourceImageId: section.sourceImageId,
+    displayTop: allDisplayTops[i],
+  })),
+};
+
+/**
+ * N5 성능 방어 검증 전용 stress job (10일차).
+ *
+ * 기본 job(mockReviewResponse/mockPreviewResponse, MOCK_JOB_ID)과 완전히
+ * 분리된 별도 jobId다 — 성능 테스트가 이 fixture만 바라보게 하기 위함이며,
+ * 기본 job의 다른 N5 테스트에는 어떤 영향도 주지 않는다(section/sourceImage가
+ * 겹치지 않는다). 테스트 실행 중 정적 fixture 파일을 덮어쓰는 대신, 이
+ * jobId로 직접 진입하면 처음부터 212x8000 실측 이미지(scripts/make-n3-fixture-images.mjs로
+ * 생성, N3 방어 검증과 동일 파일 재사용)를 가리키는 응답이 내려온다.
+ *
+ * /preview·/review 계약 타입은 기존과 완전히 동일하다(PreviewResponse/
+ * ReviewResponse) — 새 필드를 추가하거나 계약을 바꾸지 않았다. scale=1,
+ * previewHeight=8000은 이 stress 이미지 자체가 이미 212x8000(다운스케일
+ * 없음)이라는 뜻이다.
+ */
+export const MOCK_STRESS_JOB_ID = 'job_mock_stress_001';
+const STRESS_SRC = 'src_mock_stress_001';
+const STRESS_IMG_EXTREME_TALL = SECTION_IMG_EXTREME_TALL; // 212x8000, N3 방어 검증과 같은 실제 파일
+
+export const mockStressJobStatus: JobStatusResponse = {
+  jobId: MOCK_STRESS_JOB_ID,
+  currentStep: 'N5',
+  dbStatus: 'review',
+  progress: 100,
+  processingSubStep: '',
+  activeSubSteps: [],
+  hasFailed: false,
+  failedItems: [],
+};
+
+const stressSection: ReviewSection = {
+  sectionId: 'stress_sec_01',
+  sourceImageId: STRESS_SRC,
+  sectionOrder: 1,
+  bucket: 'include',
+  excludedStage: null,
+  topOffset: 0,
+  displayTop: 0, // include section 1개뿐이라 누적값도 0 — computeSectionDisplayTops와 동일한 결과
+  height: 8000,
+  textBlocks: [],
+};
+
+export const mockStressReviewResponse: ReviewResponse = {
+  job: { jobId: MOCK_STRESS_JOB_ID, targetCountry: 'US', targetLanguage: 'en' },
+  sourceImages: [
+    {
+      sourceImageId: STRESS_SRC,
+      originalUrl: STRESS_IMG_EXTREME_TALL,
+      renderedUrl: STRESS_IMG_EXTREME_TALL,
+      preview: { originalWidth: 212, originalHeight: 8000, previewWidth: 212, previewHeight: 8000 },
+    },
+  ],
+  sections: [stressSection],
+};
+
+export const mockStressPreviewResponse: PreviewResponse = {
+  sourceImages: [
+    {
+      sourceImageId: STRESS_SRC,
+      originalUrl: STRESS_IMG_EXTREME_TALL,
+      renderedUrl: STRESS_IMG_EXTREME_TALL,
+      scale: 1,
+      previewHeight: 8000,
+    },
+  ],
+  sections: [{ sectionId: stressSection.sectionId, sourceImageId: STRESS_SRC, displayTop: 0 }],
+};
+
+/**
+ * N5 "초장축 원본 좌표계" stress job (10일차) — 위 212x8000 stress job과
+ * 완전히 별도 jobId다(서로 다른 sourceImageId/sectionId도 겹치지 않는다).
+ *
+ * 원본 section 좌표계: width 1000 / height 37736, /preview scale: 0.5 —
+ * 즉 실제 preview는 500 x 18868(= 1000*0.5 x 37736*0.5)이다. originalUrl/
+ * renderedUrl 자체가 이미 다운스케일된 preview 이미지라는 계약(v3.4.1 백엔드
+ * 최종 확정)에 따라, 1000x37736짜리 원본 이미지를 URL에 넣고 FE에서 다시
+ * scale을 곱하는 구조로 만들지 않는다 — scripts/make-n3-fixture-images.mjs가
+ * 만든 실제 500x18868 PNG 파일(section-500x18868.png) 자체를 가리킨다.
+ * section.height=37736(원본 해상도)에 scale=0.5를 곱하면 canvas height도
+ * 정확히 18868이 된다(이중 스케일 없음 — naturalWidth/Height를 그대로 쓰고
+ * scale은 section.height/topOffset 같은 "원본 좌표"에만 적용하는 기존 원칙
+ * 그대로).
+ */
+export const MOCK_STRESS_TALL_JOB_ID = 'job_mock_stress_002';
+const STRESS_TALL_SRC = 'src_mock_stress_002';
+const STRESS_TALL_IMG = '/mock/n3/section-500x18868.png';
+
+export const mockStressTallJobStatus: JobStatusResponse = {
+  jobId: MOCK_STRESS_TALL_JOB_ID,
+  currentStep: 'N5',
+  dbStatus: 'review',
+  progress: 100,
+  processingSubStep: '',
+  activeSubSteps: [],
+  hasFailed: false,
+  failedItems: [],
+};
+
+const stressTallSection: ReviewSection = {
+  sectionId: 'stress_tall_sec_01',
+  sourceImageId: STRESS_TALL_SRC,
+  sectionOrder: 1,
+  bucket: 'include',
+  excludedStage: null,
+  topOffset: 0,
+  displayTop: 0,
+  height: 37736, // 원본 해상도 section 높이
+  textBlocks: [],
+};
+
+export const mockStressTallReviewResponse: ReviewResponse = {
+  job: { jobId: MOCK_STRESS_TALL_JOB_ID, targetCountry: 'US', targetLanguage: 'en' },
+  sourceImages: [
+    {
+      sourceImageId: STRESS_TALL_SRC,
+      originalUrl: STRESS_TALL_IMG,
+      renderedUrl: STRESS_TALL_IMG,
+      preview: { originalWidth: 1000, originalHeight: 37736, previewWidth: 500, previewHeight: 18868 },
+    },
+  ],
+  sections: [stressTallSection],
+};
+
+export const mockStressTallPreviewResponse: PreviewResponse = {
+  sourceImages: [
+    {
+      sourceImageId: STRESS_TALL_SRC,
+      originalUrl: STRESS_TALL_IMG,
+      renderedUrl: STRESS_TALL_IMG,
+      scale: 0.5,
+      previewHeight: 18868,
+    },
+  ],
+  sections: [{ sectionId: stressTallSection.sectionId, sourceImageId: STRESS_TALL_SRC, displayTop: 0 }],
 };
 
 // ─────────────────────────────────────────────

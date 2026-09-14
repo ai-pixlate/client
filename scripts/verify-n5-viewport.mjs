@@ -16,6 +16,10 @@ import {
   computeUsableViewportSize,
   computeFitWidthScale,
   computeFitHeightScale,
+  computeCenteredPan,
+  clampPan,
+  parseZoomPercentInput,
+  hasMissingRenderedPreview,
 } from '../lib/n5/viewport.ts';
 
 let pass = 0;
@@ -31,12 +35,15 @@ function check(name, condition, detail = '') {
   }
 }
 
-console.log('\n[1] zoom clamp — 25% ~ 400%');
+console.log('\n[1] zoom clamp — 1% ~ 400%');
 {
-  check('MIN_ZOOM === 0.25', MIN_ZOOM === 0.25, `got ${MIN_ZOOM}`);
+  // 11일차: 25%였던 하한을 1%로 낮췄다 — 초장축 이미지의 Fit Height 배율이
+  // 25% 밑으로 내려가는 경우(예: preview 500x18868)에도 clamp 때문에
+  // 이미지가 잘리지 않게 하기 위함이다.
+  check('MIN_ZOOM === 0.01', MIN_ZOOM === 0.01, `got ${MIN_ZOOM}`);
   check('MAX_ZOOM === 4', MAX_ZOOM === 4, `got ${MAX_ZOOM}`);
   check('범위 안 값은 그대로', clampZoom(1) === 1);
-  check('최소값 미만은 clamp', clampZoom(0.01) === MIN_ZOOM, `got ${clampZoom(0.01)}`);
+  check('최소값 미만은 clamp', clampZoom(0.001) === MIN_ZOOM, `got ${clampZoom(0.001)}`);
   check('최대값 초과는 clamp', clampZoom(100) === MAX_ZOOM, `got ${clampZoom(100)}`);
 }
 
@@ -114,6 +121,122 @@ console.log('\n[5] fit width / fit height — 원본 canvas size와 viewport siz
   // canvas가 매우 커서 fit이 25% 밑으로 내려가면 clamp된다
   const hugeCanvas = { width: 100_000, height: 100_000 };
   check('fit 결과도 MIN_ZOOM으로 clamp', computeFitHeightScale(viewport, hugeCanvas) === MIN_ZOOM);
+}
+
+console.log('\n[6] hasMissingRenderedPreview — render_image_key(renderedUrl) null 여부로만 판단');
+{
+  const allRendered = [{ renderedUrl: '/a.png' }, { renderedUrl: '/b.png' }];
+  check('모두 렌더 완료면 false', hasMissingRenderedPreview(allRendered) === false);
+
+  const oneMissing = [{ renderedUrl: '/a.png' }, { renderedUrl: null }];
+  check(
+    '하나라도 renderedUrl이 null이면 true(별도 render_failed 신호 없이 null만으로 판단)',
+    hasMissingRenderedPreview(oneMissing) === true,
+  );
+
+  check('빈 배열이면 false', hasMissingRenderedPreview([]) === false);
+}
+
+console.log('\n[7] computeCenteredPan — Fit Width/Height 적용 후 캔버스를 viewport 정중앙에 둔다');
+{
+  const usable = { width: 800, height: 600 };
+
+  // Fit Height 직후: 세로는 정확히 맞춰졌고(스케일된 높이 === usable 높이),
+  // 가로가 usable보다 좁은 경우(600×18868 같은 세로로 긴 원본이 아니라,
+  // 여기서는 단순 산술 검증을 위해 canvas 500×2000, zoom 0.3을 쓴다 — 스케일된
+  // 크기 150×600).
+  const canvas = { width: 500, height: 2000 };
+  const zoom = 0.3; // scaled = 150 x 600 (세로가 usable.height와 정확히 일치)
+  const pan = computeCenteredPan(canvas, zoom, usable);
+  check('세로(맞춘 축) pan.y = 0 (usable.height - scaledHeight = 0)', pan.y === 0, `got ${pan.y}`);
+  check(
+    '가로(남는 축)는 가운데 정렬 — pan.x = (usable.width - scaledWidth) / 2',
+    pan.x === (usable.width - canvas.width * zoom) / 2,
+    `got ${pan.x}`,
+  );
+
+  // 초장축 stress 케이스(500x18868, scale 0.5는 /preview 계약값이고 여기서는
+  // "Fit Height를 눌렀을 때"를 흉내내 임의의 fitZoom을 대입한다) — 세로가
+  // usable보다 훨씬 큰 원본 캔버스를 Fit Height로 맞추면 두 축 다 유한한 pan이
+  // 나와야 한다(NaN/Infinity 없음).
+  const tallCanvas = { width: 500, height: 18868 };
+  const fitHeightZoom = usable.height / tallCanvas.height; // 정확히 세로를 채우는 배율
+  const tallPan = computeCenteredPan(tallCanvas, fitHeightZoom, usable);
+  check('초장축 Fit Height 후 pan.y가 유한하다(NaN/Infinity 아님)', Number.isFinite(tallPan.y));
+  check('초장축 Fit Height 후 pan.y ≈ 0(세로를 정확히 채움)', Math.abs(tallPan.y) < 1e-9, `got ${tallPan.y}`);
+}
+
+console.log('\n[8] clampPan — pan 경계(빈 공간이 viewport 중앙보다 넓게 보이지 않음)');
+{
+  const usable = { width: 800, height: 600 };
+
+  // 8-1) 캔버스가 usable보다 작은 축은 pan을 허용하지 않고 항상 가운데 고정.
+  const smallCanvas = { width: 400, height: 300 };
+  const smallZoom = 1; // scaled 400x300, 둘 다 usable보다 작다
+  const centeredSmall = { x: (800 - 400) / 2, y: (600 - 300) / 2 };
+  check(
+    '작은 이미지는 pan을 아무리 줘도 가운데로 고정된다(x)',
+    clampPan({ x: 9999, y: 9999 }, smallCanvas, smallZoom, usable).x === centeredSmall.x,
+  );
+  check(
+    '작은 이미지는 pan을 아무리 줘도 가운데로 고정된다(y)',
+    clampPan({ x: 9999, y: 9999 }, smallCanvas, smallZoom, usable).y === centeredSmall.y,
+  );
+  check(
+    '음수로 줘도 마찬가지로 가운데 고정',
+    clampPan({ x: -9999, y: -9999 }, smallCanvas, smallZoom, usable).x === centeredSmall.x,
+  );
+
+  // 8-2) 캔버스가 usable보다 큰 축은 [usable/2 - scaled, usable/2] 범위로 clamp.
+  //      scaled = 500*2 = 1000 (usable.width=800보다 큼)
+  const bigCanvas = { width: 500, height: 2000 };
+  const bigZoom = 2; // scaled 1000 x 4000
+  const scaledW = bigCanvas.width * bigZoom;
+  const scaledH = bigCanvas.height * bigZoom;
+
+  // pan을 아주 크게(이미지를 오른쪽/아래로 한참 밀어도) upper bound(usable/2)를 못 넘는다
+  const pushedFarPositive = clampPan({ x: 999_999, y: 999_999 }, bigCanvas, bigZoom, usable);
+  check('이미지 좌측 끝이 viewport 가로 중앙보다 오른쪽으로 못 감', pushedFarPositive.x === usable.width / 2);
+  check('이미지 최상단이 viewport 세로 중앙보다 아래로 못 감', pushedFarPositive.y === usable.height / 2);
+
+  // pan을 아주 작게(이미지를 왼쪽/위로 한참 밀어도) lower bound(usable/2 - scaled)를 못 벗어난다
+  const pushedFarNegative = clampPan({ x: -999_999, y: -999_999 }, bigCanvas, bigZoom, usable);
+  check(
+    '이미지 우측 끝이 viewport 가로 중앙보다 왼쪽으로 못 감',
+    pushedFarNegative.x === usable.width / 2 - scaledW,
+  );
+  check(
+    '이미지 최하단이 viewport 세로 중앙보다 위로 못 감',
+    pushedFarNegative.y === usable.height / 2 - scaledH,
+  );
+
+  // 범위 안의 pan은 그대로 통과한다(clamp가 불필요하게 값을 바꾸지 않음)
+  const insideRange = { x: usable.width / 2 - scaledW / 2, y: usable.height / 2 - scaledH / 2 };
+  const untouched = clampPan(insideRange, bigCanvas, bigZoom, usable);
+  check('경계 안 pan은 그대로 유지된다(x)', untouched.x === insideRange.x, `got ${untouched.x}`);
+  check('경계 안 pan은 그대로 유지된다(y)', untouched.y === insideRange.y, `got ${untouched.y}`);
+}
+
+console.log('\n[9] parseZoomPercentInput — 배율 직접 입력 파싱/보정');
+{
+  check('"100" -> 1', parseZoomPercentInput('100') === 1);
+  check('"4" -> 0.04(4%)', Math.abs(parseZoomPercentInput('4') - 0.04) < 1e-9);
+  check('"4%" -> 0.04(% 접미사 허용)', Math.abs(parseZoomPercentInput('4%') - 0.04) < 1e-9);
+  check('"125" -> 1.25', Math.abs(parseZoomPercentInput('125') - 1.25) < 1e-9);
+  check('공백 포함 "  50  " -> 0.5', Math.abs(parseZoomPercentInput('  50  ') - 0.5) < 1e-9);
+
+  // 0/음수/NaN/빈 문자열 — "입력 자체가 무효"이므로 null을 반환한다. 호출부가
+  // 이걸 현재 zoom 유지 신호로 쓴다 — MIN_ZOOM으로 강제 이동시키지 않는다.
+  check('"0" -> null(현재 zoom 유지)', parseZoomPercentInput('0') === null);
+  check('"-10" -> null(현재 zoom 유지)', parseZoomPercentInput('-10') === null);
+  check('잘못된 문자열 "abc" -> null(현재 zoom 유지)', parseZoomPercentInput('abc') === null);
+  check('빈 문자열 "" -> null(현재 zoom 유지)', parseZoomPercentInput('') === null);
+
+  // 양수지만 MIN_ZOOM 미만 — "입력은 유효, 범위만 벗어남"이므로 위 null과는
+  // 다르게 MIN_ZOOM으로 clamp한다(강제 이동이 아니라 정상적인 범위 clamp).
+  check('"0.5"(0.5%, 양수지만 최소 미만) -> MIN_ZOOM으로 clamp', parseZoomPercentInput('0.5') === MIN_ZOOM);
+
+  check('최대값 초과 "10000" -> MAX_ZOOM으로 clamp', parseZoomPercentInput('10000') === MAX_ZOOM);
 }
 
 console.log(`\n결과: PASS ${pass} / FAIL ${fail}\n`);
