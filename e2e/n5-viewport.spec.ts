@@ -117,6 +117,53 @@ test.describe('N5 캔버스형 viewport', () => {
     expect(canvasWidth).toBe(maxNaturalWidth);
   });
 
+  test('sourceImage별로 originalUrl과 renderedUrl 실제 이미지의 naturalHeight가 같다', async ({
+    page,
+  }) => {
+    // canvas.style.height(레이아웃값) 비교만으로는 "실제 파일 두 개가 정말
+    // 같은 높이의 이미지인지"를 확인할 수 없다 — 두 URL이 서로 다른
+    // 높이의 파일을 가리켜도 계산식(section.height * scale)이 같으면
+    // canvas height는 똑같이 나오기 때문이다. 여기서는 originalUrl/renderedUrl을
+    // 실제로 로드해 naturalHeight를 직접 비교한다. renderedUrl===null인
+    // sourceImage(렌더 미완료)는 비교 대상에서 제외한다.
+    const comparisons = await page.evaluate(async (jobId) => {
+      const res = await fetch(`/api/jobs/${jobId}/preview`);
+      const body = await res.json();
+
+      const loadNaturalHeight = (url: string) =>
+        new Promise<number>((resolve, reject) => {
+          const el = new Image();
+          el.onload = () => resolve(el.naturalHeight);
+          el.onerror = () => reject(new Error(`이미지 로드 실패: ${url}`));
+          el.src = url;
+        });
+
+      const sourceImages = body.sourceImages as {
+        sourceImageId: string;
+        originalUrl: string;
+        renderedUrl: string | null;
+      }[];
+
+      const results: { sourceImageId: string; originalHeight: number; renderedHeight: number }[] = [];
+      for (const image of sourceImages) {
+        if (image.renderedUrl === null) continue; // 렌더 미완료 — 비교 대상 아님
+        const [originalHeight, renderedHeight] = await Promise.all([
+          loadNaturalHeight(image.originalUrl),
+          loadNaturalHeight(image.renderedUrl),
+        ]);
+        results.push({ sourceImageId: image.sourceImageId, originalHeight, renderedHeight });
+      }
+      return results;
+    }, MOCK_JOB_ID);
+
+    // 이 mock에는 renderedUrl===null인 sourceImage가 없으므로, 비교 대상이
+    // 실제로 존재하는지(제외 로직 때문에 조용히 빈 배열이 되지 않았는지)도 확인한다.
+    expect(comparisons.length).toBeGreaterThan(0);
+    for (const { sourceImageId, originalHeight, renderedHeight } of comparisons) {
+      expect(renderedHeight, `sourceImageId=${sourceImageId}`).toBe(originalHeight);
+    }
+  });
+
   test.describe('F-CFM-14 — N5 제외 section 회색 오버레이 + 되돌리기', () => {
     // sec_07은 mock fixture(lib/mock-api/fixtures.ts)에서 이미
     // bucket: 'exclude', excludedStage: 'N5'로 세팅된 section이다 — N5Viewport가

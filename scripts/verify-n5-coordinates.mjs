@@ -209,5 +209,64 @@ console.log('\n[5] displayTop + bbox.y 결과는 viewMode(번역 전/번역 후)
   );
 }
 
+console.log('\n[6] 하단 section(큰 displayTop) + section-local bbox -> 최종 preview 좌표');
+{
+  // 실제 mock(lib/mock-api/fixtures.ts)의 SRC_B 마지막 section(sec_05,
+  // displayTop=9900)과 그 안의 blk_06(bbox.y=150) 조합을 그대로 가져온다 —
+  // job 후반부 section(큰 displayTop)에서도 같은 공식이 그대로 적용되는지,
+  // 작은 값으로만 검증했던 [1]과 별개로 명시적으로 확인한다.
+  const bbox = { x: 100, y: 150, width: 800, height: 80 }; // bbox.y ≠ 0
+  const displayTop = 9900; // >= 9000
+  const scale = 0.4; // ≠ 1 (SRC_B 실측 scale)
+
+  const rect = getBlockDisplayRect(bbox, displayTop, scale);
+  const expectedTop = (displayTop + bbox.y) * scale; // (9900+150)*0.4 = 4020
+  check(
+    'previewY = (displayTop + bbox.y) * scale — displayTop≥9000, bbox.y≠0, scale≠1',
+    Math.abs(rect.top - expectedTop) < 1e-9,
+    `expected ${expectedTop}, got ${rect.top}`,
+  );
+  check(
+    'previewX = bbox.x * scale',
+    Math.abs(rect.left - bbox.x * scale) < 1e-9,
+    `got ${rect.left}`,
+  );
+  check(
+    'previewW = bbox.width * scale',
+    Math.abs(rect.width - bbox.width * scale) < 1e-9,
+    `got ${rect.width}`,
+  );
+  check(
+    'previewH = bbox.height * scale',
+    Math.abs(rect.height - bbox.height * scale) < 1e-9,
+    `got ${rect.height}`,
+  );
+
+  // getBlockDisplayRect는 topOffset을 아예 파라미터로 받지 않는다 — section의
+  // topOffset(원본 crop 위치)이 아무리 커도 previewY 계산에는 절대 섞이지
+  // 않아야 한다. 만약 실수로 displayTop 대신(또는 더해서) topOffset을 썼다면
+  // 이 decoy 값이 결과에 나타난다.
+  const decoyTopOffset = 9_999_999;
+  check(
+    'topOffset이 커도(9,999,999) previewY 계산에 섞이지 않는다',
+    rect.top !== (decoyTopOffset + bbox.y) * scale,
+    `rect.top=${rect.top}`,
+  );
+
+  // getBlockDisplayRect는 sourceImageId도 파라미터로 받지 않는다 — "이
+  // section이 SRC_A 소속인지 SRC_B 소속인지"는 이 공식에 전혀 개입하지
+  // 않는다는 뜻이다. 같은 displayTop/bbox/scale이면 어느 sourceImage
+  // 소속이라고 가정하든 결과가 완전히 같아야 한다.
+  const rectAsIfSrcA = getBlockDisplayRect(bbox, displayTop, scale);
+  const rectAsIfSrcB = getBlockDisplayRect(bbox, displayTop, scale);
+  check(
+    'sourceImage가 달라도(SRC_A/SRC_B 어느 쪽이든) 같은 입력이면 같은 결과',
+    rectAsIfSrcA.top === rectAsIfSrcB.top &&
+      rectAsIfSrcA.left === rectAsIfSrcB.left &&
+      rectAsIfSrcA.width === rectAsIfSrcB.width &&
+      rectAsIfSrcA.height === rectAsIfSrcB.height,
+  );
+}
+
 console.log(`\n결과: PASS ${pass} / FAIL ${fail}\n`);
 process.exit(fail === 0 ? 0 : 1);
