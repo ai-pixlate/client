@@ -24,7 +24,9 @@ export function TextBlockEditor({
   const [showBasis, setShowBasis] = useState(false);
 
   const isDirty = draft !== block.translatedText;
-  const isFailed = block.blockStatus === 'failed';
+  // v3.4.1: blockStatus는 편집 상태만 표현한다 — 번역 실패 신호는
+  // translationFailed가 정본이다 (blockStatus==='failed' 분기 제거).
+  const isFailed = block.translationFailed;
   // product_label: 번역·인페인팅 대상 제외, 원본 유지 (v3.4.1) — 이 블록의
   // 번역문 편집만 막는다. section 단위 disabled(N5 제외)와는 별개 축이다.
   const isProductLabel = block.role === 'product_label';

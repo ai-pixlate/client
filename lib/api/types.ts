@@ -46,9 +46,9 @@ export type ExclusionReasonCode =
 export type ProcessingStatus = 'pending' | 'running' | 'done' | 'failed';
 
 /**
- * 섹션 경고 뱃지 코드 (Day 6 확정).
- * TODO: 현재 DTO에 대응 필드가 없음 (UI가 hasFailed/needsReview 등 boolean 조합으로
- * 파생 표시 중). 필드 연결은 백엔드 계약 확정 후 별도 진행.
+ * 섹션 경고 뱃지 코드 (Day 6 확정, v3.4.1에서 Section.warningBadge로 연결).
+ * 처리 파이프라인 문제 신호이며, section.verdicts(규제/현지화 판정)와는
+ * 다른 축이다 — 둘을 하나로 합쳐 파생하지 않는다.
  */
 export type SectionWarningBadge = 'processing_failed' | 'quality_warning';
 
@@ -107,13 +107,12 @@ export type FailedItemType = 'section' | 'textBlock';
 export type ProcessingSubStep = string;
 
 /**
- * 텍스트 블록 처리 상태.
- * TODO: 백엔드 text_block.block_status 컬럼 기준 확정 후 union으로 좁힐 것.
- * ProcessingStatus와 의미는 겹치지만, N5 응답 시점 특성상 'running'이 실제로
- * 쓰이는지 불확실해 아직 ProcessingStatus를 적용하지 않음.
- * 후보: 'pending' | 'done' | 'failed'
+ * 텍스트 블록 편집 상태 (v3.4.1 확정).
+ * 'failed'는 이 필드에 없다 — blockStatus는 편집 상태만 표현하고,
+ * 번역 실패 여부는 TextBlock.translationFailed가 정본이다. 두 축을 다시
+ * 합치지 않는다(번역이 실패해도 편집 자체는 완료된 상태일 수 있다).
  */
-export type BlockStatus = string;
+export type BlockStatus = 'machine' | 'edited';
 
 /**
  * 규제 위반 플래그 코드.
@@ -136,6 +135,11 @@ export interface FailedItem {
   id: string;
   type: FailedItemType;
   reason: string;
+  /**
+   * TODO(백엔드 v1.4 계약 대기): 개별/일괄 재시도 API와 함께 taskId(재시도
+   * 대상 비동기 task 식별자), retryable(boolean, 재시도 가능 여부)이 추가될
+   * 예정이다. v1.4 계약 확정 전까지는 타입·런타임 어느 쪽에도 반영하지 않는다.
+   */
 }
 
 export interface JobStatusResponse {
@@ -198,6 +202,38 @@ export interface SectionVerdict {
   verdictStatus: SectionVerdictStatus;
   problemText: string;
   basis: string;
+  /**
+   * 대체 가능한 표현 제안 (v3.4.1). verdictType='regulatory_replaceable'처럼
+   * 대체 표현이 존재하는 판정에서만 값이 있고, 그 외에는 null이다.
+   */
+  alternativeExpression: string | null;
+  /** 판정 근거의 출처/증빙 링크 (v3.4.1). 없으면 null. */
+  evidenceUrl: string | null;
+}
+
+/**
+ * Section.originalVerdict 배열 원소 (v3.4.1, DB original_verdict JSONB 원소
+ * 구조). 되살리기 시점에 스냅샷된 판정 한 건을 나타내며, live SectionVerdict와는
+ * 별도 타입이다 — verdictId 같은 live 전용 필드는 없고, 스냅샷 고유 필드
+ * (basisArticle/reason/dictionaryId/capturedAt)를 갖는다.
+ */
+export interface OriginalVerdictSnapshot {
+  /** 스냅샷 시점의 판정 유형. (SectionVerdict.verdictType과 같은 6종 계약) */
+  verdictType: VerdictType;
+  /** 스냅샷 시점의 판정 상태. (SectionVerdict.verdictStatus와 같은 5종 계약) */
+  verdictStatus: SectionVerdictStatus;
+  /** 스냅샷 시점의 문제 표현 원문. */
+  problemText: string;
+  /** 판정 근거가 된 규정 조항. 조항 인용이 없는 판정은 null. */
+  basisArticle: string | null;
+  /** 판정 근거의 출처/증빙 링크. 없으면 null. */
+  evidenceUrl: string | null;
+  /** 판정 사유 설명. */
+  reason: string;
+  /** 판정이 참조한 규제 사전(dictionary) 항목 id. 사전 미매칭 판정은 null. */
+  dictionaryId: string | null;
+  /** 스냅샷을 뜬 시각 (ISO 8601). */
+  capturedAt: string;
 }
 
 /**
@@ -222,6 +258,18 @@ export interface Section {
    */
   sectionOrder: number;
   thumbnailUrl: string;
+  /**
+   * 섹션 원본 이미지 식별자 (v3.4.1, DB section.image_key 그대로 camelCase).
+   * thumbnailUrl(목록 표시용 축소 미리보기)과는 별개 — N3에서 처리 결과를
+   * 원본과 나란히 비교할 때 쓰는 전체 크기 원본 이미지를 가리킨다.
+   */
+  imageKey: string;
+  /**
+   * 섹션 렌더(번역·인페인팅 처리) 결과 이미지 식별자 (v3.4.1, DB
+   * section.render_image_key 그대로 camelCase). imageKey와 짝을 이뤄
+   * 원본/처리 결과 비교에 쓰인다.
+   */
+  renderImageKey: string;
   bucket: SectionBucket;
   /** 사용자가 직접 입력하지 않음. 시스템 또는 자동 판정으로 설정 */
   exclusionReason: ExclusionReasonCode | null;
@@ -235,6 +283,21 @@ export interface Section {
   /** 원본 이미지 기준 bbox */
   bbox: BoundingBox;
   verdicts: SectionVerdict[];
+  /**
+   * 처리 파이프라인 경고 뱃지 (v3.4.1). section.verdicts(규제/현지화 판정)와는
+   * 다른 축 — AI 처리 자체의 실패/품질 신호다. 경고가 없으면 null
+   * (SectionWarningBadge에는 "정상" 값이 없으므로 nullable로 표현한다).
+   */
+  warningBadge: SectionWarningBadge | null;
+  /**
+   * 되살리기(exclude → include) 시점의 판정 스냅샷 배열 (v3.4.1, DB
+   * section.original_verdict JSONB). 컬럼명은 단수지만 실제로는 판정 행
+   * 여러 개를 담는 배열이라 단일 VerdictType으로 축약하지 않는다 —
+   * SectionVerdict가 아니라 Section 필드다. 되살리기가 없었으면 null이고,
+   * 판정 행이 없는 상태에서 되살렸다면 빈 배열([])일 수 있다.
+   * TODO: 되살리기 UI/API가 아직 없어 실제로 채워지는 시점은 미확정.
+   */
+  originalVerdict: OriginalVerdictSnapshot[] | null;
 }
 
 export interface SectionsResponse {
@@ -265,11 +328,25 @@ export interface TextBlock {
   blockId: string;
   sectionId: string;
   sourceText: string;
+  /**
+   * 번역문. DB text_block.trans_1 컬럼을 그대로 담는다 — 9월 MVP는 trans_1만
+   * 런타임에 매핑한다. trans_2(12월 예정)는 이번 계약 범위 밖이라 타입·런타임
+   * 어느 쪽에도 반영하지 않는다.
+   * TODO(12월): trans_2 계약이 확정되면 별도 필드로 추가한다. 번역 후보 선택
+   * UI(candidates)는 v3.2.1부터 계약 자체가 폐기됐으므로 다시 만들지 않는다 —
+   * trans_2는 후보 목록이 아니라 별개 목적의 컬럼으로 다룬다.
+   */
   translatedText: string;
   translationStatus: TranslationStatus;
   role: BlockRole;
   /** TODO: 백엔드 text_block.block_status 확정 후 union으로 좁힐 것 */
   blockStatus: BlockStatus;
+  /**
+   * 번역 실패 신호 (v3.4.1). blockStatus==='failed'를 대체한다 — blockStatus는
+   * 편집 상태만 표현하고, 번역 성공/실패는 이 필드가 정본이다. true면
+   * translatedText가 비어 있을 수 있고 UI는 직접 입력을 요구해야 한다.
+   */
+  translationFailed: boolean;
   needsReview: boolean;
   /** TODO: 백엔드 규제 DB 기준 코드값 확정 후 union으로 좁힐 것 */
   complianceFlags: ComplianceFlag[];
