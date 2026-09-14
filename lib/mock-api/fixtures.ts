@@ -43,6 +43,22 @@ const SRC_A_RENDER_IMAGE_KEY = '/mock/n5/detail-a-translated.png';
 const SRC_B_IMAGE_KEY = '/mock/n5/detail-b-original.png';
 const SRC_B_RENDER_IMAGE_KEY = '/mock/n5/detail-b-translated.png';
 
+/**
+ * N3 section 이미지(Section.thumbnailUrl/imageKey/renderImageKey) 실측 크기
+ * fixture (실데이터 방어 검증, 10일차). scripts/make-n3-fixture-images.mjs로
+ * 생성한 실제 PNG 파일이며(npm run make:n3-fixtures), 숫자만 선언해 둔 게
+ * 아니라 브라우저가 실제로 로드했을 때 naturalWidth/naturalHeight가 그대로
+ * 이 값이 된다. 이미지 내용은 색상 채움뿐이라 실서비스 asset이 아니다.
+ *
+ * 212x8000(SECTION_IMG_EXTREME_TALL)은 긴 상세페이지 극단값 — 성능 방어
+ * 검증(스크롤/zoom/pan, 브라우저 멈춤 여부) 전용이다. sec_03(유일한 exclude
+ * bucket section, DetailPanel에 크게 표시됨)에 배정해 실제로 로드되게 한다.
+ */
+const SECTION_IMG_1000x1360 = '/mock/n3/section-1000x1360.png';
+const SECTION_IMG_EXTREME_TALL = '/mock/n3/section-212x8000.png';
+const SECTION_IMG_830x3225 = '/mock/n3/section-830x3225.png';
+const SECTION_IMG_800x220 = '/mock/n3/section-800x220.png';
+
 // ─────────────────────────────────────────────
 // N2 — 분석 중 상태
 // ─────────────────────────────────────────────
@@ -99,9 +115,9 @@ export const mockSectionsResponse: SectionsResponse = {
        * 현재는 job 전체 기준 1~N으로 임시 사용.
        */
       sectionOrder: 1,
-      thumbnailUrl: '/mock/section-thumb-01.jpg',
-      imageKey: '/mock/section-01-original.jpg',
-      renderImageKey: '/mock/section-01-render.jpg',
+      thumbnailUrl: SECTION_IMG_1000x1360,
+      imageKey: SECTION_IMG_1000x1360,
+      renderImageKey: SECTION_IMG_1000x1360,
       bucket: 'include',
       exclusionReason: null,
       excludedStage: null,
@@ -114,9 +130,9 @@ export const mockSectionsResponse: SectionsResponse = {
       sectionId: 'sec_02',
       sourceImageId: SRC_A,
       sectionOrder: 2,
-      thumbnailUrl: '/mock/section-thumb-02.jpg',
-      imageKey: '/mock/section-02-original.jpg',
-      renderImageKey: '/mock/section-02-render.jpg',
+      thumbnailUrl: SECTION_IMG_830x3225,
+      imageKey: SECTION_IMG_830x3225,
+      renderImageKey: SECTION_IMG_830x3225,
       bucket: 'include',
       exclusionReason: null,
       excludedStage: null,
@@ -140,9 +156,11 @@ export const mockSectionsResponse: SectionsResponse = {
       sectionId: 'sec_03',
       sourceImageId: SRC_A,
       sectionOrder: 3,
-      thumbnailUrl: '/mock/section-thumb-03.jpg',
-      imageKey: '/mock/section-03-original.jpg',
-      renderImageKey: '/mock/section-03-render.jpg',
+      // 유일한 exclude bucket section — DetailPanel(N3 가운데 상세 보기)에
+      // 크게 표시되므로, 212x8000 극단값 실측 검증을 여기 배정한다.
+      thumbnailUrl: SECTION_IMG_EXTREME_TALL,
+      imageKey: SECTION_IMG_EXTREME_TALL,
+      renderImageKey: SECTION_IMG_EXTREME_TALL,
       bucket: 'exclude',
       // 카카오톡 상담 안내 — 미국(도착 시장)에서 의미 없는 채널이라 자동 제외.
       // 표시 문구는 코드값 그대로 노출하지 않고 EXCLUSION_REASON_LABELS를 거친다.
@@ -158,9 +176,9 @@ export const mockSectionsResponse: SectionsResponse = {
       sectionId: 'sec_04',
       sourceImageId: SRC_B,
       sectionOrder: 4,
-      thumbnailUrl: '/mock/section-thumb-04.jpg',
-      imageKey: '/mock/section-04-original.jpg',
-      renderImageKey: '/mock/section-04-render.jpg',
+      thumbnailUrl: SECTION_IMG_800x220,
+      imageKey: SECTION_IMG_800x220,
+      renderImageKey: SECTION_IMG_800x220,
       bucket: 'include',
       exclusionReason: null,
       excludedStage: null,
@@ -174,9 +192,10 @@ export const mockSectionsResponse: SectionsResponse = {
       sectionId: 'sec_05',
       sourceImageId: SRC_B,
       sectionOrder: 5,
-      thumbnailUrl: '/mock/section-thumb-05.jpg',
-      imageKey: '/mock/section-05-original.jpg',
-      renderImageKey: '/mock/section-05-render.jpg',
+      // 4장만 생성했으므로(요구사항) 하나는 재사용한다 — 내용은 무관하다.
+      thumbnailUrl: SECTION_IMG_1000x1360,
+      imageKey: SECTION_IMG_1000x1360,
+      renderImageKey: SECTION_IMG_1000x1360,
       bucket: 'include',
       exclusionReason: null,
       excludedStage: null,
@@ -765,6 +784,74 @@ export const mockPreviewResponse: PreviewResponse = {
     sourceImageId: section.sourceImageId,
     displayTop: allDisplayTops[i],
   })),
+};
+
+/**
+ * N5 성능 방어 검증 전용 stress job (10일차).
+ *
+ * 기본 job(mockReviewResponse/mockPreviewResponse, MOCK_JOB_ID)과 완전히
+ * 분리된 별도 jobId다 — 성능 테스트가 이 fixture만 바라보게 하기 위함이며,
+ * 기본 job의 다른 N5 테스트에는 어떤 영향도 주지 않는다(section/sourceImage가
+ * 겹치지 않는다). 테스트 실행 중 정적 fixture 파일을 덮어쓰는 대신, 이
+ * jobId로 직접 진입하면 처음부터 212x8000 실측 이미지(scripts/make-n3-fixture-images.mjs로
+ * 생성, N3 방어 검증과 동일 파일 재사용)를 가리키는 응답이 내려온다.
+ *
+ * /preview·/review 계약 타입은 기존과 완전히 동일하다(PreviewResponse/
+ * ReviewResponse) — 새 필드를 추가하거나 계약을 바꾸지 않았다. scale=1,
+ * previewHeight=8000은 이 stress 이미지 자체가 이미 212x8000(다운스케일
+ * 없음)이라는 뜻이다.
+ */
+export const MOCK_STRESS_JOB_ID = 'job_mock_stress_001';
+const STRESS_SRC = 'src_mock_stress_001';
+const STRESS_IMG_EXTREME_TALL = SECTION_IMG_EXTREME_TALL; // 212x8000, N3 방어 검증과 같은 실제 파일
+
+export const mockStressJobStatus: JobStatusResponse = {
+  jobId: MOCK_STRESS_JOB_ID,
+  currentStep: 'N5',
+  dbStatus: 'review',
+  progress: 100,
+  processingSubStep: '',
+  activeSubSteps: [],
+  hasFailed: false,
+  failedItems: [],
+};
+
+const stressSection: ReviewSection = {
+  sectionId: 'stress_sec_01',
+  sourceImageId: STRESS_SRC,
+  sectionOrder: 1,
+  bucket: 'include',
+  excludedStage: null,
+  topOffset: 0,
+  displayTop: 0, // include section 1개뿐이라 누적값도 0 — computeSectionDisplayTops와 동일한 결과
+  height: 8000,
+  textBlocks: [],
+};
+
+export const mockStressReviewResponse: ReviewResponse = {
+  job: { jobId: MOCK_STRESS_JOB_ID, targetCountry: 'US', targetLanguage: 'en' },
+  sourceImages: [
+    {
+      sourceImageId: STRESS_SRC,
+      originalUrl: STRESS_IMG_EXTREME_TALL,
+      renderedUrl: STRESS_IMG_EXTREME_TALL,
+      preview: { originalWidth: 212, originalHeight: 8000, previewWidth: 212, previewHeight: 8000 },
+    },
+  ],
+  sections: [stressSection],
+};
+
+export const mockStressPreviewResponse: PreviewResponse = {
+  sourceImages: [
+    {
+      sourceImageId: STRESS_SRC,
+      originalUrl: STRESS_IMG_EXTREME_TALL,
+      renderedUrl: STRESS_IMG_EXTREME_TALL,
+      scale: 1,
+      previewHeight: 8000,
+    },
+  ],
+  sections: [{ sectionId: stressSection.sectionId, sourceImageId: STRESS_SRC, displayTop: 0 }],
 };
 
 // ─────────────────────────────────────────────

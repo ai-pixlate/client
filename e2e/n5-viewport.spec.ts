@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 import { reachN5 } from './helpers/reach-n5';
-import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
+import { MOCK_JOB_ID, MOCK_STRESS_JOB_ID } from '@/lib/mock-api/fixtures';
 
 // ─────────────────────────────────────────────────────────────────
 // N5 — 캔버스형 viewport interaction (9일차, Figma 544:3168 기준)
@@ -30,6 +30,30 @@ test.describe('N5 캔버스형 viewport', () => {
   test('Before/After 슬라이더는 더 이상 존재하지 않는다', async ({ page }) => {
     await expect(page.locator('[data-testid="n5-before-after-slider"]')).toHaveCount(0);
     await expect(page.locator('[data-testid="n5-compare-stack"]')).toHaveCount(0);
+  });
+
+  // 판정(verdicts) 0건 방어 — N5Panel(app/jobs/[jobId]/_components/n5/n5-panel.tsx)은
+  // job.targetCountry/targetLanguage와 blockCount(텍스트 블록 총 개수)만
+  // 표시할 뿐, verdicts나 "확인 필요" 신호는 아예 읽지 않는다(9/9 block table
+  // 구현 전까지는 참조 자체가 없다). 그래서 판정/확인필요 신호가 0건이어도
+  // 우측 영역이 깨질 수 없다는 것을 코드 구조로 이미 보장한다 — 이 테스트는
+  // 그 사실을 실제 렌더 결과로 재확인한다. 새로운 판정/신호를 만들어 넣지 않는다.
+  test('N5 우측 패널은 판정/확인필요 신호 데이터를 쓰지 않으므로 0건이어도 정상 렌더된다', async ({
+    page,
+  }) => {
+    const pageErrors: Error[] = [];
+    page.on('pageerror', (err) => pageErrors.push(err));
+
+    await expect(page.getByTestId('n5-panel')).toBeVisible();
+    await expect(page.getByTestId('n5-panel-body')).toBeVisible();
+    await expect(page.getByRole('heading', { name: '번역 결과' })).toBeVisible();
+    // 좌측 preview(canvas)와 번역 전/후 토글도 함께 정상이다.
+    await expect(page.getByTestId('n5-canvas')).toBeVisible();
+    await expect(page.getByTestId('n5-view-mode-translated')).toHaveAttribute('aria-pressed', 'true');
+    await page.getByTestId('n5-view-mode-original').click();
+    await expect(page.getByTestId('n5-view-mode-original')).toHaveAttribute('aria-pressed', 'true');
+
+    expect(pageErrors).toEqual([]);
   });
 
   test('토글 라벨은 "번역 전"/"번역 후"이다 (v3.4.1, 원문/번역문 명칭 폐기)', async ({ page }) => {
@@ -507,5 +531,88 @@ test.describe('N5 캔버스형 viewport', () => {
 
     await expect(page.getByTestId('n5-view-mode-original')).toHaveAttribute('aria-pressed', 'true');
     expect(failedImages).toEqual([]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────
+// N5 — 212x8000 극단 이미지 성능 방어 검증 (10일차, "실데이터 방어 검증")
+//
+// page.route로 정적 이미지 요청을 가로채려 했으나, MSW Service Worker가
+// 페이지를 컨트롤하는 동안에는 /api/* JSON뿐 아니라 매치되는 handler가
+// 없는 정적 파일 GET까지도 page.route가 전혀 가로채지 못한다는 것을 실측으로
+// 확인했다. 이후 테스트 실행 중 /mock/n5/*.png 파일 바이트를 임시로
+// 바꿔치기하는 방식을 써봤지만, 같은 파일을 병렬로 참조하는 다른 N5
+// 테스트와 간섭할 수 있어 완전히 제거했다.
+//
+// 최종 방식: mockStressReviewResponse/mockStressPreviewResponse(둘 다
+// lib/mock-api/fixtures.ts, 기본 job과 sourceImage/section이 전혀 겹치지
+// 않는 별도 jobId=MOCK_STRESS_JOB_ID)를 MSW handler가 그대로 내려준다.
+// 이 jobId는 status도 처음부터 currentStep:'N5' 고정 응답이라 N1~N4를 거치지
+// 않고 바로 진입한다. 정적 fixture 파일(public/mock/**)은 테스트 중 어떤
+// 시점에도 쓰기(write)되지 않는다 — 212x8000 실제 파일(scripts/make-n3-fixture-images.mjs로
+// 생성, N3 방어 검증과 동일 파일)을 읽기 전용으로 가리킬 뿐이다. /preview·
+// scale·F-CFM-14 계약과 기본 job(MOCK_JOB_ID) 데이터는 전혀 건드리지 않았다.
+// ─────────────────────────────────────────────────────────────────
+
+test.describe('N5 — 212x8000 극단 이미지 성능 방어 (stress job 전용, 파일 쓰기 없음)', () => {
+  test('진입 실패/이미지 로드 실패/timeout 없이 canvas가 뜨고, zoom/pan/scroll 조작이 가능하다', async ({
+    page,
+  }) => {
+    const failedImages: string[] = [];
+    page.on('response', (res) => {
+      if (res.request().resourceType() === 'image' && res.status() >= 400) {
+        failedImages.push(`${res.status()} ${res.url()}`);
+      }
+    });
+    const pageErrors: Error[] = [];
+    page.on('pageerror', (err) => pageErrors.push(err));
+
+    const start = Date.now();
+
+    // stress job은 처음부터 currentStep:'N5'로 고정 응답하는 별도
+    // jobId다 — N1~N4를 거치지 않고 바로 N5 화면으로 진입한다.
+    await page.goto(`/jobs/${MOCK_STRESS_JOB_ID}`);
+
+    // n5-canvas가 뜬다는 것 자체가 naturalWidth 측정(useNaturalWidths)과
+    // slice 렌더가 212x8000 이미지에서도 끝까지 완료됐다는 뜻이다.
+    await expect(page.locator('[data-testid="n5-canvas"]')).toBeVisible({ timeout: 20_000 });
+    const elapsedMs = Date.now() - start;
+
+    expect(pageErrors, `pageerror 발생: ${pageErrors.map((e) => e.message).join(', ')}`).toEqual([]);
+    expect(failedImages, '이미지 404/5xx 발생').toEqual([]);
+    // 여유 있게 20초 이내 — 심각한 브라우저 멈춤이 있었다면 이 자체가 timeout으로 드러난다.
+    expect(elapsedMs).toBeLessThan(20_000);
+
+    // stress 이미지가 실제로 212px 폭으로 측정됐는지 — 이중 스케일이나
+    // 잘못된 fallback 없이 극단 이미지의 naturalWidth를 그대로 반영했는지.
+    const naturalWidth = await page.evaluate(
+      () =>
+        new Promise<number>((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => resolve(img.naturalWidth);
+          img.onerror = () => reject(new Error('stress 이미지 로드 실패'));
+          img.src = '/mock/n3/section-212x8000.png';
+        }),
+    );
+    expect(naturalWidth).toBe(212);
+
+    // zoom 조작 가능
+    await page.getByTestId('n5-zoom-in').click();
+    await expect(page.getByTestId('n5-zoom-value')).toHaveText('110%');
+
+    // scroll(wheel pan) 조작 가능
+    const viewport = page.locator('[data-testid="n5-viewport"]');
+    const box = await viewport.boundingBox();
+    if (!box) throw new Error('n5-viewport 위치를 찾을 수 없습니다');
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    const canvas = page.locator('[data-testid="n5-canvas"]');
+    const panYBefore = await canvas.getAttribute('data-pan-y');
+    await page.mouse.wheel(0, 400);
+    const panYAfter = await canvas.getAttribute('data-pan-y');
+    expect(panYAfter).not.toBe(panYBefore);
+
+    // Fit Height(극단적으로 긴 이미지를 한 화면에 맞추는 연산)도 멈추지 않는다
+    await page.getByTestId('n5-fit-height').click();
+    await expect(page.getByTestId('n5-canvas')).toBeVisible();
   });
 });
