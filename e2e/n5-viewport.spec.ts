@@ -117,6 +117,149 @@ test.describe('N5 캔버스형 viewport', () => {
     expect(canvasWidth).toBe(maxNaturalWidth);
   });
 
+  test.describe('F-CFM-14 — N5 제외 section 회색 오버레이 + 되돌리기', () => {
+    // sec_07은 mock fixture(lib/mock-api/fixtures.ts)에서 이미
+    // bucket: 'exclude', excludedStage: 'N5'로 세팅된 section이다 — N5Viewport가
+    // 이 초기값을 로컬 state(excludedSectionIds)로 씨드한다.
+
+    test('N5 제외 section도 slice로 남아 canvas 높이에 포함되고, 회색 오버레이가 보인다', async ({
+      page,
+    }) => {
+      // slice 자체(배경 이미지)는 제거되지 않는다 — N3 제외와 달리 사라지지 않는다.
+      await expect(page.getByTestId('n5-slice-translated-sec_07')).toBeVisible();
+      // 그 위에 회색 오버레이 + 되돌리기 버튼이 덮인다.
+      await expect(page.getByTestId('n5-section-excluded-sec_07')).toBeVisible();
+      await expect(page.getByTestId('n5-section-restore-sec_07')).toHaveText('되돌리기');
+    });
+
+    test('되돌리기를 누르면 오버레이가 즉시 사라지고, canvas 높이는 바뀌지 않는다', async ({
+      page,
+    }) => {
+      const canvas = page.locator('[data-testid="n5-canvas"]');
+      const heightBefore = await canvas.evaluate((el) => (el as HTMLElement).style.height);
+
+      await page.getByTestId('n5-section-restore-sec_07').click();
+
+      // 오버레이는 사라지지만 slice(배경 이미지)는 그대로 남는다 — 서버 호출도,
+      // 모달도 없이 로컬 state만 바뀐다.
+      await expect(page.getByTestId('n5-section-excluded-sec_07')).toHaveCount(0);
+      await expect(page.getByTestId('n5-slice-translated-sec_07')).toBeVisible();
+
+      const heightAfter = await canvas.evaluate((el) => (el as HTMLElement).style.height);
+      expect(heightAfter).toBe(heightBefore);
+    });
+
+    test('되돌리기 전후 다른 section의 위치가 움직이지 않는다', async ({ page }) => {
+      // sec_07 바로 다음에 화면에 그려지는 section은 sec_04(SRC_B 첫 include) —
+      // sec_03(N3 제외)은 애초에 렌더되지 않는다. 스택 재배치가 없다면 이
+      // section의 위치는 되돌리기 전후로 완전히 같아야 한다.
+      //
+      // boundingBox()(뷰포트 기준 절대 좌표)는 쓰지 않는다 — 화면 밖에 있는
+      // 되돌리기 버튼을 클릭할 때 Playwright가 페이지를 스크롤할 수 있고,
+      // 그러면 스크롤량만큼 모든 요소의 뷰포트 기준 좌표가 같이 밀려서 실제
+      // 레이아웃이 그대로여도 오탐이 난다. offsetTop/offsetLeft(레이아웃
+      // 고유값, 스크롤과 무관)로 비교한다.
+      const nextSlice = page.getByTestId('n5-slice-translated-sec_04');
+      const readOffset = () =>
+        nextSlice.evaluate((el) => ({
+          top: (el as HTMLElement).offsetTop,
+          left: (el as HTMLElement).offsetLeft,
+        }));
+
+      const offsetBefore = await readOffset();
+
+      await page.getByTestId('n5-section-restore-sec_07').click();
+      await expect(page.getByTestId('n5-section-excluded-sec_07')).toHaveCount(0);
+
+      const offsetAfter = await readOffset();
+
+      expect(offsetAfter.top).toBe(offsetBefore.top);
+      expect(offsetAfter.left).toBe(offsetBefore.left);
+    });
+
+    test('번역 전/번역 후 전환 후에도 제외 오버레이가 유지된다', async ({ page }) => {
+      await expect(page.getByTestId('n5-section-excluded-sec_07')).toBeVisible();
+
+      await page.getByTestId('n5-view-mode-original').click();
+      // 번역 전 slice(n5-slice-original-sec_07)로 image source만 바뀌었을 뿐,
+      // 오버레이는 mode와 무관한 로컬 state라 그대로 남아 있어야 한다.
+      await expect(page.getByTestId('n5-slice-original-sec_07')).toBeVisible();
+      await expect(page.getByTestId('n5-section-excluded-sec_07')).toBeVisible();
+
+      await page.getByTestId('n5-view-mode-translated').click();
+      await expect(page.getByTestId('n5-section-excluded-sec_07')).toBeVisible();
+    });
+
+    // sec_01은 mock fixture에서 처음부터 bucket: 'include'인 section이다 —
+    // 「제외하기」 액션(서버 왕복 없이 excludedSectionIds에 add)을 검증한다.
+    test('포함 section에 [제외하기] 버튼이 보이고, 클릭 즉시 회색 오버레이가 뜬다', async ({
+      page,
+    }) => {
+      await expect(page.getByTestId('n5-section-exclude-sec_01')).toHaveText('제외하기');
+      await expect(page.getByTestId('n5-section-excluded-sec_01')).toHaveCount(0);
+
+      await page.getByTestId('n5-section-exclude-sec_01').click();
+
+      // [제외하기]는 사라지고 회색 오버레이 + [되돌리기]로 바뀐다. slice(배경
+      // 이미지) 자체는 그대로 남는다 — 서버 호출도, 모달도 없다.
+      await expect(page.getByTestId('n5-section-exclude-sec_01')).toHaveCount(0);
+      await expect(page.getByTestId('n5-section-excluded-sec_01')).toBeVisible();
+      await expect(page.getByTestId('n5-section-restore-sec_01')).toHaveText('되돌리기');
+      await expect(page.getByTestId('n5-slice-translated-sec_01')).toBeVisible();
+    });
+
+    test('제외하기 전후 canvas 높이와 다른 section 위치가 그대로다', async ({ page }) => {
+      const canvas = page.locator('[data-testid="n5-canvas"]');
+      const heightBefore = await canvas.evaluate((el) => (el as HTMLElement).style.height);
+
+      // sec_01 바로 다음 section인 sec_02의 레이아웃 위치(스크롤과 무관한
+      // offsetTop/Left)를 기준으로 스택 재배치 여부를 확인한다.
+      const nextSlice = page.getByTestId('n5-slice-translated-sec_02');
+      const readOffset = () =>
+        nextSlice.evaluate((el) => ({
+          top: (el as HTMLElement).offsetTop,
+          left: (el as HTMLElement).offsetLeft,
+        }));
+      const offsetBefore = await readOffset();
+
+      await page.getByTestId('n5-section-exclude-sec_01').click();
+      await expect(page.getByTestId('n5-section-excluded-sec_01')).toBeVisible();
+
+      const heightAfter = await canvas.evaluate((el) => (el as HTMLElement).style.height);
+      expect(heightAfter).toBe(heightBefore);
+
+      const offsetAfter = await readOffset();
+      expect(offsetAfter.top).toBe(offsetBefore.top);
+      expect(offsetAfter.left).toBe(offsetBefore.left);
+    });
+
+    test('제외하기 후 번역 전/번역 후 전환해도 제외 상태가 유지된다', async ({ page }) => {
+      await page.getByTestId('n5-section-exclude-sec_01').click();
+      await expect(page.getByTestId('n5-section-excluded-sec_01')).toBeVisible();
+
+      await page.getByTestId('n5-view-mode-original').click();
+      await expect(page.getByTestId('n5-slice-original-sec_01')).toBeVisible();
+      await expect(page.getByTestId('n5-section-excluded-sec_01')).toBeVisible();
+
+      await page.getByTestId('n5-view-mode-translated').click();
+      await expect(page.getByTestId('n5-section-excluded-sec_01')).toBeVisible();
+    });
+
+    test('제외 후 되돌리면 오버레이가 사라지고, 다시 제외할 수 있다', async ({ page }) => {
+      await page.getByTestId('n5-section-exclude-sec_01').click();
+      await expect(page.getByTestId('n5-section-excluded-sec_01')).toBeVisible();
+
+      await page.getByTestId('n5-section-restore-sec_01').click();
+      await expect(page.getByTestId('n5-section-excluded-sec_01')).toHaveCount(0);
+      await expect(page.getByTestId('n5-section-exclude-sec_01')).toBeVisible();
+
+      // 되돌린 뒤 다시 제외 가능한 상태인지 — 한 쌍으로 반복 동작해야 한다.
+      await page.getByTestId('n5-section-exclude-sec_01').click();
+      await expect(page.getByTestId('n5-section-excluded-sec_01')).toBeVisible();
+      await expect(page.getByTestId('n5-section-exclude-sec_01')).toHaveCount(0);
+    });
+  });
+
   test('+/- 로 zoom이 바뀌고 표시값에 반영된다', async ({ page }) => {
     await expect(page.getByTestId('n5-zoom-value')).toHaveText('100%');
 

@@ -57,8 +57,22 @@ import { ViewModeToggle, ZoomControls, FitControls } from './n5-toolbar';
 // 다시 측정하는 것과는 다르다 — naturalWidth는 원본 asset 고유값이라 zoom/pan/fit을
 // 아무리 반복해도 오차가 쌓이지 않는다.
 //
-// 미포함(오늘 범위 아님): block selection overlay, 우측 block table,
-// virtualization, 텍스트 수정, delete interaction, 툴바 전체 기능.
+// F-CFM-14 — N5에서 제외된 section의 회색 오버레이 + 제외하기/되돌리기 (10일차).
+// N3에서 제외된 section은 /review 응답 자체에서 걸러져 여기 도달하지 않지만,
+// N5에서 제외된 section(bucket==='exclude' && excludedStage==='N5', 또는 이번
+// 세션에서 「제외하기」를 눌러 로컬로 제외한 section)은 캔버스에서 제거하지
+// 않는다 — buildSectionSlices가 그대로 slice로 만들어 같은 자리·같은 높이를
+// 유지하고, 그 위에 회색 오버레이 + 되돌리기 버튼(포함 상태면 반대로 「제외하기」
+// 버튼)만 덮는다. 제외 상태는 sectionId 기준 로컬 state(excludedSectionIds)로만
+// 관리하고 서버로 왕복하지 않는다 — 제외하기/되돌리기 둘 다 이 state를
+// add/delete할 뿐이고, slices/canvasSize를 계산하는 useMemo의 의존성에는
+// 들어가지 않으므로 스택 재계산/재배치가 절대 일어나지 않는다(같은 slices
+// 배열, 같은 canvasSize를 그대로 재사용). N6 최종 렌더에서만 실제 제외 스택
+// 반영이 이뤄진다 — N5는 여기서 표시만 담당한다.
+//
+// 미포함(오늘 범위 아님): block selection overlay(텍스트 블록 선택 하이라이트,
+// F-CFM-14의 제외 오버레이와는 다른 개념), 우측 block table, virtualization,
+// 텍스트 수정, delete interaction, 툴바 전체 기능.
 // ─────────────────────────────────────────────────────────────────
 
 /**
@@ -111,7 +125,17 @@ interface CanvasSlice {
   renderedUrl: string | null;
 }
 
-function buildIncludeSlices(
+/**
+ * job의 section 목록으로부터 캔버스에 그릴 slice 목록을 만든다.
+ *
+ * "include"라는 이름과 달리 N5에서 제외된 section(bucket==='exclude' &&
+ * excludedStage==='N5')도 slice로 만든다 — F-CFM-14가 그 자리에 회색
+ * 오버레이를 덮어야 하므로, 위치/높이를 그대로 유지한 채 남겨둔다. 걸러내는
+ * 것은 N3에서 제외된 section뿐이다(excludedStage==='N3') — 다만 /review
+ * 응답 자체가 이미 N3 제외분을 필터링해 내려주므로, 여기 도달하는 section
+ * 중 N3 제외는 원래 없다. 이 필터는 그 계약이 깨졌을 때를 대비한 방어용이다.
+ */
+function buildSectionSlices(
   sections: ReviewSection[],
   sourceImages: PreviewSourceImage[],
   naturalWidthBySourceImageId: Map<string, number>,
@@ -123,7 +147,7 @@ function buildIncludeSlices(
   const ordered = [...sections].sort((a, b) => a.sectionOrder - b.sectionOrder);
 
   return ordered
-    .filter((section) => section.bucket === 'include')
+    .filter((section) => section.excludedStage !== 'N3')
     .flatMap((section): CanvasSlice[] => {
       const image = previewById.get(section.sourceImageId);
       if (!image) return [];
@@ -157,7 +181,20 @@ function buildIncludeSlices(
     });
 }
 
-function ImageLayer({ slices, mode }: { slices: CanvasSlice[]; mode: N5ViewMode }) {
+function ImageLayer({
+  slices,
+  mode,
+  excludedSectionIds,
+  onExcludeSection,
+  onRestoreSection,
+}: {
+  slices: CanvasSlice[];
+  mode: N5ViewMode;
+  /** F-CFM-14 — 로컬로 제외 처리된 sectionId 집합. slice 자체는 그대로 두고 위에 오버레이만 덮는다. */
+  excludedSectionIds: Set<string>;
+  onExcludeSection: (sectionId: string) => void;
+  onRestoreSection: (sectionId: string) => void;
+}) {
   return (
     <>
       {slices.map((slice) => {
@@ -166,11 +203,13 @@ function ImageLayer({ slices, mode }: { slices: CanvasSlice[]; mode: N5ViewMode 
         // 'original'로 두고 「번역 후」 버튼도 disabled 처리하기 때문이다.
         // 그래도 url(null)을 그대로 CSS에 넣지 않도록 방어적으로 처리한다.
         const url = mode === 'original' ? slice.originalUrl : slice.renderedUrl;
+        const isExcluded = excludedSectionIds.has(slice.sectionId);
         return (
           <div
             key={slice.sectionId}
             data-testid={`n5-slice-${mode}-${slice.sectionId}`}
             style={{
+              position: 'relative',
               height: slice.height,
               width: slice.width,
               backgroundColor: '#e5e5e5',
@@ -179,7 +218,41 @@ function ImageLayer({ slices, mode }: { slices: CanvasSlice[]; mode: N5ViewMode 
               backgroundPosition: `0px ${slice.backgroundPositionY}px`,
               backgroundRepeat: 'no-repeat',
             }}
-          />
+          >
+            {isExcluded ? (
+              // F-CFM-14: slice의 height/width는 절대 건드리지 않는다 — 오버레이는
+              // 같은 slice 내부에 absolute로 얹을 뿐이라, 스택 재배치가 일어나지 않는다.
+              <div
+                data-testid={`n5-section-excluded-${slice.sectionId}`}
+                className="absolute inset-0 flex items-center justify-center"
+                style={{ backgroundColor: 'rgba(23, 23, 23, 0.55)' }}
+              >
+                <button
+                  type="button"
+                  data-testid={`n5-section-restore-${slice.sectionId}`}
+                  onClick={() => onRestoreSection(slice.sectionId)}
+                  className="rounded-full bg-white px-3 py-1.5 text-[12px] font-medium text-[#171717] shadow-[2px_2px_24px_0px_rgba(0,0,0,0.06)] hover:bg-gray-50"
+                >
+                  되돌리기
+                </button>
+              </div>
+            ) : (
+              // 포함 상태 section에 대한 「제외하기」 진입점 — 기존 toolbar
+              // 버튼과 같은 시각 언어(rounded-full, 흰 배경, 옅은 그림자)를
+              // 그대로 따른다. 클릭해도 slice/canvas는 전혀 다시 계산되지
+              // 않는다 — excludedSectionIds에 sectionId만 추가될 뿐이다.
+              <div className="absolute top-2 right-2 z-10">
+                <button
+                  type="button"
+                  data-testid={`n5-section-exclude-${slice.sectionId}`}
+                  onClick={() => onExcludeSection(slice.sectionId)}
+                  className="rounded-full bg-white/90 px-3 py-1.5 text-[12px] font-medium text-[#171717] shadow-[2px_2px_24px_0px_rgba(0,0,0,0.06)] hover:bg-white"
+                >
+                  제외하기
+                </button>
+              </div>
+            )}
+          </div>
         );
       })}
     </>
@@ -228,6 +301,38 @@ export function N5Viewport({
   const [isSpaceHeld, setIsSpaceHeld] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
 
+  // F-CFM-14 — N5에서 제외된 section의 회색 오버레이(sectionId 기준 로컬
+  // state). 서버 bucket/excludedStage를 초기값으로만 씨드하고, 이후로는
+  // 서버와 왕복하지 않는다 — 제외하기/되돌리기 둘 다 이 Set을 add/delete할
+  // 뿐이다. props는 N5Viewport가 마운트되는 시점(N5View가 로딩 완료 후에만
+  // 렌더한다)에 이미 최종 값이라 lazy initializer로 한 번만 계산해도 안전하다.
+  const [excludedSectionIds, setExcludedSectionIds] = useState<Set<string>>(
+    () =>
+      new Set(
+        sections
+          .filter((section) => section.bucket === 'exclude' && section.excludedStage === 'N5')
+          .map((section) => section.sectionId),
+      ),
+  );
+
+  const handleExcludeSection = useCallback((sectionId: string) => {
+    setExcludedSectionIds((prev) => {
+      if (prev.has(sectionId)) return prev;
+      const next = new Set(prev);
+      next.add(sectionId);
+      return next;
+    });
+  }, []);
+
+  const handleRestoreSection = useCallback((sectionId: string) => {
+    setExcludedSectionIds((prev) => {
+      if (!prev.has(sectionId)) return prev;
+      const next = new Set(prev);
+      next.delete(sectionId);
+      return next;
+    });
+  }, []);
+
   const viewportRef = useRef<HTMLDivElement>(null);
   const spaceHeldRef = useRef(false);
   const isPanningRef = useRef(false);
@@ -242,8 +347,11 @@ export function N5Viewport({
 
   const naturalWidths = useNaturalWidths(sourceImages);
 
+  // excludedSectionIds는 일부러 이 의존성 배열에 넣지 않는다 — F-CFM-14
+  // 되돌리기는 오버레이 표시 여부만 바꿀 뿐, slices(위치/높이) 자체를
+  // 다시 계산하면 안 된다(스택 재배치 금지).
   const slices = useMemo(
-    () => buildIncludeSlices(sections, sourceImages, naturalWidths),
+    () => buildSectionSlices(sections, sourceImages, naturalWidths),
     [sections, sourceImages, naturalWidths],
   );
 
@@ -447,7 +555,13 @@ export function N5Viewport({
               transformOrigin: '0 0',
             }}
           >
-            <ImageLayer slices={slices} mode={viewMode} />
+            <ImageLayer
+              slices={slices}
+              mode={viewMode}
+              excludedSectionIds={excludedSectionIds}
+              onExcludeSection={handleExcludeSection}
+              onRestoreSection={handleRestoreSection}
+            />
           </div>
         </>
       )}
