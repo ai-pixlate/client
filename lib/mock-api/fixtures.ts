@@ -854,6 +854,74 @@ export const mockStressPreviewResponse: PreviewResponse = {
   sections: [{ sectionId: stressSection.sectionId, sourceImageId: STRESS_SRC, displayTop: 0 }],
 };
 
+/**
+ * N5 "초장축 원본 좌표계" stress job (10일차) — 위 212x8000 stress job과
+ * 완전히 별도 jobId다(서로 다른 sourceImageId/sectionId도 겹치지 않는다).
+ *
+ * 원본 section 좌표계: width 1000 / height 37736, /preview scale: 0.5 —
+ * 즉 실제 preview는 500 x 18868(= 1000*0.5 x 37736*0.5)이다. originalUrl/
+ * renderedUrl 자체가 이미 다운스케일된 preview 이미지라는 계약(v3.4.1 백엔드
+ * 최종 확정)에 따라, 1000x37736짜리 원본 이미지를 URL에 넣고 FE에서 다시
+ * scale을 곱하는 구조로 만들지 않는다 — scripts/make-n3-fixture-images.mjs가
+ * 만든 실제 500x18868 PNG 파일(section-500x18868.png) 자체를 가리킨다.
+ * section.height=37736(원본 해상도)에 scale=0.5를 곱하면 canvas height도
+ * 정확히 18868이 된다(이중 스케일 없음 — naturalWidth/Height를 그대로 쓰고
+ * scale은 section.height/topOffset 같은 "원본 좌표"에만 적용하는 기존 원칙
+ * 그대로).
+ */
+export const MOCK_STRESS_TALL_JOB_ID = 'job_mock_stress_002';
+const STRESS_TALL_SRC = 'src_mock_stress_002';
+const STRESS_TALL_IMG = '/mock/n3/section-500x18868.png';
+
+export const mockStressTallJobStatus: JobStatusResponse = {
+  jobId: MOCK_STRESS_TALL_JOB_ID,
+  currentStep: 'N5',
+  dbStatus: 'review',
+  progress: 100,
+  processingSubStep: '',
+  activeSubSteps: [],
+  hasFailed: false,
+  failedItems: [],
+};
+
+const stressTallSection: ReviewSection = {
+  sectionId: 'stress_tall_sec_01',
+  sourceImageId: STRESS_TALL_SRC,
+  sectionOrder: 1,
+  bucket: 'include',
+  excludedStage: null,
+  topOffset: 0,
+  displayTop: 0,
+  height: 37736, // 원본 해상도 section 높이
+  textBlocks: [],
+};
+
+export const mockStressTallReviewResponse: ReviewResponse = {
+  job: { jobId: MOCK_STRESS_TALL_JOB_ID, targetCountry: 'US', targetLanguage: 'en' },
+  sourceImages: [
+    {
+      sourceImageId: STRESS_TALL_SRC,
+      originalUrl: STRESS_TALL_IMG,
+      renderedUrl: STRESS_TALL_IMG,
+      preview: { originalWidth: 1000, originalHeight: 37736, previewWidth: 500, previewHeight: 18868 },
+    },
+  ],
+  sections: [stressTallSection],
+};
+
+export const mockStressTallPreviewResponse: PreviewResponse = {
+  sourceImages: [
+    {
+      sourceImageId: STRESS_TALL_SRC,
+      originalUrl: STRESS_TALL_IMG,
+      renderedUrl: STRESS_TALL_IMG,
+      scale: 0.5,
+      previewHeight: 18868,
+    },
+  ],
+  sections: [{ sectionId: stressTallSection.sectionId, sourceImageId: STRESS_TALL_SRC, displayTop: 0 }],
+};
+
 // ─────────────────────────────────────────────
 // N6 — 최종 결과
 // ─────────────────────────────────────────────

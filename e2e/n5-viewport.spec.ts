@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 import { reachN5 } from './helpers/reach-n5';
-import { MOCK_JOB_ID, MOCK_STRESS_JOB_ID } from '@/lib/mock-api/fixtures';
+import { MOCK_JOB_ID, MOCK_STRESS_JOB_ID, MOCK_STRESS_TALL_JOB_ID } from '@/lib/mock-api/fixtures';
 
 // ─────────────────────────────────────────────────────────────────
 // N5 — 캔버스형 viewport interaction (9일차, Figma 544:3168 기준)
@@ -614,5 +614,114 @@ test.describe('N5 — 212x8000 극단 이미지 성능 방어 (stress job 전용
     // Fit Height(극단적으로 긴 이미지를 한 화면에 맞추는 연산)도 멈추지 않는다
     await page.getByTestId('n5-fit-height').click();
     await expect(page.getByTestId('n5-canvas')).toBeVisible();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────
+// N5 — "초장축 원본 좌표계" stress 검증 (10일차, "실데이터 방어 검증" 후속)
+//
+// 원본 section 좌표계: width 1000 / height 37736, /preview scale: 0.5 —
+// 실제 preview는 500 x 18868(= 1000*0.5 x 37736*0.5)이다. originalUrl/
+// renderedUrl 자체가 이미 다운스케일된 preview 이미지라는 계약에 따라,
+// 1000x37736 원본 이미지를 URL에 넣고 FE가 다시 scale을 곱하는 구조로
+// 만들지 않는다 — scripts/make-n3-fixture-images.mjs가 만든 실제
+// 500x18868 PNG 파일을 그대로 가리킨다.
+//
+// 위 212x8000 stress job과 마찬가지로 별도 jobId(MOCK_STRESS_TALL_JOB_ID,
+// lib/mock-api/fixtures.ts)로 완전히 분리돼 있고, MSW handler가 고정
+// 응답을 내려준다 — 테스트 중 어떤 정적 fixture 파일도 쓰기(write)하지
+// 않는다.
+// ─────────────────────────────────────────────────────────────────
+
+test.describe('N5 — 초장축 원본 좌표계(1000x37736, scale 0.5) stress (별도 job, 파일 쓰기 없음)', () => {
+  test('500x18868 실제 preview 이미지로 진입, 하단까지 스크롤, 토글, Fit Height가 모두 안전하다', async ({
+    page,
+  }) => {
+    const failedImages: string[] = [];
+    page.on('response', (res) => {
+      if (res.request().resourceType() === 'image' && res.status() >= 400) {
+        failedImages.push(`${res.status()} ${res.url()}`);
+      }
+    });
+    const pageErrors: Error[] = [];
+    page.on('pageerror', (err) => pageErrors.push(err));
+
+    const start = Date.now();
+
+    // stress job은 처음부터 currentStep:'N5' 고정 응답 — N1~N4를 거치지 않는다.
+    await page.goto(`/jobs/${MOCK_STRESS_TALL_JOB_ID}`);
+    await expect(page.locator('[data-testid="n5-canvas"]')).toBeVisible({ timeout: 20_000 });
+
+    // 1) 실제 fixture 파일의 naturalWidth/naturalHeight가 정확히 500x18868인지.
+    const natural = await page.evaluate(
+      () =>
+        new Promise<{ width: number; height: number }>((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+          img.onerror = () => reject(new Error('stress tall 이미지 로드 실패'));
+          img.src = '/mock/n3/section-500x18868.png';
+        }),
+    );
+    expect(natural.width).toBe(500);
+    expect(natural.height).toBe(18868);
+
+    // 2) canvas 높이가 18868px 기준으로 구성되는지 — section.height(37736,
+    // 원본 해상도) * scale(0.5)이지 naturalHeight(18868)에 scale을 또 곱한
+    // 37736이 아니어야 한다(이중 스케일 없음).
+    const canvas = page.locator('[data-testid="n5-canvas"]');
+    const canvasHeightPx = await canvas.evaluate((el) => (el as HTMLElement).style.height);
+    expect(canvasHeightPx).toBe('18868px');
+
+    // 3) 초장축 스크롤/pan — wheel로 하단 근처까지 크게 이동해도 canvas가
+    // 사라지거나 깨지지 않는다.
+    const viewport = page.locator('[data-testid="n5-viewport"]');
+    const box = await viewport.boundingBox();
+    if (!box) throw new Error('n5-viewport 위치를 찾을 수 없습니다');
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+
+    const panBeforeScroll = await canvas.getAttribute('data-pan-y');
+    await page.mouse.wheel(0, 17_000); // 18868 중 대부분을 한 번에 내려간다
+    const panAfterScroll = await canvas.getAttribute('data-pan-y');
+    expect(panAfterScroll).not.toBe(panBeforeScroll);
+    expect(Number(panAfterScroll)).toBeLessThan(-15_000); // 충분히 아래로 이동했는지
+    await expect(canvas).toBeVisible();
+
+    // 4) 토글 — 번역 후(기본) → 번역 전 → 번역 후, 스크롤된 위치에서도
+    // panX/panY/zoom/canvas height가 그대로 유지되는지.
+    const zoomBefore = await canvas.getAttribute('data-zoom');
+    const panXBefore = await canvas.getAttribute('data-pan-x');
+    const panYBefore = await canvas.getAttribute('data-pan-y');
+    const heightBeforeToggle = await canvas.evaluate((el) => (el as HTMLElement).style.height);
+
+    await page.getByTestId('n5-view-mode-original').click();
+    await expect(page.getByTestId('n5-view-mode-original')).toHaveAttribute('aria-pressed', 'true');
+    expect(await canvas.getAttribute('data-zoom')).toBe(zoomBefore);
+    expect(await canvas.getAttribute('data-pan-x')).toBe(panXBefore);
+    expect(await canvas.getAttribute('data-pan-y')).toBe(panYBefore);
+    expect(await canvas.evaluate((el) => (el as HTMLElement).style.height)).toBe(heightBeforeToggle);
+
+    await page.getByTestId('n5-view-mode-translated').click();
+    await expect(page.getByTestId('n5-view-mode-translated')).toHaveAttribute('aria-pressed', 'true');
+    expect(await canvas.getAttribute('data-zoom')).toBe(zoomBefore);
+    expect(await canvas.getAttribute('data-pan-x')).toBe(panXBefore);
+    expect(await canvas.getAttribute('data-pan-y')).toBe(panYBefore);
+    expect(await canvas.evaluate((el) => (el as HTMLElement).style.height)).toBe(heightBeforeToggle);
+
+    // 5) Fit Height — 18,868px preview에서도 NaN/Infinity/0이 아닌 유효한
+    // zoom이 나와야 한다(뷰포트가 훨씬 작으므로 MIN_ZOOM(0.25)으로 clamp될
+    // 것으로 예상되지만, 정확한 clamp 값을 하드코딩하지 않고 "유효한 양수"만 확인한다).
+    await page.getByTestId('n5-fit-height').click();
+    const zoomAfterFit = Number(await canvas.getAttribute('data-zoom'));
+    expect(Number.isFinite(zoomAfterFit)).toBe(true);
+    expect(zoomAfterFit).toBeGreaterThan(0);
+    await expect(page.getByTestId('n5-zoom-value')).not.toHaveText('NaN%');
+    await expect(canvas).toBeVisible();
+
+    const elapsedMs = Date.now() - start;
+
+    expect(pageErrors, `pageerror 발생: ${pageErrors.map((e) => e.message).join(', ')}`).toEqual([]);
+    expect(failedImages, '이미지 404/5xx 발생').toEqual([]);
+    // 6) 성능 방어선 — 20초 이내. 문제가 없으므로 별도 최적화 코드는 추가하지 않는다.
+    expect(elapsedMs).toBeLessThan(20_000);
   });
 });

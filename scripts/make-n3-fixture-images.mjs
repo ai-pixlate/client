@@ -94,6 +94,12 @@ const targets = [
   { width: 212, height: 8000, color: [0xf5, 0xe0, 0xdc] },
   { width: 830, height: 3225, color: [0xe0, 0xf5, 0xe4] },
   { width: 800, height: 220, color: [0xf5, 0xf0, 0xdc] },
+  // N5 "초장축 원본 좌표계" stress case (lib/mock-api/fixtures.ts의
+  // mockStressTallPreviewResponse). 원본 section 좌표계 1000x37736에 scale=0.5를
+  // 적용한 "이미 다운스케일된 preview" 이미지 자체다(500 = 1000*0.5,
+  // 18868 = 37736*0.5) — /preview URL에 원본 크기 이미지를 넣고 FE에서 다시
+  // scale하는 구조가 아니라는 것을 파일 자체의 실측 크기로 보장한다.
+  { width: 500, height: 18868, color: [0xe6, 0xdc, 0xf5] },
 ];
 
 mkdirSync(OUT_DIR, { recursive: true });
