@@ -1,12 +1,17 @@
-import type { N5ViewMode } from '@/lib/n5/viewport';
+import { useState } from 'react';
+
+import { parseZoomPercentInput, type N5ViewMode } from '@/lib/n5/viewport';
 
 // ─────────────────────────────────────────────────────────────────
-// N5 viewport 상단 오버레이 — 번역 전/번역 후 독립 버튼 2개 + zoom(-/%/+) +
-// fit width/height. Figma 544:3168 기준(9일차, viewport interaction foundation).
-// 라벨은 v3.4.1 요구사항 반영: 원문 → 번역 전, 번역문 → 번역 후(10일차).
+// N5 조작 컨트롤 모음 — ViewModeToggle(번역 전/번역 후 독립 버튼 2개) +
+// ZoomControls(-/입력/+) + FitControls(fit width/height). Figma 544:3168
+// 기준(9일차, viewport interaction foundation). 라벨은 v3.4.1 요구사항
+// 반영: 원문 → 번역 전, 번역문 → 번역 후(10일차).
 //
-// 순수 presentational — zoom/pan/mode state는 상위(n5-viewport.tsx)가 갖고
-// 여기는 현재 값 표시와 클릭 콜백만 받는다.
+// ViewModeToggle은 11일차부터 n5-viewport.tsx(좌측 뷰어 툴바)가 아니라
+// N5Panel(우측 패널) 상단에서 렌더된다 — 그래서 mode/zoom/pan state가 서로
+// 다른 조상(N5View/n5-viewport.tsx)에 나뉘어 있어도, 이 파일의 컴포넌트들은
+// 여전히 순수 presentational이다(현재 값 표시와 클릭 콜백만 받는다).
 //
 // 번역 후/번역 전은 하나의 segmented track 안에서 indicator가 좌우로 이동하는
 // 구조가 아니다 — 각각 독립된 버튼이고, 클릭하면 두 버튼의 active/inactive
@@ -15,8 +20,13 @@ import type { N5ViewMode } from '@/lib/n5/viewport';
 //
 // render_image_key가 null(렌더 미완료, 금요일 백 회신)이면 「번역 후」 버튼을
 // disabled 처리하고 안내 문구를 보여준다(10일차) — 별도 render_failed류
-// 신호는 쓰지 않고, 상위(n5-viewport.tsx)가 renderedUrl null 여부만으로
-// 판단해 translatedDisabled로 넘긴다.
+// 신호는 쓰지 않고, 상위가 renderedUrl null 여부만으로 판단해
+// translatedDisabled로 넘긴다.
+//
+// ZoomControls의 배율 표시는 11일차부터 읽기 전용 span이 아니라 입력
+// 가능한 input이다(예: "4", "125") — 타이핑 도중에는 clamp하지 않고
+// blur/Enter에서만 parseZoomPercentInput(lib/n5/viewport.ts)으로 한 번에
+// 보정한다.
 // ─────────────────────────────────────────────────────────────────
 
 const VIEW_MODE_OPTIONS: { mode: N5ViewMode; label: string }[] = [
@@ -77,12 +87,32 @@ export function ZoomControls({
   zoom,
   onZoomIn,
   onZoomOut,
+  onSetZoom,
 }: {
   /** 1 = 100% */
   zoom: number;
   onZoomIn: () => void;
   onZoomOut: () => void;
+  /** 사용자가 직접 입력한 배율(예: "4", "4%", "125")을 커밋할 때 호출된다. */
+  onSetZoom: (zoomFraction: number) => void;
 }) {
+  // draft: 입력 중인 원문 문자열. null이면 "편집 중이 아님" — 이때는 zoom
+  // prop을 그대로 표시값으로 쓴다. 타이핑 도중에는 매 키 입력마다 clamp하지
+  // 않고, blur/Enter에서만 parseZoomPercentInput으로 한 번에 보정한다.
+  const [draft, setDraft] = useState<string | null>(null);
+  const committedValue = String(Math.round(zoom * 100));
+  const displayValue = draft ?? committedValue;
+
+  const commit = () => {
+    if (draft === null) return;
+    // 0/음수/NaN/빈 문자열이면 parseZoomPercentInput이 null을 반환한다 — 이
+    // 경우 zoom을 바꾸지 않는다(현재 zoom 유지). setDraft(null)만으로도
+    // displayValue가 committedValue(현재 zoom 기준 표시값)로 되돌아간다.
+    const parsed = parseZoomPercentInput(draft);
+    if (parsed !== null) onSetZoom(parsed);
+    setDraft(null);
+  };
+
   return (
     <div
       data-testid="n5-zoom-controls"
@@ -97,8 +127,24 @@ export function ZoomControls({
       >
         −
       </button>
-      <span data-testid="n5-zoom-value" className="w-9 text-center tabular-nums">
-        {Math.round(zoom * 100)}%
+      <span className="flex items-center gap-0.5">
+        <input
+          data-testid="n5-zoom-value"
+          type="text"
+          inputMode="decimal"
+          aria-label="배율(%)"
+          value={displayValue}
+          onChange={(e) => setDraft(e.target.value)}
+          onFocus={() => setDraft(committedValue)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.currentTarget.blur();
+            }
+          }}
+          className="w-9 border-none bg-transparent text-center tabular-nums outline-none"
+        />
+        <span aria-hidden="true">%</span>
       </span>
       <button
         type="button"

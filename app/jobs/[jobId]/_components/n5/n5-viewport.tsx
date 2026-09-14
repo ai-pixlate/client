@@ -10,12 +10,13 @@ import {
   computeUsableViewportSize,
   computeFitWidthScale,
   computeFitHeightScale,
-  hasMissingRenderedPreview,
+  computeCenteredPan,
+  clampPan,
   type N5ViewMode,
   type Point,
   type Size,
 } from '@/lib/n5/viewport';
-import { ViewModeToggle, ZoomControls, FitControls } from './n5-toolbar';
+import { ZoomControls, FitControls } from './n5-toolbar';
 
 // ─────────────────────────────────────────────────────────────────
 // N5 — 캔버스형 viewport (Figma 544:3168 기준, 9일차)
@@ -27,18 +28,27 @@ import { ViewModeToggle, ZoomControls, FitControls } from './n5-toolbar';
 // 조작 기반을 얹는다.
 //
 // pan의 정본은 transform.pan 하나뿐이다 — native scrollTop/overflow-y-auto는
-// 두지 않는다. 일반 wheel/Shift+Wheel/Space+drag 세 입력 모두 같은
-// transform.pan을 옮기기만 할 뿐, 별도의 scroll state를 두지 않는다.
+// 두지 않는다. 일반 wheel/Shift+Wheel/Space+drag/+-버튼/배율 직접 입력 모두
+// 같은 transform.pan을 옮기기만 할 뿐, 별도의 scroll state를 두지 않는다.
+// 이 다섯 경로 전부 lib/n5/viewport.ts의 clampPan을 거쳐 같은 pan 경계
+// 규칙(11일차)을 적용한다 — 빈 공간이 viewport 중앙보다 더 넓게 보이지
+// 않고, 캔버스가 viewport보다 작은 축은 그 축을 가운데 고정해 pan 자체가
+// 안 먹는다.
 //
 // canvas(원문/번역 stack)의 크기는 zoom과 무관하게 고정된 값이다 — section
 // 목록과 preview scale로부터 한 번만 계산하고(useMemo), 화면에는 그 위에
 // `translate(pan) scale(zoom)` transform만 얹는다(transform-origin 0 0).
 // fit 계산이 이 원본 크기와 viewport clientWidth/Height만으로 이뤄지는 것도
 // 이 때문이다 — CSS transform 결과(getBoundingClientRect 등)를 다시 측정해
-// 누적하지 않으므로 fit을 여러 번 눌러도 오차가 쌓이지 않는다.
+// 누적하지 않으므로 fit을 여러 번 눌러도 오차가 쌓이지 않는다. Fit Width/
+// Height는 11일차부터 zoom만이 아니라 computeCenteredPan으로 pan도 함께
+// 계산해 캔버스를 viewport 정중앙에 놓는다.
 //
-// mode(원문/번역문)는 zoom/pan과 완전히 독립된 state다 — 전환해도 같은
-// transform 값을 그대로 쓰므로 "보고 있던 위치"가 유지된다.
+// mode(번역 전/번역 후)는 11일차부터 이 컴포넌트가 소유하지 않는다 — 상위
+// (N5View)가 소유하고 이 컴포넌트는 viewMode를 prop으로만 받는다(우측
+// N5Panel 상단으로 토글 UI 자체가 이동했기 때문). zoom/pan과는 여전히
+// 완전히 독립된 state라 토글해도 같은 transform 값을 그대로 쓰므로 "보고
+// 있던 위치"가 유지된다 — 이 불변은 mode의 소유자가 바뀌어도 그대로다.
 //
 // sourceImages는 /review가 아니라 /preview(API-CFM-03, v3.4.1) 응답이다 —
 // originalUrl/renderedUrl/scale/previewHeight 모두 서버가 계산해 내려주는
@@ -285,18 +295,13 @@ const INITIAL_TRANSFORM: Transform = { zoom: 1, pan: { x: 0, y: 0 } };
 export function N5Viewport({
   sourceImages,
   sections,
+  viewMode,
 }: {
   sourceImages: PreviewSourceImage[];
   sections: ReviewSection[];
+  /** 11일차부터 이 컴포넌트가 소유하지 않는다 — 토글 UI가 N5Panel로 이동했다. */
+  viewMode: N5ViewMode;
 }) {
-  // renderedUrl(render_image_key)이 없는 sourceImage가 하나라도 있으면 렌더가
-  // 아직 없다는 뜻이다 — 이때는 기본 진입도 'translated'가 아니라 'original'로
-  // 시작한다(보여줄 이미지가 없으므로). props는 이 컴포넌트가 마운트되는
-  // 시점(N5View가 로딩 완료 후에만 렌더한다)에 이미 최종 값이라 useState
-  // lazy initializer로 한 번만 계산해도 안전하다.
-  const [viewMode, setViewMode] = useState<N5ViewMode>(() =>
-    hasMissingRenderedPreview(sourceImages) ? 'original' : 'translated',
-  );
   const [transform, setTransform] = useState<Transform>(INITIAL_TRANSFORM);
   const [isSpaceHeld, setIsSpaceHeld] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
@@ -355,11 +360,6 @@ export function N5Viewport({
     [sections, sourceImages, naturalWidths],
   );
 
-  const translatedDisabled = useMemo(
-    () => hasMissingRenderedPreview(sourceImages),
-    [sourceImages],
-  );
-
   // canvas(원본, zoom과 무관한) 크기 — fit 계산의 기준값. 매 렌더 다시 측정하지 않는다.
   const canvasSize = useMemo<Size>(
     () => ({
@@ -368,6 +368,18 @@ export function N5Viewport({
     }),
     [slices],
   );
+
+  // wheel/pointer 핸들러는 useCallback([])/useEffect([])로 한 번만 만들어
+  // el(viewportRef)을 재사용한다 — 그 안에서 canvasSize를 직접 closure로
+  // 참조하면 naturalWidths가 나중에 채워져 canvasSize가 바뀌어도 마운트
+  // 시점의 값(보통 {0,0})에 갇힌다. transformRef와 같은 이유로 ref에 최신값을
+  // 미러링해 둔다. canvasSize.width/height가 모두 0이면 "표시할 이미지가
+  // 없는" 상태다 — 이때 wheel/drag는 완전히 비활성화된다(zoom/fit 버튼은
+  // 애초에 이 조건일 때 렌더되지 않는다).
+  const canvasSizeRef = useRef(canvasSize);
+  useEffect(() => {
+    canvasSizeRef.current = canvasSize;
+  }, [canvasSize]);
 
   // ── Space 키 상태 추적 — 텍스트 입력창에 focus가 있으면 pan을 발동하지 않는다 ──
   useEffect(() => {
@@ -412,20 +424,24 @@ export function N5Viewport({
   //    native scrollTop/overflow-y-auto는 새로 만들지 않는다 — pan은 항상
   //    transform.pan 하나만 정본으로 쓴다(scroll state를 별도로 두지 않는다).
   //    브라우저 기본 page zoom/scroll을 막아야 하므로 React onWheel이 아니라
-  //    { passive: false } native listener로 등록해야 preventDefault가 먹는다. ──
+  //    { passive: false } native listener로 등록해야 preventDefault가 먹는다.
+  //    두 경로 모두 마지막에 clampPan을 거친다(11일차 pan 경계). ──
   useEffect(() => {
     const el = viewportRef.current;
     if (!el) return;
 
     function handleWheel(e: WheelEvent) {
       e.preventDefault();
+      if (canvasSizeRef.current.width <= 0 && canvasSizeRef.current.height <= 0) return; // 빈 상태 — 조작 비활성화
 
       if (e.ctrlKey || e.metaKey) {
         const rect = el!.getBoundingClientRect();
         const pointer: Point = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+        const usable = computeUsableViewportSize(el!.clientWidth, el!.clientHeight, readPadding(el!));
         setTransform((prev) => {
           const nextZoomRaw = prev.zoom * computeWheelZoomFactor(e.deltaY);
-          return computeZoomAroundPoint(prev.zoom, prev.pan, pointer, nextZoomRaw);
+          const result = computeZoomAroundPoint(prev.zoom, prev.pan, pointer, nextZoomRaw);
+          return { zoom: result.zoom, pan: clampPan(result.pan, canvasSizeRef.current, result.zoom, usable) };
         });
         return;
       }
@@ -434,12 +450,13 @@ export function N5Viewport({
       // delta(e.deltaY)를 가로 이동으로 재해석한다 — 이 경우 e.deltaX는 쓰지
       // 않는다(트랙패드가 이미 deltaX/deltaY를 축별로 분리해 주는 것과 별개로,
       // 일반 마우스 휠 + Shift 조합을 위한 명시적 매핑이다).
-      setTransform((prev) => ({
-        ...prev,
-        pan: e.shiftKey
+      const usable = computeUsableViewportSize(el!.clientWidth, el!.clientHeight, readPadding(el!));
+      setTransform((prev) => {
+        const rawPan: Point = e.shiftKey
           ? { x: prev.pan.x - e.deltaY, y: prev.pan.y }
-          : { x: prev.pan.x - e.deltaX, y: prev.pan.y - e.deltaY },
-      }));
+          : { x: prev.pan.x - e.deltaX, y: prev.pan.y - e.deltaY };
+        return { ...prev, pan: clampPan(rawPan, canvasSizeRef.current, prev.zoom, usable) };
+      });
     }
 
     el.addEventListener('wheel', handleWheel, { passive: false });
@@ -448,6 +465,7 @@ export function N5Viewport({
 
   const handlePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (!spaceHeldRef.current) return;
+    if (canvasSizeRef.current.width <= 0 && canvasSizeRef.current.height <= 0) return; // 빈 상태 — pan 비활성화
     e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
     isPanningRef.current = true;
@@ -462,7 +480,12 @@ export function N5Viewport({
       x: pan.x + (e.clientX - pointer.x),
       y: pan.y + (e.clientY - pointer.y),
     };
-    setTransform((prev) => ({ ...prev, pan: nextPan }));
+    const el = viewportRef.current;
+    setTransform((prev) => {
+      if (!el) return { ...prev, pan: nextPan };
+      const usable = computeUsableViewportSize(el.clientWidth, el.clientHeight, readPadding(el));
+      return { ...prev, pan: clampPan(nextPan, canvasSizeRef.current, prev.zoom, usable) };
+    });
   }, []);
 
   const endPan = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
@@ -480,23 +503,46 @@ export function N5Viewport({
     if (!el) return;
     const rect = el.getBoundingClientRect();
     const center: Point = { x: rect.width / 2, y: rect.height / 2 };
-    setTransform((prev) =>
-      computeZoomAroundPoint(prev.zoom, prev.pan, center, prev.zoom + direction * ZOOM_BUTTON_STEP),
-    );
+    const usable = computeUsableViewportSize(el.clientWidth, el.clientHeight, readPadding(el));
+    setTransform((prev) => {
+      const result = computeZoomAroundPoint(prev.zoom, prev.pan, center, prev.zoom + direction * ZOOM_BUTTON_STEP);
+      return { zoom: result.zoom, pan: clampPan(result.pan, canvasSizeRef.current, result.zoom, usable) };
+    });
   }, []);
 
+  // 배율 직접 입력(11일차) — n5-toolbar.tsx의 ZoomControls가
+  // parseZoomPercentInput으로 이미 유효한 zoom 배수로 보정해서 넘겨준다.
+  // +/- 버튼과 같은 방식(viewport 중심 기준 zoom) 뒤 clampPan을 거친다.
+  const handleSetZoom = useCallback((nextZoom: number) => {
+    const el = viewportRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const center: Point = { x: rect.width / 2, y: rect.height / 2 };
+    const usable = computeUsableViewportSize(el.clientWidth, el.clientHeight, readPadding(el));
+    setTransform((prev) => {
+      const result = computeZoomAroundPoint(prev.zoom, prev.pan, center, nextZoom);
+      return { zoom: result.zoom, pan: clampPan(result.pan, canvasSizeRef.current, result.zoom, usable) };
+    });
+  }, []);
+
+  // Fit Width/Height(11일차) — zoom뿐 아니라 computeCenteredPan으로 pan도
+  // 함께 계산해 캔버스를 viewport 정중앙에 놓는다. clampPan이 아니라
+  // computeCenteredPan을 쓴다 — fit은 "범위 안에서 이동 허용"이 아니라
+  // 항상 정확히 가운데 배치가 목표이기 때문이다.
   const handleFitWidth = useCallback(() => {
     const el = viewportRef.current;
     if (!el || canvasSize.width <= 0) return;
     const usable = computeUsableViewportSize(el.clientWidth, el.clientHeight, readPadding(el));
-    setTransform({ zoom: computeFitWidthScale(usable, canvasSize), pan: { x: 0, y: 0 } });
+    const zoom = computeFitWidthScale(usable, canvasSize);
+    setTransform({ zoom, pan: computeCenteredPan(canvasSize, zoom, usable) });
   }, [canvasSize]);
 
   const handleFitHeight = useCallback(() => {
     const el = viewportRef.current;
     if (!el || canvasSize.height <= 0) return;
     const usable = computeUsableViewportSize(el.clientWidth, el.clientHeight, readPadding(el));
-    setTransform({ zoom: computeFitHeightScale(usable, canvasSize), pan: { x: 0, y: 0 } });
+    const zoom = computeFitHeightScale(usable, canvasSize);
+    setTransform({ zoom, pan: computeCenteredPan(canvasSize, zoom, usable) });
   }, [canvasSize]);
 
   const cursor = isPanning ? 'grabbing' : isSpaceHeld ? 'grab' : 'default';
@@ -524,19 +570,12 @@ export function N5Viewport({
         </div>
       ) : (
         <>
-          <div className="absolute top-5 left-5 z-10">
-            <ViewModeToggle
-              mode={viewMode}
-              onChange={setViewMode}
-              translatedDisabled={translatedDisabled}
-            />
-          </div>
-
           <div className="absolute top-5 right-5 z-10 flex items-center gap-2">
             <ZoomControls
               zoom={transform.zoom}
               onZoomIn={() => handleZoomButton(1)}
               onZoomOut={() => handleZoomButton(-1)}
+              onSetZoom={handleSetZoom}
             />
             <FitControls onFitWidth={handleFitWidth} onFitHeight={handleFitHeight} />
           </div>
