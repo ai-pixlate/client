@@ -221,11 +221,19 @@ export const handlers = [
   // N1 화면 자체를 이 흐름으로 다시 만드는 건 오늘 범위 밖이라 기존 한 번에
   // 받는 payload/검증은 그대로 둔다 — 대신 job 진행 상태(jobState)만
   // 리셋해서, 이후 analyze/tasks polling이 실제로 이어지게 한다.
+  //
+  // productName/productCode(오늘 계약 보정): 실제 JobCreate/Job 스키마의
+  // productName은 이 엔드포인트 자체에서는 optional이고 analyze 게이트에서
+  // 필수로 걸린다 — 하지만 이 mock은 targetCountry/targetLanguage처럼
+  // "N1 폼이 이미 필수로 받는 값"을 이 시점에 함께 검증하는 기존 패턴을
+  // 그대로 따른다(다른 필드와 다른 규칙을 새로 만들지 않는다). productCode는
+  // 실제 계약대로 선택값이라 없어도 통과시키고 null로 저장한다.
   // ──────────────────────────────────────────
   http.post('/jobs', async ({ request }) => {
     const body = await request.json() as Record<string, unknown>;
 
     if (!body.brandId) return badRequest('brandId가 필요합니다');
+    if (!body.productName) return badRequest('productName이 필요합니다');
     if (!body.targetCountry) return badRequest('targetCountry가 필요합니다');
     if (!body.targetLanguage) return badRequest('targetLanguage가 필요합니다');
     if (!Array.isArray(body.sourceImages) || body.sourceImages.length === 0) {
@@ -235,6 +243,11 @@ export const handlers = [
     // 새 job 생성 시 이전 브라우저 테스트에서 진행됐던 mock 상태를 다시 시작
     // (리셋 기준값이 N2인 이유는 위 jobState 선언부 주석 참고)
     resetJobState();
+    jobState = {
+      ...jobState,
+      productName: body.productName as string,
+      productCode: (body.productCode as string | undefined) ?? null,
+    };
 
     return HttpResponse.json({ jobId: MOCK_JOB_ID }, { status: 201 });
   }),

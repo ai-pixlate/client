@@ -2,9 +2,9 @@ import { test, expect, type Page, type Locator } from '@playwright/test';
 
 import { MOCK_BRAND_ID, MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 
-// N1 combobox 순서: 국가 → 언어 → 규제 분류 → 카테고리
-// 현재 label이 select에 htmlFor/id로 연결돼 있지 않아 getByLabel을 쓸 수 없다.
-// 각 select의 첫 번째 유효한(placeholder 다음) option을 선택한다.
+// N1 combobox 순서(Figma 525:3023 반영 후): 국가 → 언어 → 카테고리 → 규제
+// 분류 — 우측 패널에서 카테고리/규제 분류 자리가 서로 바뀌었다. 각 select의
+// 첫 번째 유효한(placeholder 다음) option을 선택하므로 순서 자체는 영향 없다.
 async function selectFirstValidOption(page: Page, index: number) {
   const select = page.getByRole('combobox').nth(index);
   const firstRealOption = select.locator('option').nth(1);
@@ -47,19 +47,20 @@ test('N1에서 N5 검수 화면까지 기본 작업 흐름을 완료한다', asy
   // ── N1: 진입 ──────────────────────────────────────────────
   await page.goto(`/jobs/new?brandId=${MOCK_BRAND_ID}`);
 
-  await expect(page.getByText('신규 작업')).toBeVisible();
+  await expect(page.getByText('이미지 입력')).toBeVisible();
   await expect(page.getByRole('combobox')).toHaveCount(4);
-  await expect(page.getByLabel('이미지 추가')).toBeAttached();
-  await expect(page.getByRole('button', { name: '다음 →' })).toBeVisible();
+  await expect(page.getByLabel('파일 선택')).toBeAttached();
+  await expect(page.getByRole('button', { name: '다음' })).toBeVisible();
 
-  // ── N1: 필수값 입력 (실제 사용자 순서: 국가 → 언어 → 규제 분류 → 카테고리) ──
+  // ── N1: 필수값 입력 (실제 사용자 순서: 국가 → 언어 → 카테고리 → 규제 분류) ──
+  await page.getByPlaceholder('상품 이름을 입력해주세요').fill('E2E 테스트 상품');
   await selectFirstValidOption(page, 0); // 국가
   await selectFirstValidOption(page, 1); // 언어
-  await selectFirstValidOption(page, 2); // 규제 분류
-  await selectFirstValidOption(page, 3); // 카테고리
+  await selectFirstValidOption(page, 2); // 카테고리
+  await selectFirstValidOption(page, 3); // 규제 분류
 
   // ── N1: 이미지 업로드 ─────────────────────────────────────
-  await page.getByLabel('이미지 추가').setInputFiles({
+  await page.getByLabel('파일 선택').setInputFiles({
     name: 'e2e-test.png',
     mimeType: 'image/png',
     buffer: Buffer.from(TINY_PNG_BASE64, 'base64'),
@@ -67,7 +68,7 @@ test('N1에서 N5 검수 화면까지 기본 작업 흐름을 완료한다', asy
   await expect(page.getByText('e2e-test.png')).toBeVisible();
 
   // ── N1: 제출 ──────────────────────────────────────────────
-  await page.getByRole('button', { name: '다음 →' }).click();
+  await page.getByRole('button', { name: '다음' }).click();
   await expect(page).toHaveURL(new RegExp(`/jobs/${MOCK_JOB_ID}$`));
 
   // ── N2: 분석 진행 화면 ────────────────────────────────────

@@ -28,19 +28,20 @@ const TINY_PNG_BASE64 =
 async function reachN3(page: Page): Promise<void> {
   await page.goto(`/jobs/new?brandId=${MOCK_BRAND_ID}`);
 
+  await page.getByPlaceholder('상품 이름을 입력해주세요').fill('E2E 테스트 상품');
   await selectFirstValidOption(page, 0);
   await selectFirstValidOption(page, 1);
   await selectFirstValidOption(page, 2);
   await selectFirstValidOption(page, 3);
 
-  await page.getByLabel('이미지 추가').setInputFiles({
+  await page.getByLabel('파일 선택').setInputFiles({
     name: 'e2e-test.png',
     mimeType: 'image/png',
     buffer: Buffer.from(TINY_PNG_BASE64, 'base64'),
   });
   await expect(page.getByText('e2e-test.png')).toBeVisible();
 
-  await page.getByRole('button', { name: '다음 →' }).click();
+  await page.getByRole('button', { name: '다음' }).click();
   await expect(page).toHaveURL(new RegExp(`/jobs/${MOCK_JOB_ID}$`));
 
   await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 8_000 });

@@ -130,6 +130,14 @@ export interface SourceImageMeta {
 
 export interface CreateJobRequest {
   brandId: string;
+  /**
+   * 실제 OpenAPI(JobCreate/Job)와 필드명이 같다(productName/productCode) —
+   * 스키마 자체는 둘 다 optional이지만(analyze 게이트에서 productName 필수
+   * 검증), N1 폼은 이미 productName을 필수로 받으므로 이 요청 타입에서는
+   * required로 좁힌다(targetCountry 등 다른 필드와 같은 방식).
+   */
+  productName: string;
+  productCode?: string;
   sourceImages: SourceImageMeta[];
   targetCountry: string;
   targetLanguage: string;
