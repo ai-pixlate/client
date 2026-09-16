@@ -128,11 +128,14 @@ test('N1에서 N5 검수 화면까지 기본 작업 흐름을 완료한다', asy
   await expect(page.locator('[data-testid="n5-before-after-slider"]')).toHaveCount(0);
   await expect(page.locator('[data-testid="n5-compare-stack"]')).toHaveCount(0);
 
-  // ── 현재 flow 종료 조건: N5 → N6 미구현 확인 ────────────────
+  // ── 현재 flow 종료 조건: N5 확정 버튼 표시 확인 ────────────────
+  // 6단계부터 「저장하러 가기」가 실제 confirm(N5→N6)에 연결됐다. 이 fixture
+  // job은 항상 include section이 1개 이상이라 버튼은 기본적으로 활성 상태다
+  // — 실제 confirm→N6 전환 자체는 e2e/n5-confirm.spec.ts에서 검증한다(이
+  // 테스트의 범위는 이름 그대로 N1→N5까지).
   const finishButton = page.getByRole('button', { name: '저장하러 가기' });
   await expect(finishButton).toBeVisible();
-  await expect(finishButton).toBeDisabled();
-  await expect(finishButton).toHaveAttribute('title', 'N6 저장 화면은 아직 구현되지 않았습니다.');
+  await expect(finishButton).toBeEnabled();
 
   expect(pageErrors).toEqual([]);
 });

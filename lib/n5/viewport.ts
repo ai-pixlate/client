@@ -31,20 +31,10 @@ export interface Size {
   height: number;
 }
 
-export interface RenderedPreviewLike {
-  /** render_image_key 기반 렌더 결과 URL. 렌더가 아직 없으면 null(v3.4.1, 금요일 백 회신). */
-  renderedUrl: string | null;
-}
-
-/**
- * 「번역 후」 토글을 비활성화해야 하는지 판단한다.
- * render_image_key(=renderedUrl)가 없는 sourceImage가 하나라도 있으면
- * 비활성화한다 — 별도 render_failed류 신호를 새로 만들지 않고 renderedUrl의
- * null 여부만으로 판단한다.
- */
-export function hasMissingRenderedPreview(sourceImages: RenderedPreviewLike[]): boolean {
-  return sourceImages.some((image) => image.renderedUrl === null);
-}
+// 「번역 후」 토글 비활성화 판단(구 hasMissingRenderedPreview, PreviewSourceImage[]
+// 기준)은 5단계에서 제거했다 — 호출부가 없었고(3단계부터 죽은 코드), 같은 판단은
+// 이제 app/jobs/[jobId]/_components/n5/n5-view.tsx가 PreviewViewModel.sections의
+// render.status로 직접 계산한다(lib/n5/adapter.ts의 resolveSectionRenderState 결과).
 
 // ─────────────────────────────────────────────────────────────────
 // zoom clamp
