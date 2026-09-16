@@ -18,6 +18,17 @@ import { parseZoomPercentInput, type N5ViewMode } from '@/lib/n5/viewport';
 // style만 서로 교환된다. sliding pill/moving indicator/track 배경은 쓰지
 // 않는다(스펙 정정, 9일차). 비교 슬라이더(Before/After)도 쓰지 않는다.
 //
+// 3단계(Figma get_design_context, node 544:3168 "N5 검수"): 실제 버튼 모양은
+// rounded-full pill이 아니라 rounded-[4px] 사각 버튼이고(공유 Button 컴포넌트,
+// Style=Secondary·Size=SM), gap-[10px]·px-[12px]·py-[8px]다 — 모양은 Figma
+// 그대로 반영했다. 다만 버튼 문구는 Figma가 "번역문"/"원문"으로 보여주는데,
+// 같은 프레임의 바로 아래(번역근거 카드)에 "뭐 넣자고 했는데 기억이 안남"이라는
+// 디자이너의 미완성 placeholder 문구가 그대로 남아 있어 — 이 프레임 자체가
+// 문구 확정 전 상태일 가능성이 있다. 기존 "번역 후"/"번역 전"은 v3.4.1
+// 요구사항 반영·e2e 커버리지가 있는 확정 결정이라 이번 단계에서는 유지하고,
+// 문구 불일치는 사용자 확인이 필요한 항목으로 보고에 남긴다(임의로 두 쪽 중
+// 하나를 조용히 덮어쓰지 않는다).
+//
 // render_image_key가 null(렌더 미완료, 금요일 백 회신)이면 「번역 후」 버튼을
 // disabled 처리하고 안내 문구를 보여준다(10일차) — 별도 render_failed류
 // 신호는 쓰지 않고, 상위가 renderedUrl null 여부만으로 판단해
@@ -48,7 +59,7 @@ export function ViewModeToggle({
 }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <div data-testid="n5-view-mode-toggle" className="flex items-center gap-2">
+      <div data-testid="n5-view-mode-toggle" className="flex items-center gap-[10px]">
         {VIEW_MODE_OPTIONS.map((option) => {
           const isActive = mode === option.mode;
           const isDisabled = option.mode === 'translated' && translatedDisabled;
@@ -61,7 +72,7 @@ export function ViewModeToggle({
               disabled={isDisabled}
               title={isDisabled ? RENDER_MISSING_MESSAGE : undefined}
               onClick={() => onChange(option.mode)}
-              className={`rounded-full border px-4 py-1.5 text-[12px] tracking-[-0.02em] transition-colors duration-150 ${
+              className={`rounded-[4px] border px-3 py-2 text-[12px] tracking-[-0.02em] transition-colors duration-150 ${
                 isDisabled
                   ? 'cursor-not-allowed border-transparent bg-[#f5f5f5] text-[#ccc]'
                   : isActive
@@ -113,17 +124,22 @@ export function ZoomControls({
     setDraft(null);
   };
 
+  // 7단계 — Figma(544:3168 재확인)의 zoom control은 배경/그림자/pill이 없는
+  // 평평한 한 줄(gap-[8px], text-[#999], tracking-[-0.48px])이다. 이전엔
+  // rounded-full 흰 배경 + shadow pill이었다 — 그 스타일은 이번 프레임에서
+  // 확인되지 않아 걷어냈다. 입력 가능한 배율(input)과 클릭 확대/축소 기능은
+  // 그대로 유지한다(11일차 확정 기능, 디자인만 바꾼다).
   return (
     <div
       data-testid="n5-zoom-controls"
-      className="flex items-center gap-2 rounded-full bg-white px-3 py-1.5 text-[12px] text-[#171717] shadow-[2px_2px_24px_0px_rgba(0,0,0,0.06)]"
+      className="flex items-center gap-2 text-[12px] font-light tracking-[-0.02em] text-[#999]"
     >
       <button
         type="button"
         data-testid="n5-zoom-out"
         aria-label="축소"
         onClick={onZoomOut}
-        className="flex size-4 items-center justify-center text-[#999] hover:text-[#171717]"
+        className="flex size-3 items-center justify-center hover:text-[#171717]"
       >
         −
       </button>
@@ -142,7 +158,7 @@ export function ZoomControls({
               e.currentTarget.blur();
             }
           }}
-          className="w-9 border-none bg-transparent text-center tabular-nums outline-none"
+          className="w-7 border-none bg-transparent text-center tabular-nums outline-none"
         />
         <span aria-hidden="true">%</span>
       </span>
@@ -151,7 +167,7 @@ export function ZoomControls({
         data-testid="n5-zoom-in"
         aria-label="확대"
         onClick={onZoomIn}
-        className="flex size-4 items-center justify-center text-[#999] hover:text-[#171717]"
+        className="flex size-3 items-center justify-center hover:text-[#171717]"
       >
         +
       </button>

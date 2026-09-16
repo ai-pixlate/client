@@ -2,11 +2,15 @@
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
-import { createJob, getJobStatus, advanceJobStep, getSections, updateSectionBucket, getReview, getPreview, updateTranslation, getJobResult, saveJob } from '@/lib/api/pixate';
-import type { UpdateSectionBucketRequest, UpdateTranslationRequest, CreateJobRequest, SectionsResponse } from '@/lib/api/types';
+import { createJob, getJobStatus, advanceJobStep, getSections, updateSectionBucket, getJob, getN5Blocks, getN5Preview, patchN5Block, getN5Tasks, confirmN5, getJobResult, saveJob } from '@/lib/api/pixate';
+import type { UpdateSectionBucketRequest, CreateJobRequest, SectionsResponse } from '@/lib/api/types';
+import type { ApiBlockPatch, ApiConfirmRequest, ApiTextBlock } from '@/lib/api/n5-schema';
 
 // ─────────────────────────────────────────────
 // Query Keys
+//
+// 5단계: 구 /review·/preview(v3.4.1) 전용이던 review/preview 키는 호출부
+// (useReviewQuery/usePreviewQuery)와 함께 제거했다 — N5는 n5Blocks/n5Preview만 쓴다.
 // ─────────────────────────────────────────────
 
 export const pixateKeys = {
@@ -15,9 +19,10 @@ export const pixateKeys = {
   status: (jobId: string, scenario?: string) =>
     ['pixate', 'job', jobId, 'status', scenario] as const,
   sections: (jobId: string) => ['pixate', 'job', jobId, 'sections'] as const,
-  review: (jobId: string) => ['pixate', 'job', jobId, 'review'] as const,
-  preview: (jobId: string) => ['pixate', 'job', jobId, 'preview'] as const,
   result: (jobId: string) => ['pixate', 'job', jobId, 'result'] as const,
+  n5Blocks: (jobId: string) => ['pixate', 'job', jobId, 'n5-blocks'] as const,
+  n5Preview: (jobId: string) => ['pixate', 'job', jobId, 'n5-preview'] as const,
+  n5Task: (jobId: string, taskId: number | null) => ['pixate', 'job', jobId, 'n5-task', taskId] as const,
 };
 
 // ─────────────────────────────────────────────
@@ -94,41 +99,101 @@ export function useSectionsQuery(jobId: string) {
 }
 
 // ─────────────────────────────────────────────
-// N5 — 검수 데이터 조회
+// N5 — 실제 계약(v3.4.2) 조회.
 // ─────────────────────────────────────────────
 
-export function useReviewQuery(jobId: string) {
+/** N5 헤더(targetCountry/targetLanguage)용 job 조회 */
+export function useJobQuery(jobId: string) {
   return useQuery({
-    queryKey: pixateKeys.review(jobId),
-    queryFn: () => getReview(jobId),
+    queryKey: pixateKeys.job(jobId),
+    queryFn: () => getJob(jobId),
+    enabled: !!jobId,
+  });
+}
+
+export function useN5BlocksQuery(jobId: string) {
+  return useQuery({
+    queryKey: pixateKeys.n5Blocks(jobId),
+    queryFn: () => getN5Blocks(jobId),
+    enabled: !!jobId,
+  });
+}
+
+export function useN5PreviewQuery(jobId: string) {
+  return useQuery({
+    queryKey: pixateKeys.n5Preview(jobId),
+    queryFn: () => getN5Preview(jobId),
     enabled: !!jobId,
   });
 }
 
 // ─────────────────────────────────────────────
-// N5 — 좌측 뷰어 preview 조회 (API-CFM-03, /review와 별개 엔드포인트)
+// N5 — 번역문 수정 (실제 계약 v3.4.2, PATCH /jobs/:jobId/blocks/:blockId)
+//
+// 4단계: revision 낙관적 잠금 + 재렌더 task polling. 성공 시 서버가 반환한
+// block(트랜스1·revision·charCount — overflow/autoAdjust는 재렌더 전이라
+// 아직 이전 값)으로 n5Blocks 캐시를 갱신한다. 409는 여기서 처리하지 않는다 —
+// mutateAsync가 그대로 던지는 에러(ApiRequestError)를 호출부(TranslationEditor)가
+// 잡아 lib/n5/adapter.ts의 parseApiError/isRevisionConflict로 판별한다.
 // ─────────────────────────────────────────────
 
-export function usePreviewQuery(jobId: string) {
-  return useQuery({
-    queryKey: pixateKeys.preview(jobId),
-    queryFn: () => getPreview(jobId),
-    enabled: !!jobId,
-  });
-}
-
-// ─────────────────────────────────────────────
-// N5 — 번역문 수정
-// ─────────────────────────────────────────────
-
-export function useUpdateTranslationMutation(jobId: string) {
+export function usePatchN5BlockMutation(jobId: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ blockId, payload }: { blockId: string; payload: UpdateTranslationRequest }) =>
-      updateTranslation(blockId, payload),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: pixateKeys.review(jobId) });
+    mutationFn: ({ blockId, payload }: { blockId: number; payload: ApiBlockPatch }) =>
+      patchN5Block(jobId, blockId, payload),
+    onSuccess: (response) => {
+      const updated = response.block;
+      if (!updated) return;
+      queryClient.setQueryData<ApiTextBlock[]>(pixateKeys.n5Blocks(jobId), (prev) =>
+        prev ? prev.map((b) => (b.id === updated.id ? updated : b)) : prev,
+      );
+    },
+  });
+}
+
+/**
+ * rerenderTaskId를 2초 간격으로 polling한다. taskId가 null이면 비활성화된다
+ * (요청 접수 전이거나 이미 종료됨). done/failed/cancelled에 도달하면 polling을
+ * 멈춘다 — 호출부가 그 상태를 보고 blocks/preview invalidate 여부를 판단한다.
+ */
+export function useN5TaskStatusQuery(jobId: string, taskId: number | null) {
+  return useQuery({
+    queryKey: pixateKeys.n5Task(jobId, taskId),
+    queryFn: () => getN5Tasks(jobId),
+    enabled: taskId != null,
+    refetchInterval: (query) => {
+      if (taskId == null) return false;
+      const item = query.state.data?.items?.find((i) => i.taskId === taskId);
+      if (!item) return 2000; // 아직 목록에 반영 전 — 계속 polling
+      return item.status === 'done' || item.status === 'failed' || item.status === 'cancelled'
+        ? false
+        : 2000;
+    },
+  });
+}
+
+// ─────────────────────────────────────────────
+// N5 — 검수 확정 = N5→N6 (실제 계약 v3.4.2, POST /jobs/:jobId/confirm)
+//
+// 6단계: 성공(200)이면 서버가 준 최신 Job으로 job 캐시를 갱신하고, 화면
+// 전환을 구동하는 구 status polling 캐시(pixateKeys.status)도 함께
+// invalidate한다 — page.tsx가 currentStep으로 N5/N6 뷰를 고르는 기존 라우팅
+// 메커니즘(useAdvanceJobStepMutation과 동일 패턴)을 그대로 재사용하기 위함이다.
+// 409(ALL_SECTIONS_EXCLUDED/INVALID_STATE)는 여기서 삼키지 않는다 —
+// mutateAsync가 던지는 ApiRequestError를 호출부(N5Panel)가 lib/n5/adapter.ts의
+// isAllSectionsExcludedError/isInvalidStateError로 판별한다.
+// ─────────────────────────────────────────────
+
+export function useConfirmN5Mutation(jobId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (payload: ApiConfirmRequest) => confirmN5(jobId, payload),
+    onSuccess: (job) => {
+      queryClient.setQueryData(pixateKeys.job(jobId), job);
+      queryClient.invalidateQueries({ queryKey: pixateKeys.status(jobId) });
     },
   });
 }
@@ -165,7 +230,7 @@ export function useSaveJobMutation(jobId: string) {
 //
 // N3 drag & drop에서 즉시 settle 애니메이션을 보여주기 위해
 // sections 캐시를 optimistic하게 갱신한다. 실패 시 이전 값으로 롤백한다.
-// N5(review 캐시)는 이 낙관적 갱신의 영향을 받지 않는다 — 별도 query key.
+// N5(n5Blocks/n5Preview 캐시)는 이 낙관적 갱신의 영향을 받지 않는다 — 별도 query key.
 // ─────────────────────────────────────────────
 
 export function useUpdateSectionBucketMutation(jobId: string) {

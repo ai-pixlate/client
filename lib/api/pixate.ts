@@ -3,14 +3,11 @@ import type {
   SectionsResponse,
   SectionBucket,
   UpdateSectionBucketRequest,
-  ReviewResponse,
-  PreviewResponse,
-  UpdateTranslationRequest,
-  UpdateTranslationResponse,
   JobResultResponse,
   CreateJobRequest,
   CreateJobResponse,
 } from '@/lib/api/types';
+import type { ApiBlockPatch, ApiBlockPatchResponse, ApiConfirmRequest, ApiJob, ApiJobTaskStatus, ApiReviewPreview, ApiTextBlock } from '@/lib/api/n5-schema';
 
 // ─────────────────────────────────────────────
 // 공통 fetch 헬퍼
@@ -29,6 +26,24 @@ async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
     throw new Error(message);
   }
   return res.json() as Promise<T>;
+}
+
+/**
+ * 공통 apiFetch는 실패 시 body를 버리고 문자열 message만 남긴다 — N1~N6의
+ * 다른 엔드포인트는 그걸로 충분했지만, N5 PATCH block의 409
+ * REVISION_CONFLICT는 error.details.current(최신 block)를 꺼내 써야 한다.
+ * apiFetch 자체를 공통으로 바꾸지 않고, 이 호출 하나에서만 raw body를
+ * 보존하는 에러를 던진다(lib/n5/adapter.ts의 parseApiError가 이 body를 받는다).
+ */
+export class ApiRequestError extends Error {
+  status: number;
+  body: unknown;
+  constructor(status: number, body: unknown) {
+    super(`API error: ${status}`);
+    this.name = 'ApiRequestError';
+    this.status = status;
+    this.body = body;
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -92,32 +107,73 @@ export function updateSectionBucket(
 }
 
 // ─────────────────────────────────────────────
-// N5 — 검수
+// N5 — 실제 계약(v3.4.2) 조회. 경로는 실제 backend 상대경로를 그대로 쓴다 —
+// mock 전용 `/api/...` 프리픽스를 추가하지 않는다(CLAUDE.md 엔드포인트 규칙).
+//
+// 5단계: 구 /api/jobs/:jobId/review·preview(getReview/getPreview, v3.4.1
+// 계약)와 구 번역 수정(updateTranslation, /api/text-blocks/:blockId/translation)은
+// 실제 호출부가 전혀 남아있지 않음을 확인하고 제거했다 — N5는 이제 아래
+// 함수들만 쓴다.
 // ─────────────────────────────────────────────
 
-export function getReview(jobId: string): Promise<ReviewResponse> {
-  return apiFetch<ReviewResponse>(`/api/jobs/${jobId}/review`);
+/** N5 헤더(targetCountry/targetLanguage)용 job 조회 (API-JOB-03) */
+export function getJob(jobId: string): Promise<ApiJob> {
+  return apiFetch<ApiJob>(`/jobs/${jobId}`);
+}
+
+/** 섹션 단위 lazy-load. sectionId 생략 시 job 전체 블록을 받는다 (API-CFM-01) */
+export function getN5Blocks(jobId: string, sectionId?: number): Promise<ApiTextBlock[]> {
+  const url =
+    sectionId != null
+      ? `/jobs/${jobId}/blocks?sectionId=${sectionId}`
+      : `/jobs/${jobId}/blocks`;
+  return apiFetch<ApiTextBlock[]>(url);
+}
+
+/** N5 좌측 뷰어 다폭 프리뷰 조회 (API-CFM-03, v3.4.2) */
+export function getN5Preview(jobId: string): Promise<ApiReviewPreview> {
+  return apiFetch<ApiReviewPreview>(`/jobs/${jobId}/preview`);
 }
 
 /**
- * N5 좌측 뷰어 전용 preview 조회 (API-CFM-03). /review와 별개 엔드포인트다.
+ * 번역문 수정 (API-CFM-02, v3.4.2). revision 낙관적 잠금 — 불일치 시 409
+ * REVISION_CONFLICT(ApiRequestError로 던짐, body에 원본 Error 응답 보존).
  */
-export function getPreview(jobId: string): Promise<PreviewResponse> {
-  return apiFetch<PreviewResponse>(`/api/jobs/${jobId}/preview`);
+export async function patchN5Block(
+  jobId: string,
+  blockId: number,
+  payload: ApiBlockPatch,
+): Promise<ApiBlockPatchResponse> {
+  const res = await fetch(`/jobs/${jobId}/blocks/${blockId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) throw new ApiRequestError(res.status, body);
+  return body as ApiBlockPatchResponse;
 }
 
-export function updateTranslation(
-  blockId: string,
-  payload: UpdateTranslationRequest,
-): Promise<UpdateTranslationResponse> {
-  return apiFetch<UpdateTranslationResponse>(
-    `/api/text-blocks/${blockId}/translation`,
-    {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    },
-  );
+/** N5 재렌더 task 상태 조회 (API-JOB-05). rerenderTaskId를 items[]에서 찾아 polling한다. */
+export function getN5Tasks(jobId: string): Promise<ApiJobTaskStatus> {
+  return apiFetch<ApiJobTaskStatus>(`/jobs/${jobId}/tasks`);
+}
+
+/**
+ * N5 검수 확정 = N5→N6 (API-CFM-04, v3.4.2). 전 섹션 제외면 409
+ * ALL_SECTIONS_EXCLUDED, acknowledgedWarnings가 서버의 현재 미해결 경고
+ * 집합과 다르면 409 INVALID_STATE(+현재 경고 목록) — 둘 다 ApiRequestError로
+ * 던져 error.code로 분기할 수 있게 한다(patchN5Block과 같은 패턴).
+ */
+export async function confirmN5(jobId: string, payload: ApiConfirmRequest): Promise<ApiJob> {
+  const res = await fetch(`/jobs/${jobId}/confirm`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) throw new ApiRequestError(res.status, body);
+  return body as ApiJob;
 }
 
 // ─────────────────────────────────────────────
