@@ -1,24 +1,17 @@
 import { http, HttpResponse } from 'msw';
 
 import type {
-  JobStatusResponse,
   JobCurrentStep,
-  JobDbStatus,
   SectionBucket,
 } from '@/lib/api/types';
 import {
   MOCK_JOB_ID,
-  mockN2ProcessingStatus,
-  mockN2VerdictStatus,
-  mockN4ProcessingStatus,
-  mockN4RenderingStatus,
-  mockN4PartialFailureStatus,
-  mockN6RenderingStatus,
   mockSectionsResponse,
   mockJobResultResponse,
 } from '@/lib/mock-api/fixtures';
 import { mockN5Job, mockN5Blocks, mockN5PreviewSections, buildMockN5Preview } from '@/lib/mock-api/n5-fixtures';
 import type { ApiJob, ApiJobAsyncTaskItem, ApiTextBlock } from '@/lib/api/n5-schema';
+import type { ApiAcceptedTask } from '@/lib/api/job-schema';
 
 // ─────────────────────────────────────────────
 // Mock 인메모리 상태
@@ -49,10 +42,36 @@ const sectionState = new Map<string, {
 );
 
 /**
- * N5 실제 계약(v3.4.2) job 상태. mockN5Job(원본 fixture) 직접 변경을 막기
- * 위해 복제해 관리한다 — confirm 성공 시 이 값만 갱신한다.
+ * job 진행 상태(N1~N6 공용, ApiJob 그대로). mockN5Job(원본 fixture)이 가진
+ * productName/brandId/targetCountry 등 N5 표시용 필드는 그대로 씨드하되,
+ * currentStep/userFacingStatus/status만 "방금 분석이 시작된" 값으로 덮어써서
+ * 시작한다 — mockN5Job 원본은 N5 화면을 독립적으로 만들던 시절 currentStep을
+ * 'N5'로 고정해 뒀던 값이라, 그대로 쓰면 새 job이 생성되자마자 이미 N5에
+ * 있는 것처럼 보인다(N1→N6 전체 경로를 검증하려는 오늘 작업과 모순).
+ * analyze/sections-proceed/confirm 성공 시 이 값만 갱신한다 — N3(구
+ * mockJobState)와 N5(구 n5JobState) 각자 따로 있던 진행 상태를 오늘 하나로
+ * 합쳤다(같은 job의 currentStep이 두 소스에서 다르게 답하는 걸 막기 위함).
+ *
+ * N1('/jobs/new')에서 '/jobs/:jobId'로의 첫 진입은 Next dev 서버가 실제
+ * full page load를 낸다(해당 동적 라우트를 그 세션에서 처음 컴파일할 때의
+ * dev 전용 동작 — 실측: page.on('load')가 실제로 두 번째 발생한다). 그
+ * 순간 MSW Service Worker의 모듈(top-level let 전부, jobState 포함)이
+ * 다시 초기화되므로, POST /jobs/:jobId/analyze가 이미 성공시킨 N2 전환이
+ * 그 직후 지워질 수 있다. 그래서 리셋 기준값 자체를 draft/N1이 아니라
+ * "분석 시작 직후"(N2/processing/analyzing)로 잡는다 — analyze 엔드포인트
+ * 자체는 그대로 두고 N1이 실제로 호출한다(멱등하게 같은 값을 다시 확정할
+ * 뿐이니 무해하다). 이 개발 서버 특성과 무관한 실제 배포 환경에서는
+ * analyze 호출이 여전히 유일한 N1→N2 전환 경로다.
  */
-let n5JobState: ApiJob = { ...mockN5Job };
+let jobState: ApiJob = { ...mockN5Job, currentStep: 'N2', userFacingStatus: 'analyzing', status: 'processing' };
+
+/** N2/N4 진행 polling 카운터. jobState.currentStep이 N2/N4로 바뀔 때마다 0으로 리셋한다. */
+let jobProcessingPollCount = 0;
+
+function resetJobState() {
+  jobState = { ...mockN5Job, currentStep: 'N2', userFacingStatus: 'analyzing', status: 'processing' };
+  jobProcessingPollCount = 0;
+}
 
 /**
  * N5 실제 계약(v3.4.2) 블록 상태. mockN5Blocks(원본 fixture) 직접 변경을
@@ -126,66 +145,44 @@ function n5RevisionConflictResponse(current: ApiTextBlock) {
 let jobResultSaved = false;
 
 /**
- * Mock job 진행 상태 (2일차: N2/N4 polling auto-progress용)
- *
- * scenario 쿼리 없이 GET /status를 호출할 때만 이 상태를 진행시킵니다.
- * scenario가 명시된 요청은 읽기 전용 디버그 조회이므로 이 상태를 건드리지 않습니다.
+ * N2/N4 진행 중(processing) 단계에서 다음 단계로 넘어갈 조건 — 오늘(N1→N6
+ * happy path) 작업. 실제 처리 로직은 만들지 않는다 — GET /jobs/:jobId/tasks를
+ * 2초 polling할 때마다 poll count만 늘려 pending→running→done을 흉내내고,
+ * done이 되는 시점에 jobState.currentStep을 다음 단계로 바꾼다. 중간 실패·재시도
+ * 시나리오는 오늘 범위가 아니라 failedCount/items는 항상 0/[]이다.
  */
-let mockJobState: { currentStep: JobCurrentStep; dbStatus: JobDbStatus; pollCount: number } = {
-  currentStep: 'N2',
-  dbStatus: 'processing',
-  pollCount: 0,
+const PROCESSING_STAGES: Record<'N2' | 'N4', { key: string; label: string; next: ApiJob['currentStep']; nextUserFacingStatus: ApiJob['userFacingStatus'] }> = {
+  N2: { key: 'analyze', label: '이미지를 분석하고 있습니다', next: 'N3', nextUserFacingStatus: 'section_review' },
+  N4: { key: 'translate', label: '번역과 이미지 처리를 진행하고 있습니다', next: 'N5', nextUserFacingStatus: 'reviewing' },
 };
 
-function resetMockJobState() {
-  mockJobState = { currentStep: 'N2', dbStatus: 'processing', pollCount: 0 };
-}
-
 /**
- * scenario 없는 기본 GET /status 요청에 대해 mockJobState를 한 단계 진행시키고
- * 그에 맞는 JobStatusResponse를 반환합니다.
+ * jobState가 N2/N4(진행 중 단계)면 poll count를 진행시키고, 2번째 poll에서
+ * done 처리와 함께 다음 단계로 전환한다(jobState를 직접 갱신). N1/N3/N5/N6처럼
+ * 사용자 조작을 기다리는 단계면 아무것도 진행시키지 않고 빈 진행 정보를
+ * 반환한다 — GET /jobs/:jobId/tasks 핸들러가 이 결과를 응답 조립에 쓴다.
  */
-function advanceMockJobState(): JobStatusResponse {
-  if (mockJobState.currentStep === 'N2') {
-    if (mockJobState.pollCount === 0) {
-      mockJobState.pollCount += 1;
-      return mockN2ProcessingStatus;
-    }
-    if (mockJobState.pollCount === 1) {
-      mockJobState.pollCount += 1;
-      return mockN2VerdictStatus;
-    }
-    mockJobState = { currentStep: 'N3', dbStatus: 'review', pollCount: 0 };
-    return { ...mockN2VerdictStatus, currentStep: 'N3', dbStatus: 'review', progress: 100 };
+function advanceJobProcessing(): {
+  progress: number;
+  total: number;
+  done: number;
+  stages: { key: string; label: string; status: 'running' | 'done' }[];
+} {
+  const step = jobState.currentStep;
+  if (step !== 'N2' && step !== 'N4') {
+    return { progress: 1, total: 0, done: 0, stages: [] };
   }
 
-  if (mockJobState.currentStep === 'N4') {
-    if (mockJobState.pollCount === 0) {
-      mockJobState.pollCount += 1;
-      return mockN4ProcessingStatus;
-    }
-    if (mockJobState.pollCount === 1) {
-      mockJobState.pollCount += 1;
-      return mockN4RenderingStatus;
-    }
-    mockJobState = { currentStep: 'N5', dbStatus: 'review', pollCount: 0 };
-    return { ...mockN4RenderingStatus, currentStep: 'N5', dbStatus: 'review', progress: 100 };
+  const stage = PROCESSING_STAGES[step];
+  jobProcessingPollCount += 1;
+
+  if (jobProcessingPollCount < 2) {
+    return { progress: 0.5, total: 1, done: 0, stages: [{ ...stage, status: 'running' }] };
   }
 
-  // N3: 다음 단계 진입 API가 없어 현재 상태를 그대로 반환한다. N5→N6은 이
-  // 함수가 아니라 POST /jobs/:jobId/confirm 핸들러(아래, 6단계)가 mockJobState를
-  // 직접 갱신한다 — 이 분기는 그 갱신 결과(currentStep: 'N6')를 그대로
-  // 돌려주는 경로로만 통과한다.
-  return {
-    jobId: MOCK_JOB_ID,
-    currentStep: mockJobState.currentStep,
-    dbStatus: mockJobState.dbStatus,
-    progress: 100,
-    processingSubStep: '',
-    activeSubSteps: [],
-    hasFailed: false,
-    failedItems: [],
-  };
+  jobState = { ...jobState, currentStep: stage.next, userFacingStatus: stage.nextUserFacingStatus, status: 'review' };
+  jobProcessingPollCount = 0;
+  return { progress: 1, total: 1, done: 1, stages: [{ ...stage, status: 'done' }] };
 }
 
 // ─────────────────────────────────────────────
@@ -207,18 +204,25 @@ function badRequest(message: string) {
 
 export const handlers = [
 
-  // ── health (기존 유지)
+  // ── health (기존 유지). N1→N6 화면 흐름과 무관한 MSW 자체 점검용
+  // 엔드포인트라 오늘 /api 경로 정리 대상이 아니다 — 실제 OpenAPI에도 대응
+  // 경로가 없다(mock 전용 유틸리티).
   http.get('/api/mock/health', () => {
     return HttpResponse.json({ ok: true, source: 'msw' });
   }),
 
   // ──────────────────────────────────────────
-  // N1 — job 생성
+  // N1 — job 생성. 경로는 실제 OpenAPI(POST /jobs)로 맞췄다 — mock 전용
+  // /api 프리픽스를 쓰지 않는다(오늘 경로 정리, 이전엔 /api/jobs였다).
   //
   // Mock에서는 항상 MOCK_JOB_ID를 반환합니다.
-  // 실제 백엔드는 별도 job ID를 생성합니다.
+  // 실제 백엔드는 별도 job ID를 생성합니다. 실제 계약(JobCreate)은 brandId만
+  // 받는 draft-first 흐름(POST /jobs → PATCH로 N1값 세팅 → analyze)이지만,
+  // N1 화면 자체를 이 흐름으로 다시 만드는 건 오늘 범위 밖이라 기존 한 번에
+  // 받는 payload/검증은 그대로 둔다 — 대신 job 진행 상태(jobState)만
+  // 리셋해서, 이후 analyze/tasks polling이 실제로 이어지게 한다.
   // ──────────────────────────────────────────
-  http.post('/api/jobs', async ({ request }) => {
+  http.post('/jobs', async ({ request }) => {
     const body = await request.json() as Record<string, unknown>;
 
     if (!body.brandId) return badRequest('brandId가 필요합니다');
@@ -228,80 +232,38 @@ export const handlers = [
       return badRequest('sourceImages가 1개 이상 필요합니다');
     }
 
-    // 새 job 생성 시 이전 브라우저 테스트에서 진행됐던 mock 상태를 N2부터 다시 시작
-    resetMockJobState();
+    // 새 job 생성 시 이전 브라우저 테스트에서 진행됐던 mock 상태를 다시 시작
+    // (리셋 기준값이 N2인 이유는 위 jobState 선언부 주석 참고)
+    resetJobState();
 
     return HttpResponse.json({ jobId: MOCK_JOB_ID }, { status: 201 });
   }),
 
   // ──────────────────────────────────────────
-  // N2 / N4 / N6 공용 — 비동기 처리 상태 polling
+  // N1 → N2 — 분석 시작 (API-ANL-01)
   //
-  // scenario 없음                 mockJobState 기준 auto-progress (2일차)
-  // ?scenario=n2               N2 섹션 분해 중 (읽기 전용 디버그)
-  // ?scenario=n2-verdict       N2 규제 판정 중 (읽기 전용 디버그)
-  // ?scenario=n4               N4 번역·인페인팅 병렬 처리 중 (읽기 전용 디버그)
-  // ?scenario=n4-partial-failure  N4 부분 실패 (blk_04 타임아웃, 읽기 전용 디버그)
-  // ?scenario=n6-rendering     N6 렌더링 중 (읽기 전용 디버그)
+  // draft 생성만으로 분석이 자동 시작되지 않는다 — 이 호출이 게이트다
+  // (CLAUDE.md 원칙). 큐 등록까지만 202로 수락하고, 진행은 GET
+  // /jobs/:jobId/tasks 폴링(아래)이 맡는다.
   // ──────────────────────────────────────────
-  http.get('/api/jobs/:jobId/status', ({ params, request }) => {
+  http.post('/jobs/:jobId/analyze', ({ params }) => {
     const jobId = params.jobId as string;
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
 
-    const scenario = new URL(request.url).searchParams.get('scenario');
+    jobState = { ...jobState, currentStep: 'N2', userFacingStatus: 'analyzing', status: 'processing' };
+    jobProcessingPollCount = 0;
 
-    // scenario가 명시된 요청은 수동 fixture 조회용 — mockJobState에 영향 없음
-    if (scenario) {
-      const scenarioMap: Record<string, JobStatusResponse> = {
-        'n2':                 mockN2ProcessingStatus,
-        'n2-verdict':         mockN2VerdictStatus,
-        'n4':                 mockN4ProcessingStatus,
-        'n4-partial-failure': mockN4PartialFailureStatus,
-        'n6-rendering':       mockN6RenderingStatus,
-      };
-      return HttpResponse.json(scenarioMap[scenario] ?? mockN2ProcessingStatus);
-    }
-
-    // scenario 없는 기본 요청 — mockJobState를 진행시키며 응답
-    return HttpResponse.json(advanceMockJobState());
+    const response: ApiAcceptedTask = { jobId: jobState.id, taskId: 1 };
+    return HttpResponse.json(response, { status: 202 });
   }),
 
   // ──────────────────────────────────────────
-  // N3 → N4 — 다음 단계 진입
-  //
-  // Mock 검증용 임시 계약입니다. 백엔드 확정 API가 아닙니다.
-  // 이 엔드포인트는 N3 → N4 전환만 지원합니다. N5 → N6은 이 임시 계약이
-  // 아니라 실제 v3.4.2 계약인 POST /jobs/:jobId/confirm(아래, 6단계)으로
-  // 처리합니다 — 별도 엔드포인트라 여기서 다루지 않습니다.
-  // ──────────────────────────────────────────
-  http.post('/api/jobs/:jobId/status/advance', ({ params }) => {
-    const jobId = params.jobId as string;
-    if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
-
-    if (mockJobState.currentStep !== 'N3') {
-      return badRequest('현재 단계에서는 다음 단계로 진행할 수 없습니다.');
-    }
-
-    mockJobState = { currentStep: 'N4', dbStatus: 'processing', pollCount: 0 };
-
-    const response: JobStatusResponse = {
-      jobId: MOCK_JOB_ID,
-      currentStep: 'N4',
-      dbStatus: 'processing',
-      progress: 0,
-      processingSubStep: 'translation',
-      activeSubSteps: [],
-      hasFailed: false,
-      failedItems: [],
-    };
-    return HttpResponse.json(response);
-  }),
-
-  // ──────────────────────────────────────────
-  // N3 — 섹션 목록 조회
+  // N3 — 섹션 목록 조회. 경로는 실제 OpenAPI(GET /jobs/:jobId/sections)로
+  // 맞췄다(오늘 경로 정리, 이전엔 /api/jobs/:jobId/sections였다) — PATCH는
+  // 이미 실제 경로를 쓰고 있었다.
   // 현재 인메모리 bucket 상태를 반영해 반환합니다.
   // ──────────────────────────────────────────
-  http.get('/api/jobs/:jobId/sections', ({ params }) => {
+  http.get('/jobs/:jobId/sections', ({ params }) => {
     const jobId = params.jobId as string;
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
 
@@ -321,7 +283,7 @@ export const handlers = [
   // Request: { "bucket": "include" | "exclude" }
   // exclusionReason은 사용자 입력 필드가 아닙니다.
   // excludedStage는 클라이언트가 보내지 않는다 — 서버가 현재 job 단계
-  // (mockJobState.currentStep)를 기준으로 판단한다.
+  // (jobState.currentStep)를 기준으로 판단한다.
   // ──────────────────────────────────────────
   http.patch('/jobs/:jobId/sections/:sectionId', async ({ params, request }) => {
     const jobId = params.jobId as string;
@@ -337,9 +299,44 @@ export const handlers = [
       return badRequest("bucket은 'include' 또는 'exclude'이어야 합니다");
     }
 
-    const excludedStage = bucket === 'include' ? null : mockJobState.currentStep;
+    const excludedStage = bucket === 'include' ? null : (jobState.currentStep as JobCurrentStep | undefined) ?? null;
     sectionState.set(sectionId, { bucket, exclusionReason: null, excludedStage });
     return HttpResponse.json({ sectionId, bucket, excludedStage });
+  }),
+
+  // ──────────────────────────────────────────
+  // N3 → N4 — 이대로 진행 (API-SEC-04)
+  //
+  // 전 섹션 제외면 409 ALL_SECTIONS_EXCLUDED(N5 confirm과 같은 규칙, N3 자신의
+  // sectionState 기준). include≥1이면 큐 등록(202) — 진행은 GET
+  // /jobs/:jobId/tasks 폴링이 맡는다. 구 /api/jobs/:jobId/status/advance
+  // (mock 임시 계약)를 대체한다.
+  // ──────────────────────────────────────────
+  http.post('/jobs/:jobId/sections/proceed', ({ params }) => {
+    const jobId = params.jobId as string;
+    if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
+
+    const hasIncludedSection = [...sectionState.values()].some((s) => s.bucket === 'include');
+    if (!hasIncludedSection) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'ALL_SECTIONS_EXCLUDED',
+            message: '모든 섹션이 제외되어 진행할 수 없습니다. 최소 1개 섹션을 포함해야 합니다.',
+            retryable: false,
+            details: null,
+            traceId: `mock-trace-${Date.now()}`,
+          },
+        },
+        { status: 409 },
+      );
+    }
+
+    jobState = { ...jobState, currentStep: 'N4', userFacingStatus: 'translating', status: 'processing' };
+    jobProcessingPollCount = 0;
+
+    const response: ApiAcceptedTask = { jobId: jobState.id, taskId: 2 };
+    return HttpResponse.json(response, { status: 202 });
   }),
 
   // ──────────────────────────────────────────
@@ -354,7 +351,7 @@ export const handlers = [
   http.get('/jobs/:jobId', ({ params }) => {
     const jobId = params.jobId as string;
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
-    return HttpResponse.json(n5JobState);
+    return HttpResponse.json(jobState);
   }),
 
   http.get('/jobs/:jobId/blocks', ({ params, request }) => {
@@ -412,7 +409,14 @@ export const handlers = [
   }),
 
   // ──────────────────────────────────────────
-  // N5 — 재렌더 task polling (API-JOB-05)
+  // 비동기 큐 상태 polling (API-JOB-05, x-screen: N2·N4·N6)
+  //
+  // 오늘(N1→N6 happy path)부터 이 엔드포인트가 두 가지 진행을 함께 나른다 —
+  // ① N5 block 재렌더 task(n5TaskState, PATCH /blocks/:id가 등록. 기존 로직
+  // 그대로 유지) ② N2/N4 job 단계 진행(advanceJobProcessing, jobState.currentStep이
+  // N2/N4일 때만 poll count를 늘려 다음 단계로 전환). 응답 wrapper의
+  // currentStep/userFacingStatus/jobStatus는 항상 jobState를 그대로 반영한다 —
+  // FE(page.tsx)가 이 값으로만 다음 화면을 고른다(별도 계산 없음).
   // ──────────────────────────────────────────
   http.get('/jobs/:jobId/tasks', ({ params }) => {
     const jobId = params.jobId as string;
@@ -485,15 +489,18 @@ export const handlers = [
       });
     }
 
+    const jobProgress = advanceJobProcessing();
+    const hasN5Items = items.length > 0;
+
     return HttpResponse.json({
-      jobStatus: 'review',
-      currentStep: 'N5',
-      userFacingStatus: 'reviewing',
-      progress: items.length === 0 ? 1 : items.filter((i) => i.status === 'done').length / items.length,
-      total: items.length,
-      done: items.filter((i) => i.status === 'done').length,
+      jobStatus: jobState.status,
+      currentStep: jobState.currentStep,
+      userFacingStatus: jobState.userFacingStatus,
+      progress: hasN5Items ? items.filter((i) => i.status === 'done').length / items.length : jobProgress.progress,
+      total: hasN5Items ? items.length : jobProgress.total,
+      done: hasN5Items ? items.filter((i) => i.status === 'done').length : jobProgress.done,
       failedCount: items.filter((i) => i.status === 'failed').length,
-      stages: [],
+      stages: jobProgress.stages,
       items,
     });
   }),
@@ -503,9 +510,8 @@ export const handlers = [
   //
   // 전 섹션 제외 차단(409 ALL_SECTIONS_EXCLUDED), acknowledgedWarnings가
   // 현재 미해결 경고 집합과 다르면 409 INVALID_STATE(+details.warnings에
-  // 현재 목록). 성공하면 job이 N6로 넘어간다 — 화면 전환은 구 status
-  // polling(mockJobState)에 기대므로 그것도 함께 갱신한다(다른 화면들이
-  // 이미 그 메커니즘으로 전환하고 있어, 여기서만 새로 만들지 않는다).
+  // 현재 목록). 성공하면 job이 N6로 넘어간다 — 화면 전환을 구동하는
+  // jobState를 여기서 직접 갱신한다(GET /jobs/:jobId/tasks가 그대로 반영).
   // ──────────────────────────────────────────
   http.post('/jobs/:jobId/confirm', async ({ params, request }) => {
     const jobId = params.jobId as string;
@@ -547,19 +553,24 @@ export const handlers = [
       );
     }
 
-    // job→N6. dbStatus/userFacingStatus는 "review 완료, 렌더 자동 등록" 상태로
-    // 옮긴다 — 렌더 진행 자체는 N6 화면의 JOB-05 폴링 몫이라 여기서 task를
-    // 새로 만들지 않는다. N6 화면 자체는 이미 구현돼 있다(getJobResult 기준,
-    // 아래 GET /api/jobs/:jobId/result) — 여기서 만들지 않는 건 그 렌더
-    // task 등록/폴링뿐이며, 6단계 범위 밖이라 손대지 않았다.
-    n5JobState = { ...n5JobState, currentStep: 'N6', status: 'processing', userFacingStatus: 'done' };
-    mockJobState = { currentStep: 'N6', dbStatus: 'processing', pollCount: 0 };
+    // job→N6, status=review(스펙: "job→review/N6"). userFacingStatus는 'done'이
+    // 아니라 'reviewing'으로 둔다 — 렌더 task는 confirm 트랜잭션에서 서버가
+    // 자동 등록하지만 아직 완료된 게 아니다(서버가 안 준 완료 상태를 mock이
+    // 임의로 만들지 않는다). 실제 렌더 진행 polling·완료 시 'done' 전환은
+    // N6 5단계 구현(오늘 범위 밖)에서 다룬다. N6 화면 자체는 이미 구현돼
+    // 있다(getJobResult 기준, 아래 GET /api/jobs/:jobId/result) — 그 결과
+    // 데이터는 이 jobState와 별개로 항상 완료 상태를 보여준다.
+    jobState = { ...jobState, currentStep: 'N6', status: 'review', userFacingStatus: 'reviewing' };
 
-    return HttpResponse.json(n5JobState);
+    return HttpResponse.json(jobState);
   }),
 
   // ──────────────────────────────────────────
-  // N6 — 최종 결과 조회
+  // N6 — 최종 결과 조회. mock 전용 /api placeholder를 아직 그대로 둔다 —
+  // N6 화면 자체를 만들지 않는 오늘(경로 정리) 범위 밖이다. TODO(N6 구현
+  // 시): 실제 계약은 GET /jobs/:jobId/deliverables(+ /validation)이고
+  // 응답 shape가 이 JobResultResponse와 전혀 다르다 — 경로만 바꿔 끼울 수
+  // 없고 화면·adapter를 함께 다시 만들어야 한다.
   // ──────────────────────────────────────────
   http.get('/api/jobs/:jobId/result', ({ params }) => {
     const jobId = params.jobId as string;
@@ -569,7 +580,9 @@ export const handlers = [
   }),
 
   // ──────────────────────────────────────────
-  // N6 — 보관함 저장
+  // N6 — 보관함 저장. 위와 같은 이유로 /api placeholder 유지. TODO(N6 구현
+  // 시): 실제 계약은 POST /jobs/:jobId/save이고 응답이 LibraryCard다({saved:
+  // boolean}이 아니다).
   // 호출 후 GET result에서 saved: true가 반환됩니다.
   // ──────────────────────────────────────────
   http.post('/api/jobs/:jobId/save', ({ params }) => {

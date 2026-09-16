@@ -1,5 +1,4 @@
 import type {
-  JobStatusResponse,
   SectionsResponse,
   SectionBucket,
   UpdateSectionBucketRequest,
@@ -8,6 +7,7 @@ import type {
   CreateJobResponse,
 } from '@/lib/api/types';
 import type { ApiBlockPatch, ApiBlockPatchResponse, ApiConfirmRequest, ApiJob, ApiJobTaskStatus, ApiReviewPreview, ApiTextBlock } from '@/lib/api/n5-schema';
+import type { ApiAcceptedTask } from '@/lib/api/job-schema';
 
 // ─────────────────────────────────────────────
 // 공통 fetch 헬퍼
@@ -47,11 +47,16 @@ export class ApiRequestError extends Error {
 }
 
 // ─────────────────────────────────────────────
-// N1 — job 생성
+// N1 — job 생성. 경로는 실제 OpenAPI(POST /jobs)로 맞췄다 — mock 전용 /api
+// 프리픽스를 쓰지 않는다. 요청/응답 payload 자체(CreateJobRequest/
+// CreateJobResponse, 실제 JobCreate/Job 계약과 다름 — 예: targetCountry 등
+// N1 값을 한 번에 같이 받음)는 오늘(경로 정리) 범위가 아니라 그대로 뒀다 —
+// N1을 draft-first(brandId만 POST → PATCH로 나머지 세팅) 흐름으로 다시
+// 만드는 건 더 큰 화면 작업이라 별도로 다룬다.
 // ─────────────────────────────────────────────
 
 export function createJob(payload: CreateJobRequest): Promise<CreateJobResponse> {
-  return apiFetch<CreateJobResponse>('/api/jobs', {
+  return apiFetch<CreateJobResponse>('/jobs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -59,31 +64,12 @@ export function createJob(payload: CreateJobRequest): Promise<CreateJobResponse>
 }
 
 // ─────────────────────────────────────────────
-// N2 / N4 / N6 — 처리 상태 polling
+// N1 → N2 — 분석 시작
 // ─────────────────────────────────────────────
 
-/**
- * scenario는 MSW Mock 테스트 전용입니다. 실제 백엔드 사용 시 생략합니다.
- * 사용 가능한 값: 'n2' | 'n2-verdict' | 'n4' | 'n4-partial-failure' | 'n6-rendering'
- */
-export function getJobStatus(
-  jobId: string,
-  scenario?: string,
-): Promise<JobStatusResponse> {
-  const url = scenario
-    ? `/api/jobs/${jobId}/status?scenario=${encodeURIComponent(scenario)}`
-    : `/api/jobs/${jobId}/status`;
-  return apiFetch<JobStatusResponse>(url);
-}
-
-/**
- * 다음 단계로 진행 (현재는 N3 → N4만 지원).
- * Mock 검증용 임시 계약입니다. 백엔드 확정 API가 아닙니다.
- */
-export function advanceJobStep(jobId: string): Promise<JobStatusResponse> {
-  return apiFetch<JobStatusResponse>(`/api/jobs/${jobId}/status/advance`, {
-    method: 'POST',
-  });
+/** 분석 시작 = N1 완료 → N2 진입 (API-ANL-01). draft 생성만으로 자동 시작되지 않는다 — 이 호출이 게이트다. */
+export function analyzeJob(jobId: string): Promise<ApiAcceptedTask> {
+  return apiFetch<ApiAcceptedTask>(`/jobs/${jobId}/analyze`, { method: 'POST' });
 }
 
 // ─────────────────────────────────────────────
@@ -91,7 +77,7 @@ export function advanceJobStep(jobId: string): Promise<JobStatusResponse> {
 // ─────────────────────────────────────────────
 
 export function getSections(jobId: string): Promise<SectionsResponse> {
-  return apiFetch<SectionsResponse>(`/api/jobs/${jobId}/sections`);
+  return apiFetch<SectionsResponse>(`/jobs/${jobId}/sections`);
 }
 
 export function updateSectionBucket(
@@ -104,6 +90,11 @@ export function updateSectionBucket(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
+}
+
+/** 이대로 진행 = N3 → N4 (API-SEC-04). 전 섹션 제외면 409 ALL_SECTIONS_EXCLUDED. */
+export function proceedSections(jobId: string): Promise<ApiAcceptedTask> {
+  return apiFetch<ApiAcceptedTask>(`/jobs/${jobId}/sections/proceed`, { method: 'POST' });
 }
 
 // ─────────────────────────────────────────────
@@ -154,8 +145,13 @@ export async function patchN5Block(
   return body as ApiBlockPatchResponse;
 }
 
-/** N5 재렌더 task 상태 조회 (API-JOB-05). rerenderTaskId를 items[]에서 찾아 polling한다. */
-export function getN5Tasks(jobId: string): Promise<ApiJobTaskStatus> {
+/**
+ * job 비동기 큐 상태 조회 (API-JOB-05, x-screen: N2·N4·N6). N5의
+ * rerenderTaskId polling(items[]에서 찾음)과 N2/N4/N6 페이지 레벨 진행 polling
+ * (currentStep/userFacingStatus)이 이 하나의 엔드포인트를 공유한다 — 오늘(N1→N6
+ * happy path) 작업에서 job 전체 공용으로 승격했다.
+ */
+export function getJobTasks(jobId: string): Promise<ApiJobTaskStatus> {
   return apiFetch<ApiJobTaskStatus>(`/jobs/${jobId}/tasks`);
 }
 
@@ -177,7 +173,15 @@ export async function confirmN5(jobId: string, payload: ApiConfirmRequest): Prom
 }
 
 // ─────────────────────────────────────────────
-// N6 — 결과 / 저장
+// N6 — 결과 / 저장. 아직 mock 전용 /api placeholder다 — N6 화면 자체를
+// 만들지 않는 오늘(경로 정리) 범위에서는 그대로 둔다.
+//
+// TODO(N6 구현 시 실제 계약으로 교체):
+//   getJobResult → GET /jobs/{jobId}/deliverables(+ /validation) — 응답
+//     shape(JobResultResponse)이 DeliverableList/ValidationDetail[]와 전혀
+//     다르다.
+//   saveJob → POST /jobs/{jobId}/save — 응답 shape({saved:boolean})이
+//     LibraryCard와 전혀 다르다.
 // ─────────────────────────────────────────────
 
 export function getJobResult(jobId: string): Promise<JobResultResponse> {

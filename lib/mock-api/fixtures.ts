@@ -9,7 +9,6 @@
  */
 
 import type {
-  JobStatusResponse,
   SectionsResponse,
   Section,
   JobResultResponse,
@@ -45,34 +44,11 @@ const SECTION_IMG_EXTREME_TALL = '/mock/n3/section-212x8000.png';
 const SECTION_IMG_830x3225 = '/mock/n3/section-830x3225.png';
 const SECTION_IMG_800x220 = '/mock/n3/section-800x220.png';
 
-// ─────────────────────────────────────────────
-// N2 — 분석 중 상태
-// ─────────────────────────────────────────────
-
-/** N2: 섹션 자동 분해 진행 중 */
-export const mockN2ProcessingStatus: JobStatusResponse = {
-  jobId: MOCK_JOB_ID,
-  currentStep: 'N2',
-  dbStatus: 'processing',
-  progress: 55,
-  // TODO: 백엔드 파이프라인 명세 확정 후 N2 ProcessingSubStep union으로 좁힐 것
-  processingSubStep: 'section_decomposition',
-  activeSubSteps: [],
-  hasFailed: false,
-  failedItems: [],
-};
-
-/** N2: OCR 완료, 규제 판정 진행 중 */
-export const mockN2VerdictStatus: JobStatusResponse = {
-  jobId: MOCK_JOB_ID,
-  currentStep: 'N2',
-  dbStatus: 'processing',
-  progress: 85,
-  processingSubStep: 'verdict',
-  activeSubSteps: [],
-  hasFailed: false,
-  failedItems: [],
-};
+// N2 — 분석 중 상태(구 GET /api/jobs/:jobId/status 전용 mockN2ProcessingStatus/
+// mockN2VerdictStatus)는 오늘(N1→N6 happy path) 작업에서 실제 계약인 GET
+// /jobs/:jobId/tasks(JobTaskStatus) 기반 진행으로 교체하며 제거했다 —
+// lib/msw/handlers.ts의 advanceJobProcessing()이 고정 fixture 대신 poll count로
+// 그 자리를 대신한다.
 
 // ─────────────────────────────────────────────
 // N3 — 섹션 목록
@@ -356,64 +332,10 @@ export const mockN3VerdictContractSections: Section[] = [
   },
 ];
 
-// ─────────────────────────────────────────────
-// N4 — 번역 / 인페인팅 처리 중
-// ─────────────────────────────────────────────
-
-/** N4: 정상 처리 중 (인페인팅 + 번역 병렬) */
-export const mockN4ProcessingStatus: JobStatusResponse = {
-  jobId: MOCK_JOB_ID,
-  currentStep: 'N4',
-  dbStatus: 'processing',
-  progress: 63,
-  // TODO: 백엔드 파이프라인 명세 확정 후 N4 ProcessingSubStep union으로 좁힐 것
-  processingSubStep: 'translation',
-  activeSubSteps: ['inpainting', 'translation'],
-  hasFailed: false,
-  failedItems: [],
-};
-
-/** N4: 인페인팅 + 번역 완료, 렌더링 진행 중 (2일차 auto-progress 2번째 응답용) */
-export const mockN4RenderingStatus: JobStatusResponse = {
-  jobId: MOCK_JOB_ID,
-  currentStep: 'N4',
-  dbStatus: 'processing',
-  progress: 90,
-  processingSubStep: 'render',
-  activeSubSteps: ['render'],
-  hasFailed: false,
-  failedItems: [],
-};
-
-/** N6: 렌더링 진행 중 (handler의 'n6-rendering' scenario용 최소 fixture) */
-export const mockN6RenderingStatus: JobStatusResponse = {
-  jobId: MOCK_JOB_ID,
-  currentStep: 'N6',
-  dbStatus: 'processing',
-  progress: 80,
-  processingSubStep: 'render',
-  activeSubSteps: ['render'],
-  hasFailed: false,
-  failedItems: [],
-};
-
-/** N4: 부분 실패 케이스 — textBlock 1개 번역 타임아웃 */
-export const mockN4PartialFailureStatus: JobStatusResponse = {
-  jobId: MOCK_JOB_ID,
-  currentStep: 'N4',
-  dbStatus: 'processing',
-  progress: 90,
-  processingSubStep: 'render',
-  activeSubSteps: ['render'],
-  hasFailed: false, // 전체 실패가 아니라 부분 실패이므로 false
-  failedItems: [
-    {
-      id: 'blk_04',
-      type: 'textBlock',
-      reason: 'TRANSLATION_TIMEOUT',
-    },
-  ],
-};
+// N4/N6 — 처리 중 상태(구 mockN4ProcessingStatus/mockN4RenderingStatus/
+// mockN6RenderingStatus/mockN4PartialFailureStatus)도 위 N2 fixture와 같은
+// 이유로 오늘 제거했다 — GET /jobs/:jobId/tasks 기반 진행으로 대체됐다.
+// 중간 실패/재시도 시나리오(부분 실패 포함)는 오늘 작업 범위가 아니다.
 
 // N5 — 검수(구 /review·/preview, v3.4.1 계약)는 3단계부터 lib/mock-api/n5-fixtures.ts의
 // 실제 계약(v3.4.2, GET /jobs/{jobId}/blocks·/preview)으로 대체됐다. 이 fixture

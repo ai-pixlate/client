@@ -3,7 +3,7 @@
 import { use, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
-import { useCreateJobMutation } from '@/lib/queries/pixate';
+import { useCreateJobMutation, useAnalyzeJobMutation } from '@/lib/queries/pixate';
 import type { ImageType } from '@/lib/api/types';
 
 // ─────────────────────────────────────────────────────────────────
@@ -86,7 +86,8 @@ export default function NewJobPage({
   const brandId = typeof rawBrandId === 'string' ? rawBrandId : '';
 
   const router = useRouter();
-  const mutation = useCreateJobMutation();
+  const createMutation = useCreateJobMutation();
+  const analyzeMutation = useAnalyzeJobMutation();
 
   // ── 폼 상태 ─────────────────────────────────────────────────────
   const [targetCountry, setTargetCountry] = useState('');
@@ -164,8 +165,14 @@ export default function NewJobPage({
     images.length > 0;
 
   // ── 제출 ────────────────────────────────────────────────────────
+  //
+  // 오늘(N1→N6 happy path): 생성과 분석 시작을 분리한다(CLAUDE.md 원칙 —
+  // 작업 생성만으로 분석이 자동 시작된다고 가정하지 않는다). createJob이
+  // 성공한 jobId로 analyzeJob을 이어 호출한 뒤에만 N2로 이동한다. 이 폼이
+  // 한 번에 보내는 입력값 payload 자체(실제 draft-first 다단계 계약과 다름)는
+  // 오늘 범위가 아니라 그대로 뒀다.
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!isValid) return;
 
     // 9월 MVP: 입력 유형 선택 UI는 12월 예정 — imageType은 'multi_section' 고정
@@ -175,8 +182,8 @@ export default function NewJobPage({
       imageType: 'multi_section' as ImageType,
     }));
 
-    mutation.mutate(
-      {
+    try {
+      const created = await createMutation.mutateAsync({
         brandId,
         targetCountry,
         targetLanguage,
@@ -185,13 +192,12 @@ export default function NewJobPage({
         displayCategory,
         keywords,
         sourceImages,
-      },
-      {
-        onSuccess: (data) => {
-          router.push(`/jobs/${data.jobId}`);
-        },
-      },
-    );
+      });
+      await analyzeMutation.mutateAsync(created.jobId);
+      router.push(`/jobs/${created.jobId}`);
+    } catch {
+      // createMutation/analyzeMutation의 isError·error가 그대로 하단 안내에 반영된다.
+    }
   };
 
   // ── 렌더링 ──────────────────────────────────────────────────────
@@ -539,15 +545,15 @@ export default function NewJobPage({
       {/* 하단 액션 바 — sticky */}
       <footer className="sticky bottom-0 border-t bg-white px-6 py-4 shadow-[0_-1px_4px_rgba(0,0,0,0.06)]">
         <div className="mx-auto flex max-w-2xl items-center justify-between gap-4">
-          {/* 에러 메시지 */}
-          {mutation.isError && (
+          {/* 에러 메시지 — 생성/분석 시작 둘 중 하나라도 실패하면 보여준다 */}
+          {(createMutation.isError || analyzeMutation.isError) && (
             <p className="flex-1 text-sm text-red-500">
-              {mutation.error instanceof Error
-                ? mutation.error.message
+              {(createMutation.error ?? analyzeMutation.error) instanceof Error
+                ? ((createMutation.error ?? analyzeMutation.error) as Error).message
                 : '오류가 발생했습니다. 다시 시도해 주세요.'}
             </p>
           )}
-          {!mutation.isError && (
+          {!createMutation.isError && !analyzeMutation.isError && (
             <p className="flex-1 text-sm text-gray-400">
               {!isValid ? '필수 항목을 모두 입력해 주세요.' : '모든 항목이 입력됐습니다.'}
             </p>
@@ -556,10 +562,10 @@ export default function NewJobPage({
           <button
             type="button"
             onClick={handleSubmit}
-            disabled={!isValid || mutation.isPending}
+            disabled={!isValid || createMutation.isPending || analyzeMutation.isPending}
             className="shrink-0 rounded-lg bg-blue-500 px-6 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-blue-600 active:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {mutation.isPending ? '생성 중...' : '다음 →'}
+            {createMutation.isPending || analyzeMutation.isPending ? '생성 중...' : '다음 →'}
           </button>
         </div>
       </footer>

@@ -2,7 +2,21 @@
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
-import { createJob, getJobStatus, advanceJobStep, getSections, updateSectionBucket, getJob, getN5Blocks, getN5Preview, patchN5Block, getN5Tasks, confirmN5, getJobResult, saveJob } from '@/lib/api/pixate';
+import {
+  createJob,
+  analyzeJob,
+  getSections,
+  updateSectionBucket,
+  proceedSections,
+  getJob,
+  getN5Blocks,
+  getN5Preview,
+  patchN5Block,
+  getJobTasks,
+  confirmN5,
+  getJobResult,
+  saveJob,
+} from '@/lib/api/pixate';
 import type { UpdateSectionBucketRequest, CreateJobRequest, SectionsResponse } from '@/lib/api/types';
 import type { ApiBlockPatch, ApiConfirmRequest, ApiTextBlock } from '@/lib/api/n5-schema';
 
@@ -11,13 +25,19 @@ import type { ApiBlockPatch, ApiConfirmRequest, ApiTextBlock } from '@/lib/api/n
 //
 // 5단계: 구 /review·/preview(v3.4.1) 전용이던 review/preview 키는 호출부
 // (useReviewQuery/usePreviewQuery)와 함께 제거했다 — N5는 n5Blocks/n5Preview만 쓴다.
+//
+// 오늘(N1→N6 happy path): 구 status 키(GET /api/jobs/:jobId/status, mockJobState
+// 기준)는 tasks 키(GET /jobs/:jobId/tasks, currentStep/userFacingStatus를 서버가
+// 그대로 내려줌)로 교체됐다 — page.tsx의 화면 분기도 이 키를 본다. n5Task는
+// N5 block 재렌더 task(rerenderTaskId 단건) 전용이라 별도 키로 남겨 둔다 — 같은
+// 엔드포인트를 부르지만 polling 중단 조건(특정 taskId 완료 vs currentStep 전환)이
+// 달라 캐시를 공유하면 두 refetchInterval이 서로의 조건을 밟는다.
 // ─────────────────────────────────────────────
 
 export const pixateKeys = {
   all: ['pixate'] as const,
   job: (jobId: string) => ['pixate', 'job', jobId] as const,
-  status: (jobId: string, scenario?: string) =>
-    ['pixate', 'job', jobId, 'status', scenario] as const,
+  tasks: (jobId: string) => ['pixate', 'job', jobId, 'tasks'] as const,
   sections: (jobId: string) => ['pixate', 'job', jobId, 'sections'] as const,
   result: (jobId: string) => ['pixate', 'job', jobId, 'result'] as const,
   n5Blocks: (jobId: string) => ['pixate', 'job', jobId, 'n5-blocks'] as const,
@@ -26,7 +46,13 @@ export const pixateKeys = {
 };
 
 // ─────────────────────────────────────────────
-// N1 — job 생성
+// N1 — job 생성 + 분석 시작
+//
+// CLAUDE.md 원칙: 작업 생성만으로 분석이 자동 시작되지 않는다 — 생성과 처리
+// 시작은 각 API 흐름을 따른다. useAnalyzeJobMutation은 jobId를 hook 생성
+// 시점이 아니라 mutate(jobId) 호출 시점에 받는다 — N1은 createJob이 성공해야
+// jobId를 알 수 있기 때문이다(다른 N3~N5 mutation처럼 jobId를 hook 인자로
+// 고정할 수 없다).
 // ─────────────────────────────────────────────
 
 export function useCreateJobMutation() {
@@ -35,53 +61,50 @@ export function useCreateJobMutation() {
   });
 }
 
-// ─────────────────────────────────────────────
-// N2 — 처리 상태 polling
-// ─────────────────────────────────────────────
-
-interface UseJobStatusQueryOptions {
-  /** MSW Mock 테스트 전용. 실제 백엔드 사용 시 생략 */
-  scenario?: string;
-  /** true일 때만 refetchInterval 활성화 */
-  polling?: boolean;
+export function useAnalyzeJobMutation() {
+  return useMutation({
+    mutationFn: (jobId: string) => analyzeJob(jobId),
+  });
 }
 
-export function useJobStatusQuery(
-  jobId: string,
-  options: UseJobStatusQueryOptions = {},
-) {
-  const { scenario, polling = false } = options;
+// ─────────────────────────────────────────────
+// N2 / N4 — 비동기 처리 진행 polling (API-JOB-05, GET /jobs/:jobId/tasks)
+//
+// 폴링 주기 2초(계약 그대로). currentStep이 N2·N4(진행 중 단계)가 아니면
+// polling을 멈춘다 — N1/N3/N5/N6은 사용자 조작을 기다리는 정적 단계라 계속
+// 찔러볼 필요가 없다. currentStep이 바뀌면(N2→N3, N4→N5) page.tsx가 그 값을
+// 보고 다음 화면을 그대로 렌더한다 — FE가 별도로 "다음 단계 진입"을 계산하지
+// 않는다(userFacingStatus/currentStep은 서버 응답 그대로 쓴다).
+// ─────────────────────────────────────────────
+
+export function useJobTasksQuery(jobId: string, options: { polling?: boolean } = {}) {
+  const { polling = false } = options;
 
   return useQuery({
-    queryKey: pixateKeys.status(jobId, scenario),
-    queryFn: () => getJobStatus(jobId, scenario),
+    queryKey: pixateKeys.tasks(jobId),
+    queryFn: () => getJobTasks(jobId),
     enabled: !!jobId,
     refetchInterval: polling
       ? (query) => {
           const data = query.state.data;
-          // 데이터가 없으면 첫 응답 대기 중이므로 계속 polling
-          if (!data) return 1_000;
-          // dbStatus가 processing이 아니면 (N2/N4 어느 단계든) polling 중단
-          if (data.dbStatus !== 'processing') return false;
-          return 1_000;
+          if (!data) return 2_000; // 첫 응답 대기 중
+          return data.currentStep === 'N2' || data.currentStep === 'N4' ? 2_000 : false;
         }
       : false,
   });
 }
 
 // ─────────────────────────────────────────────
-// N3 → N4 — 다음 단계 진입
-//
-// Mock 검증용 임시 계약입니다. 백엔드 확정 API가 아닙니다.
+// N3 → N4 — 이대로 진행 (API-SEC-04, POST /jobs/:jobId/sections/proceed)
 // ─────────────────────────────────────────────
 
-export function useAdvanceJobStepMutation(jobId: string) {
+export function useSectionProceedMutation(jobId: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: () => advanceJobStep(jobId),
+    mutationFn: () => proceedSections(jobId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: pixateKeys.status(jobId) });
+      queryClient.invalidateQueries({ queryKey: pixateKeys.tasks(jobId) });
     },
   });
 }
@@ -161,7 +184,7 @@ export function usePatchN5BlockMutation(jobId: string) {
 export function useN5TaskStatusQuery(jobId: string, taskId: number | null) {
   return useQuery({
     queryKey: pixateKeys.n5Task(jobId, taskId),
-    queryFn: () => getN5Tasks(jobId),
+    queryFn: () => getJobTasks(jobId),
     enabled: taskId != null,
     refetchInterval: (query) => {
       if (taskId == null) return false;
@@ -178,10 +201,10 @@ export function useN5TaskStatusQuery(jobId: string, taskId: number | null) {
 // N5 — 검수 확정 = N5→N6 (실제 계약 v3.4.2, POST /jobs/:jobId/confirm)
 //
 // 6단계: 성공(200)이면 서버가 준 최신 Job으로 job 캐시를 갱신하고, 화면
-// 전환을 구동하는 구 status polling 캐시(pixateKeys.status)도 함께
-// invalidate한다 — page.tsx가 currentStep으로 N5/N6 뷰를 고르는 기존 라우팅
-// 메커니즘(useAdvanceJobStepMutation과 동일 패턴)을 그대로 재사용하기 위함이다.
-// 409(ALL_SECTIONS_EXCLUDED/INVALID_STATE)는 여기서 삼키지 않는다 —
+// 전환을 구동하는 tasks 캐시(pixateKeys.tasks, 오늘부터 status 대신 이 키를
+// 쓴다)도 함께 invalidate한다 — page.tsx가 currentStep으로 N5/N6 뷰를 고르는
+// 라우팅 메커니즘(useSectionProceedMutation과 동일 패턴)을 그대로 재사용하기
+// 위함이다. 409(ALL_SECTIONS_EXCLUDED/INVALID_STATE)는 여기서 삼키지 않는다 —
 // mutateAsync가 던지는 ApiRequestError를 호출부(N5Panel)가 lib/n5/adapter.ts의
 // isAllSectionsExcludedError/isInvalidStateError로 판별한다.
 // ─────────────────────────────────────────────
@@ -193,7 +216,7 @@ export function useConfirmN5Mutation(jobId: string) {
     mutationFn: (payload: ApiConfirmRequest) => confirmN5(jobId, payload),
     onSuccess: (job) => {
       queryClient.setQueryData(pixateKeys.job(jobId), job);
-      queryClient.invalidateQueries({ queryKey: pixateKeys.status(jobId) });
+      queryClient.invalidateQueries({ queryKey: pixateKeys.tasks(jobId) });
     },
   });
 }
