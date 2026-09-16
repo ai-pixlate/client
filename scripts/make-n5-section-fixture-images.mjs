@@ -1,27 +1,20 @@
 /**
- * N5 Before/After 비교 viewer 검증용 test fixture 이미지 생성기.
+ * N5 실제 계약(v3.4.2, GET /jobs/:jobId/preview) mock용 섹션별 test fixture 이미지 생성기.
  *
  * 왜 필요한가:
- *   lib/mock-api/fixtures.ts의 ReviewSourceImage가 가리키던 /mock/*.jpg는
- *   실제 파일이 없어 항상 404였다. 그래서 이미지 두 레이어를 실제로 겹쳐
- *   그리고 clip-path로 자르는 동작, section.topOffset 기준 crop 위치가
- *   정확한지를 눈으로 검증할 방법이 없었다. 이 스크립트는 그 문제를 풀기
- *   위한 test/mock fixture만 만든다 — 실서비스 asset이 아니다.
+ *   v3.4.2 계약은 sourceImage 하나를 통째로 내려주고 FE가 backgroundPosition으로
+ *   섹션을 잘라 쓰던 이전 계약과 다르다 — 섹션마다 이미 own originalUrl/renderedUrl이
+ *   개별 발급된다(CLAUDE.md: "프리뷰는 섹션별 이미지로 구성한다. 전체 높이를 가진
+ *   단일 이미지 요소로 합성하지 않는다"). scripts/make-n5-fixture-images.mjs(sourceImage
+ *   단위, 구 계약 mock)는 건드리지 않고, 이 스크립트가 섹션 단위 이미지를 따로 만든다.
  *
- * scripts/make-ruler.mjs와 같은 방식(외부 이미지 라이브러리 없이 PNG를 직접
- * 인코딩)을 쓴다. 그 파일과 완전히 독립적으로 동작하도록 인코더를 그대로
- * 복제해 둔다 — Day8 범위가 아닌 기존 스크립트는 건드리지 않는다.
+ * scripts/make-n5-fixture-images.mjs와 같은 방식(외부 이미지 라이브러리 없이 PNG를
+ * 직접 인코딩)을 쓴다 — 인코더를 그대로 복제해 독립적으로 동작한다.
  *
- * 만드는 것 (총 4장, lib/mock-api/fixtures.ts의 preview 값과 반드시 맞춰야 한다):
- *   SRC_A: 400 x 3400 (원본 1000 x 8500, scale 0.4) — original / translated
- *   SRC_B: 400 x 2800 (원본 1000 x 7000, scale 0.4) — original / translated
+ * lib/mock-api/n5-fixtures.ts의 섹션 목록과 반드시 맞춰야 한다 (id/width/height/scale).
  *
- * 눈금은 "원본 이미지 좌표"를 라벨로 적는다 — section.topOffset이 가리키는
- * 지점이 실제로 그 위치를 crop해서 보여주는지 확인하기 위함이다.
- * original/translated는 배경색 + 문구로 한눈에 구분된다.
- *
- * 실행:  node scripts/make-n5-fixture-images.mjs (npm run make:n5-fixtures)
- * 출력:  public/mock/n5/detail-{a,b}-{original,translated}.png
+ * 실행:  node scripts/make-n5-section-fixture-images.mjs (npm run make:n5-section-fixtures)
+ * 출력:  public/mock/n5/sections/{id}-{original,translated}.png
  */
 
 import { deflateSync } from 'node:zlib';
@@ -30,9 +23,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const OUT_DIR = join(HERE, '..', 'public', 'mock', 'n5');
+const OUT_DIR = join(HERE, '..', 'public', 'mock', 'n5', 'sections');
 
-/* ---------- 5x7 비트맵 폰트 (숫자 + 라벨에 필요한 대문자만) ---------- */
+/* ---------- 5x7 비트맵 폰트 (make-n5-fixture-images.mjs와 동일, 독립 복제) ---------- */
 const GLYPHS = {
   '0': ['01110', '10001', '10011', '10101', '11001', '10001', '01110'],
   '1': ['00100', '01100', '00100', '00100', '00100', '00100', '01110'],
@@ -47,7 +40,6 @@ const GLYPHS = {
   x: ['00000', '10001', '01010', '00100', '01010', '10001', '00000'],
   ' ': ['00000', '00000', '00000', '00000', '00000', '00000', '00000'],
   A: ['01110', '10001', '10001', '11111', '10001', '10001', '10001'],
-  B: ['11110', '10001', '10001', '11110', '10001', '10001', '11110'],
   C: ['01111', '10000', '10000', '10000', '10000', '10000', '01111'],
   D: ['11110', '10001', '10001', '10001', '10001', '10001', '11110'],
   E: ['11111', '10000', '10000', '11110', '10000', '10000', '11111'],
@@ -102,7 +94,7 @@ function drawText(c, text, x, y, color, scale = 1) {
   }
 }
 
-/* ---------- PNG 인코딩 (scripts/make-ruler.mjs와 동일한 방식, 독립 복제) ---------- */
+/* ---------- PNG 인코딩 (make-n5-fixture-images.mjs와 동일, 독립 복제) ---------- */
 const CRC_TABLE = (() => {
   const t = new Int32Array(256);
   for (let n = 0; n < 256; n += 1) {
@@ -148,61 +140,44 @@ function encodePng(c) {
   ]);
 }
 
-/* ---------- N5 fixture 렌더링 ---------- */
+/* ---------- N5 section fixture 렌더링 ---------- */
 
 const ORIGINAL_BG = [0xdc, 0xe6, 0xf5]; // 옅은 블루그레이
-const TRANSLATED_BG = [0xe0, 0xf5, 0xe4]; // 옅은 그린 — 원본과 확실히 구분되는 톤
-const TICK_MINOR = [0xaa, 0xaa, 0xaa];
-const TICK_MAJOR = [0x22, 0x22, 0x22];
-const LABEL_COLOR = [0x1d, 0x4e, 0xd8];
+const TRANSLATED_BG = [0xe0, 0xf5, 0xe4]; // 옅은 그린
+const BORDER = [0xea, 0xea, 0xea];
+const LABEL_COLOR = [0x17, 0x17, 0x17];
 const WATERMARK_COLOR = [0x88, 0x88, 0x88];
 
-/**
- * @param width         preview 폭 (px) — lib/mock-api/fixtures.ts의 previewWidth와 일치해야 함
- * @param height        preview 높이 (px) — previewHeight와 일치해야 함
- * @param originalScale 눈금 라벨을 "원본 이미지 좌표"로 적기 위한 배율 (1/scaleY)
- * @param sourceLabel   예: "SRC A"
- * @param layerLabel    "ORIGINAL" | "TRANSLATED"
- * @param background    레이어 구분용 배경색
- */
-function makeFixtureImage(width, height, originalScale, sourceLabel, layerLabel, background) {
+function makeSectionImage(width, height, idLabel, layerLabel, background) {
   const c = createCanvas(width, height, background);
-  const minorStep = 40; // preview px 기준
-  const majorEvery = 5; // 5 * minorStep = 200px 마다 major (원본 좌표로는 500px 간격)
-
-  for (let y = 0, i = 0; y < height; y += minorStep, i += 1) {
-    const isMajor = i % majorEvery === 0;
-    fillRect(c, 0, y, width, isMajor ? 2 : 1, isMajor ? TICK_MAJOR : TICK_MINOR);
-    if (isMajor) {
-      drawText(c, String(Math.round(y * originalScale)), 6, y + 4, LABEL_COLOR, 2);
-    }
-  }
-
-  // 제목 워터마크 — 스크롤 중 아무 위치에서나 어떤 레이어/이미지인지 바로 알 수 있도록
-  // 800px마다 반복해서 그린다. SRC_A -> SRC_B 경계, before/after 색 전환을 눈으로 확인하는 용도.
-  const title = `${sourceLabel} ${layerLabel}`;
-  for (let y = 60; y < height; y += 800) {
-    drawText(c, title, 10, y, WATERMARK_COLOR, 3);
-  }
-
+  fillRect(c, 0, 0, width, 1, BORDER);
+  fillRect(c, 0, height - 1, width, 1, BORDER);
+  fillRect(c, 0, 0, 1, height, BORDER);
+  fillRect(c, width - 1, 0, 1, height, BORDER);
+  drawText(c, `SEC ${idLabel}`, 10, 10, LABEL_COLOR, 2);
+  drawText(c, layerLabel, 10, 30, WATERMARK_COLOR, 2);
+  drawText(c, `${width}x${height}`, 10, height - 20, WATERMARK_COLOR, 1);
   return c;
 }
 
-const scaleY = 0.4; // lib/mock-api/fixtures.ts와 반드시 일치
-const originalScale = 1 / scaleY; // 라벨을 원본 좌표로 표기하기 위한 배율(2.5)
-
+// scale=0.4 — lib/mock-api/n5-fixtures.ts와 반드시 일치.
 const targets = [
-  { file: 'detail-a-original.png', width: 400, height: 3400, source: 'SRC A', layer: 'ORIGINAL', bg: ORIGINAL_BG },
-  { file: 'detail-a-translated.png', width: 400, height: 3400, source: 'SRC A', layer: 'TRANSLATED', bg: TRANSLATED_BG },
-  { file: 'detail-b-original.png', width: 400, height: 2800, source: 'SRC B', layer: 'ORIGINAL', bg: ORIGINAL_BG },
-  { file: 'detail-b-translated.png', width: 400, height: 2800, source: 'SRC B', layer: 'TRANSLATED', bg: TRANSLATED_BG },
+  { id: 501, width: 400, height: 360, layers: ['original', 'translated'] },
+  { id: 502, width: 400, height: 280, layers: ['original', 'translated'] },
+  { id: 503, width: 400, height: 200, layers: ['original', 'translated'] }, // N5 제외 섹션 — 오버레이로 가려짐
+  { id: 504, width: 400, height: 240, layers: ['original'] }, // renderedUrl null(렌더 전) 시나리오 — translated 파일 없음
+  { id: 505, width: 360, height: 320, layers: ['original', 'translated'] }, // 다른 원본 폭 — align=left 검증
 ];
 
 mkdirSync(OUT_DIR, { recursive: true });
 
 for (const t of targets) {
-  const canvas = makeFixtureImage(t.width, t.height, originalScale, t.source, t.layer, t.bg);
-  const png = encodePng(canvas);
-  writeFileSync(join(OUT_DIR, t.file), png);
-  console.log(`${t.file}  ${t.width}x${t.height}  ${(png.length / 1024).toFixed(0)}KB`);
+  for (const layer of t.layers) {
+    const bg = layer === 'original' ? ORIGINAL_BG : TRANSLATED_BG;
+    const canvas = makeSectionImage(t.width, t.height, t.id, layer.toUpperCase(), bg);
+    const png = encodePng(canvas);
+    const file = `${t.id}-${layer}.png`;
+    writeFileSync(join(OUT_DIR, file), png);
+    console.log(`${file}  ${t.width}x${t.height}  ${(png.length / 1024).toFixed(1)}KB`);
+  }
 }

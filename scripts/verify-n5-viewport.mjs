@@ -19,7 +19,6 @@ import {
   computeCenteredPan,
   clampPan,
   parseZoomPercentInput,
-  hasMissingRenderedPreview,
 } from '../lib/n5/viewport.ts';
 
 let pass = 0;
@@ -123,19 +122,9 @@ console.log('\n[5] fit width / fit height — 원본 canvas size와 viewport siz
   check('fit 결과도 MIN_ZOOM으로 clamp', computeFitHeightScale(viewport, hugeCanvas) === MIN_ZOOM);
 }
 
-console.log('\n[6] hasMissingRenderedPreview — render_image_key(renderedUrl) null 여부로만 판단');
-{
-  const allRendered = [{ renderedUrl: '/a.png' }, { renderedUrl: '/b.png' }];
-  check('모두 렌더 완료면 false', hasMissingRenderedPreview(allRendered) === false);
-
-  const oneMissing = [{ renderedUrl: '/a.png' }, { renderedUrl: null }];
-  check(
-    '하나라도 renderedUrl이 null이면 true(별도 render_failed 신호 없이 null만으로 판단)',
-    hasMissingRenderedPreview(oneMissing) === true,
-  );
-
-  check('빈 배열이면 false', hasMissingRenderedPreview([]) === false);
-}
+// [6] hasMissingRenderedPreview(구 PreviewSourceImage[] 기준)는 5단계에서
+// lib/n5/viewport.ts와 함께 제거했다 — 같은 판단은 이제 n5-view.tsx가
+// PreviewViewModel.sections의 render.status로 직접 계산한다.
 
 console.log('\n[7] computeCenteredPan — Fit Width/Height 적용 후 캔버스를 viewport 정중앙에 둔다');
 {
