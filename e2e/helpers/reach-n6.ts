@@ -8,12 +8,13 @@ import { reachN5 } from './reach-n5';
  * N5 자체를 검증하는 assertion은 포함하지 않는다(그건 e2e/n5-confirm.spec.ts의 몫).
  *
  * confirm이 성공하면 서버가 N6 진입과 동시에 job 단위 render task를 자동
- * 등록한다(lib/msw/handlers.ts) — 헤딩이 뜨는 시점엔 이미 render task가
- * done으로 polling을 마친 뒤다(2초 polling 2회 안쪽, 10초 타임아웃 안에 끝난다).
+ * 등록한다(lib/msw/handlers.ts). "번역이 완료되었습니다." 문구(N6 완료 배너,
+ * Figma node 665:4065)는 render task가 done으로 polling을 마치고 deliverables
+ * 조회까지 끝난 뒤에만 뜬다(2초 polling 2회 안쪽, 10초 타임아웃 안에 끝난다).
  */
 export async function reachN6(page: Page): Promise<void> {
   await reachN5(page);
 
   await page.getByTestId('n5-confirm-button').click();
-  await expect(page.getByRole('heading', { name: '번역이 완료됐습니다' })).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText('번역이 완료되었습니다.')).toBeVisible({ timeout: 10_000 });
 }
