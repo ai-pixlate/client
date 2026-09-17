@@ -29,6 +29,20 @@ const LANGUAGE_OPTIONS = [
   { value: 'fr', label: '프랑스어' },
 ];
 
+/**
+ * 국가 → 추천 언어. N1 Figma 재정합(3단계) 조사 결과, 이 관계를 일반적으로
+ * 정의한 매핑(맵/API)이 백엔드·설계 문서 어디에도 없다 — 오히려
+ * docs/reference/pixate-frontend-data-spec.md는 "국가와 언어는 독립 축이며
+ * 자유 조합을 허용한다"고 명시한다. 실제 데이터로 뒷받침되는 조합은
+ * lib/mock-api/n5-fixtures.ts의 mockN5Job(targetCountry:'US',
+ * targetLanguage:'en')과 Figma(525:3023)가 직접 보여준 "미국→영어" 하나뿐이라,
+ * 그 조합만 담는다. JP→ja, CN→zh, DE→de, FR→fr 같은 나머지 조합은 실제
+ * 데이터 근거가 없어 임의로 추가하지 않았다 — 관계가 정의되면 이 맵에 추가한다.
+ */
+const COUNTRY_RECOMMENDED_LANGUAGE: Partial<Record<string, string>> = {
+  US: 'en',
+};
+
 // TODO: 백엔드 규제 분류 목록 API 연결 시 교체
 const REGULATORY_CLASS_OPTIONS = [
   { value: 'cosmetics', label: '화장품' },
@@ -256,30 +270,56 @@ export default function NewJobPage({
 
   const submitError = createMutation.error ?? analyzeMutation.error;
   const isSubmitting = createMutation.isPending || analyzeMutation.isPending;
-  const selectedLanguageLabel = LANGUAGE_OPTIONS.find((o) => o.value === targetLanguage)?.label ?? null;
+
+  // 추천 태그는 targetLanguage(언어 select의 현재 선택값)가 아니라
+  // targetCountry에서만 파생된다 — 국가를 바꿔도 이미 고른 언어 값은
+  // 건드리지 않는다. 태그를 클릭했을 때만 setTargetLanguage가 호출된다.
+  const recommendedLanguageValue = COUNTRY_RECOMMENDED_LANGUAGE[targetCountry];
+  const recommendedLanguageOption = recommendedLanguageValue
+    ? (LANGUAGE_OPTIONS.find((o) => o.value === recommendedLanguageValue) ?? null)
+    : null;
 
   // ── 렌더링 ──────────────────────────────────────────────────────
 
   return (
     <div className="flex h-screen w-full bg-white">
-      <StepNav currentStep="N1" />
+      {/* N1 Figma 재정합(1단계) — Figma(525:3023)는 "보관함으로 나가기" X
+          버튼(608:1434, left-40 top-40)과 StepNav(573:3070, left-36)가 같은
+          좌측 rail x축을 공유한다. 기존엔 X 버튼이 본문 콘텐츠 영역의 padding
+          (px-10) 안에 있어 StepNav보다 한참 오른쪽으로 밀려 있었다 — 이제 X
+          버튼을 StepNav와 같은 44px 레일 컬럼 안에 둔다. StepNav 자신은
+          justify-between으로 6개 항목을 촘촘히 묶어 그리는 높이 고정 블록이라
+          (Figma도 top:calc(50% + 40px)로 rail 전체를 세로 중앙 정렬한다),
+          이 컬럼도 justify-center로 그 블록을 세로 중앙에 두고 top-10 X
+          버튼과는 별도로 띄운다 — 그냥 위쪽에 쌓으면(예: stretch) 2번 배지가
+          X 버튼에 가려진다(실측 확인).
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">
-        {/* 헤더 — Figma(525:3023, node 608:1434 "보관함으로 나가기")는 N5와
-            동일하게 닫기(X) 아이콘이다. 단, N1은 입력 중인 폼/업로드가
-            날아갈 수 있어 기존 나가기 확인 모달은 그대로 유지한다. */}
+          마감 보정 — Figma는 이 rail이 viewport 왼쪽 끝에 완전히 붙어있지
+          않다(X 버튼 left-40, StepNav 자신도 left-36 — 둘 다 프레임 원점에서
+          36~40px 띄워져 있다). 이 프로젝트는 rail을 0에 붙여 그렸었는데,
+          실측 결과 "정보 입력" 라벨이 44px 폭엔 들어가지만(0.77px~43.2px)
+          rail 자체가 viewport 0에 붙어 있어 여백이 사실상 1px도 안 남아
+          경계에 닿아 보였다 — 라벨을 개별로 옮기지 않고, Figma 수치(36px)
+          그대로 이 rail wrapper에 ml-9로 최소 inset만 더했다. 44px 내부
+          구조·line 중심축(step-nav.tsx)은 그대로다. */}
+      <div className="relative ml-9 flex h-full w-[44px] shrink-0 flex-col items-center justify-center">
+        <button
+          type="button"
+          onClick={() => setShowExitConfirm(true)}
+          aria-label="보관함으로 나가기"
+          className="absolute top-10 left-1/2 z-20 flex size-10 -translate-x-1/2 shrink-0 items-center justify-center rounded-md border border-[#eaeaea] bg-white text-[#171717] transition-colors hover:bg-gray-50"
+        >
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M2 2L14 14M14 2L2 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+          </svg>
+        </button>
+        <StepNav currentStep="N1" />
+      </div>
+
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        {/* 헤더 — X 버튼이 좌측 rail로 옮겨가면서, 여기는 이제 제목/설명 행만
+            남는다(N1 Figma 재정합 1단계). */}
         <div className="shrink-0 px-10 pt-10 pb-6">
-          <button
-            type="button"
-            onClick={() => setShowExitConfirm(true)}
-            aria-label="보관함으로 나가기"
-            className="mb-6 flex size-10 shrink-0 items-center justify-center rounded-md border border-[#eaeaea] bg-white text-[#171717] transition-colors hover:bg-gray-50"
-          >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <path d="M2 2L14 14M14 2L2 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-            </svg>
-          </button>
-
           <div className="flex items-center gap-4">
             <h1 className="text-[20px] font-semibold tracking-[-0.02em] text-[#171717]">이미지 입력</h1>
             <p className="text-[14px] tracking-[-0.01em] text-[#707070]">
@@ -293,9 +333,13 @@ export default function NewJobPage({
             </div>
           )}
 
-          {/* 국가선택 / 언어선택 — Figma 두 필드를 한 줄에 배치 */}
-          <div className="mt-6 flex items-center justify-between gap-10">
-            <div className="flex flex-1 items-center gap-5">
+          {/* 국가선택 / 언어선택 — Figma(525:3023, node 787:6016) 두 필드를
+              한 줄에 배치. 각 필드 그룹은 w-[385px] 고정이고(늘어나 퍼지는
+              구조가 아니다), 두 그룹 사이 gap은 40px다 — 예전엔 flex-1 +
+              justify-between이라 뷰포트가 넓을수록 두 select가 거의 절반씩
+              퍼졌다(N1 Figma 재정합 3단계). */}
+          <div className="mt-6 flex items-center gap-10">
+            <div className="flex w-[385px] shrink-0 items-center gap-5">
               <p className="shrink-0 text-[12px] tracking-[-0.02em] text-[#707070]">국가선택</p>
               <div className="relative flex-1">
                 <select
@@ -314,12 +358,21 @@ export default function NewJobPage({
               </div>
             </div>
 
-            <div className="flex flex-1 items-center gap-5">
+            <div className="flex w-[385px] shrink-0 items-center gap-5">
               <p className="shrink-0 text-[12px] tracking-[-0.02em] text-[#707070]">언어선택</p>
-              {selectedLanguageLabel && (
-                <span className="flex h-7 shrink-0 items-center justify-center rounded-[6px] border border-[#ff6a38] bg-white px-2 text-[12px] text-[#ff6a38]">
-                  {selectedLanguageLabel}
-                </span>
+              {/* 추천 태그 — 국가 선택에서 파생되는 별도 표시값이다.
+                  targetLanguage(실제 선택값)를 그대로 되비추던 예전 로직과
+                  분리했다: 국가만 바꿔도 언어 select는 그대로 두고, 이 태그를
+                  "클릭"해야만 select 값이 바뀐다(N1 Figma 재정합 3단계). */}
+              {recommendedLanguageOption && (
+                <button
+                  type="button"
+                  onClick={() => setTargetLanguage(recommendedLanguageOption.value)}
+                  aria-pressed={targetLanguage === recommendedLanguageOption.value}
+                  className="flex h-7 shrink-0 items-center justify-center gap-1 rounded-[6px] border border-[#ff6a38] bg-white px-2 text-[12px] text-[#ff6a38] transition-colors hover:bg-[#faf3ed]"
+                >
+                  {recommendedLanguageOption.label}
+                </button>
               )}
               <div className="relative flex-1">
                 <select
@@ -453,7 +506,13 @@ export default function NewJobPage({
           </div>
 
           {/* 우측 — 필드 패널 */}
-          <div className="flex w-[505px] shrink-0 flex-col gap-8 overflow-y-auto rounded-[8px] border border-[#eaeaea] p-5">
+          {/* 우측 필드 패널 — Figma(643:5942) 폭은 516px(505 아님)이고, 내부
+              overflow-y-auto가 따로 없다(고정 h-770 안에서 justify-between로
+              4개 블록 간격을 나눈다). 여기선 높이를 강제 고정하지 않는 대신,
+              근거 없이 크게 잡혀 있던 블록 간 gap(32px)을 Figma가 반복해서
+              쓰는 20px 톤(gap-5)으로 줄이고 스크롤을 없앴다(N1 Figma 재정합
+              4단계) — overflow-hidden으로 가리지 않고 실제 spacing을 줄인다. */}
+          <div className="flex w-[516px] shrink-0 flex-col gap-5 rounded-[8px] border border-[#eaeaea] p-5">
             <div className="flex flex-col gap-3">
               <div className="flex flex-col gap-1">
                 <FieldLabel required>상품명</FieldLabel>
