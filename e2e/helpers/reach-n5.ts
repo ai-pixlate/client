@@ -46,7 +46,9 @@ export async function reachN5(page: Page): Promise<void> {
     mimeType: 'image/png',
     buffer: Buffer.from(TINY_PNG_BASE64, 'base64'),
   });
-  await expect(page.getByText('e2e-test.png')).toBeVisible();
+  // N1 재정합(925:2529) — 업로드 후 파일명 텍스트 대신 썸네일 그리드로
+  // 표시된다. 업로드 성공 확인은 해당 파일의 썸네일 img(alt=파일명)로 한다.
+  await expect(page.locator('img[alt="e2e-test.png"]')).toBeVisible();
 
   await page.getByRole('button', { name: '다음' }).click();
   await expect(page).toHaveURL(new RegExp(`/jobs/${MOCK_JOB_ID}$`));

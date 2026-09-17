@@ -137,7 +137,12 @@ export interface CreateJobRequest {
   /** TODO: 허용 분류값 목록 백엔드 확정 필요 */
   regulatoryClass: string;
   specId: string;
-  displayCategory: string;
+  /**
+   * 실제 OpenAPI `JobCreate.categoryId`도 optional이다(`required`엔
+   * brandId만 있다) — N1 폼에서도 필수로 좁히지 않는다. productCode와
+   * 같은 방식으로 비어 있으면 payload에서 아예 뺀다.
+   */
+  displayCategory?: string;
   keywords: string[];
 }
 

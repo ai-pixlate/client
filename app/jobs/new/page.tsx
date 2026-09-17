@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useMemo, useRef, useState } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
 import { useCreateJobMutation, useAnalyzeJobMutation } from '@/lib/queries/pixate';
@@ -131,6 +131,9 @@ function findCategoryPath(nodes: CategoryNode[], value: string, path: CategoryNo
 interface LocalImage {
   localId: string;
   file: File;
+  /** Figma(925:2529) 썸네일 미리보기용 — addFiles에서 생성하고, 제거/언마운트
+   * 시 revoke한다(메모리 누수 방지). */
+  previewUrl: string;
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -155,10 +158,23 @@ function SearchIcon() {
   );
 }
 
-function PlusIcon() {
+function PlusIcon({ size = 24 }: { size?: number }) {
   return (
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
       <path d="M12 4V20M4 12H20" stroke="#171717" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+// Figma(929:7386 "Icon Button" Circle/XXS/Secondary) 실측: Glyph는 12px
+// 아이콘 박스 안에서 inset-1/4(사방 25%=3px)만큼 들여 그려진다 — 즉 실제
+// 선은 12px 전체가 아니라 가운데 6×6 영역(3~9) 안에만 있다. 색상도 이
+// 노드에 등록된 3색(#fff bg / #eaeaea border / #707070) 중 유일하게 남는
+// text/secondary #707070이다(검정 #171717이 아니다).
+function CloseIcon({ size = 12 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 12 12" fill="none" aria-hidden="true">
+      <path d="M3 3L9 9M9 3L3 9" stroke="#707070" strokeWidth="1.2" strokeLinecap="round" />
     </svg>
   );
 }
@@ -420,6 +436,7 @@ function NewJobPageInner() {
     const newItems: LocalImage[] = files.map((file, i) => ({
       localId: `local_${Date.now()}_${i}`,
       file,
+      previewUrl: URL.createObjectURL(file),
     }));
     setImages((prev) => [...prev, ...newItems]);
   };
@@ -442,30 +459,63 @@ function NewJobPageInner() {
   };
 
   const removeImage = (localId: string) => {
-    setImages((prev) => prev.filter((img) => img.localId !== localId));
+    setImages((prev) => {
+      const removed = prev.find((img) => img.localId === localId);
+      if (removed) URL.revokeObjectURL(removed.previewUrl);
+      return prev.filter((img) => img.localId !== localId);
+    });
   };
 
-  const moveImage = (localId: string, direction: 'up' | 'down') => {
+  // 언마운트 시 남아있는 미리보기 objectURL을 모두 해제한다(메모리 누수 방지).
+  // images를 직접 deps에 넣지 않고 ref로 최신값을 들고 있다가 언마운트
+  // 시점에만 실행 — 매 렌더마다 cleanup이 재실행되는 걸 막는다. ref는
+  // effect 안에서만 갱신한다(render 중 ref.current 쓰기 금지 — react-hooks 규칙).
+  const imagesRef = useRef(images);
+  useEffect(() => {
+    imagesRef.current = images;
+  }, [images]);
+  useEffect(() => {
+    return () => {
+      imagesRef.current.forEach((img) => URL.revokeObjectURL(img.previewUrl));
+    };
+  }, []);
+
+  // 썸네일 드래그 순서 변경(Figma 925:2529) — up/down 버튼은 이 Figma
+  // 썸네일 카드에 없다(X 삭제만 있음), 드래그로 대체한다. 내부 재정렬
+  // 드래그와 OS 파일 드래그(업로드)를 dataTransfer로 구분해야 하므로,
+  // draggingLocalId가 채워져 있을 때만(=우리 쪽 썸네일 drag) preventDefault/
+  // stopPropagation해서 상위 드롭존(파일 업로드용 onDrop)으로 번지지 않게
+  // 막는다 — OS 파일 드래그는 그대로 버블시켜 기존 handleDrop이 처리한다.
+  const [draggingLocalId, setDraggingLocalId] = useState<string | null>(null);
+  const [dragOverLocalId, setDragOverLocalId] = useState<string | null>(null);
+
+  const reorderImages = (fromLocalId: string, toLocalId: string) => {
+    if (fromLocalId === toLocalId) return;
     setImages((prev) => {
-      const idx = prev.findIndex((img) => img.localId === localId);
-      if (idx < 0) return prev;
+      const fromIdx = prev.findIndex((img) => img.localId === fromLocalId);
+      const toIdx = prev.findIndex((img) => img.localId === toLocalId);
+      if (fromIdx < 0 || toIdx < 0) return prev;
       const next = [...prev];
-      const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
-      if (swapIdx < 0 || swapIdx >= next.length) return prev;
-      [next[idx], next[swapIdx]] = [next[swapIdx], next[idx]];
+      const [moved] = next.splice(fromIdx, 1);
+      next.splice(toIdx, 0, moved);
       return next;
     });
   };
 
   // ── 유효성 검사 ──────────────────────────────────────────────────
 
+  // 실제 OpenAPI JobCreate는 brandId만 required다(categoryId/productCode/
+  // keywords는 전부 optional). N1 폼은 productName/targetCountry/
+  // targetLanguage/regulatoryClass/이미지 1장 이상만 화면 자체 필수값으로
+  // 좁혀서 쓴다(기존 결정 유지) — displayCategory(카테고리)는 그 목록에
+  // 없었으므로 여기서 제거한다. productCode/keywords는 애초에 isValid에
+  // 없었다(이미 선택값으로 처리돼 있었다).
   const isValid =
     !!brandId &&
     !!productName &&
     !!targetCountry &&
     !!targetLanguage &&
     !!regulatoryClass &&
-    !!displayCategory &&
     images.length > 0;
 
   // ── 제출 ────────────────────────────────────────────────────────
@@ -495,7 +545,7 @@ function NewJobPageInner() {
         targetLanguage,
         regulatoryClass,
         specId: 'spec_original',
-        displayCategory,
+        displayCategory: displayCategory || undefined,
         keywords,
         sourceImages,
       });
@@ -520,6 +570,10 @@ function NewJobPageInner() {
   // ── 렌더링 ──────────────────────────────────────────────────────
 
   return (
+    // 폰트는 app/layout.tsx(전역 1곳)에서 Pretendard를 로드하고
+    // globals.css의 body font-family로 전체 화면에 적용한다 — N1에서
+    // 별도로 <link>를 넣거나 font-family를 다시 걸지 않는다(body에서
+    // 상속받는다).
     <div className="flex h-screen w-full bg-white">
       {/* N1 Figma 재정합(재수정) — Figma(525:3023) 실측: X 버튼(608:1434)
           x=40,y=40,w=40,h=40 → bottom=80. StepNav(608:1440) x=36,y=150,
@@ -540,8 +594,11 @@ function NewJobPageInner() {
           aria-label="보관함으로 나가기"
           className="absolute top-10 left-1/2 z-20 flex size-10 -translate-x-1/2 shrink-0 items-center justify-center rounded-md border border-[#eaeaea] bg-white text-[#171717] transition-colors hover:bg-gray-50"
         >
+          {/* Figma(925:2530 "보관함으로 나가기") 실측: 16px Glyph 박스
+              안에서 inset-1/4(사방 25%=4px)만큼 들여 그려진다 — 실제
+              X선은 박스 전체가 아니라 가운데 8×8 영역(4~12)에만 있다. */}
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path d="M2 2L14 14M14 2L2 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            <path d="M4 4L12 12M12 4L4 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
           </svg>
         </button>
         <div className="absolute inset-0 pt-[100px] pb-6">
@@ -596,7 +653,7 @@ function NewJobPageInner() {
                   type="button"
                   onClick={() => setTargetLanguage(recommendedLanguageOption.value)}
                   aria-pressed={targetLanguage === recommendedLanguageOption.value}
-                  className="flex h-7 shrink-0 items-center justify-center gap-1 rounded-[6px] border border-[#ff6a38] bg-white px-2 text-[12px] text-[#ff6a38] transition-colors hover:bg-[#faf3ed]"
+                  className="flex h-7 shrink-0 items-center justify-center gap-1 rounded-[6px] border border-[#ff6a38] bg-white px-2 text-[12px] leading-[14px] text-[#ff6a38] transition-colors hover:bg-[#faf3ed]"
                 >
                   {recommendedLanguageOption.label}
                 </button>
@@ -625,13 +682,20 @@ function NewJobPageInner() {
         <div className="flex min-h-0 flex-1 gap-6 px-10 pb-[33px]">
           {/* 좌측 — 업로드 영역 */}
           <div
+            data-testid="n1-image-dropzone"
             onDragOver={(e) => {
               e.preventDefault();
               setIsDragOver(true);
             }}
             onDragLeave={() => setIsDragOver(false)}
             onDrop={handleDrop}
-            className={`flex flex-1 flex-col items-center justify-center gap-10 rounded-[8px] border transition-colors ${
+            // min-w-0 — 4열 그리드(1039px 고정)가 flex-1 아이템의 기본
+            // min-width:auto(콘텐츠 크기) 때문에 부모 row를 밀어내 우측
+            // 516px 패널이 뷰포트 밖으로 잘려나가는 걸 막는다(실측
+            // 확인). 안쪽 스크롤 wrapper(overflow-auto)가 실제 스크롤을
+            // 담당하고, 이 div는 그 스크롤 영역이 자기 폭보다 좁아지는
+            // 걸 허용만 하면 된다.
+            className={`flex min-w-0 flex-1 flex-col items-center justify-center gap-10 rounded-[8px] border transition-colors ${
               isDragOver ? 'border-[#ff6a38] bg-[#faf3ed]' : 'border-[#eaeaea] bg-white'
             }`}
           >
@@ -661,65 +725,113 @@ function NewJobPageInner() {
                 </p>
               </div>
             ) : (
+              // Figma(925:2529 "N1 이미지 업로드 썸네일") 실측 비율은
+              // 244:320, gap은 21px(가로)/20px(세로, row1 bottom 522 →
+              // row2 top 542), X 버튼은 24px 원(rounded-12) + top/right
+              // 12px(=카드 폭의 4.92%) 오프셋 — 하지만 이 Figma 프레임 자체가
+              // 1920px 루트라, 244px 절대값을 그대로 쓰면 1440px 뷰포트에서
+              // 우측 516px 패널과 함께 4열이 가로 스크롤 없이 안 들어간다.
+              // "4열×2행 한눈에 보기"가 우선이므로 카드 폭은 고정값이
+              // 아니라 grid-template-columns: repeat(4, 1fr)로 부모 가용
+              // 폭을 4등분한 값을 쓰고, 세로는 aspect-[244/320]로 자동
+              // 계산한다(가로/세로를 따로 줄이지 않아 비율이 절대 안
+              // 깨진다). 마지막 칸에 FileUploader(273:2103) 컴팩트
+              // variant를 그대로 "파일 추가" 자리로 쓴다(Figma에 별도
+              // "+이미지 추가" 헤더 버튼은 없다). up/down 버튼은 이 카드에
+              // 없다(X만 있음) — 대신 드래그 재정렬로 대체한다.
               <div className="flex h-full w-full flex-col gap-4 overflow-y-auto p-6">
-                <div className="flex items-center justify-between">
-                  <p className="text-[14px] text-[#707070]">이미지 {images.length}개</p>
-                  <label
-                    htmlFor="image-upload"
-                    className="cursor-pointer rounded-[6px] border border-[#eaeaea] px-4 py-2 text-[12px] font-medium text-[#171717] hover:bg-gray-50"
-                  >
-                    + 이미지 추가
-                  </label>
-                </div>
-                <ul className="flex flex-col gap-2">
-                  {images.map((img, idx) => (
-                    <li
-                      key={img.localId}
-                      className="flex items-center gap-3 rounded-[6px] border border-[#eaeaea] bg-white px-3 py-2.5"
-                    >
-                      <span className="flex size-6 shrink-0 items-center justify-center rounded-full border border-[#eaeaea] text-xs font-medium text-[#707070]">
-                        {idx + 1}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate text-sm text-[#171717]" title={img.file.name}>
-                        {img.file.name}
-                      </span>
-                      <div className="flex shrink-0 gap-0.5">
+                <p className="text-[14px] text-[#707070]">이미지 {images.length}개</p>
+                <div className="grid grid-cols-4 gap-x-4 gap-y-5">
+                  {images.map((img) => {
+                    const isDragging = draggingLocalId === img.localId;
+                    const isDragOverTarget = dragOverLocalId === img.localId && draggingLocalId !== img.localId;
+                    return (
+                      <div
+                        key={img.localId}
+                        draggable
+                        onDragStart={(e) => {
+                          e.dataTransfer.effectAllowed = 'move';
+                          e.dataTransfer.setData('text/plain', img.localId);
+                          // 브라우저 기본 drag ghost가 카드 대신 내부 <img>만
+                          // 원본 픽셀 크기로 캡처하는 경우가 있어(브라우저마다
+                          // 다름) 카드 엘리먼트 자체를 drag image로 명시
+                          // 지정한다. 카드 폭이 이제 뷰포트에 따라 달라지므로
+                          // 절반 오프셋도 그 순간의 실제 렌더 크기에서
+                          // 계산한다(고정 122/160 하드코딩 금지) — 어떤
+                          // 뷰포트에서도 244×320 비율·object-contain 여백이
+                          // 그대로 유지된 채 드래그된다.
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          e.dataTransfer.setDragImage(e.currentTarget, rect.width / 2, rect.height / 2);
+                          setDraggingLocalId(img.localId);
+                        }}
+                        onDragEnd={() => {
+                          setDraggingLocalId(null);
+                          setDragOverLocalId(null);
+                        }}
+                        onDragOver={(e) => {
+                          // draggingLocalId가 있을 때만 우리 쪽 썸네일 재정렬
+                          // 드래그다 — 그 외(OS 파일 드래그)는 막지 않고
+                          // 그대로 상위 드롭존으로 버블시킨다.
+                          if (!draggingLocalId) return;
+                          e.preventDefault();
+                          e.stopPropagation();
+                          if (draggingLocalId !== img.localId) setDragOverLocalId(img.localId);
+                        }}
+                        onDrop={(e) => {
+                          if (!draggingLocalId) return;
+                          e.preventDefault();
+                          e.stopPropagation();
+                          reorderImages(draggingLocalId, img.localId);
+                          setDraggingLocalId(null);
+                          setDragOverLocalId(null);
+                        }}
+                        className={`relative aspect-[244/320] w-full max-w-[244px] cursor-grab overflow-hidden bg-[#eee] transition-opacity ${
+                          isDragging ? 'opacity-50' : ''
+                        } ${isDragOverTarget ? 'ring-2 ring-[#ff6a38]' : ''}`}
+                      >
+                        {/* object-contain — 원본 비율 유지, crop/stretch
+                            없음. 카드 배경이 이미 #eee라 이미지가 축소
+                            표시될 때 생기는 여백은 그대로 카드 배경색이
+                            채운다(세로형은 좌우, 가로형은 상하 letterbox). */}
+                        {/* eslint-disable-next-line @next/next/no-img-element -- 로컬 blob: objectURL이라 next/image 최적화 대상이 아니다 */}
+                        <img src={img.previewUrl} alt={img.file.name} className="h-full w-full object-contain" />
                         <button
                           type="button"
-                          onClick={() => moveImage(img.localId, 'up')}
-                          disabled={idx === 0}
-                          className="rounded p-1 text-[#999] hover:bg-gray-100 hover:text-[#171717] disabled:opacity-30"
-                          aria-label="위로 이동"
+                          onClick={() => removeImage(img.localId)}
+                          aria-label={`${img.file.name} 삭제`}
+                          // top/right를 %로 둬서(12px÷244px≈4.92%) 카드가
+                          // 축소돼도 여백 비율이 그대로 유지된다 — 버튼
+                          // 자체 크기(24px)는 클릭 타겟 확보를 위해 고정.
+                          className="absolute top-[4.92%] right-[4.92%] flex size-6 items-center justify-center rounded-full border border-[#eaeaea] bg-white hover:bg-gray-50"
                         >
-                          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M5 15l7-7 7 7" />
-                          </svg>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => moveImage(img.localId, 'down')}
-                          disabled={idx === images.length - 1}
-                          className="rounded p-1 text-[#999] hover:bg-gray-100 hover:text-[#171717] disabled:opacity-30"
-                          aria-label="아래로 이동"
-                        >
-                          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-                          </svg>
+                          <CloseIcon />
                         </button>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => removeImage(img.localId)}
-                        className="shrink-0 rounded p-1 text-[#999] hover:bg-red-50 hover:text-red-500"
-                        aria-label="삭제"
-                      >
-                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                        </svg>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
+                    );
+                  })}
+
+                  <div className="flex aspect-[244/320] w-full max-w-[244px] flex-col items-center justify-center gap-5 rounded-[8px] border border-[#eaeaea] bg-white px-6 py-8">
+                    <div className="flex size-10 items-center justify-center rounded-full border border-[#eaeaea] bg-white">
+                      <PlusIcon size={16} />
+                    </div>
+                    <div className="flex flex-col items-center gap-2 text-center">
+                      <p className="text-[16px] font-medium tracking-[-0.03em] whitespace-nowrap text-[#171717]">
+                        파일을 드래그하거나 선택
+                      </p>
+                      <p className="text-[12px] tracking-[-0.01em] whitespace-nowrap text-[#707070]">JPG, PNG · 최대 1GB</p>
+                    </div>
+                    {/* 기존 빈 상태와 동일한 label 패턴 — htmlFor로 숨은
+                        input#image-upload를 직접 연다(accessible name이
+                        타일 전체 텍스트로 뭉개지지 않도록 label을 이
+                        버튼 텍스트에만 좁게 건다). */}
+                    <label
+                      htmlFor="image-upload"
+                      className="cursor-pointer rounded-[6px] bg-[#171717] px-5 py-2.5 text-[14px] font-medium tracking-[-0.03em] whitespace-nowrap text-white hover:opacity-90"
+                    >
+                      파일 선택
+                    </label>
+                  </div>
+                </div>
               </div>
             )}
             <input
@@ -802,7 +914,7 @@ function NewJobPageInner() {
                   <button
                     type="button"
                     onClick={() => setCategoryModalOpen(true)}
-                    className="flex h-[37px] w-[108px] shrink-0 items-center justify-center rounded-[6px] border border-[#eaeaea] bg-white px-5 py-2.5 text-[14px] font-medium tracking-[-0.42px] text-[#171717] hover:bg-gray-50"
+                    className="flex h-[37px] w-[108px] shrink-0 items-center justify-center rounded-[6px] border border-[#eaeaea] bg-white px-5 py-2.5 text-[14px] font-medium tracking-[-0.03em] text-[#171717] hover:bg-gray-50"
                   >
                     선택하기
                   </button>
@@ -837,7 +949,7 @@ function NewJobPageInner() {
                 (보여주되 비활성)으로 처리하고 보고에 남긴다. */}
             <div className="flex flex-col gap-2">
               <div className="flex items-center gap-2">
-                <p className="text-[16px] font-medium tracking-[-0.03em] text-[#171717]">
+                <p className="text-[18px] font-medium tracking-[-0.03em] text-[#171717]">
                   이미지 안에 여러 내용이 이어져 있나요?
                 </p>
                 <div
@@ -849,7 +961,7 @@ function NewJobPageInner() {
                 >
                   <div className="size-4 rounded-full bg-white shadow-sm" />
                 </div>
-                <span className="text-[16px] font-medium text-[#ff6a38]">*</span>
+                <span className="text-[18px] font-medium tracking-[-0.03em] text-[#ff6a38]">*</span>
               </div>
               {/* Figma(673:7819)는 이 helper text를 라벨/토글과 같은 좌측
                   기준선에 맞춘다 — 혼자 text-center로 떠 있던 것을 고쳤다. */}
@@ -864,8 +976,13 @@ function NewJobPageInner() {
                 탭을 그대로 베끼지 않고, 실제로 쓸 수 있는 "원본 사이즈"를
                 활성으로 두고 나머지 두 탭은 비활성으로 보여준다. */}
             <div className="flex flex-col gap-4">
+              {/* Figma(925:2573-2575) — 이 라벨의 asterisk만 18px Medium이다
+                  (다른 라벨의 asterisk는 16px 상속). FieldLabel 공용
+                  컴포넌트의 기본 16px 상속 asterisk와 다르므로 이 자리만
+                  직접 마크업한다. */}
               <div className="flex items-center gap-2">
-                <FieldLabel required>결과물 규격</FieldLabel>
+                <p className="text-[16px] tracking-[-0.03em] text-[#171717]">결과물 규격</p>
+                <span className="text-[18px] font-medium tracking-[-0.03em] text-[#ff6a38]">*</span>
               </div>
               <div className="flex h-8 w-full items-center">
                 <div className="flex-1 border-b border-[#eaeaea] pb-2 text-center">
@@ -878,7 +995,7 @@ function NewJobPageInner() {
                   <span className="text-[16px] tracking-[-0.03em] text-[#999]">커스텀</span>
                 </div>
               </div>
-              <p className="text-[12px] text-[#999]">업로드된 이미지의 원본 크기를 유지합니다.</p>
+              <p className="text-[12px] font-light tracking-[-0.04em] text-[#999]">업로드된 이미지의 원본 크기를 유지합니다.</p>
             </div>
 
             <div className="flex flex-col gap-1">
@@ -908,7 +1025,7 @@ function NewJobPageInner() {
                   {keywords.map((kw) => (
                     <span
                       key={kw}
-                      className="inline-flex items-center gap-1 rounded-[6px] border border-[#eaeaea] bg-[#f5f5f5] px-2.5 py-1 text-xs font-medium text-[#707070]"
+                      className="inline-flex items-center gap-1 rounded-[6px] border border-[#eaeaea] bg-[#f5f5f5] px-2.5 py-1 text-[12px] font-medium text-[#707070]"
                     >
                       {kw}
                       <button
