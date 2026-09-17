@@ -6,7 +6,12 @@
  * 참조한다.
  */
 
-import type { components } from './generated/openapi';
+import type { components, operations } from './generated/openapi';
+
+/** GET /jobs/{jobId}/export/download 쿼리 파라미터 artifactType (기본 zip) */
+export type ApiExportArtifactType = NonNullable<
+  operations['exportDownloadByType']['parameters']['query']
+>['artifactType'];
 
 /** POST /jobs/{jobId}/render 응답 (API-FIN-01) */
 export type ApiRenderResponse = components['schemas']['RenderResponse'];

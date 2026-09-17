@@ -745,6 +745,30 @@ export const handlers = [
   }),
 
   // ──────────────────────────────────────────
+  // N6 — 행별 개별 다운로드, 타입별 presigned (API-FIN-05, exportDownloadByType).
+  // export 묶음 생성 없이 구성요소 하나만 바로 받는다 — artifactType(기본
+  // zip) 쿼리로 images|csv|html을 지정한다. psd는 호출부가 항상 비활성이라
+  // 여기 도달하지 않지만, 혹시 들어와도 404로 거절한다(생성된 적 없는 구성요소).
+  // ──────────────────────────────────────────
+  http.get('/jobs/:jobId/export/download', ({ params, request }) => {
+    const jobId = params.jobId as string;
+    if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
+
+    const artifactType = new URL(request.url).searchParams.get('artifactType') ?? 'zip';
+    if (!['zip', 'images', 'csv', 'html'].includes(artifactType)) {
+      return badRequest("artifactType은 'zip'|'images'|'csv'|'html'이어야 합니다");
+    }
+    if (!isN6RenderDone()) return notFound(`'${artifactType}' 구성요소가 아직 생성되지 않았습니다`);
+
+    const fileName = artifactType === 'zip' ? 'export.zip' : `export.${artifactType}`;
+    return HttpResponse.json({
+      url: `/mock/download/${fileName}?token=mock-presigned-bytype-${artifactType}-${Date.now()}`,
+      fileName,
+      expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+    });
+  }),
+
+  // ──────────────────────────────────────────
   // N6 — 저장 = 보관함 카드 생성 (API-FIN-06)
   //
   // "렌더 성공 확인 후 done/N6·is_saved=true" — 렌더가 아직 안 끝났으면 409

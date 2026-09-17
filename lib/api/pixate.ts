@@ -16,6 +16,7 @@ import type {
   ApiDownloadResponse,
   ApiSaveRequest,
   ApiLibraryCard,
+  ApiExportArtifactType,
 } from '@/lib/api/n6-schema';
 
 // ─────────────────────────────────────────────
@@ -222,6 +223,21 @@ export function createExport(jobId: string, payload: ApiExportRequest): Promise<
 /** 생성된 산출물의 presigned 다운로드 정보 조회 (API-FIN-05, 5분 만료) */
 export function getExportDownload(jobId: string, artifactId: number): Promise<ApiDownloadResponse> {
   return apiFetch<ApiDownloadResponse>(`/jobs/${jobId}/exports/${artifactId}/download`);
+}
+
+/**
+ * N6 행별 개별 다운로드 — 타입별 presigned (API-FIN-05, exportDownloadByType).
+ * export 묶음 생성(POST /export) 없이 구성요소 하나만 바로 받는다. artifactType
+ * 생략 시 서버 기본값은 zip이지만, 이 화면에서는 항상 images|csv|html 중
+ * 하나를 명시해서 부른다 — psd는 호출하지 않는다(12월 예정, 항상 비활성).
+ */
+export function getExportDownloadByType(
+  jobId: string,
+  artifactType: ApiExportArtifactType,
+): Promise<ApiDownloadResponse> {
+  return apiFetch<ApiDownloadResponse>(
+    `/jobs/${jobId}/export/download?artifactType=${encodeURIComponent(artifactType ?? 'zip')}`,
+  );
 }
 
 /** 저장 = 보관함 카드 생성 (API-FIN-06). 응답은 { saved: boolean }이 아니라 LibraryCard다. */

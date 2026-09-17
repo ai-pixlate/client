@@ -19,11 +19,12 @@ import {
   getValidation,
   createExport,
   getExportDownload,
+  getExportDownloadByType,
   saveJob,
 } from '@/lib/api/pixate';
 import type { UpdateSectionBucketRequest, CreateJobRequest, SectionsResponse } from '@/lib/api/types';
 import type { ApiBlockPatch, ApiConfirmRequest, ApiJobTaskStatus, ApiTextBlock } from '@/lib/api/n5-schema';
-import type { ApiExportRequest } from '@/lib/api/n6-schema';
+import type { ApiExportRequest, ApiExportArtifactType } from '@/lib/api/n6-schema';
 
 // ─────────────────────────────────────────────
 // Query Keys
@@ -311,6 +312,17 @@ export function useExportMutation(jobId: string) {
 export function useExportDownloadMutation(jobId: string) {
   return useMutation({
     mutationFn: (artifactId: number) => getExportDownload(jobId, artifactId),
+  });
+}
+
+/**
+ * N6 행별 개별 다운로드 (exportDownloadByType) — export 묶음 생성 없이
+ * images|csv|html 구성요소 하나만 바로 presigned URL로 받는다. psd는 호출부가
+ * 애초에 disabled라 이 mutation을 쓰지 않는다.
+ */
+export function useExportDownloadByTypeMutation(jobId: string) {
+  return useMutation({
+    mutationFn: (artifactType: ApiExportArtifactType) => getExportDownloadByType(jobId, artifactType),
   });
 }
 

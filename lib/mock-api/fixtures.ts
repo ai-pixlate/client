@@ -352,16 +352,25 @@ export const mockN3VerdictContractSections: Section[] = [
 // 이 fixture는 표현하지 않는다.
 // ─────────────────────────────────────────────
 
-/** 화면에 표시할 결과 이미지 2장. deliverable.validationResult는 9월 계약상
+/**
+ * 화면에 표시할 결과 이미지 2장. deliverable.validationResult는 9월 계약상
  * unknown 블록이라(백엔드 구조 미확정) 검증 표시는 별도 /validation 응답을
- * 쓴다 — 여기서는 null로 둔다. */
+ * 쓴다 — 여기서는 null로 둔다.
+ *
+ * imageUrl: 4단계(Final Preview mock 이미지 정상화) — 실제 파일이 없던
+ * '/mock/result-a.jpg'·'/mock/result-b.jpg'(존재하지 않아 404) 대신, 이미
+ * 저장소에 커밋돼 있는 N5 section fixture PNG(scripts/make-n5-section-fixture-images.mjs
+ * 생성, public/mock/n5/sections/)를 그대로 재사용한다 — N6 전용 새 이미지를
+ * 만들지 않는다. "번역 후(TRANSLATED)" 레이어라 N6 "최종 렌더 결과"라는
+ * 맥락과도 맞는다.
+ */
 export const mockN6Deliverables: ApiDeliverable[] = [
   {
     id: 9601,
     sourceImageId: 9101,
     usageType: 'detail',
-    imageUrl: '/mock/result-a.jpg',
-    format: 'JPG',
+    imageUrl: '/mock/n5/sections/501-translated.png',
+    format: 'PNG',
     colorSpace: 'RGB',
     fileSize: 1_843_200,
     renderStatus: 'done',
@@ -371,8 +380,8 @@ export const mockN6Deliverables: ApiDeliverable[] = [
     id: 9602,
     sourceImageId: 9102,
     usageType: 'detail',
-    imageUrl: '/mock/result-b.jpg',
-    format: 'JPG',
+    imageUrl: '/mock/n5/sections/502-translated.png',
+    format: 'PNG',
     colorSpace: 'RGB',
     fileSize: 2_105_344,
     renderStatus: 'done',
@@ -381,14 +390,16 @@ export const mockN6Deliverables: ApiDeliverable[] = [
 ];
 
 /**
- * N6 산출물 구성요소 상태. 9월 MVP: images/csv는 생성 완료, html은 should라
- * pending, psd는 12월 예정이라 항상 비활성(isActive=false) — UI에서 "12월
- * 제공 예정"으로만 표시하고 선택 불가.
+ * N6 산출물 구성요소 상태 — Figma(643:5523) N6 저장 화면 기준: images/
+ * content.csv/HTML 3행은 전부 선택 가능한 흰 배경 체크박스로 나오고,
+ * PSD 한 행만 "12월 제공 예정"으로 비활성이다(html은 API-FIN-02가
+ * should(🟡)로 표시한 9월 계약이지만, 이 mock의 happy path 완료 상태는
+ * html도 이미 생성된 것으로 둔다 — psd만 항상 isActive=false).
  */
 export const mockN6Components: NonNullable<ApiDeliverableList['components']> = [
   { artifactId: null, type: 'images', status: 'generated', isGenerated: true, isActive: true, failedCount: 0, retryAction: null },
   { artifactId: null, type: 'csv', status: 'generated', isGenerated: true, isActive: true, failedCount: 0, retryAction: null },
-  { artifactId: null, type: 'html', status: 'pending', isGenerated: false, isActive: false, failedCount: 0, retryAction: null },
+  { artifactId: null, type: 'html', status: 'generated', isGenerated: true, isActive: true, failedCount: 0, retryAction: null },
   { artifactId: null, type: 'psd', status: 'pending', isGenerated: false, isActive: false, failedCount: 0, retryAction: null },
 ];
 
