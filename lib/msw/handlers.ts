@@ -1,4 +1,4 @@
-import { http, HttpResponse } from 'msw';
+import { http, HttpResponse, passthrough } from 'msw';
 
 import type {
   JobCurrentStep,
@@ -401,7 +401,18 @@ export const handlers = [
   // 새 엔드포인트(/jobs/:jobId 등)는 MOCK_JOB_ID만 인식하므로, 그 stress job id로는
   // 애초에 도달할 수 없었다(고아 상태였다).
   // ──────────────────────────────────────────
-  http.get('/jobs/:jobId', ({ params }) => {
+  // N1→N2 hard navigation 조사(9단계)로 확인: 이 REST 경로(GET /jobs/:jobId,
+  // job 상태 조회)는 실제 페이지 라우트 app/jobs/[jobId]/page.tsx와 URL이
+  // 우연히 같다. Next.js App Router가 router.push 소프트 내비게이션에 쓰는
+  // RSC flight fetch도 같은 URL로 RSC:1 헤더를 달아 나간다 — 이 핸들러가
+  // 그 요청까지 가로채 JSON을 돌려주면(RSC flight 포맷이 아니므로) 라우터가
+  // 유효하지 않은 응답으로 보고 전체 페이지 하드 네비게이션으로 폴백한다
+  // (Playwright network 계측으로 실측: RSC fetch 직후 resourceType=document
+  // 요청이 별도로 발생). RSC 헤더가 있는 요청은 mock을 거치지 않고 실제 dev
+  // 서버로 그대로 흘려보낸다 — happy path 응답 자체(jobState)는 그대로다.
+  http.get('/jobs/:jobId', ({ params, request }) => {
+    if (request.headers.get('RSC') != null) return passthrough();
+
     const jobId = params.jobId as string;
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
     return HttpResponse.json(jobState);
