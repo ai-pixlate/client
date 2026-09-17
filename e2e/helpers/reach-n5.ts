@@ -2,9 +2,11 @@ import { type Page, expect } from '@playwright/test';
 
 import { MOCK_BRAND_ID, MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 
-// N1 combobox 순서(Figma 525:3023 반영 후): 국가 → 언어 → 카테고리 → 규제
-// 분류 — 우측 패널에서 카테고리/규제 분류 자리가 서로 바뀌었다. 어느
-// select든 첫 번째 유효한 option을 고르는 동작이라 순서 자체는 영향 없다.
+// N1 combobox 순서(Figma 525:3023 재정합 후): 국가 → 언어 → 규제 분류
+// (카테고리는 더 이상 combobox가 아니다 — 검색 표시 필드 + "선택하기" 버튼
+// →카테고리 선택 모달(381:6293)로 바뀌었다. 아래 openCategoryModalAndPick이
+// 그 흐름을 대신한다). 어느 select든 첫 번째 유효한 option을 고르는
+// 동작이라 순서 자체는 영향 없다.
 async function selectFirstValidOption(page: Page, index: number) {
   const select = page.getByRole('combobox').nth(index);
   const firstRealOption = select.locator('option').nth(1);
@@ -30,8 +32,14 @@ export async function reachN5(page: Page): Promise<void> {
   await page.getByPlaceholder('상품 이름을 입력해주세요').fill('E2E 테스트 상품');
   await selectFirstValidOption(page, 0); // 국가
   await selectFirstValidOption(page, 1); // 언어
-  await selectFirstValidOption(page, 2); // 카테고리
-  await selectFirstValidOption(page, 3); // 규제 분류
+
+  // 카테고리 — "선택하기" 클릭 → 모달(381:6293)에서 하위 데이터가 없는
+  // 최상위 항목("바디/헤어")을 눌러 즉시 선택·닫힘 처리한다(가장 짧은 경로).
+  await page.getByRole('button', { name: '선택하기' }).click();
+  const categoryModal = page.getByRole('dialog', { name: '카테고리 선택' });
+  await categoryModal.getByRole('button', { name: '바디/헤어' }).click();
+
+  await selectFirstValidOption(page, 2); // 규제 분류 (카테고리가 combobox에서 빠지며 인덱스가 3→2로 당겨졌다)
 
   await page.getByLabel('파일 선택').setInputFiles({
     name: 'e2e-test.png',

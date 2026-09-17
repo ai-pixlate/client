@@ -110,6 +110,18 @@ export interface SourceImageMeta {
 }
 
 export interface CreateJobRequest {
+  /**
+   * TODO(draft-first 전환): 실제 OpenAPI `JobCreate.brandId`는
+   * required `number`(int64)다. 지금 이 필드는 mock 전용 문자열
+   * ID(`brand_mock_001` 등)를 그대로 실어 나르는 FE 임시 타입이라
+   * string이다 — 실제 브랜드 API가 붙으면 number로 바꿔야 한다.
+   * 또한 실제 계약은 `POST /jobs(brandId)` → `PATCH /jobs/{jobId}`(N1
+   * 값) → `analyze` 3단계 draft-first 흐름이지만, 이 타입/N1 화면은
+   * 지금 모든 N1 값을 한 번에 담아 단일 `POST /jobs`로 보내는 구조다.
+   * 브랜드를 선택해 `/jobs/new?brandId=...`로 진입시키는 상위 화면도
+   * 아직 없다(현재는 URL 쿼리 파라미터가 유일한 진입 경로). 이 셋 모두
+   * 오늘 범위가 아니라 전환하지 않았다 — 별도 작업으로 다룬다.
+   */
   brandId: string;
   /**
    * 실제 OpenAPI(JobCreate/Job)와 필드명이 같다(productName/productCode) —

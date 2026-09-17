@@ -1,7 +1,7 @@
 'use client';
 
-import { use, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useMemo, useRef, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 
 import { useCreateJobMutation, useAnalyzeJobMutation } from '@/lib/queries/pixate';
 import type { ImageType } from '@/lib/api/types';
@@ -52,17 +52,77 @@ const REGULATORY_CLASS_OPTIONS = [
   { value: 'general', label: '일반 상품' },
 ];
 
-// TODO: 백엔드 카테고리 목록 API 연결 시 교체
-const CATEGORY_OPTIONS = [
-  { value: 'skincare', label: '스킨케어' },
-  { value: 'haircare', label: '헤어케어' },
-  { value: 'makeup', label: '메이크업' },
-  { value: 'supplements', label: '건강기능식품' },
-  { value: 'electronics', label: '전자제품' },
-  { value: 'fashion', label: '패션' },
-  { value: 'food_beverage', label: '식품·음료' },
-  { value: 'other', label: '기타' },
+// ─────────────────────────────────────────────────────────────────
+// 카테고리 계층 — Figma 카테고리 선택 모달(381:6293)이 실제로 보여준 값만
+// 그대로 옮긴다. "화장품/향수 → 스킨케어 → 스킨/토너 → {토너,에센스 토너,패드}"
+// 경로만 4단계 전부(세분류까지) 문서화돼 있다. 나머지 형제 항목(바디/헤어,
+// 건강식품, 선케어, 팩/마스크, 클렌징, 에센스/세럼, 크림/젤/밤, 미스트)은
+// Figma에 라벨만 보이고 그 하위 트리는 어디에도 없다 — 임의로 하위 항목을
+// 지어내지 않는다. children이 없는 노드는 그 자체가 선택 가능한 leaf다
+// (더 드릴다운할 데이터가 없으므로 클릭 즉시 선택으로 처리한다).
+// TODO: 백엔드 카테고리 목록 API 연결 시 교체.
+// ─────────────────────────────────────────────────────────────────
+
+interface CategoryNode {
+  value: string;
+  label: string;
+  children?: CategoryNode[];
+}
+
+const CATEGORY_TREE: CategoryNode[] = [
+  {
+    value: 'cosmetics_perfume',
+    label: '화장품/향수',
+    children: [
+      {
+        value: 'skincare',
+        label: '스킨케어',
+        children: [
+          {
+            value: 'toner_type',
+            label: '스킨/토너',
+            children: [
+              { value: 'toner', label: '토너' },
+              { value: 'essence_toner', label: '에센스 토너' },
+              { value: 'pad', label: '패드' },
+            ],
+          },
+          { value: 'essence_serum', label: '에센스/세럼' },
+          { value: 'cream_gel_balm', label: '크림/젤/밤' },
+          { value: 'mist', label: '미스트' },
+        ],
+      },
+      { value: 'suncare', label: '선케어' },
+      { value: 'pack_mask', label: '팩/마스크' },
+      { value: 'cleansing', label: '클렌징' },
+    ],
+  },
+  { value: 'body_hair', label: '바디/헤어' },
+  { value: 'health_food', label: '건강식품' },
 ];
+
+function findCategoryLabel(nodes: CategoryNode[], value: string): string | null {
+  for (const node of nodes) {
+    if (node.value === value) return node.label;
+    if (node.children) {
+      const found = findCategoryLabel(node.children, value);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function findCategoryPath(nodes: CategoryNode[], value: string, path: CategoryNode[] = []): CategoryNode[] | null {
+  for (const node of nodes) {
+    const nextPath = [...path, node];
+    if (node.value === value) return nextPath;
+    if (node.children) {
+      const found = findCategoryPath(node.children, value, nextPath);
+      if (found) return found;
+    }
+  }
+  return null;
+}
 
 // ─────────────────────────────────────────────────────────────────
 // 로컬 이미지 항목 타입 (업로드 이전 브라우저 상태)
@@ -103,6 +163,14 @@ function PlusIcon() {
   );
 }
 
+function ChevronRightIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+      <path d="M5.5 3.5L9 7L5.5 10.5" stroke="#999" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────
 // 필드 레이블 — Figma 기준(필수: text-[#171717] + orange *, 선택: text-[#707070])
 // ─────────────────────────────────────────────────────────────────
@@ -117,16 +185,182 @@ function FieldLabel({ children, required }: { children: React.ReactNode; require
 }
 
 // ─────────────────────────────────────────────────────────────────
+// 카테고리 선택 모달 (Figma 381:6293 "카테고리 선택")
+//
+// Figma 프레임 자체엔 backdrop 딤(어둡게 가리기)·제목/설명·확인/닫기 버튼이
+// 보이지 않는다 — 흰 카드(drop-shadow) + 검색 입력 + 4단 목록뿐이다. 그
+// 카드를 그대로 옮기고, "확인" 버튼 대신 leaf(더 하위 데이터가 없는 노드)를
+// 클릭하면 즉시 선택·닫힘으로 처리했다 — Figma에 없는 버튼을 임의로 만들지
+// 않기 위한 최소 보완이다. backdrop은 화면을 어둡게 가리진 않되(Figma에
+// 없음), 바깥 영역 클릭 시 닫히는 투명 캐처로는 둔다.
+// ─────────────────────────────────────────────────────────────────
+
+function CategoryColumn({
+  heading,
+  items,
+  selectedValue,
+  onSelect,
+  showChevron,
+}: {
+  heading: string;
+  items: CategoryNode[];
+  selectedValue: string | null;
+  onSelect: (node: CategoryNode) => void;
+  showChevron: boolean;
+}) {
+  return (
+    <div className="flex w-[277px] shrink-0 flex-col items-start">
+      <div className="flex w-full items-center px-4 py-2">
+        <p className="text-[12px] font-light tracking-[-0.04em] text-[#999]">{heading}</p>
+      </div>
+      {items.length === 0 && <p className="px-4 py-[18px] text-[12px] text-[#999]">검색 결과가 없습니다.</p>}
+      {items.map((item) => {
+        const isSelected = item.value === selectedValue;
+        return (
+          <button
+            key={item.value}
+            type="button"
+            onClick={() => onSelect(item)}
+            aria-pressed={isSelected}
+            className={`flex w-full items-center justify-between px-4 py-[18px] text-left text-[14px] tracking-[-0.01em] transition-colors ${
+              isSelected ? 'bg-[#f5f5f5] text-[#ff6a38]' : 'text-[#707070] hover:bg-gray-50'
+            }`}
+          >
+            <span>{item.label}</span>
+            {showChevron && item.children && <ChevronRightIcon />}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function CategoryModal({
+  currentValue,
+  onClose,
+  onSelect,
+}: {
+  currentValue: string;
+  onClose: () => void;
+  onSelect: (value: string) => void;
+}) {
+  const initialPath = useMemo(() => findCategoryPath(CATEGORY_TREE, currentValue) ?? [], [currentValue]);
+  const [selectedL1, setSelectedL1] = useState<CategoryNode | null>(initialPath[0] ?? null);
+  const [selectedL2, setSelectedL2] = useState<CategoryNode | null>(initialPath[1] ?? null);
+  const [selectedL3, setSelectedL3] = useState<CategoryNode | null>(initialPath[2] ?? null);
+  const [search, setSearch] = useState('');
+
+  const commit = (node: CategoryNode) => {
+    onSelect(node.value);
+    onClose();
+  };
+
+  const query = search.trim().toLowerCase();
+  const filterItems = (nodes: CategoryNode[]) =>
+    query ? nodes.filter((n) => n.label.toLowerCase().includes(query)) : nodes;
+
+  return (
+    <div className="fixed inset-0 z-50" onClick={onClose} role="presentation">
+      <div
+        role="dialog"
+        aria-label="카테고리 선택"
+        onClick={(e) => e.stopPropagation()}
+        className="absolute top-1/2 left-1/2 flex w-[1203px] max-w-[calc(100vw-48px)] -translate-x-1/2 -translate-y-1/2 flex-col items-start gap-3 rounded-[5px] bg-white px-7 py-5 drop-shadow-[2px_2px_12px_rgba(0,0,0,0.06)]"
+      >
+        {/* 다른 모든 텍스트 입력(상품명/상품코드/핵심키워드 등)과 같은 focus
+            처리(Design Direction §8: "Focus에서 Orange Accent")를 그대로
+            재사용한다 — 이 검색 입력만 border를 감싼 div에 올려두고
+            focus 스타일을 빠뜨렸던 것을 다른 input들과 같은 패턴(직접
+            border+focus:border-[#ff6a38])으로 맞췄다. */}
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="카테고리명 검색"
+          className="w-[150px] rounded-[6px] border border-[#eaeaea] bg-white px-4 py-2.5 text-[14px] text-[#707070] outline-none placeholder:text-[#707070] focus:border-[#ff6a38]"
+        />
+
+        <div className="flex w-full items-stretch gap-1.5 overflow-x-auto">
+          <CategoryColumn
+            heading="대분류"
+            items={filterItems(CATEGORY_TREE)}
+            selectedValue={selectedL1?.value ?? null}
+            showChevron
+            onSelect={(node) => {
+              if (node.children) {
+                setSelectedL1(node);
+                setSelectedL2(null);
+                setSelectedL3(null);
+              } else {
+                commit(node);
+              }
+            }}
+          />
+          <div className="w-px shrink-0 self-stretch bg-[#eaeaea]" />
+          <CategoryColumn
+            heading="중분류"
+            items={filterItems(selectedL1?.children ?? [])}
+            selectedValue={selectedL2?.value ?? null}
+            showChevron
+            onSelect={(node) => {
+              if (node.children) {
+                setSelectedL2(node);
+                setSelectedL3(null);
+              } else {
+                commit(node);
+              }
+            }}
+          />
+          <div className="w-px shrink-0 self-stretch bg-[#eaeaea]" />
+          <CategoryColumn
+            heading="소분류"
+            items={filterItems(selectedL2?.children ?? [])}
+            selectedValue={selectedL3?.value ?? null}
+            showChevron
+            onSelect={(node) => {
+              if (node.children) setSelectedL3(node);
+              else commit(node);
+            }}
+          />
+          <div className="w-px shrink-0 self-stretch bg-[#eaeaea]" />
+          <CategoryColumn
+            heading="세분류"
+            items={filterItems(selectedL3?.children ?? [])}
+            selectedValue={null}
+            showChevron={false}
+            onSelect={(node) => commit(node)}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────
 // N1 페이지 (Figma node 525:3023 "N1 이미지 정보 입력" 기준)
 // ─────────────────────────────────────────────────────────────────
 
-export default function NewJobPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
-}) {
-  const { brandId: rawBrandId } = use(searchParams);
-  const brandId = typeof rawBrandId === 'string' ? rawBrandId : '';
+export default function NewJobPage() {
+  // useSearchParams()는 정적 렌더링 시 이 컴포넌트를 Suspense 경계까지
+  // client-only로 opt-in시킨다(Next.js 공식 요구사항) — fallback 없이 즉시
+  // 그리는 얇은 wrapper로 감싼다.
+  return (
+    <Suspense fallback={null}>
+      <NewJobPageInner />
+    </Suspense>
+  );
+}
+
+function NewJobPageInner() {
+  // Client Component page에 Next.js가 넘겨주는 searchParams prop(Promise)은
+  // 최초 진입(하드 로드)에서만 정확하고, 같은 경로에서 쿼리스트링만 바뀌는
+  // 클라이언트 사이드(soft) 네비게이션에서는 갱신되지 않는다(Next.js 공식
+  // 문서가 명시한 known caveat) — 이번 재현에서 실제 사용자는 앱 안에서
+  // 링크를 타고 들어왔고(soft navigation), 그 결과 brandId가 URL엔 있는데
+  // state는 빈 값으로 고정돼 있었다. 클라이언트 라우팅에도 반응하는
+  // useSearchParams()로 바꿔 URL을 실제 source of truth로 삼는다.
+  const searchParamsObj = useSearchParams();
+  const brandId = searchParamsObj.get('brandId') ?? '';
 
   const router = useRouter();
   const createMutation = useCreateJobMutation();
@@ -154,6 +388,10 @@ export default function NewJobPage({
 
   // ── 나가기 확인 ─────────────────────────────────────────────────
   const [showExitConfirm, setShowExitConfirm] = useState(false);
+
+  // ── 카테고리 선택 모달 (Figma 381:6293) ─────────────────────────
+  const [categoryModalOpen, setCategoryModalOpen] = useState(false);
+  const selectedCategoryLabel = displayCategory ? findCategoryLabel(CATEGORY_TREE, displayCategory) : null;
 
   // ── 키워드 ──────────────────────────────────────────────────────
 
@@ -283,26 +521,19 @@ export default function NewJobPage({
 
   return (
     <div className="flex h-screen w-full bg-white">
-      {/* N1 Figma 재정합(1단계) — Figma(525:3023)는 "보관함으로 나가기" X
-          버튼(608:1434, left-40 top-40)과 StepNav(573:3070, left-36)가 같은
-          좌측 rail x축을 공유한다. 기존엔 X 버튼이 본문 콘텐츠 영역의 padding
-          (px-10) 안에 있어 StepNav보다 한참 오른쪽으로 밀려 있었다 — 이제 X
-          버튼을 StepNav와 같은 44px 레일 컬럼 안에 둔다. StepNav 자신은
-          justify-between으로 6개 항목을 촘촘히 묶어 그리는 높이 고정 블록이라
-          (Figma도 top:calc(50% + 40px)로 rail 전체를 세로 중앙 정렬한다),
-          이 컬럼도 justify-center로 그 블록을 세로 중앙에 두고 top-10 X
-          버튼과는 별도로 띄운다 — 그냥 위쪽에 쌓으면(예: stretch) 2번 배지가
-          X 버튼에 가려진다(실측 확인).
-
-          마감 보정 — Figma는 이 rail이 viewport 왼쪽 끝에 완전히 붙어있지
-          않다(X 버튼 left-40, StepNav 자신도 left-36 — 둘 다 프레임 원점에서
-          36~40px 띄워져 있다). 이 프로젝트는 rail을 0에 붙여 그렸었는데,
-          실측 결과 "정보 입력" 라벨이 44px 폭엔 들어가지만(0.77px~43.2px)
-          rail 자체가 viewport 0에 붙어 있어 여백이 사실상 1px도 안 남아
-          경계에 닿아 보였다 — 라벨을 개별로 옮기지 않고, Figma 수치(36px)
-          그대로 이 rail wrapper에 ml-9로 최소 inset만 더했다. 44px 내부
-          구조·line 중심축(step-nav.tsx)은 그대로다. */}
-      <div className="relative ml-9 flex h-full w-[44px] shrink-0 flex-col items-center justify-center">
+      {/* N1 Figma 재정합(재수정) — Figma(525:3023) 실측: X 버튼(608:1434)
+          x=40,y=40,w=40,h=40 → bottom=80. StepNav(608:1440) x=36,y=150,
+          w=44,h=860(1080 프레임 기준). 이전 시도는 "top:calc(50%+40px)
+          -translate-y-1/2"로 Figma의 1080-프레임 공식을 그대로 옮겼는데,
+          이 공식은 뷰포트 높이가 1080보다 많이 작아지면(예: 800px) 계산된
+          top이 X 버튼의 bottom(80)보다 작아져 1번 step이 X 버튼 뒤로
+          들어가 버린다(실측 확인: 1440×800에서 겹침 재현). Figma의 860px
+          자체를 억지로 재현하는 대신, X 버튼 bottom(80)+여유 20px=100px를
+          "항상 지켜야 할 최소 상단 여백"으로 고정하고, 그 아래 남는 공간을
+          모두 StepNav에 준다 — 뷰포트가 얼마나 짧아지든 1번 step은 X
+          버튼보다 항상 아래에서 시작한다(공식이 아니라 고정 오프셋 + 남는
+          공간 채우기라 음수가 될 수 없다). */}
+      <div className="relative ml-9 h-full w-[44px] shrink-0">
         <button
           type="button"
           onClick={() => setShowExitConfirm(true)}
@@ -313,7 +544,9 @@ export default function NewJobPage({
             <path d="M2 2L14 14M14 2L2 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
           </svg>
         </button>
-        <StepNav currentStep="N1" />
+        <div className="absolute inset-0 pt-[100px] pb-6">
+          <StepNav currentStep="N1" />
+        </div>
       </div>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -326,12 +559,6 @@ export default function NewJobPage({
               번역할 원본 이미지를 등록하고 작업 조건을 설정합니다.
             </p>
           </div>
-
-          {!brandId && (
-            <div className="mt-4 rounded-md border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-orange-700">
-              브랜드를 먼저 선택해 주세요. URL에 <code className="font-mono text-xs">?brandId=</code> 파라미터가 필요합니다.
-            </div>
-          )}
 
           {/* 국가선택 / 언어선택 — Figma(525:3023, node 787:6016) 두 필드를
               한 줄에 배치. 각 필드 그룹은 w-[385px] 고정이고(늘어나 퍼지는
@@ -393,8 +620,9 @@ export default function NewJobPage({
           </div>
         </div>
 
-        {/* 본문: 좌 FileUploader + 우 필드 패널 */}
-        <div className="flex min-h-0 flex-1 gap-6 px-10 pb-6">
+        {/* 본문: 좌 FileUploader + 우 필드 패널. 아래 pb는 Figma 실측
+            (패널 bottom 932, 다음 버튼 top 965 → 33px)을 그대로 쓴다. */}
+        <div className="flex min-h-0 flex-1 gap-6 px-10 pb-[33px]">
           {/* 좌측 — 업로드 영역 */}
           <div
             onDragOver={(e) => {
@@ -506,13 +734,24 @@ export default function NewJobPage({
           </div>
 
           {/* 우측 — 필드 패널 */}
-          {/* 우측 필드 패널 — Figma(643:5942) 폭은 516px(505 아님)이고, 내부
-              overflow-y-auto가 따로 없다(고정 h-770 안에서 justify-between로
-              4개 블록 간격을 나눈다). 여기선 높이를 강제 고정하지 않는 대신,
-              근거 없이 크게 잡혀 있던 블록 간 gap(32px)을 Figma가 반복해서
-              쓰는 20px 톤(gap-5)으로 줄이고 스크롤을 없앴다(N1 Figma 재정합
-              4단계) — overflow-hidden으로 가리지 않고 실제 spacing을 줄인다. */}
-          <div className="flex w-[516px] shrink-0 flex-col gap-5 rounded-[8px] border border-[#eaeaea] p-5">
+          {/* 우측 필드 패널 — Figma(643:5942) 폭 516px. get_metadata로 4개
+              블록(상품명~규제분류 묶음/토글/결과물규격/핵심키워드)의 실제
+              y좌표를 각각 다시 쟀다: 643:5913 bottom=305 → 673:7820
+              top=359.67(gap 54.67), 673:7820 bottom=401.67 → 643:5914
+              top=456.33(gap 54.66), 643:5914 bottom=616.33 → 643:5924
+              top=671(gap 54.67) — 네 간격이 모두 54.6~54.7px로 사실상
+              같은 값이라 gap-[55px] 하나로도 Figma 실측과 맞는다(블록마다
+              다른 값을 억지로 만들지 않았다 — 실제로 같다).
+              패널 자체 높이(770)는 Figma의 1080 프레임 기준이라, 그보다
+              낮은 실제 브라우저 창에서는 자연 높이(~757)가 남는 공간을
+              넘어설 수 있다 — 이전엔 고정 height 없이 그대로 뒀더니
+              부모 flex-1 row가 패널을 눌러 압축했고, 핵심 키워드가 패널
+              테두리 밖으로 그대로 흘러나와 다음 버튼과 겹쳤다(1440×800
+              실측 재현). overflow-y-auto를 다시 두되, 이번엔 "필요 이상
+              공간을 만들어 생기는" 스크롤이 아니라 "실제 콘텐츠가 진짜
+              가용 공간보다 클 때만" 나오는 안전장치다 — 평소 뷰포트에서는
+              나타나지 않는다. */}
+          <div className="flex min-h-0 w-[516px] shrink-0 flex-col gap-[55px] overflow-y-auto rounded-[8px] border border-[#eaeaea] p-5">
             <div className="flex flex-col gap-3">
               <div className="flex flex-col gap-1">
                 <FieldLabel required>상품명</FieldLabel>
@@ -536,27 +775,37 @@ export default function NewJobPage({
                 />
               </div>
 
-              {/* 카테고리 — Figma는 "검색하기" 입력 + "선택하기" 버튼 2단 조합으로
-                  보여주지만, 그 조합의 실제 동작(검색 결과 목록·선택 흐름)이
-                  확인되지 않아 추측해 만들지 않는다. 기존에 이미 동작하는
-                  단일 select(카테고리 상태·옵션 목록)를 그대로 쓰고, 검색
-                  아이콘만 Figma 톤에 맞춰 얹었다. */}
+              {/* 카테고리 — Figma(643:5824)는 검색 표시 입력(w-323) + "선택하기"
+                  버튼(w-108) 두 요소가 한 행에 나란히 있다. 버튼을 누르면
+                  카테고리 선택 모달(381:6293)이 뜬다 — 실제 값 변경은 모달의
+                  leaf 클릭으로만 일어나고, 이 표시 필드 자체는 읽기 전용이다. */}
               <div className="flex flex-col gap-1">
                 <FieldLabel>카테고리</FieldLabel>
-                <div className="relative">
-                  <select
-                    value={displayCategory}
-                    onChange={(e) => setDisplayCategory(e.target.value)}
-                    className="w-full appearance-none rounded-[6px] border border-[#eaeaea] bg-white px-[14px] py-[10px] text-[14px] tracking-[-0.01em] text-[#707070] outline-none focus:border-[#ff6a38]"
-                  >
-                    <option value="">검색 하기</option>
-                    {CATEGORY_OPTIONS.map((o) => (
-                      <option key={o.value} value={o.value}>{o.label}</option>
-                    ))}
-                  </select>
-                  <div className="pointer-events-none absolute top-1/2 right-3.5 -translate-y-1/2">
+                <div className="flex items-center gap-4">
+                  <div className="flex h-[39px] flex-1 items-center justify-between rounded-[6px] border border-[#eaeaea] bg-white px-[14px] py-[10px]">
+                    <span
+                      className={`truncate text-[14px] tracking-[-0.01em] ${
+                        selectedCategoryLabel ? 'text-[#171717]' : 'text-[#707070]'
+                      }`}
+                    >
+                      {selectedCategoryLabel ?? '검색 하기'}
+                    </span>
                     <SearchIcon />
                   </div>
+                  {/* h-[37px]를 고정한 채 py-2.5(=line-height 21px과 합쳐 41px)를
+                      그대로 두면 실제 필요한 높이(41px)가 선언한 높이(37px)를
+                      넘어서 텍스트가 세로 중앙에서 어긋나 보였다(실측: 다른
+                      버튼과 달리 이 버튼만 고정 height를 썼는데 flex 정렬이
+                      없었다) — Figma 치수(w-108/h-37/py-10)는 그대로 두고
+                      flex items-center justify-center로 항상 정중앙에 오게
+                      고쳤다. */}
+                  <button
+                    type="button"
+                    onClick={() => setCategoryModalOpen(true)}
+                    className="flex h-[37px] w-[108px] shrink-0 items-center justify-center rounded-[6px] border border-[#eaeaea] bg-white px-5 py-2.5 text-[14px] font-medium tracking-[-0.42px] text-[#171717] hover:bg-gray-50"
+                  >
+                    선택하기
+                  </button>
                 </div>
               </div>
 
@@ -602,7 +851,9 @@ export default function NewJobPage({
                 </div>
                 <span className="text-[16px] font-medium text-[#ff6a38]">*</span>
               </div>
-              <p className="text-center text-[12px] font-light tracking-[-0.04em] text-[#707070]">
+              {/* Figma(673:7819)는 이 helper text를 라벨/토글과 같은 좌측
+                  기준선에 맞춘다 — 혼자 text-center로 떠 있던 것을 고쳤다. */}
+              <p className="text-left text-[12px] font-light tracking-[-0.04em] text-[#707070]">
                 이미지 유형에 따라 분석 방식이 달라집니다.
               </p>
             </div>
@@ -694,6 +945,15 @@ export default function NewJobPage({
           </button>
         </div>
       </div>
+
+      {/* 카테고리 선택 모달 (Figma 381:6293) */}
+      {categoryModalOpen && (
+        <CategoryModal
+          currentValue={displayCategory}
+          onClose={() => setCategoryModalOpen(false)}
+          onSelect={(value) => setDisplayCategory(value)}
+        />
+      )}
 
       {/* 나가기 확인 오버레이 */}
       {showExitConfirm && (

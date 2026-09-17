@@ -29,10 +29,16 @@ async function reachN3(page: Page): Promise<void> {
   await page.goto(`/jobs/new?brandId=${MOCK_BRAND_ID}`);
 
   await page.getByPlaceholder('상품 이름을 입력해주세요').fill('E2E 테스트 상품');
-  await selectFirstValidOption(page, 0);
-  await selectFirstValidOption(page, 1);
-  await selectFirstValidOption(page, 2);
-  await selectFirstValidOption(page, 3);
+  await selectFirstValidOption(page, 0); // 국가
+  await selectFirstValidOption(page, 1); // 언어
+
+  // 카테고리 — 더 이상 combobox가 아니다(N1 재정합: 검색 표시 필드 +
+  // "선택하기" → 모달(381:6293)). 하위 데이터가 없는 최상위 항목("바디/헤어")을
+  // 눌러 즉시 선택·닫힘 처리한다.
+  await page.getByRole('button', { name: '선택하기' }).click();
+  await page.getByRole('dialog', { name: '카테고리 선택' }).getByRole('button', { name: '바디/헤어' }).click();
+
+  await selectFirstValidOption(page, 2); // 규제 분류(인덱스가 3→2로 당겨졌다)
 
   await page.getByLabel('파일 선택').setInputFiles({
     name: 'e2e-test.png',
