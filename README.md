@@ -37,8 +37,10 @@ http://localhost:3000 에서 확인합니다.
 
 ## 환경 변수
 
-현재 이 스파이크 단계에서는 필요한 환경 변수가 없습니다 (API·외부 서비스 미연동, 모두 mock).
-실제 API가 붙으면 `.env.example`에 필요한 키를 추가하고 여기 표로 정리합니다.
+| 변수 | 값 | 설명 |
+|---|---|---|
+| `NEXT_PUBLIC_API_MOCKING` | `enabled` / 미설정(또는 그 외 값) | `enabled`일 때만 MSW(Mock Service Worker)가 켜집니다. production 여부(`NODE_ENV`)와는 독립적인 값입니다 — Vercel 실서버 환경에서는 이 값을 넣지 않아야 실제 API로 요청이 나갑니다. 로컬 mock 개발 시 `.env.local`에 `NEXT_PUBLIC_API_MOCKING=enabled`를 넣습니다. |
+
 Secret은 절대 Git에 커밋하지 않습니다 (`.env`, `.env.local`은 `.gitignore` 처리됨).
 
 ## 명령어
