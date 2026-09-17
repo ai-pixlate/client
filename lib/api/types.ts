@@ -14,9 +14,6 @@ import type { SectionVerdictStatus, VerdictType } from '@/lib/n3/verdict';
 /** 현재 사용자가 머물고 있는 화면 단계 */
 export type JobCurrentStep = 'N1' | 'N2' | 'N3' | 'N4' | 'N5' | 'N6';
 
-/** DB 작업 상태값 (Day 6 확정) */
-export type JobDbStatus = 'draft' | 'processing' | 'review' | 'done' | 'failed' | 'archived';
-
 /** 업로드 원본 이미지 유형. single 파이프라인은 미확정이므로 N2 이후 동작 단정 안 함 */
 export type ImageType = 'multi_section' | 'single';
 
@@ -39,30 +36,11 @@ export type ExclusionReasonCode =
   | 'restored_by_user';
 
 /**
- * 비동기 처리 항목 상태 (Day 6 확정).
- * TODO: TextBlock.blockStatus에는 적용하지 않음 — N5 응답 시점엔 이미 완료된
- * 블록만 내려오는 구조라 'running'이 실제로 쓰이는지 백엔드 확인 필요.
- */
-export type ProcessingStatus = 'pending' | 'running' | 'done' | 'failed';
-
-/**
  * 섹션 경고 뱃지 코드 (Day 6 확정, v3.4.1에서 Section.warningBadge로 연결).
  * 처리 파이프라인 문제 신호이며, section.verdicts(규제/현지화 판정)와는
  * 다른 축이다 — 둘을 하나로 합쳐 파생하지 않는다.
  */
 export type SectionWarningBadge = 'processing_failed' | 'quality_warning';
-
-/**
- * 산출물 이미지 용도 구분 (Day 6 확정).
- * TODO: Deliverable에 대응 필드 없음. 9월 MVP는 detail만 다루므로 필드 추가는 보류.
- */
-export type DeliverableUsageType = 'detail' | 'thumbnail_main' | 'thumbnail_sub';
-
-/**
- * 검증 적용 범위 (Day 6 확정).
- * TODO: ValidationItem/ValidationResult에 대응 필드 없음. 필드 추가는 보류.
- */
-export type ValidationScope = 'detail' | 'thumbnail_main' | 'thumbnail_sub' | 'all';
 
 /**
  * 텍스트 블록 역할. 번역 톤·규제 검증 강도가 이 값에 따라 달라짐.
@@ -91,20 +69,9 @@ export const BLOCK_ROLES = [
 /** 번역 상태 */
 export type TranslationStatus = 'machine' | 'userEdited';
 
-/** polling failedItems 항목 유형 */
-export type FailedItemType = 'section' | 'textBlock';
-
 // ─────────────────────────────────────────────
 // 협의 필요 — 현재 string으로 열어둠
 // ─────────────────────────────────────────────
-
-/**
- * 비동기 처리 세부 단계.
- * TODO: 백엔드 파이프라인 명세 확정 후 union으로 좁힐 것.
- * N2 후보: 'ocr' | 'section_decomposition' | 'verdict'
- * N4 후보: 'inpainting' | 'translation' | 'compliance_check' | 'render'
- */
-export type ProcessingSubStep = string;
 
 /**
  * 텍스트 블록 편집 상태 (v3.4.1 확정).
@@ -127,34 +94,10 @@ export type ComplianceFlag = string;
  */
 export type SpecType = string;
 
-// ─────────────────────────────────────────────
-// N2 / N4 / N6 polling 공용 — GET /api/jobs/:jobId/status
-// ─────────────────────────────────────────────
-
-export interface FailedItem {
-  id: string;
-  type: FailedItemType;
-  reason: string;
-  /**
-   * TODO(백엔드 v1.4 계약 대기): 개별/일괄 재시도 API와 함께 taskId(재시도
-   * 대상 비동기 task 식별자), retryable(boolean, 재시도 가능 여부)이 추가될
-   * 예정이다. v1.4 계약 확정 전까지는 타입·런타임 어느 쪽에도 반영하지 않는다.
-   */
-}
-
-export interface JobStatusResponse {
-  jobId: string;
-  currentStep: JobCurrentStep;
-  dbStatus: JobDbStatus;
-  /** 0~100 전체 진행률 */
-  progress: number;
-  /** 현재 세부 처리 단계. N2/N4/N6마다 다른 값 사용 */
-  processingSubStep: ProcessingSubStep;
-  /** N4 병렬 처리 중 활성 서브스텝 목록 (N4 전용, N2/N6에서는 빈 배열) */
-  activeSubSteps: ProcessingSubStep[];
-  hasFailed: boolean;
-  failedItems: FailedItem[];
-}
+// N2/N4/N6 polling 공용(구 GET /api/jobs/:jobId/status, JobStatusResponse/
+// FailedItem/ProcessingSubStep)은 오늘(N1→N6 happy path) 작업에서 실제 계약인
+// GET /jobs/:jobId/tasks(ApiJobTaskStatus, lib/api/job-schema.ts)로 대체하며
+// 제거했다 — 호출부(page.tsx N2View/N4ProcessingView)가 모두 옮겨갔다.
 
 // ─────────────────────────────────────────────
 // N1 — job 생성 관련
@@ -167,14 +110,39 @@ export interface SourceImageMeta {
 }
 
 export interface CreateJobRequest {
+  /**
+   * TODO(draft-first 전환): 실제 OpenAPI `JobCreate.brandId`는
+   * required `number`(int64)다. 지금 이 필드는 mock 전용 문자열
+   * ID(`brand_mock_001` 등)를 그대로 실어 나르는 FE 임시 타입이라
+   * string이다 — 실제 브랜드 API가 붙으면 number로 바꿔야 한다.
+   * 또한 실제 계약은 `POST /jobs(brandId)` → `PATCH /jobs/{jobId}`(N1
+   * 값) → `analyze` 3단계 draft-first 흐름이지만, 이 타입/N1 화면은
+   * 지금 모든 N1 값을 한 번에 담아 단일 `POST /jobs`로 보내는 구조다.
+   * 브랜드를 선택해 `/jobs/new?brandId=...`로 진입시키는 상위 화면도
+   * 아직 없다(현재는 URL 쿼리 파라미터가 유일한 진입 경로). 이 셋 모두
+   * 오늘 범위가 아니라 전환하지 않았다 — 별도 작업으로 다룬다.
+   */
   brandId: string;
+  /**
+   * 실제 OpenAPI(JobCreate/Job)와 필드명이 같다(productName/productCode) —
+   * 스키마 자체는 둘 다 optional이지만(analyze 게이트에서 productName 필수
+   * 검증), N1 폼은 이미 productName을 필수로 받으므로 이 요청 타입에서는
+   * required로 좁힌다(targetCountry 등 다른 필드와 같은 방식).
+   */
+  productName: string;
+  productCode?: string;
   sourceImages: SourceImageMeta[];
   targetCountry: string;
   targetLanguage: string;
   /** TODO: 허용 분류값 목록 백엔드 확정 필요 */
   regulatoryClass: string;
   specId: string;
-  displayCategory: string;
+  /**
+   * 실제 OpenAPI `JobCreate.categoryId`도 optional이다(`required`엔
+   * brandId만 있다) — N1 폼에서도 필수로 좁히지 않는다. productCode와
+   * 같은 방식으로 비어 있으면 payload에서 아예 뺀다.
+   */
+  displayCategory?: string;
   keywords: string[];
 }
 
@@ -517,67 +485,7 @@ export interface UpdateTranslationResponse {
   translationStatus: TranslationStatus;
 }
 
-// ─────────────────────────────────────────────
-// N6 — 최종 저장
-// ─────────────────────────────────────────────
-
-export interface ValidationItem {
-  /** 규칙 식별 코드. 9월: 'FORMAT_CHECK' | 'COLOR_SPACE_CHECK' */
-  ruleId: string;
-  name: string;
-  passed: boolean;
-  actualValue: string;
-  violationReason: string | null;
-}
-
-export interface ValidationResult {
-  passed: boolean;
-  items: ValidationItem[];
-}
-
-/**
- * 화면에 표시할 실제 결과 이미지.
- * exportArtifacts(다운로드 파일)와 다른 개념.
- */
-export interface Deliverable {
-  deliverableId: string;
-  sourceImageId: string;
-  imageUrl: string;
-  format: string;
-  colorSpace: string;
-  fileSizeBytes: number;
-  renderStatus: ProcessingStatus;
-  validationResult: ValidationResult;
-}
-
-/**
- * 사용자가 다운로드할 산출물 구성요소.
- * Deliverable(결과 이미지 표시)과 다른 개념.
- *
- * 9월 MVP 구성요소: 'images' | 'content_csv' | 'html'(should)
- * export_zip은 구성요소가 아니라 선택 항목을 묶어 받는 다운로드 동작 — exportZipUrl 사용.
- * manifest.json은 서버 내부용으로 이 목록에 포함하지 않음.
- * PSD는 12월 예정 — exportArtifacts에 포함하지 않고 UI에서 비활성으로만 표시.
- */
-export interface ExportArtifact {
-  /** 9월: 'images' | 'content_csv' | 'html'. export_zip/manifest/psd 제외. */
-  type: string;
-  downloadUrl: string;
-  /** images 타입에만 존재 */
-  fileCount?: number;
-}
-
-export interface JobResultResponse {
-  jobId: string;
-  renderStatus: ProcessingStatus;
-  /** 화면에 보여줄 결과 이미지 목록 */
-  deliverables: Deliverable[];
-  /** 다운로드할 산출물 구성요소 목록 (images, content_csv, html) */
-  exportArtifacts: ExportArtifact[];
-  /**
-   * 선택 구성요소를 ZIP으로 묶어 받는 URL.
-   * TODO: 백엔드 확정 후 필드명·동작 방식 조율 필요.
-   */
-  exportZipUrl: string;
-  saved: boolean;
-}
+// N6 — 저장/내보내기 수기 타입(ValidationItem/ValidationResult/Deliverable/
+// ExportArtifact/JobResultResponse)은 오늘(N6 데이터 흐름 연결) lib/api/n6-schema.ts의
+// generated 타입(ApiDeliverable/ApiValidationDetail/ApiExportResponse 등)으로
+// 대체하며 제거했다 — n5-schema.ts와 같은 경계 원칙.

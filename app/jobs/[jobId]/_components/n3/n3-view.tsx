@@ -18,7 +18,7 @@ import {
 import {
   useSectionsQuery,
   useUpdateSectionBucketMutation,
-  useAdvanceJobStepMutation,
+  useSectionProceedMutation,
 } from '@/lib/queries/pixate';
 import type { Section, SectionBucket } from '@/lib/api/types';
 import { StepNav } from '../step-nav';
@@ -47,7 +47,7 @@ interface ActiveDrag {
 export function N3View({ jobId }: { jobId: string }) {
   const { data, isLoading, isError, error } = useSectionsQuery(jobId);
   const mutation = useUpdateSectionBucketMutation(jobId);
-  const advanceMutation = useAdvanceJobStepMutation(jobId);
+  const proceedMutation = useSectionProceedMutation(jobId);
 
   const [activeSectionId, setActiveSectionId] = useState<string | null>(null);
   const [activeDrag, setActiveDrag] = useState<ActiveDrag | null>(null);
@@ -177,8 +177,8 @@ export function N3View({ jobId }: { jobId: string }) {
               sections={includeSections}
               activeDrag={activeDrag}
               overZone={overZone}
-              onAdvance={() => advanceMutation.mutate()}
-              isAdvancing={advanceMutation.isPending}
+              onAdvance={() => proceedMutation.mutate()}
+              isAdvancing={proceedMutation.isPending}
             />
           </div>
         </div>

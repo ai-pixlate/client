@@ -1,26 +1,19 @@
 'use client';
 
-import type { JobStatusResponse } from '@/lib/api/types';
+import type { ApiJobTaskStatus } from '@/lib/api/job-schema';
 
-const N4_SUBSTEP_LABELS: Record<string, string> = {
-  inpainting: '원문의 텍스트 영역을 정리하고 있습니다.',
-  translation: '콘텐츠를 현지 언어로 번역하고 있습니다.',
-  compliance_check: '규제 및 표현 적합성을 확인하고 있습니다.',
-  render: '번역 결과를 이미지에 적용하고 있습니다.',
-};
 const N4_SUBSTEP_FALLBACK = '번역 결과를 생성하고 있습니다.';
 
-const ACTIVE_SUBSTEP_LABELS: Record<string, string> = {
-  inpainting: '인페인팅',
-  translation: '번역',
-  compliance_check: '규제 검증',
-  render: '렌더링',
-};
-
-export function N4ProcessingView({ status }: { status: JobStatusResponse }) {
-  const data = status;
-
-  const subStepLabel = N4_SUBSTEP_LABELS[data.processingSubStep] ?? N4_SUBSTEP_FALLBACK;
+/**
+ * 오늘(N1→N6 happy path): GET /jobs/:jobId/tasks(JobTaskStatus)로 갈아탔다.
+ * N2View와 같은 이유로 substep 코드 매핑을 걷어내고 stages[].label을 그대로
+ * 쓴다 — progress는 0.0~1.0 실수라 반올림한 정수 %로 표시한다.
+ */
+export function N4ProcessingView({ status }: { status: ApiJobTaskStatus }) {
+  const runningStages = (status.stages ?? []).filter((s) => s.status === 'running');
+  const primaryLabel = runningStages[0]?.label ?? N4_SUBSTEP_FALLBACK;
+  const progressPercent = Math.round((status.progress ?? 0) * 100);
+  const failedItems = (status.items ?? []).filter((i) => i.status === 'failed');
 
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-10 px-6">
@@ -51,39 +44,39 @@ export function N4ProcessingView({ status }: { status: JobStatusResponse }) {
       {/* 제목 + 현재 단계 */}
       <div className="text-center">
         <h2 className="text-lg font-semibold text-gray-800">번역을 진행하고 있습니다</h2>
-        <p className="mt-1 text-sm text-gray-500">{subStepLabel}</p>
+        <p className="mt-1 text-sm text-gray-500">{primaryLabel}</p>
       </div>
 
       {/* 진행률 바 */}
       <div className="w-full max-w-sm space-y-3">
         <div className="flex items-center justify-between text-sm">
           <span className="text-gray-600">전체 진행률</span>
-          <span className="font-semibold tabular-nums text-violet-600">{data.progress}%</span>
+          <span className="font-semibold tabular-nums text-violet-600">{progressPercent}%</span>
         </div>
         <div
           className="h-2 w-full overflow-hidden rounded-full bg-gray-100"
           role="progressbar"
-          aria-valuenow={data.progress}
+          aria-valuenow={progressPercent}
           aria-valuemin={0}
           aria-valuemax={100}
         >
           <div
             className="h-full rounded-full bg-violet-500 transition-[width] duration-500 ease-out"
-            style={{ width: `${data.progress}%` }}
+            style={{ width: `${progressPercent}%` }}
           />
         </div>
       </div>
 
       {/* 병렬 처리 중인 서브스텝 태그 */}
-      {data.activeSubSteps.length > 0 && (
+      {runningStages.length > 0 && (
         <div className="flex flex-wrap justify-center gap-2">
-          {data.activeSubSteps.map((sub) => (
+          {runningStages.map((stage) => (
             <span
-              key={sub}
+              key={stage.key}
               className="inline-flex items-center gap-1.5 rounded-full border border-violet-200 bg-violet-50 px-3 py-1 text-xs font-medium text-violet-700"
             >
               <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-violet-500" />
-              {ACTIVE_SUBSTEP_LABELS[sub] ?? sub}
+              {stage.label}
             </span>
           ))}
         </div>
@@ -92,15 +85,15 @@ export function N4ProcessingView({ status }: { status: JobStatusResponse }) {
       <p className="text-xs text-gray-400">완료되면 자동으로 검수 단계로 이동합니다.</p>
 
       {/* 부분 실패 안내 */}
-      {data.failedItems.length > 0 && (
+      {failedItems.length > 0 && (
         <div className="w-full max-w-sm rounded-lg border border-orange-200 bg-orange-50 p-4">
           <p className="mb-2 text-sm font-medium text-orange-700">
             일부 텍스트 블록을 처리하지 못했습니다
           </p>
           <ul className="mb-3 space-y-1">
-            {data.failedItems.map((item) => (
-              <li key={item.id} className="text-xs text-orange-600">
-                {item.id} — {item.reason}
+            {failedItems.map((item) => (
+              <li key={item.taskId} className="text-xs text-orange-600">
+                {item.unitType} #{item.unitId} — {item.errorCode ?? '알 수 없는 오류'}
               </li>
             ))}
           </ul>

@@ -59,7 +59,7 @@ test.describe('정상 confirm', () => {
 
     // 클릭 직후 버튼이 disabled로 전환된다(중복 confirm 방지) — 이후 상태는
     // 성공하면 N6로 화면 자체가 바뀌어 이 버튼이 더 이상 존재하지 않는다.
-    await expect(page.getByRole('heading', { name: '번역이 완료됐습니다' })).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText('번역이 완료되었습니다.')).toBeVisible({ timeout: 10_000 });
 
     expect(confirmRequests).toHaveLength(1);
     const body = JSON.parse(confirmRequests[0]);
@@ -117,7 +117,7 @@ test.describe('unresolved warning — acknowledgedWarnings 불일치', () => {
     // 흐름이 만드는 요청은 일치해서 통과한다"를 별도로 재확인한다(정상
     // confirm 테스트와 같은 취지, INVALID_STATE 쪽 설명에 붙여 둔다).
     await page.getByTestId('n5-confirm-button').click();
-    await expect(page.getByRole('heading', { name: '번역이 완료됐습니다' })).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText('번역이 완료되었습니다.')).toBeVisible({ timeout: 10_000 });
   });
 });
 
@@ -163,7 +163,7 @@ test.describe('전체 section 제외 — ALL_SECTIONS_EXCLUDED', () => {
     await expect(page.getByTestId('n5-confirm-error')).toHaveText('모든 섹션이 제외되어 확정할 수 없습니다.');
     // N6로 넘어가지 않는다 — 실패 전에 낙관적으로 이동하지 않는다.
     await expect(page.getByTestId('n5-panel')).toBeVisible();
-    await expect(page.getByRole('heading', { name: '번역이 완료됐습니다' })).toHaveCount(0);
+    await expect(page.getByText('번역이 완료되었습니다.')).toHaveCount(0);
 
     // selection/zoom/pan/viewMode 모두 유지
     await expect(page.getByTestId('n5-block-row-9103')).toHaveAttribute('aria-pressed', 'true');
@@ -192,7 +192,7 @@ test.describe('중복 confirm 방지', () => {
     // 자체가 사라진다. 어느 쪽이든 PATCH 요청이 1개만 나갔는지가 핵심이다.
     void disabledRightAfterClick;
 
-    await expect(page.getByRole('heading', { name: '번역이 완료됐습니다' })).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText('번역이 완료되었습니다.')).toBeVisible({ timeout: 10_000 });
     expect(confirmRequests).toHaveLength(1);
   });
 });

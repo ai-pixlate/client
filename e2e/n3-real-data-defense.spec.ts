@@ -28,19 +28,28 @@ const TINY_PNG_BASE64 =
 async function reachN3(page: Page): Promise<void> {
   await page.goto(`/jobs/new?brandId=${MOCK_BRAND_ID}`);
 
-  await selectFirstValidOption(page, 0);
-  await selectFirstValidOption(page, 1);
-  await selectFirstValidOption(page, 2);
-  await selectFirstValidOption(page, 3);
+  await page.getByPlaceholder('상품 이름을 입력해주세요').fill('E2E 테스트 상품');
+  await selectFirstValidOption(page, 0); // 국가
+  await selectFirstValidOption(page, 1); // 언어
 
-  await page.getByLabel('이미지 추가').setInputFiles({
+  // 카테고리 — 더 이상 combobox가 아니다(N1 재정합: 검색 표시 필드 +
+  // "선택하기" → 모달(381:6293)). 하위 데이터가 없는 최상위 항목("바디/헤어")을
+  // 눌러 즉시 선택·닫힘 처리한다.
+  await page.getByRole('button', { name: '선택하기' }).click();
+  await page.getByRole('dialog', { name: '카테고리 선택' }).getByRole('button', { name: '바디/헤어' }).click();
+
+  await selectFirstValidOption(page, 2); // 규제 분류(인덱스가 3→2로 당겨졌다)
+
+  await page.getByLabel('파일 선택').setInputFiles({
     name: 'e2e-test.png',
     mimeType: 'image/png',
     buffer: Buffer.from(TINY_PNG_BASE64, 'base64'),
   });
-  await expect(page.getByText('e2e-test.png')).toBeVisible();
+  // N1 재정합(925:2529) — 업로드 후 파일명 텍스트 대신 썸네일 그리드로
+  // 표시된다. 업로드 성공 확인은 해당 파일의 썸네일 img(alt=파일명)로 한다.
+  await expect(page.locator('img[alt="e2e-test.png"]')).toBeVisible();
 
-  await page.getByRole('button', { name: '다음 →' }).click();
+  await page.getByRole('button', { name: '다음' }).click();
   await expect(page).toHaveURL(new RegExp(`/jobs/${MOCK_JOB_ID}$`));
 
   await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 8_000 });
