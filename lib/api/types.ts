@@ -36,30 +36,11 @@ export type ExclusionReasonCode =
   | 'restored_by_user';
 
 /**
- * 비동기 처리 항목 상태 (Day 6 확정).
- * TODO: TextBlock.blockStatus에는 적용하지 않음 — N5 응답 시점엔 이미 완료된
- * 블록만 내려오는 구조라 'running'이 실제로 쓰이는지 백엔드 확인 필요.
- */
-export type ProcessingStatus = 'pending' | 'running' | 'done' | 'failed';
-
-/**
  * 섹션 경고 뱃지 코드 (Day 6 확정, v3.4.1에서 Section.warningBadge로 연결).
  * 처리 파이프라인 문제 신호이며, section.verdicts(규제/현지화 판정)와는
  * 다른 축이다 — 둘을 하나로 합쳐 파생하지 않는다.
  */
 export type SectionWarningBadge = 'processing_failed' | 'quality_warning';
-
-/**
- * 산출물 이미지 용도 구분 (Day 6 확정).
- * TODO: Deliverable에 대응 필드 없음. 9월 MVP는 detail만 다루므로 필드 추가는 보류.
- */
-export type DeliverableUsageType = 'detail' | 'thumbnail_main' | 'thumbnail_sub';
-
-/**
- * 검증 적용 범위 (Day 6 확정).
- * TODO: ValidationItem/ValidationResult에 대응 필드 없음. 필드 추가는 보류.
- */
-export type ValidationScope = 'detail' | 'thumbnail_main' | 'thumbnail_sub' | 'all';
 
 /**
  * 텍스트 블록 역할. 번역 톤·규제 검증 강도가 이 값에 따라 달라짐.
@@ -487,67 +468,7 @@ export interface UpdateTranslationResponse {
   translationStatus: TranslationStatus;
 }
 
-// ─────────────────────────────────────────────
-// N6 — 최종 저장
-// ─────────────────────────────────────────────
-
-export interface ValidationItem {
-  /** 규칙 식별 코드. 9월: 'FORMAT_CHECK' | 'COLOR_SPACE_CHECK' */
-  ruleId: string;
-  name: string;
-  passed: boolean;
-  actualValue: string;
-  violationReason: string | null;
-}
-
-export interface ValidationResult {
-  passed: boolean;
-  items: ValidationItem[];
-}
-
-/**
- * 화면에 표시할 실제 결과 이미지.
- * exportArtifacts(다운로드 파일)와 다른 개념.
- */
-export interface Deliverable {
-  deliverableId: string;
-  sourceImageId: string;
-  imageUrl: string;
-  format: string;
-  colorSpace: string;
-  fileSizeBytes: number;
-  renderStatus: ProcessingStatus;
-  validationResult: ValidationResult;
-}
-
-/**
- * 사용자가 다운로드할 산출물 구성요소.
- * Deliverable(결과 이미지 표시)과 다른 개념.
- *
- * 9월 MVP 구성요소: 'images' | 'content_csv' | 'html'(should)
- * export_zip은 구성요소가 아니라 선택 항목을 묶어 받는 다운로드 동작 — exportZipUrl 사용.
- * manifest.json은 서버 내부용으로 이 목록에 포함하지 않음.
- * PSD는 12월 예정 — exportArtifacts에 포함하지 않고 UI에서 비활성으로만 표시.
- */
-export interface ExportArtifact {
-  /** 9월: 'images' | 'content_csv' | 'html'. export_zip/manifest/psd 제외. */
-  type: string;
-  downloadUrl: string;
-  /** images 타입에만 존재 */
-  fileCount?: number;
-}
-
-export interface JobResultResponse {
-  jobId: string;
-  renderStatus: ProcessingStatus;
-  /** 화면에 보여줄 결과 이미지 목록 */
-  deliverables: Deliverable[];
-  /** 다운로드할 산출물 구성요소 목록 (images, content_csv, html) */
-  exportArtifacts: ExportArtifact[];
-  /**
-   * 선택 구성요소를 ZIP으로 묶어 받는 URL.
-   * TODO: 백엔드 확정 후 필드명·동작 방식 조율 필요.
-   */
-  exportZipUrl: string;
-  saved: boolean;
-}
+// N6 — 저장/내보내기 수기 타입(ValidationItem/ValidationResult/Deliverable/
+// ExportArtifact/JobResultResponse)은 오늘(N6 데이터 흐름 연결) lib/api/n6-schema.ts의
+// generated 타입(ApiDeliverable/ApiValidationDetail/ApiExportResponse 등)으로
+// 대체하며 제거했다 — n5-schema.ts와 같은 경계 원칙.

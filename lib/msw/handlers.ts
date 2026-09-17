@@ -7,11 +7,14 @@ import type {
 import {
   MOCK_JOB_ID,
   mockSectionsResponse,
-  mockJobResultResponse,
+  mockN6Deliverables,
+  mockN6Components,
+  mockN6Validation,
 } from '@/lib/mock-api/fixtures';
 import { mockN5Job, mockN5Blocks, mockN5PreviewSections, buildMockN5Preview } from '@/lib/mock-api/n5-fixtures';
 import type { ApiJob, ApiJobAsyncTaskItem, ApiTextBlock } from '@/lib/api/n5-schema';
 import type { ApiAcceptedTask } from '@/lib/api/job-schema';
+import type { ApiDeliverableList, ApiExportResponse, ApiLibraryCard } from '@/lib/api/n6-schema';
 
 // ─────────────────────────────────────────────
 // Mock 인메모리 상태
@@ -71,6 +74,9 @@ let jobProcessingPollCount = 0;
 function resetJobState() {
   jobState = { ...mockN5Job, currentStep: 'N2', userFacingStatus: 'analyzing', status: 'processing' };
   jobProcessingPollCount = 0;
+  n6LatestRenderTaskId = null;
+  n6RenderTaskState.clear();
+  n6ExportArtifactState.clear();
 }
 
 /**
@@ -141,8 +147,42 @@ function n5RevisionConflictResponse(current: ApiTextBlock) {
   );
 }
 
-/** N6 보관함 저장 상태 */
-let jobResultSaved = false;
+/**
+ * N6 렌더 task 인메모리 상태 — job 전체 렌더 1건(unitType='job'). N5
+ * confirm이 N6 진입 시 최초 1회 자동 등록한다(API 계약: "최초 렌더는
+ * confirm(CFM-04)이 자동 등록"). POST /jobs/:jobId/render(수동 재렌더)는
+ * 이미 진행 중인 task가 있으면 새로 만들지 않고 그 taskId를 그대로 돌려준다
+ * (계약: "렌더 task upsert·unit당 1행·멱등"). n5TaskState(블록별 재렌더)와
+ * 같은 방식으로 pollCount>=2가 되면 done 처리한다 — 실제 2초 polling 몇 번
+ * 만에 끝나는 모습을 mock에서도 재현하기 위함이다.
+ */
+let n6RenderTaskIdCounter = 80000;
+let n6LatestRenderTaskId: number | null = null;
+const n6RenderTaskState = new Map<number, { pollCount: number }>();
+
+function registerOrReuseN6RenderTask(): number {
+  if (n6LatestRenderTaskId != null) {
+    const state = n6RenderTaskState.get(n6LatestRenderTaskId);
+    if (state && state.pollCount < 2) return n6LatestRenderTaskId; // 아직 진행 중 — 멱등 재사용
+  }
+  const taskId = n6RenderTaskIdCounter++;
+  n6RenderTaskState.set(taskId, { pollCount: 0 });
+  n6LatestRenderTaskId = taskId;
+  return taskId;
+}
+
+function isN6RenderDone(): boolean {
+  if (n6LatestRenderTaskId == null) return false;
+  return (n6RenderTaskState.get(n6LatestRenderTaskId)?.pollCount ?? 0) >= 2;
+}
+
+/**
+ * N6 export 묶음 인메모리 상태. POST /export가 발급하고 GET
+ * /exports/:artifactId/download가 조회한다. 계약에 재사용·멱등이 명시돼
+ * 있지 않으므로 호출마다 새 artifactId를 발급한다.
+ */
+let n6ExportArtifactIdCounter = 70000;
+const n6ExportArtifactState = new Map<number, { artifactType: ApiExportResponse['artifactType']; components: string[] }>();
 
 /**
  * N2/N4 진행 중(processing) 단계에서 다음 단계로 넘어갈 조건 — 오늘(N1→N6
@@ -424,18 +464,49 @@ export const handlers = [
   // ──────────────────────────────────────────
   // 비동기 큐 상태 polling (API-JOB-05, x-screen: N2·N4·N6)
   //
-  // 오늘(N1→N6 happy path)부터 이 엔드포인트가 두 가지 진행을 함께 나른다 —
+  // 오늘(N1→N6 happy path)부터 이 엔드포인트가 세 가지 진행을 함께 나른다 —
   // ① N5 block 재렌더 task(n5TaskState, PATCH /blocks/:id가 등록. 기존 로직
   // 그대로 유지) ② N2/N4 job 단계 진행(advanceJobProcessing, jobState.currentStep이
-  // N2/N4일 때만 poll count를 늘려 다음 단계로 전환). 응답 wrapper의
-  // currentStep/userFacingStatus/jobStatus는 항상 jobState를 그대로 반영한다 —
-  // FE(page.tsx)가 이 값으로만 다음 화면을 고른다(별도 계산 없음).
+  // N2/N4일 때만 poll count를 늘려 다음 단계로 전환) ③ N6 job 단위 render
+  // task(n6RenderTaskState, confirm/POST render가 등록 — taskType은 같은
+  // 'render'지만 unitType='job'으로 n5TaskState의 unitType='text_block'과
+  // 구분한다). 응답 wrapper의 currentStep/userFacingStatus/jobStatus는 항상
+  // jobState를 그대로 반영한다 — FE(page.tsx)가 이 값으로만 다음 화면을
+  // 고른다(별도 계산 없음).
   // ──────────────────────────────────────────
   http.get('/jobs/:jobId/tasks', ({ params }) => {
     const jobId = params.jobId as string;
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
 
     const items: ApiJobAsyncTaskItem[] = [];
+
+    if (n6LatestRenderTaskId != null) {
+      const state = n6RenderTaskState.get(n6LatestRenderTaskId);
+      if (state) {
+        state.pollCount += 1;
+        const done = state.pollCount >= 2;
+        items.push({
+          taskId: n6LatestRenderTaskId,
+          taskType: 'render',
+          unitType: 'job',
+          unitId: jobState.id,
+          status: done ? 'done' : 'running',
+          uiStatus: done ? 'done' : 'running',
+          retryCount: 0,
+          maxRetry: 3,
+          retryable: false,
+          errorCode: null,
+          revision: null,
+        });
+        // 렌더가 이 polling에서 막 완료됐고 아직 job이 'done'으로 넘어가지
+        // 않았으면 여기서 전환한다 — save(API-FIN-06)는 "렌더 성공 확인 후
+        // done/N6"이 전제이므로, 그 확인을 이 시점에 반영해 둔다.
+        if (done && jobState.currentStep === 'N6' && jobState.userFacingStatus !== 'done') {
+          jobState = { ...jobState, userFacingStatus: 'done', status: 'done' };
+        }
+      }
+    }
+
     for (const [taskId, state] of n5TaskState.entries()) {
       state.pollCount += 1;
       const block = n5BlockState.get(state.blockId);
@@ -503,15 +574,18 @@ export const handlers = [
     }
 
     const jobProgress = advanceJobProcessing();
-    const hasN5Items = items.length > 0;
+    // n6 render item(job 단위)과 n5 rerender item(block 단위) 둘 다 여기 속한다
+    // — N2/N4 job 단계 진행(advanceJobProcessing)과는 별도 진행률 소스라 있으면
+    // 이쪽을 우선한다(과거 이름 hasN5Items를 오늘 N6 항목도 포함하도록 재사용).
+    const hasTaskItems = items.length > 0;
 
     return HttpResponse.json({
       jobStatus: jobState.status,
       currentStep: jobState.currentStep,
       userFacingStatus: jobState.userFacingStatus,
-      progress: hasN5Items ? items.filter((i) => i.status === 'done').length / items.length : jobProgress.progress,
-      total: hasN5Items ? items.length : jobProgress.total,
-      done: hasN5Items ? items.filter((i) => i.status === 'done').length : jobProgress.done,
+      progress: hasTaskItems ? items.filter((i) => i.status === 'done').length / items.length : jobProgress.progress,
+      total: hasTaskItems ? items.length : jobProgress.total,
+      done: hasTaskItems ? items.filter((i) => i.status === 'done').length : jobProgress.done,
       failedCount: items.filter((i) => i.status === 'failed').length,
       stages: jobProgress.stages,
       items,
@@ -567,42 +641,146 @@ export const handlers = [
     }
 
     // job→N6, status=review(스펙: "job→review/N6"). userFacingStatus는 'done'이
-    // 아니라 'reviewing'으로 둔다 — 렌더 task는 confirm 트랜잭션에서 서버가
-    // 자동 등록하지만 아직 완료된 게 아니다(서버가 안 준 완료 상태를 mock이
-    // 임의로 만들지 않는다). 실제 렌더 진행 polling·완료 시 'done' 전환은
-    // N6 5단계 구현(오늘 범위 밖)에서 다룬다. N6 화면 자체는 이미 구현돼
-    // 있다(getJobResult 기준, 아래 GET /api/jobs/:jobId/result) — 그 결과
-    // 데이터는 이 jobState와 별개로 항상 완료 상태를 보여준다.
+    // 아니라 'reviewing'으로 둔다 — 렌더가 아직 완료된 게 아니다(서버가 안 준
+    // 완료 상태를 mock이 임의로 만들지 않는다). 최초 render task는 이 confirm
+    // 트랜잭션이 자동 등록한다(계약: "최초 렌더는 confirm이 자동 등록") — GET
+    // /jobs/:jobId/tasks polling이 이 task를 done으로 진행시키면 그 시점에
+    // userFacingStatus가 'done'으로 바뀐다(아래 tasks 핸들러 참고).
     jobState = { ...jobState, currentStep: 'N6', status: 'review', userFacingStatus: 'reviewing' };
+    registerOrReuseN6RenderTask();
 
     return HttpResponse.json(jobState);
   }),
 
   // ──────────────────────────────────────────
-  // N6 — 최종 결과 조회. mock 전용 /api placeholder를 아직 그대로 둔다 —
-  // N6 화면 자체를 만들지 않는 오늘(경로 정리) 범위 밖이다. TODO(N6 구현
-  // 시): 실제 계약은 GET /jobs/:jobId/deliverables(+ /validation)이고
-  // 응답 shape가 이 JobResultResponse와 전혀 다르다 — 경로만 바꿔 끼울 수
-  // 없고 화면·adapter를 함께 다시 만들어야 한다.
+  // N6 — 최종 이미지 (재)렌더링 트리거 (API-FIN-01)
+  //
+  // 최초 렌더는 confirm이 자동 등록한다(위 confirm 핸들러) — 이 엔드포인트는
+  // 수동 재렌더용이지만, 진행 중인 task가 없거나(예: 개발 서버 모듈 재초기화)
+  // failed일 때 FE가 호출해도 같은 upsert 규칙(멱등)으로 동작한다.
   // ──────────────────────────────────────────
-  http.get('/api/jobs/:jobId/result', ({ params }) => {
+  http.post('/jobs/:jobId/render', ({ params }) => {
     const jobId = params.jobId as string;
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
 
-    return HttpResponse.json({ ...mockJobResultResponse, saved: jobResultSaved });
+    const renderTaskId = registerOrReuseN6RenderTask();
+    return HttpResponse.json({ renderTaskId }, { status: 202 });
   }),
 
   // ──────────────────────────────────────────
-  // N6 — 보관함 저장. 위와 같은 이유로 /api placeholder 유지. TODO(N6 구현
-  // 시): 실제 계약은 POST /jobs/:jobId/save이고 응답이 LibraryCard다({saved:
-  // boolean}이 아니다).
-  // 호출 후 GET result에서 saved: true가 반환됩니다.
+  // N6 — 산출물 목록 + 구성요소 상태 (API-FIN-02)
+  //
+  // 렌더가 아직 done이 아니면 deliverables는 빈 배열, components는 전부
+  // pending으로 돌려준다 — "렌더 전" 상태를 실패로 위장하지 않는다
+  // (renderedUrl=null만으로 실패를 단정하지 않는 CLAUDE.md 원칙과 같은 축).
   // ──────────────────────────────────────────
-  http.post('/api/jobs/:jobId/save', ({ params }) => {
+  http.get('/jobs/:jobId/deliverables', ({ params }) => {
     const jobId = params.jobId as string;
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
 
-    jobResultSaved = true;
-    return HttpResponse.json({ saved: true });
+    const renderDone = isN6RenderDone();
+    const response: ApiDeliverableList = {
+      deliverables: renderDone ? mockN6Deliverables : [],
+      components: renderDone
+        ? mockN6Components
+        : mockN6Components.map((c) => ({ ...c, status: 'pending', isGenerated: false, isActive: false })),
+    };
+    return HttpResponse.json(response);
+  }),
+
+  // ──────────────────────────────────────────
+  // N6 — 규격 검증 상세 (API-FIN-03). deliverables와 같은 렌더 완료 전제.
+  // ──────────────────────────────────────────
+  http.get('/jobs/:jobId/validation', ({ params }) => {
+    const jobId = params.jobId as string;
+    if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
+
+    return HttpResponse.json(isN6RenderDone() ? mockN6Validation : []);
+  }),
+
+  // ──────────────────────────────────────────
+  // N6 — 산출물 묶음 생성 (API-FIN-04). components(셀러 선택)를 묶어
+  // export.zip 1건을 발급한다 — 호출마다 새 artifactId(재사용/멱등 규칙은
+  // 계약에 없다).
+  // ──────────────────────────────────────────
+  http.post('/jobs/:jobId/export', async ({ params, request }) => {
+    const jobId = params.jobId as string;
+    if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
+
+    const body = (await request.json().catch(() => ({}))) as { components?: unknown };
+    const components = Array.isArray(body.components)
+      ? body.components.filter((c): c is string => typeof c === 'string')
+      : [];
+    if (components.length === 0) {
+      return badRequest('components가 1개 이상 필요합니다');
+    }
+
+    const artifactId = n6ExportArtifactIdCounter++;
+    const artifactType: ApiExportResponse['artifactType'] = 'zip';
+    n6ExportArtifactState.set(artifactId, { artifactType, components });
+
+    const response: ApiExportResponse = { artifactId, artifactType, components };
+    return HttpResponse.json(response, { status: 201 });
+  }),
+
+  // ──────────────────────────────────────────
+  // N6 — 산출물 다운로드, presigned (API-FIN-05, 5분 만료). manifest·미생성·
+  // 남의 job은 404 — 여기서는 "이 job이 만든 적 없는 artifactId"로 표현한다.
+  // 실제 파일은 만들지 않는다 — mock presigned URL만 반환한다.
+  // ──────────────────────────────────────────
+  http.get('/jobs/:jobId/exports/:artifactId/download', ({ params }) => {
+    const jobId = params.jobId as string;
+    if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
+
+    const artifactId = Number(params.artifactId);
+    const artifact = n6ExportArtifactState.get(artifactId);
+    if (!artifact) return notFound(`Export artifact '${artifactId}' not found`);
+
+    const fileName = artifact.artifactType === 'zip' ? 'export.zip' : `export.${artifact.artifactType}`;
+    return HttpResponse.json({
+      url: `/mock/download/${fileName}?token=mock-presigned-${artifactId}`,
+      fileName,
+      expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+    });
+  }),
+
+  // ──────────────────────────────────────────
+  // N6 — 저장 = 보관함 카드 생성 (API-FIN-06)
+  //
+  // "렌더 성공 확인 후 done/N6·is_saved=true" — 렌더가 아직 안 끝났으면 409
+  // INVALID_STATE로 거절한다(계약: 409 상태 충돌).
+  // ──────────────────────────────────────────
+  http.post('/jobs/:jobId/save', ({ params }) => {
+    const jobId = params.jobId as string;
+    if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
+
+    if (!isN6RenderDone()) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'INVALID_STATE',
+            message: '렌더가 완료되지 않아 저장할 수 없습니다.',
+            retryable: true,
+            details: null,
+            traceId: `mock-trace-${Date.now()}`,
+          },
+        },
+        { status: 409 },
+      );
+    }
+
+    jobState = { ...jobState, isSaved: true, status: 'done', userFacingStatus: 'done' };
+
+    const card: ApiLibraryCard = {
+      jobId: jobState.id,
+      productName: jobState.productName ?? null,
+      brandName: null,
+      targetCountry: jobState.targetCountry ?? null,
+      targetLanguage: jobState.targetLanguage ?? null,
+      specType: jobState.specType,
+      thumbnailUrl: mockN6Deliverables[0]?.imageUrl ?? null,
+      savedAt: new Date().toISOString(),
+    };
+    return HttpResponse.json(card);
   }),
 ];

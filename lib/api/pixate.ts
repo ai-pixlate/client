@@ -2,12 +2,21 @@ import type {
   SectionsResponse,
   SectionBucket,
   UpdateSectionBucketRequest,
-  JobResultResponse,
   CreateJobRequest,
   CreateJobResponse,
 } from '@/lib/api/types';
 import type { ApiBlockPatch, ApiBlockPatchResponse, ApiConfirmRequest, ApiJob, ApiJobTaskStatus, ApiReviewPreview, ApiTextBlock } from '@/lib/api/n5-schema';
 import type { ApiAcceptedTask } from '@/lib/api/job-schema';
+import type {
+  ApiRenderResponse,
+  ApiDeliverableList,
+  ApiValidationDetail,
+  ApiExportRequest,
+  ApiExportResponse,
+  ApiDownloadResponse,
+  ApiSaveRequest,
+  ApiLibraryCard,
+} from '@/lib/api/n6-schema';
 
 // ─────────────────────────────────────────────
 // 공통 fetch 헬퍼
@@ -173,23 +182,53 @@ export async function confirmN5(jobId: string, payload: ApiConfirmRequest): Prom
 }
 
 // ─────────────────────────────────────────────
-// N6 — 결과 / 저장. 아직 mock 전용 /api placeholder다 — N6 화면 자체를
-// 만들지 않는 오늘(경로 정리) 범위에서는 그대로 둔다.
+// N6 — 저장 및 내보내기. 실제 계약(OpenAPI, N6 Save & Export)으로 맞췄다 —
+// mock 전용 /api 프리픽스를 쓰지 않는다.
 //
-// TODO(N6 구현 시 실제 계약으로 교체):
-//   getJobResult → GET /jobs/{jobId}/deliverables(+ /validation) — 응답
-//     shape(JobResultResponse)이 DeliverableList/ValidationDetail[]와 전혀
-//     다르다.
-//   saveJob → POST /jobs/{jobId}/save — 응답 shape({saved:boolean})이
-//     LibraryCard와 전혀 다르다.
+// happy path: render → tasks polling(job 단위 taskType=render) → deliverables
+// → validation → export → exports/{artifactId}/download → save.
 // ─────────────────────────────────────────────
 
-export function getJobResult(jobId: string): Promise<JobResultResponse> {
-  return apiFetch<JobResultResponse>(`/api/jobs/${jobId}/result`);
+/**
+ * 최종 이미지 (재)렌더링 트리거 (API-FIN-01). 최초 렌더는 N5 confirm(CFM-04)이
+ * 자동 등록하므로, N6 진입 시 무조건 이 함수를 호출하지 않는다 — 현재
+ * task 상태(getJobTasks)에 진행 중인 render task가 없을 때만(또는 재렌더가
+ * 필요할 때만) 호출한다. 렌더 진행/실패는 이 응답이 아니라 renderTaskId로
+ * GET /jobs/:jobId/tasks를 폴링해 판별한다(taskType=render).
+ */
+export function renderStart(jobId: string): Promise<ApiRenderResponse> {
+  return apiFetch<ApiRenderResponse>(`/jobs/${jobId}/render`, { method: 'POST' });
 }
 
-export function saveJob(jobId: string): Promise<{ saved: boolean }> {
-  return apiFetch<{ saved: boolean }>(`/api/jobs/${jobId}/save`, {
+/** 산출물 목록 + 검증 요약 + 구성요소 상태 조회 (API-FIN-02) */
+export function getDeliverables(jobId: string): Promise<ApiDeliverableList> {
+  return apiFetch<ApiDeliverableList>(`/jobs/${jobId}/deliverables`);
+}
+
+/** 규격 검증 상세 조회 (API-FIN-03) */
+export function getValidation(jobId: string): Promise<ApiValidationDetail[]> {
+  return apiFetch<ApiValidationDetail[]>(`/jobs/${jobId}/validation`);
+}
+
+/** 선택한 구성요소를 묶어 export.zip 생성 (API-FIN-04) */
+export function createExport(jobId: string, payload: ApiExportRequest): Promise<ApiExportResponse> {
+  return apiFetch<ApiExportResponse>(`/jobs/${jobId}/export`, {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+/** 생성된 산출물의 presigned 다운로드 정보 조회 (API-FIN-05, 5분 만료) */
+export function getExportDownload(jobId: string, artifactId: number): Promise<ApiDownloadResponse> {
+  return apiFetch<ApiDownloadResponse>(`/jobs/${jobId}/exports/${artifactId}/download`);
+}
+
+/** 저장 = 보관함 카드 생성 (API-FIN-06). 응답은 { saved: boolean }이 아니라 LibraryCard다. */
+export function saveJob(jobId: string, payload?: ApiSaveRequest): Promise<ApiLibraryCard> {
+  return apiFetch<ApiLibraryCard>(`/jobs/${jobId}/save`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload ?? {}),
   });
 }

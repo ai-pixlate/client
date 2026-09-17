@@ -11,8 +11,8 @@
 import type {
   SectionsResponse,
   Section,
-  JobResultResponse,
 } from '@/lib/api/types';
+import type { ApiDeliverable, ApiDeliverableList, ApiValidationDetail } from '@/lib/api/n6-schema';
 
 // ─────────────────────────────────────────────
 // 공통 ID 상수
@@ -344,106 +344,57 @@ export const mockN3VerdictContractSections: Section[] = [
 // mockSectionsResponse(N3) 등 다른 fixture가 계속 쓰므로 위에 그대로 남아 있다.
 
 // ─────────────────────────────────────────────
-// N6 — 최종 결과
+// N6 — 저장 및 내보내기 (실제 계약: GET /jobs/{jobId}/deliverables·/validation)
+//
+// render task(job 단위, lib/msw/handlers.ts의 n6RenderTaskState)가 done이 된
+// 뒤에 조회된다는 전제로 만든 고정 fixture다 — renderStatus는 항상 'done',
+// 렌더 진행 중 상태는 render task polling(GET /jobs/:jobId/tasks)이 표현하고
+// 이 fixture는 표현하지 않는다.
 // ─────────────────────────────────────────────
 
-/** N6: 렌더링 완료, 전체 검증 통과 */
-export const mockJobResultResponse: JobResultResponse = {
-  jobId: MOCK_JOB_ID,
-  renderStatus: 'done',
+/** 화면에 표시할 결과 이미지 2장. deliverable.validationResult는 9월 계약상
+ * unknown 블록이라(백엔드 구조 미확정) 검증 표시는 별도 /validation 응답을
+ * 쓴다 — 여기서는 null로 둔다. */
+export const mockN6Deliverables: ApiDeliverable[] = [
+  {
+    id: 9601,
+    sourceImageId: 9101,
+    usageType: 'detail',
+    imageUrl: '/mock/result-a.jpg',
+    format: 'JPG',
+    colorSpace: 'RGB',
+    fileSize: 1_843_200,
+    renderStatus: 'done',
+    validationResult: null,
+  },
+  {
+    id: 9602,
+    sourceImageId: 9102,
+    usageType: 'detail',
+    imageUrl: '/mock/result-b.jpg',
+    format: 'JPG',
+    colorSpace: 'RGB',
+    fileSize: 2_105_344,
+    renderStatus: 'done',
+    validationResult: null,
+  },
+];
 
-  // 화면에 표시할 결과 이미지 (exportArtifacts 다운로드 파일과 별개)
-  deliverables: [
-    {
-      deliverableId: 'dlv_001',
-      sourceImageId: SRC_A,
-      imageUrl: '/mock/result-a.jpg',
-      format: 'JPG',
-      colorSpace: 'RGB',
-      fileSizeBytes: 1_843_200,
-      renderStatus: 'done',
-      // 9월 MVP: FORMAT_CHECK + COLOR_SPACE_CHECK만 검증
-      validationResult: {
-        passed: true,
-        items: [
-          {
-            ruleId: 'FORMAT_CHECK',
-            name: '지원 포맷',
-            passed: true,
-            actualValue: 'JPG',
-            violationReason: null,
-          },
-          {
-            ruleId: 'COLOR_SPACE_CHECK',
-            name: '색공간',
-            passed: true,
-            actualValue: 'RGB',
-            violationReason: null,
-          },
-        ],
-      },
-    },
-    {
-      deliverableId: 'dlv_002',
-      sourceImageId: SRC_B,
-      imageUrl: '/mock/result-b.jpg',
-      format: 'JPG',
-      colorSpace: 'RGB',
-      fileSizeBytes: 2_105_344,
-      renderStatus: 'done',
-      // 색공간 검증 실패 케이스 — 파일 용량은 실측 표시만, 통과/실패 판정 없음
-      validationResult: {
-        passed: false,
-        items: [
-          {
-            ruleId: 'FORMAT_CHECK',
-            name: '지원 포맷',
-            passed: true,
-            actualValue: 'JPG',
-            violationReason: null,
-          },
-          {
-            ruleId: 'COLOR_SPACE_CHECK',
-            name: '색공간',
-            passed: false,
-            actualValue: 'CMYK',
-            violationReason: 'CMYK 색공간은 지원하지 않습니다. RGB로 변환하세요.',
-          },
-        ],
-      },
-    },
-  ],
+/**
+ * N6 산출물 구성요소 상태. 9월 MVP: images/csv는 생성 완료, html은 should라
+ * pending, psd는 12월 예정이라 항상 비활성(isActive=false) — UI에서 "12월
+ * 제공 예정"으로만 표시하고 선택 불가.
+ */
+export const mockN6Components: NonNullable<ApiDeliverableList['components']> = [
+  { artifactId: null, type: 'images', status: 'generated', isGenerated: true, isActive: true, failedCount: 0, retryAction: null },
+  { artifactId: null, type: 'csv', status: 'generated', isGenerated: true, isActive: true, failedCount: 0, retryAction: null },
+  { artifactId: null, type: 'html', status: 'pending', isGenerated: false, isActive: false, failedCount: 0, retryAction: null },
+  { artifactId: null, type: 'psd', status: 'pending', isGenerated: false, isActive: false, failedCount: 0, retryAction: null },
+];
 
-  // 다운로드 산출물 구성요소.
-  // manifest.json: 서버 내부용 — 이 목록에 포함 안 함.
-  // export_zip: 구성요소가 아니라 묶음 다운로드 동작 — exportZipUrl 사용.
-  // PSD: 12월 예정 — 배열에 넣지 않고 UI에서 비활성으로만 표시.
-  exportArtifacts: [
-    {
-      type: 'images',
-      downloadUrl: '/mock/download/images/',
-      fileCount: 2,
-    },
-    {
-      type: 'content_csv',
-      downloadUrl: '/mock/download/content.csv',
-    },
-    // html은 9월 should
-    {
-      type: 'html',
-      downloadUrl: '/mock/download/content.html',
-    },
-  ],
-
-  // 선택 구성요소를 ZIP으로 묶어 받는 URL.
-  // TODO: 백엔드 확정 후 필드명·동작 방식 조율 필요.
-  exportZipUrl: '/mock/download/export.zip',
-
-  saved: false,
-};
-
-/** N6: 렌더링 완료 후 보관함 저장된 상태 */
-export const mockJobResultSaved: JobResultResponse = {
-  ...mockJobResultResponse,
-  saved: true,
-};
+/** 9월 MVP 규격 검증: 포맷·색공간만(용량 passed=null, 계약 그대로). */
+export const mockN6Validation: ApiValidationDetail[] = [
+  { itemKey: 'format', scope: 'detail', passed: true, measuredValue: 'JPG', severity: 'error' },
+  { itemKey: 'color_space', scope: 'detail', passed: true, measuredValue: 'RGB', severity: 'error' },
+  { itemKey: 'file_size', scope: 'all', passed: null, measuredValue: null, severity: 'warning' },
+];

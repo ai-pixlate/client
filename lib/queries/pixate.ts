@@ -14,11 +14,16 @@ import {
   patchN5Block,
   getJobTasks,
   confirmN5,
-  getJobResult,
+  renderStart,
+  getDeliverables,
+  getValidation,
+  createExport,
+  getExportDownload,
   saveJob,
 } from '@/lib/api/pixate';
 import type { UpdateSectionBucketRequest, CreateJobRequest, SectionsResponse } from '@/lib/api/types';
-import type { ApiBlockPatch, ApiConfirmRequest, ApiTextBlock } from '@/lib/api/n5-schema';
+import type { ApiBlockPatch, ApiConfirmRequest, ApiJobTaskStatus, ApiTextBlock } from '@/lib/api/n5-schema';
+import type { ApiExportRequest } from '@/lib/api/n6-schema';
 
 // ─────────────────────────────────────────────
 // Query Keys
@@ -39,10 +44,11 @@ export const pixateKeys = {
   job: (jobId: string) => ['pixate', 'job', jobId] as const,
   tasks: (jobId: string) => ['pixate', 'job', jobId, 'tasks'] as const,
   sections: (jobId: string) => ['pixate', 'job', jobId, 'sections'] as const,
-  result: (jobId: string) => ['pixate', 'job', jobId, 'result'] as const,
   n5Blocks: (jobId: string) => ['pixate', 'job', jobId, 'n5-blocks'] as const,
   n5Preview: (jobId: string) => ['pixate', 'job', jobId, 'n5-preview'] as const,
   n5Task: (jobId: string, taskId: number | null) => ['pixate', 'job', jobId, 'n5-task', taskId] as const,
+  deliverables: (jobId: string) => ['pixate', 'job', jobId, 'deliverables'] as const,
+  validation: (jobId: string) => ['pixate', 'job', jobId, 'validation'] as const,
 };
 
 // ─────────────────────────────────────────────
@@ -68,14 +74,28 @@ export function useAnalyzeJobMutation() {
 }
 
 // ─────────────────────────────────────────────
-// N2 / N4 — 비동기 처리 진행 polling (API-JOB-05, GET /jobs/:jobId/tasks)
+// N2 / N4 / N6 — 비동기 처리 진행 polling (API-JOB-05, GET /jobs/:jobId/tasks)
 //
-// 폴링 주기 2초(계약 그대로). currentStep이 N2·N4(진행 중 단계)가 아니면
-// polling을 멈춘다 — N1/N3/N5/N6은 사용자 조작을 기다리는 정적 단계라 계속
-// 찔러볼 필요가 없다. currentStep이 바뀌면(N2→N3, N4→N5) page.tsx가 그 값을
-// 보고 다음 화면을 그대로 렌더한다 — FE가 별도로 "다음 단계 진입"을 계산하지
-// 않는다(userFacingStatus/currentStep은 서버 응답 그대로 쓴다).
+// 폴링 주기 2초(계약 그대로). currentStep이 N2·N4(진행 중 단계)면 무조건
+// polling한다 — N1/N3/N5는 사용자 조작을 기다리는 정적 단계라 계속 찔러볼
+// 필요가 없다. N6은 그 자체는 정적 단계지만, confirm이 자동 등록한 job 단위
+// render task(taskType=render, unitType이 'text_block'이 아닌 것 — N5의 블록별
+// 재렌더 task와 구분)가 아직 진행 중일 때만 계속 polling한다. currentStep이
+// 바뀌면(N2→N3, N4→N5) page.tsx가 그 값을 보고 다음 화면을 그대로 렌더한다 —
+// FE가 별도로 "다음 단계 진입"을 계산하지 않는다(userFacingStatus/currentStep은
+// 서버 응답 그대로 쓴다).
 // ─────────────────────────────────────────────
+
+function hasActiveN6RenderTask(data: ApiJobTaskStatus): boolean {
+  return (
+    data.items?.some(
+      (item) =>
+        item.taskType === 'render' &&
+        item.unitType !== 'text_block' &&
+        (item.status === 'pending' || item.status === 'running'),
+    ) ?? false
+  );
+}
 
 export function useJobTasksQuery(jobId: string, options: { polling?: boolean } = {}) {
   const { polling = false } = options;
@@ -88,7 +108,9 @@ export function useJobTasksQuery(jobId: string, options: { polling?: boolean } =
       ? (query) => {
           const data = query.state.data;
           if (!data) return 2_000; // 첫 응답 대기 중
-          return data.currentStep === 'N2' || data.currentStep === 'N4' ? 2_000 : false;
+          if (data.currentStep === 'N2' || data.currentStep === 'N4') return 2_000;
+          if (data.currentStep === 'N6') return hasActiveN6RenderTask(data) ? 2_000 : false;
+          return false;
         }
       : false,
   });
@@ -222,29 +244,84 @@ export function useConfirmN5Mutation(jobId: string) {
 }
 
 // ─────────────────────────────────────────────
-// N6 — 최종 결과 조회
+// N6 — render 트리거 (API-FIN-01)
+//
+// N5 confirm이 최초 render task를 자동 등록하므로, 호출부(N6ResultView)는
+// tasks 조회 결과에 진행 중/완료된 job 단위 render task가 이미 있으면 이
+// mutation을 부르지 않는다 — task가 아예 없거나(도달 불가 상태) failed일
+// 때만 (재)트리거한다. 성공(202) 후 tasks를 invalidate해 polling이 새
+// renderTaskId를 바로 잡게 한다.
 // ─────────────────────────────────────────────
 
-export function useJobResultQuery(jobId: string) {
-  return useQuery({
-    queryKey: pixateKeys.result(jobId),
-    queryFn: () => getJobResult(jobId),
-    enabled: !!jobId,
+export function useN6RenderMutation(jobId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: () => renderStart(jobId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: pixateKeys.tasks(jobId) });
+    },
   });
 }
 
 // ─────────────────────────────────────────────
-// N6 — 보관함 저장
+// N6 — 산출물 목록 + 검증 상세 조회 (API-FIN-02/03)
+//
+// render task가 done이 되기 전에도 호출 자체는 막지 않는다(계약상 "렌더 전"
+// 상태도 있을 수 있다 — renderedUrl=null만으로 실패를 확정하지 않는다는
+// CLAUDE.md 원칙과 같은 축). 호출 시점 제어(=render 완료를 기다렸다가 조회)는
+// 화면(N6ResultView)이 판단한다.
+// ─────────────────────────────────────────────
+
+export function useDeliverablesQuery(jobId: string, options: { enabled?: boolean } = {}) {
+  const { enabled = true } = options;
+  return useQuery({
+    queryKey: pixateKeys.deliverables(jobId),
+    queryFn: () => getDeliverables(jobId),
+    enabled: !!jobId && enabled,
+  });
+}
+
+export function useValidationQuery(jobId: string, options: { enabled?: boolean } = {}) {
+  const { enabled = true } = options;
+  return useQuery({
+    queryKey: pixateKeys.validation(jobId),
+    queryFn: () => getValidation(jobId),
+    enabled: !!jobId && enabled,
+  });
+}
+
+// ─────────────────────────────────────────────
+// N6 — 산출물 묶음 생성 (API-FIN-04)
+// ─────────────────────────────────────────────
+
+export function useExportMutation(jobId: string) {
+  return useMutation({
+    mutationFn: (payload: ApiExportRequest) => createExport(jobId, payload),
+  });
+}
+
+// ─────────────────────────────────────────────
+// N6 — 산출물 presigned 다운로드 조회 (API-FIN-05)
+//
+// 클릭 시점에 바로 조회해야 하는 값(5분 만료 presigned URL)이라 query가 아니라
+// mutation으로 감싼다 — 영구 식별자처럼 캐시해 두지 않는다.
+// ─────────────────────────────────────────────
+
+export function useExportDownloadMutation(jobId: string) {
+  return useMutation({
+    mutationFn: (artifactId: number) => getExportDownload(jobId, artifactId),
+  });
+}
+
+// ─────────────────────────────────────────────
+// N6 — 보관함 저장 (API-FIN-06). 응답은 LibraryCard — 저장 여부는 별도 조회
+// 없이 이 mutation의 성공 여부(isSuccess)로 판단한다.
 // ─────────────────────────────────────────────
 
 export function useSaveJobMutation(jobId: string) {
-  const queryClient = useQueryClient();
-
   return useMutation({
     mutationFn: () => saveJob(jobId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: pixateKeys.result(jobId) });
-    },
   });
 }
 
