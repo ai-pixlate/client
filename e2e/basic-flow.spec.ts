@@ -39,6 +39,12 @@ async function dragBetweenZones(page: Page, source: Locator, targetZone: Locator
   await page.mouse.move(startX + (endX - startX) / 2, startY + (endY - startY) / 2, { steps: 8 });
   await page.mouse.move(endX, endY, { steps: 8 });
   await page.mouse.up();
+  // F-CFM-14: N3 드래그가 이제 네트워크 호출 없이 로컬 상태만 바꾸다 보니
+  // (이전엔 PATCH 왕복이 자연스러운 지연을 줬다) 드롭 직후 곧바로 다음
+  // 드래그를 시작하면 dnd-kit PointerSensor의 드롭 직후 짧은 쿨다운에 걸려
+  // 두 번째 드래그가 시작되지 않을 수 있다(실측). 실사용자의 자연스러운
+  // 조작 간격을 흉내내 짧게 settle한다.
+  await page.waitForTimeout(250);
 }
 
 test('N1에서 N5 검수 화면까지 기본 작업 흐름을 완료한다', async ({ page }) => {

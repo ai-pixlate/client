@@ -333,7 +333,7 @@ export const handlers = [
   // ──────────────────────────────────────────
   // N3 / N5 — 섹션 bucket 변경 (포함 / 제외 전환)
   //
-  // Request: { "bucket": "include" | "exclude" }
+  // Request: { "action": "exclude" | "restore" } (F-CFM-14, 실제 SectionPatch 계약)
   // exclusionReason은 사용자 입력 필드가 아닙니다.
   // excludedStage는 클라이언트가 보내지 않는다 — 서버가 현재 job 단계
   // (jobState.currentStep)를 기준으로 판단한다.
@@ -346,12 +346,13 @@ export const handlers = [
     if (!sectionState.has(sectionId)) return notFound(`Section '${sectionId}' not found`);
 
     const body = await request.json() as Record<string, unknown>;
-    const bucket = body.bucket;
+    const action = body.action;
 
-    if (bucket !== 'include' && bucket !== 'exclude') {
-      return badRequest("bucket은 'include' 또는 'exclude'이어야 합니다");
+    if (action !== 'exclude' && action !== 'restore') {
+      return badRequest("action은 'exclude' 또는 'restore'이어야 합니다");
     }
 
+    const bucket: SectionBucket = action === 'exclude' ? 'exclude' : 'include';
     const excludedStage = bucket === 'include' ? null : (jobState.currentStep as JobCurrentStep | undefined) ?? null;
     sectionState.set(sectionId, { bucket, exclusionReason: null, excludedStage });
     return HttpResponse.json({ sectionId, bucket, excludedStage });
