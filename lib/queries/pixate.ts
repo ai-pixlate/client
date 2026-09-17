@@ -22,7 +22,7 @@ import {
   getExportDownloadByType,
   saveJob,
 } from '@/lib/api/pixate';
-import type { UpdateSectionBucketRequest, CreateJobRequest, SectionsResponse } from '@/lib/api/types';
+import type { UpdateSectionBucketRequest, CreateJobRequest, SectionsResponse, SectionBucket } from '@/lib/api/types';
 import type { ApiBlockPatch, ApiConfirmRequest, ApiJobTaskStatus, ApiTextBlock } from '@/lib/api/n5-schema';
 import type { ApiExportRequest, ApiExportArtifactType } from '@/lib/api/n6-schema';
 
@@ -118,14 +118,69 @@ export function useJobTasksQuery(jobId: string, options: { polling?: boolean } =
 }
 
 // ─────────────────────────────────────────────
+// N3 — 드래그 중 bucket 변경 (로컬 전용, F-CFM-14)
+//
+// 드래그는 이제 네트워크 호출을 하지 않는다 — sections 캐시의 bucket만 즉시
+// 바꿔 기존 회색 제외 UI를 그대로 보여준다. 실제 서버 반영은 확정
+// (useSectionProceedMutation)에서 배치로만 일어난다.
+// ─────────────────────────────────────────────
+
+export function useSetSectionBucketLocally(jobId: string) {
+  const queryClient = useQueryClient();
+
+  return (sectionId: string, bucket: SectionBucket) => {
+    queryClient.setQueryData<SectionsResponse>(pixateKeys.sections(jobId), (prev) =>
+      prev
+        ? {
+            sections: prev.sections.map((section) =>
+              section.sectionId === sectionId
+                ? {
+                    ...section,
+                    bucket,
+                    exclusionReason: null,
+                    excludedStage: bucket === 'include' ? null : 'N3',
+                  }
+                : section,
+            ),
+          }
+        : prev,
+    );
+  };
+}
+
+// ─────────────────────────────────────────────
 // N3 → N4 — 이대로 진행 (API-SEC-04, POST /jobs/:jobId/sections/proceed)
+//
+// F-CFM-14: 확정 시점에 "아직 서버에 exclude로 반영되지 않은" section만
+// PATCH(action=exclude)로 반영한 뒤에만 proceed를 부른다. include는 다시
+// PATCH하지 않는다(서버가 exclude→PATCH 없이도 기본 include로 안다).
+//
+// alreadySyncedExcludeIds는 호출부(N3View)가 들고 있는 Set이다 — N3 진입
+// 시점에 서버가 이미 exclude로 응답한 section들로 시드해 둬야 한다(그래야
+// 사용자가 아무것도 안 건드렸을 때 "제외 없음 → PATCH 없음"이 성립한다).
+// 이 함수는 그 Set을 그대로(참조로) 받아 성공한 sectionId를 추가한다 —
+// PATCH 중 하나라도 실패하면 proceed를 부르지 않고 그대로 던져 N3에 머문다.
+// 이미 성공한 PATCH는 Set에 남아 재시도 시 중복 전송하지 않는다. 성공 후에도
+// /preview는 재조회하지 않는다(N3엔 그런 계약이 없다).
 // ─────────────────────────────────────────────
 
 export function useSectionProceedMutation(jobId: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: () => proceedSections(jobId),
+    mutationFn: async (alreadySyncedExcludeIds: Set<string>) => {
+      const sections = queryClient.getQueryData<SectionsResponse>(pixateKeys.sections(jobId))?.sections ?? [];
+      const pendingExcludes = sections.filter(
+        (section) => section.bucket === 'exclude' && !alreadySyncedExcludeIds.has(section.sectionId),
+      );
+
+      for (const section of pendingExcludes) {
+        await updateSectionBucket(jobId, section.sectionId, { bucket: 'exclude' });
+        alreadySyncedExcludeIds.add(section.sectionId);
+      }
+
+      return proceedSections(jobId);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: pixateKeys.tasks(jobId) });
     },

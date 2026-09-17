@@ -90,15 +90,21 @@ export function getSections(jobId: string): Promise<SectionsResponse> {
   return apiFetch<SectionsResponse>(`/jobs/${jobId}/sections`);
 }
 
+/**
+ * 실제 OpenAPI(SectionPatch)는 body가 `{ bucket }`이 아니라 `{ action:
+ * 'exclude'|'restore' }`다(F-CFM-14). 호출부(UpdateSectionBucketRequest)는
+ * 그대로 bucket 기준으로 두고, 이 함수 안에서만 실제 wire body로 변환한다.
+ */
 export function updateSectionBucket(
   jobId: string,
   sectionId: string,
   payload: UpdateSectionBucketRequest,
 ): Promise<{ sectionId: string; bucket: SectionBucket }> {
+  const action = payload.bucket === 'exclude' ? 'exclude' : 'restore';
   return apiFetch(`/jobs/${jobId}/sections/${sectionId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ action }),
   });
 }
 

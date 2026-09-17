@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
   DndContext,
@@ -17,7 +17,7 @@ import {
 
 import {
   useSectionsQuery,
-  useUpdateSectionBucketMutation,
+  useSetSectionBucketLocally,
   useSectionProceedMutation,
 } from '@/lib/queries/pixate';
 import type { Section, SectionBucket } from '@/lib/api/types';
@@ -46,8 +46,21 @@ interface ActiveDrag {
 
 export function N3View({ jobId }: { jobId: string }) {
   const { data, isLoading, isError, error } = useSectionsQuery(jobId);
-  const mutation = useUpdateSectionBucketMutation(jobId);
+  const setBucketLocally = useSetSectionBucketLocally(jobId);
   const proceedMutation = useSectionProceedMutation(jobId);
+
+  // F-CFM-14: 서버가 "이미 exclude로 응답한" section은 확정 시 다시 PATCH할
+  // 필요가 없다 — N3 진입(최초 GET 성공) 시점의 exclude 목록으로 한 번만
+  // 시드한다. 이후 사용자가 드래그로 만든 exclude만 확정 시 새로 PATCH되고,
+  // 성공한 sectionId는 이 Set에 그대로 쌓여 재시도 시 중복 전송을 막는다.
+  const syncedExcludeIdsRef = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    if (syncedExcludeIdsRef.current === null && data) {
+      syncedExcludeIdsRef.current = new Set(
+        data.sections.filter((s) => s.bucket === 'exclude').map((s) => s.sectionId),
+      );
+    }
+  }, [data]);
 
   const [activeSectionId, setActiveSectionId] = useState<string | null>(null);
   const [activeDrag, setActiveDrag] = useState<ActiveDrag | null>(null);
@@ -86,17 +99,19 @@ export function N3View({ jobId }: { jobId: string }) {
   if (!data) return null;
 
   function moveSection(sectionId: string, targetBucket: SectionBucket) {
+    // F-CFM-14: 드래그는 로컬 bucket만 바꾼다(네트워크 호출 없음). 서버 반영은
+    // "번역 시작"(useSectionProceedMutation)에서 exclude된 section만 배치로 PATCH한다.
     if (targetBucket === 'include') {
       // 삭제 → 번역
       if (effectiveActiveId === sectionId) {
         const next = excludeSections.find((s) => s.sectionId !== sectionId);
         setActiveSectionId(next?.sectionId ?? null);
       }
-      mutation.mutate({ sectionId, bucket: 'include' });
+      setBucketLocally(sectionId, 'include');
     } else {
       // 번역 → 삭제: 이동한 섹션을 바로 상세 보기로 노출
       setActiveSectionId(sectionId);
-      mutation.mutate({ sectionId, bucket: 'exclude' });
+      setBucketLocally(sectionId, 'exclude');
     }
   }
 
@@ -177,7 +192,7 @@ export function N3View({ jobId }: { jobId: string }) {
               sections={includeSections}
               activeDrag={activeDrag}
               overZone={overZone}
-              onAdvance={() => proceedMutation.mutate()}
+              onAdvance={() => proceedMutation.mutate(syncedExcludeIdsRef.current ?? new Set())}
               isAdvancing={proceedMutation.isPending}
             />
           </div>
