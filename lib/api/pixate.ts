@@ -21,10 +21,31 @@ import type {
 
 // ─────────────────────────────────────────────
 // 공통 fetch 헬퍼
+//
+// FE 페이지 라우트(app/jobs/[jobId]/page.tsx)와 백엔드 API가 `/jobs/{jobId}`
+// 같은 완전히 같은 경로를 공유한다 — Next.js rewrite는 경로만 보고는 이
+// 요청이 "페이지 navigation"인지 "API fetch"인지 구분할 수 없다(조사 결과,
+// afterFiles rewrite가 동적 페이지 라우트보다 먼저 매칭돼 실제 페이지까지
+// 백엔드로 프록시되어 버림). 그래서 이 앱이 보내는 API 요청에만 내부 식별
+// 헤더를 붙이고, next.config.ts의 backend rewrite가 그 헤더가 있을 때만
+// 매칭되게 한다 — 페이지 navigation(브라우저가 직접 보내는 문서 요청)에는
+// 이 헤더가 붙을 수 없으므로 rewrite를 타지 않는다.
+//
+// OpenAPI 계약의 일부가 아니다(백엔드가 값을 해석하지 않는다) — 순수
+// FE↔Next 프록시 식별용이라 이름에 그 의도를 그대로 담았다.
 // ─────────────────────────────────────────────
 
+const API_PROXY_HEADER = 'x-pixate-api-proxy';
+
+/** 기존 headers(있다면)를 보존한 채 프록시 식별 헤더만 추가한다. */
+function withProxyHeader(init?: RequestInit): RequestInit {
+  const headers = new Headers(init?.headers);
+  headers.set(API_PROXY_HEADER, '1');
+  return { ...init, headers };
+}
+
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  const res = await fetch(url, withProxyHeader(init));
   if (!res.ok) {
     let message = `API error: ${res.status}`;
     try {
@@ -145,11 +166,11 @@ export async function patchN5Block(
   blockId: number,
   payload: ApiBlockPatch,
 ): Promise<ApiBlockPatchResponse> {
-  const res = await fetch(`/jobs/${jobId}/blocks/${blockId}`, {
+  const res = await fetch(`/jobs/${jobId}/blocks/${blockId}`, withProxyHeader({
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
-  });
+  }));
   const body = await res.json().catch(() => null);
   if (!res.ok) throw new ApiRequestError(res.status, body);
   return body as ApiBlockPatchResponse;
@@ -172,11 +193,11 @@ export function getJobTasks(jobId: string): Promise<ApiJobTaskStatus> {
  * 던져 error.code로 분기할 수 있게 한다(patchN5Block과 같은 패턴).
  */
 export async function confirmN5(jobId: string, payload: ApiConfirmRequest): Promise<ApiJob> {
-  const res = await fetch(`/jobs/${jobId}/confirm`, {
+  const res = await fetch(`/jobs/${jobId}/confirm`, withProxyHeader({
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
-  });
+  }));
   const body = await res.json().catch(() => null);
   if (!res.ok) throw new ApiRequestError(res.status, body);
   return body as ApiJob;
