@@ -1,6 +1,6 @@
 'use client';
 
-import { use } from 'react';
+import { use, useEffect, useState } from 'react';
 import Link from 'next/link';
 
 import { useJobTasksQuery } from '@/lib/queries/pixate';
@@ -17,6 +17,20 @@ import { N6ResultView } from './_components/n6-result-view';
 // N3 — 섹션 확인 화면은 ./_components/n3/n3-view.tsx로 분리됨
 // (Figma node 540:3119 기준 2버킷 drag & drop 레이아웃)
 // ─────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────
+// N2 최소 체류 시간 — mock 환경(NEXT_PUBLIC_API_MOCKING=enabled) 전용.
+// mock 서버는 poll 2회(약 4초) 만에 N2 task를 끝내버려 화면을 확인할
+// 여유조차 없어, 화면 구성 확인 목적으로만 최소 7초를 보장한다. 서버가
+// 이미 다음 단계로 넘어갔어도(task 완료) 이 시간 전에는 화면을 넘기지
+// 않고, 반대로 서버가 7초보다 오래 걸리면 기존처럼 task 완료 시점까지
+// 그대로 기다린다 — 즉 "task 완료"와 "최소 체류 충족" 둘 다 필요하다.
+// 실서버/mock 비활성 환경에서는 이 게이트를 아예 타지 않는다(기존 동작
+// 그대로). polling 주기(2초)나 mock의 task 완료 로직 자체는 건드리지
+// 않는다.
+// ─────────────────────────────────────────────────────────────────
+const N2_MOCK_MIN_DWELL_MS = 7000;
+const IS_MOCK_ENABLED = process.env.NEXT_PUBLIC_API_MOCKING === 'enabled';
 
 // ─────────────────────────────────────────────────────────────────
 // 페이지 루트
@@ -44,8 +58,40 @@ export default function Page({
   // status props로 전달받아 재사용한다. currentStep/userFacingStatus는 서버
   // 응답 그대로 쓴다 — 여기서 다시 계산하지 않는다.
   const tasksQuery = useJobTasksQuery(jobId, { polling: true });
+  const rawCurrentStep = tasksQuery.data?.currentStep;
 
-  const currentStep = tasksQuery.data?.currentStep;
+  // N2 진입 시점(서버가 처음으로 currentStep==='N2'를 응답한 시점)을
+  // 한 번만 기록한다 — 이미 N2를 지나 시작된 job에는 적용하지 않는다.
+  const [n2EnteredAt, setN2EnteredAt] = useState<number | null>(null);
+  const [n2DwellElapsed, setN2DwellElapsed] = useState(false);
+
+  useEffect(() => {
+    if (IS_MOCK_ENABLED && rawCurrentStep === 'N2' && n2EnteredAt === null) {
+      setN2EnteredAt(Date.now());
+    }
+  }, [rawCurrentStep, n2EnteredAt]);
+
+  // 위 effect와 별개로, n2EnteredAt이 정해진 그 순간에만 타이머를 한 번
+  // 건다 — rawCurrentStep이 이후 바뀌어도(N3로 전환) 이 effect가 다시
+  // 실행되며 타이머가 취소되지 않도록 의존성을 n2EnteredAt만으로 둔다.
+  useEffect(() => {
+    if (n2EnteredAt === null) return;
+    const remaining = N2_MOCK_MIN_DWELL_MS - (Date.now() - n2EnteredAt);
+    if (remaining <= 0) {
+      setN2DwellElapsed(true);
+      return;
+    }
+    const timer = setTimeout(() => setN2DwellElapsed(true), remaining);
+    return () => clearTimeout(timer);
+  }, [n2EnteredAt]);
+
+  // task는 끝났지만(rawCurrentStep이 N2를 벗어남) 최소 체류 시간이 아직
+  // 안 지났으면 N2 화면을 그대로 유지한다. 두 조건이 모두 만족되면(=
+  // n2DwellElapsed) 실제 서버 상태를 그대로 반영한다.
+  const currentStep =
+    IS_MOCK_ENABLED && n2EnteredAt !== null && !n2DwellElapsed && rawCurrentStep !== 'N2'
+      ? 'N2'
+      : rawCurrentStep;
   const meta = (currentStep && STEP_META[currentStep]) || STEP_META_FALLBACK;
 
   return (
