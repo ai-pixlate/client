@@ -94,6 +94,35 @@ export default function Page({
       : rawCurrentStep;
   const meta = (currentStep && STEP_META[currentStep]) || STEP_META_FALLBACK;
 
+  // N2 mock progress 동기화 — mock 서버는 실제로는 poll 2회(약 4초) 만에
+  // task를 끝내버려서, 위 7초 체류 게이트가 화면을 붙잡고 있는 동안
+  // status.progress는 이미 한참 전에 도달한 값(0.5 고정 등)에 머문다.
+  // 그대로 두면 "진행률은 안 움직이는데 화면만 붙잡혀 있다가 갑자기
+  // N3로 넘어간다" 같은 부자연스러운 인상을 준다. mock에서만, 서버가
+  // 원본으로 보낸 값은 건드리지 않고 화면에 보여줄 값만 별도로 계산한다
+  // (progressOverride) — 실서버/mock 비활성에서는 항상 undefined라
+  // N2AnalysisView가 기존처럼 status.progress를 그대로 쓴다.
+  //
+  // 100ms tick으로 elapsed를 다시 계산해 progress bar가 폴링 주기(2초)에
+  // 맞춰 뚝뚝 끊기지 않고 부드럽게 움직이게 한다 — dwell이 끝나면(화면이
+  // N2를 벗어나거나 곧 벗어날 시점) tick을 멈춰 불필요한 타이머를 남기지
+  // 않는다.
+  const [, forceMockProgressTick] = useState(0);
+  useEffect(() => {
+    if (!IS_MOCK_ENABLED || n2EnteredAt === null || n2DwellElapsed) return;
+    const interval = setInterval(() => forceMockProgressTick((t) => t + 1), 150);
+    return () => clearInterval(interval);
+  }, [n2EnteredAt, n2DwellElapsed]);
+
+  let mockN2Progress: number | undefined;
+  if (IS_MOCK_ENABLED && n2EnteredAt !== null) {
+    const elapsedRatio = Math.min(1, (Date.now() - n2EnteredAt) / N2_MOCK_MIN_DWELL_MS);
+    const serverCompleted = rawCurrentStep !== 'N2';
+    // 서버가 끝났고 7초도 다 찼을 때만 100% — 그 전에는 어느 쪽이든
+    // 99%에서 멈춰 기다린다("100%인데 화면이 안 넘어가는 상태" 방지).
+    mockN2Progress = serverCompleted && elapsedRatio >= 1 ? 1 : Math.min(0.99, elapsedRatio);
+  }
+
   return (
     <div className="flex h-screen flex-col bg-gray-50">
       {/* 상단 헤더 — N2/N3/N5/N6는 Figma 기준 자체 헤더(StepNav+나가기)를 가지므로 숨긴다 */}
@@ -135,7 +164,7 @@ export default function Page({
 
         {tasksQuery.data && (
           <>
-            {currentStep === 'N2' && <N2AnalysisView status={tasksQuery.data} />}
+            {currentStep === 'N2' && <N2AnalysisView status={tasksQuery.data} progressOverride={mockN2Progress} />}
             {currentStep === 'N3' && <N3View jobId={jobId} />}
             {currentStep === 'N4' && <N4ProcessingView status={tasksQuery.data} />}
             {currentStep === 'N5' && <N5View jobId={jobId} />}

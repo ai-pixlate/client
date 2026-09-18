@@ -15,9 +15,11 @@ import { StepNav } from './step-nav';
 // 준다. API를 5단계로 바꾸지 않고, 이 파일 안의 resolveCoarseStage/
 // FIVE_STEP_STATES_BY_COARSE_STAGE 두 개로 3→5 presentation 매핑만 흡수한다
 // (컴포넌트 JSX 안에는 조건문을 두지 않는다). 지금 mock은 아직 이 3단계를
-// 개별 제공하지 않고 단일 'analyze' stage만 주므로, coarse stage를 식별할
-// 수 없을 때는 실제로 모르는 진행을 완료로 부풀리지 않도록 가장 보수적인
-// 값(OCR 진행 중)으로 취급한다.
+// 개별 제공하지 않고 단일 'analyze' stage만 주므로, 실제 ocr/section/verify
+// key가 하나도 없을 때만 page.tsx가 넘겨주는 mock 표시 progress(0~1)로
+// coarse stage를 추정한다(resolvePresentationProgressFallback) — 실제 BE
+// stage가 하나라도 있으면 이 fallback은 아예 쓰이지 않고 항상 실제 stage가
+// 우선한다.
 // ─────────────────────────────────────────────────────────────────
 
 const HEADLINE_FALLBACK = '상세페이지의 구조와 문맥을 읽고 있습니다.';
@@ -43,13 +45,29 @@ const FIVE_STEP_STATES_BY_COARSE_STAGE: Record<'ocr' | 'section' | 'verify' | 'd
   done: ['done', 'done', 'done', 'done', 'done'],
 };
 
+// progressOverride(mock 전용 표시 progress, 0~1)가 있고 실제 ocr/section/
+// verify stage가 하나도 없을 때만 쓰는 fallback. 실제 BE 데이터가 존재하면
+// resolveCoarseStage가 이 함수를 아예 호출하지 않는다 — 항상 실제 stage가
+// 최우선이다.
+function resolvePresentationProgressFallback(progress: number | undefined): 'ocr' | 'section' | 'verify' {
+  const p = progress ?? 0;
+  if (p >= 0.7) return 'verify';
+  if (p >= 0.3) return 'section';
+  return 'ocr';
+}
+
 function resolveCoarseStage(
   stages: ApiJobTaskStatus['stages'],
+  presentationProgress?: number,
 ): keyof typeof FIVE_STEP_STATES_BY_COARSE_STAGE {
   const find = (key: string) => stages?.find((s) => s.key?.toLowerCase() === key);
   const ocr = find('ocr');
   const section = find('section');
   const verify = find('verify');
+
+  if (!ocr && !section && !verify) {
+    return resolvePresentationProgressFallback(presentationProgress);
+  }
 
   if (verify?.status === 'done') return 'done';
   if (verify?.status === 'running') return 'verify';
@@ -57,6 +75,8 @@ function resolveCoarseStage(
   if (ocr?.status === 'running') return 'ocr';
   if (section?.status === 'done') return 'verify';
   if (ocr?.status === 'done') return 'section';
+  // 실제 stage는 있지만(예: 전부 pending) 아직 뭐가 진행 중인지 알 수 없는
+  // 애매한 경우 — 모르는 진행을 완료로 부풀리지 않도록 보수적 기본값.
   return 'ocr';
 }
 
@@ -121,9 +141,23 @@ function StageRow({ no, label, state }: { no: string; label: string; state: Five
   );
 }
 
-export function N2AnalysisView({ status }: { status: ApiJobTaskStatus }) {
-  const fiveSteps = buildFiveSteps(FIVE_STEP_STATES_BY_COARSE_STAGE[resolveCoarseStage(status.stages)]);
-  const progressPercent = Math.round((status.progress ?? 0) * 100);
+export function N2AnalysisView({
+  status,
+  progressOverride,
+}: {
+  status: ApiJobTaskStatus;
+  /**
+   * mock 환경에서 N2 최소 체류(7초)와 진행률을 맞추기 위해 page.tsx가
+   * 계산해 넘기는 표시 전용 값(0~1). 실서버/mock 비활성에서는 항상
+   * undefined이며, 그 경우 아래에서 그대로 status.progress를 쓴다 —
+   * status 자체는 여기서도 변형하지 않는다.
+   */
+  progressOverride?: number;
+}) {
+  const fiveSteps = buildFiveSteps(
+    FIVE_STEP_STATES_BY_COARSE_STAGE[resolveCoarseStage(status.stages, progressOverride)],
+  );
+  const progressPercent = Math.round((progressOverride ?? status.progress ?? 0) * 100);
   const failedItems = (status.items ?? []).filter((i) => i.status === 'failed');
 
   return (
