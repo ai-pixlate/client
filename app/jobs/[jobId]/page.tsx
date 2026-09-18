@@ -1,102 +1,36 @@
 'use client';
 
-import { use } from 'react';
+import { use, useEffect, useState } from 'react';
 import Link from 'next/link';
 
 import { useJobTasksQuery } from '@/lib/queries/pixate';
-import type { ApiJobTaskStatus } from '@/lib/api/job-schema';
+import { N2AnalysisView } from './_components/n2-analysis-view';
 import { N3View } from './_components/n3/n3-view';
 import { N4ProcessingView } from './_components/n4-processing-view';
 import { N5View } from './_components/n5/n5-view';
 import { N6ResultView } from './_components/n6-result-view';
 
-const SUBSTEP_FALLBACK = '이미지를 분석하고 있습니다.';
-
 // ─────────────────────────────────────────────────────────────────
-// N2 — 분석 진행 화면
+// N2 — 분석 진행 화면은 ./_components/n2-analysis-view.tsx로 분리됨
+// (Figma 660:4139 기준 StepNav + 분석 비주얼/ANALYSIS LOG 2단 레이아웃)
 //
-// 오늘(N1→N6 happy path): GET /jobs/:jobId/tasks(JobTaskStatus)로 갈아탔다.
-// progress는 0.0~1.0 실수라 화면 표시는 반올림한 정수 %로 변환한다. 세부
-// 단계 문구는 FE가 substep 코드를 자체 매핑하지 않고 서버가 내려준
-// stages[].label을 그대로 쓴다(stages는 "step별 고정 단계"라 화면 표시 문구가
-// 런타임 값이라고 계약에 명시돼 있다). 실패 항목은 items[]에서 status==='failed'만
-// 걸러 보여준다 — 세부 재시도 UI는 오늘 범위가 아니다.
-// ─────────────────────────────────────────────────────────────────
-function N2View({ status }: { status: ApiJobTaskStatus }) {
-  const runningStage = status.stages?.find((s) => s.status === 'running');
-  const subStepLabel = runningStage?.label ?? SUBSTEP_FALLBACK;
-  const progressPercent = Math.round((status.progress ?? 0) * 100);
-  const failedItems = (status.items ?? []).filter((i) => i.status === 'failed');
-
-  return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-10 px-6">
-      {/* 스피너 */}
-      <div className="flex h-20 w-20 items-center justify-center rounded-full bg-blue-50">
-        <svg
-          className="h-10 w-10 animate-spin text-blue-500"
-          fill="none"
-          viewBox="0 0 24 24"
-          aria-hidden="true"
-        >
-          <circle
-            className="opacity-25"
-            cx="12"
-            cy="12"
-            r="10"
-            stroke="currentColor"
-            strokeWidth="4"
-          />
-          <path
-            className="opacity-75"
-            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-            fill="currentColor"
-          />
-        </svg>
-      </div>
-
-      {/* 진행률 */}
-      <div className="w-full max-w-sm space-y-3">
-        <div className="flex items-center justify-between text-sm">
-          <span className="text-gray-600">{subStepLabel}</span>
-          <span className="font-semibold tabular-nums text-blue-600">{progressPercent}%</span>
-        </div>
-        <div
-          className="h-2 w-full overflow-hidden rounded-full bg-gray-100"
-          role="progressbar"
-          aria-valuenow={progressPercent}
-          aria-valuemin={0}
-          aria-valuemax={100}
-        >
-          <div
-            className="h-full rounded-full bg-blue-500 transition-[width] duration-500 ease-out"
-            style={{ width: `${progressPercent}%` }}
-          />
-        </div>
-      </div>
-
-      <p className="text-xs text-gray-400">완료되면 자동으로 다음 단계로 이동합니다.</p>
-
-      {/* 부분 실패 알림 */}
-      {failedItems.length > 0 && (
-        <div className="w-full max-w-sm rounded-lg border border-orange-200 bg-orange-50 p-4">
-          <p className="mb-2 text-sm font-medium text-orange-700">일부 항목을 처리하지 못했습니다</p>
-          <ul className="space-y-1">
-            {failedItems.map((item) => (
-              <li key={item.taskId} className="text-xs text-orange-600">
-                {item.unitType} #{item.unitId} — {item.errorCode ?? '알 수 없는 오류'}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────
 // N3 — 섹션 확인 화면은 ./_components/n3/n3-view.tsx로 분리됨
-// (Figma 540:3119 기준 2버킷 drag & drop 레이아웃)
+// (Figma node 540:3119 기준 2버킷 drag & drop 레이아웃)
 // ─────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────
+// N2 최소 체류 시간 — mock 환경(NEXT_PUBLIC_API_MOCKING=enabled) 전용.
+// mock 서버는 poll 2회(약 4초) 만에 N2 task를 끝내버려 화면을 확인할
+// 여유조차 없어, 화면 구성 확인 목적으로만 최소 7초를 보장한다. 서버가
+// 이미 다음 단계로 넘어갔어도(task 완료) 이 시간 전에는 화면을 넘기지
+// 않고, 반대로 서버가 7초보다 오래 걸리면 기존처럼 task 완료 시점까지
+// 그대로 기다린다 — 즉 "task 완료"와 "최소 체류 충족" 둘 다 필요하다.
+// 실서버/mock 비활성 환경에서는 이 게이트를 아예 타지 않는다(기존 동작
+// 그대로). polling 주기(2초)나 mock의 task 완료 로직 자체는 건드리지
+// 않는다.
+// ─────────────────────────────────────────────────────────────────
+const N2_MOCK_MIN_DWELL_MS = 7000;
+const IS_MOCK_ENABLED = process.env.NEXT_PUBLIC_API_MOCKING === 'enabled';
 
 // ─────────────────────────────────────────────────────────────────
 // 페이지 루트
@@ -124,14 +58,46 @@ export default function Page({
   // status props로 전달받아 재사용한다. currentStep/userFacingStatus는 서버
   // 응답 그대로 쓴다 — 여기서 다시 계산하지 않는다.
   const tasksQuery = useJobTasksQuery(jobId, { polling: true });
+  const rawCurrentStep = tasksQuery.data?.currentStep;
 
-  const currentStep = tasksQuery.data?.currentStep;
+  // N2 진입 시점(서버가 처음으로 currentStep==='N2'를 응답한 시점)을
+  // 한 번만 기록한다 — 이미 N2를 지나 시작된 job에는 적용하지 않는다.
+  const [n2EnteredAt, setN2EnteredAt] = useState<number | null>(null);
+  const [n2DwellElapsed, setN2DwellElapsed] = useState(false);
+
+  useEffect(() => {
+    if (IS_MOCK_ENABLED && rawCurrentStep === 'N2' && n2EnteredAt === null) {
+      setN2EnteredAt(Date.now());
+    }
+  }, [rawCurrentStep, n2EnteredAt]);
+
+  // 위 effect와 별개로, n2EnteredAt이 정해진 그 순간에만 타이머를 한 번
+  // 건다 — rawCurrentStep이 이후 바뀌어도(N3로 전환) 이 effect가 다시
+  // 실행되며 타이머가 취소되지 않도록 의존성을 n2EnteredAt만으로 둔다.
+  useEffect(() => {
+    if (n2EnteredAt === null) return;
+    const remaining = N2_MOCK_MIN_DWELL_MS - (Date.now() - n2EnteredAt);
+    if (remaining <= 0) {
+      setN2DwellElapsed(true);
+      return;
+    }
+    const timer = setTimeout(() => setN2DwellElapsed(true), remaining);
+    return () => clearTimeout(timer);
+  }, [n2EnteredAt]);
+
+  // task는 끝났지만(rawCurrentStep이 N2를 벗어남) 최소 체류 시간이 아직
+  // 안 지났으면 N2 화면을 그대로 유지한다. 두 조건이 모두 만족되면(=
+  // n2DwellElapsed) 실제 서버 상태를 그대로 반영한다.
+  const currentStep =
+    IS_MOCK_ENABLED && n2EnteredAt !== null && !n2DwellElapsed && rawCurrentStep !== 'N2'
+      ? 'N2'
+      : rawCurrentStep;
   const meta = (currentStep && STEP_META[currentStep]) || STEP_META_FALLBACK;
 
   return (
     <div className="flex h-screen flex-col bg-gray-50">
-      {/* 상단 헤더 — N3/N5/N6는 Figma 기준 자체 헤더(StepNav+나가기)를 가지므로 숨긴다 */}
-      {currentStep !== 'N3' && currentStep !== 'N5' && currentStep !== 'N6' && (
+      {/* 상단 헤더 — N2/N3/N5/N6는 Figma 기준 자체 헤더(StepNav+나가기)를 가지므로 숨긴다 */}
+      {currentStep !== 'N2' && currentStep !== 'N3' && currentStep !== 'N5' && currentStep !== 'N6' && (
         <header className="flex h-14 shrink-0 items-center gap-4 border-b bg-white px-6 shadow-sm">
           <Link
             href="/"
@@ -169,7 +135,7 @@ export default function Page({
 
         {tasksQuery.data && (
           <>
-            {currentStep === 'N2' && <N2View status={tasksQuery.data} />}
+            {currentStep === 'N2' && <N2AnalysisView status={tasksQuery.data} />}
             {currentStep === 'N3' && <N3View jobId={jobId} />}
             {currentStep === 'N4' && <N4ProcessingView status={tasksQuery.data} />}
             {currentStep === 'N5' && <N5View jobId={jobId} />}

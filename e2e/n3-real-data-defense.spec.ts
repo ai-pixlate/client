@@ -52,7 +52,9 @@ async function reachN3(page: Page): Promise<void> {
   await page.getByRole('button', { name: '다음' }).click();
   await expect(page).toHaveURL(new RegExp(`/jobs/${MOCK_JOB_ID}$`));
 
-  await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 8_000 });
+  // mock 환경 N2 최소 체류(7초, app/jobs/[jobId]/page.tsx)를 감안한 여유
+  // 타임아웃.
+  await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 10_000 });
 }
 
 test.describe('N3 section 이미지 — 실측 크기 방어 검증', () => {
