@@ -174,30 +174,43 @@ export function N2AnalysisView({
           </div>
         </div>
 
-        {/* 본문 — "헤더를 제외한 실제 작업 가능 영역"(workspace)을 정의하고
-            그 안에서 회색 N2 패널을 가로·세로 모두 중앙 정렬한다. 이전처럼
-            좌우 padding을 각각 줄여 패널을 억지로 우측 컬럼 쪽에 맞추던
-            방식(비대칭 pl/pr clamp)을 걷어내고, 대신:
-              1) 패널의 max-width/aspect-ratio를 Figma 비율(1740:892)로
-                 고정하고
-              2) 이 wrapper가 `items-center justify-center`로 패널을
-                 감싸 중앙에 배치한다.
-            뷰포트 폭만 보고 축소하던 이전 방식과 달리, `max-h-full` +
-            `aspect-[1740/892]`가 남은 세로 공간까지 함께 고려하므로
-            1536×864처럼 세로가 더 빠듯한 뷰포트에서도 패널이 폭 기준으로만
-            커지다 아래가 잘리는 대신, 가로·세로 중 더 좁은 쪽에 맞춰
-            비율대로 줄어든다. */}
-        <div className="[container-type:size] flex min-h-0 flex-1 items-center justify-center p-10">
-          {/* 패널 폭은 `aspect-ratio` + `max-height`가 자동으로 되돌려
-              계산해주길 기대하지 않는다 — 실측해보니 Chromium이 이 조합을
-              "가로가 부족할 때만" 정확히 처리하고, 세로가 병목일 때는
-              높이만 잘라내고 폭은 줄이지 않아 비율이 어긋났다(1536×864
-              실측 1376×690 ≈ 1.994, Figma 1740/892 ≈ 1.951). 그래서 폭을
-              직접 `min(1740px, 컨테이너 폭, 컨테이너 높이×1740/892)`로
-              계산한다 — 위 wrapper를 `container-type:size`로 만들어
-              cqw/cqh 둘 다 여기서 참조한다.
+        {/* 본문 — 패널에 aspect-ratio를 강제하지 않는다. 1740×892는 1920
+            viewport에서 "이 gutter들로 남는 공간을 채운 결과값"이지, 모든
+            viewport에서 지켜야 할 이미지 비율이 아니다(실측 확인: 이전에
+            aspect-ratio + max-height로 강제했더니 세로가 짧은 노트북에서
+            높이가 병목이 되어 폭까지 같이 줄어들고, 결과적으로 Figma보다
+            훨씬 좁은 패널이 화면 가운데 떠버렸다).
 
-              패널 자신의 padding/gap은 vw 기준을 그대로 쓴다(패널 자신이
+            대신 StepNav 오른쪽 workspace 안에서 gutter만 두고, 패널은 그
+            gutter 안 남는 공간을 가로·세로 모두 그대로 채운다
+            (`w-full h-full`) — `items-center`/`justify-center`로 가운데
+            띄우지 않는다.
+
+            중요: 목표는 "gutter 몇 px"가 아니라 panel의 절대 bbox가
+            Figma 비율(x=6.25vw, y=10vh, right=3.125vw)에 수렴하는 것이다.
+            - 좌측 gutter(pl)는 StepNav rail(고정 80px)을 지나고 나서
+              추가로 더해지는 값이므로, 순수 `vw` 비율로는 rail 몫이
+              이중으로 더해져 1440/1536처럼 좁은 화면에서 패널이 필요
+              이상으로 안쪽에 처박힌다(실측: 1440에서 x=110, 목표는 90).
+              그래서 `calc(6.25vw - 80px)`로 rail 몫을 먼저 상쇄한다 —
+              1920에서 40px(=120-80)로 정확히 Figma와 같아지고, 1440에서는
+              10px(=90-80)까지 자연스럽게 줄어든다.
+            - 상단 gutter(pt)도 같은 이유로 `calc(10vh - 94px)`을 쓴다.
+              94px는 헤더 블록의 실제 렌더링 높이(px-10/pt-10/pb-6 고정,
+              실측 confirmed)다 — 헤더를 건드리지 않는 한 이 상수는
+              바뀌지 않는다. 1920에서 14px(=108-94)로 Figma의 절대 y=108과
+              정확히 맞고, viewport가 짧아 10vh가 94px보다 작아지는
+              900/864급에서는 0으로 clamp돼(더 뺄 여백이 없다) panel_y가
+              94px에 수렴한다 — Figma 비율(90/86)보다 4~8px 낮을 뿐이며,
+              헤더 자체를 줄이지 않는 한 이게 가능한 최솟값이다.
+            - 우측 gutter(pr)는 rail 같은 상쇄 대상이 없어 순수 비율
+              (3.125vw)만으로 이미 1920/1536/1440 목표(60/48/45)에 그대로
+              들어맞는다(요청에서도 "right는 맞다"고 확인됨).
+            - 하단 gutter(pb)는 Figma 자신도 세로 비율(80/1080≈7.41%)로
+              정의돼 있어 `vw`가 아니라 `vh`로 고친다(이전 버전은 실수로
+              `vw`를 썼다 — 세로 간격인데 가로 폭에 반응하는 버그였다). */}
+        <div className="min-h-0 flex-1 pt-[clamp(0px,calc(10vh_-_94px),14px)] pr-[clamp(45px,3.125vw,60px)] pb-[clamp(60px,7.41vh,80px)] pl-[clamp(0px,calc(6.25vw_-_80px),40px)]">
+          {/* 패널 내부 padding/gap은 vw 기준을 그대로 쓴다(패널 자신이
               [container-type:inline-size]로 자식들의 cqw 기준점이 되는
               동시에, cq 단위는 스펙상 컨테이너 자기 자신의 padding/width에는
               쓸 수 없다 — self-reference라 조용히 상위 컨테이너를 참조하며
@@ -205,10 +218,7 @@ export function N2AnalysisView({
               내부 간격, 우측 컬럼 폭·간격, 5단계 row 높이, progress 간격)은
               전부 cqw로 패널 자신의 실제 렌더링 폭에 정확히 비례한다 — 그
               값들은 아래에서 개별적으로 처리한다. */}
-          <div
-            className="relative flex min-h-0 min-w-0 [container-type:inline-size] gap-[clamp(60px,4.17vw,80px)] overflow-y-auto rounded-[8px] bg-[#f5f5f5] pt-[clamp(43.5px,3.02vw,58px)] pr-[clamp(45px,3.13vw,60px)] pb-[clamp(43.5px,3.02vw,58px)] pl-[clamp(51px,3.54vw,68px)]"
-            style={{ width: 'min(1740px, 100cqw, calc(100cqh * 1740 / 892))', aspectRatio: '1740 / 892' }}
-          >
+          <div className="relative flex h-full min-h-0 min-w-0 w-full [container-type:inline-size] gap-[clamp(60px,4.17vw,80px)] overflow-y-auto rounded-[8px] bg-[#f5f5f5] pt-[clamp(43.5px,3.02vw,58px)] pr-[clamp(45px,3.13vw,60px)] pb-[clamp(43.5px,3.02vw,58px)] pl-[clamp(51px,3.54vw,68px)]">
             {/* 좌측 — 분석 비주얼. cqw 기준값은 패널의 content-box 폭
                 (border-box 1740 − pl68 − pr60 = 1612, 1920 기준)이다 —
                 container query 단위는 컨테이너 자신의 padding을 제외한
