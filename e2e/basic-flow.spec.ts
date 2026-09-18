@@ -110,9 +110,13 @@ test('N1에서 N5 검수 화면까지 기본 작업 흐름을 완료한다', asy
   await expect(page.locator('[data-testid^="n3-thumb-exclude-"]')).toHaveCount(2);
   await expect(page.locator('[data-testid^="n3-thumb-include-"]')).toHaveCount(3);
 
-  // 방금 이동한 섹션이 가운데 상세 보기에 activeSection으로 표시된다 — 그 상태에서 다시 번역 영역으로 되돌린다.
-  const detailImage = page.locator(`[data-testid="n3-detail-image-${movedSectionId}"]`);
-  await dragBetweenZones(page, detailImage, includeZone);
+  // 방금 이동한 섹션이 가운데 원본 뷰포트에 activeSection으로 표시된다(3단계
+  // UI 재구성: 뷰포트는 SourceImage 전체를 보여줄 뿐 더 이상 section별
+  // drag source가 아니다 — 삭제 nav 썸네일이 유일한 drag source다) — 그
+  // 상태에서 다시 번역 영역으로 되돌린다.
+  await expect(page.getByTestId('n3-source-viewport')).toBeVisible();
+  const excludeThumb = page.locator(`[data-testid="n3-thumb-exclude-${movedSectionId}"]`);
+  await dragBetweenZones(page, excludeThumb, includeZone);
   await expect(page.locator(`[data-testid="n3-thumb-include-${movedSectionId}"]`)).toBeVisible();
   await expect(page.locator('[data-testid^="n3-thumb-exclude-"]')).toHaveCount(1);
   await expect(page.locator('[data-testid^="n3-thumb-include-"]')).toHaveCount(4);
