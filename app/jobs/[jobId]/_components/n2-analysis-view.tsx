@@ -4,22 +4,72 @@ import type { ApiJobTaskStatus } from '@/lib/api/job-schema';
 import { StepNav } from './step-nav';
 
 // ─────────────────────────────────────────────────────────────────
-// N2 — 분석중 (Figma node 660:4139 기준)
+// N2 — 분석중 (Figma node 660:4139 기준, 2026-09-18 재정합)
 //
 // 좌측 StepNav 레일 + 본문(좌: 분석 비주얼 · 우: ANALYSIS LOG) 2단 구조.
 // page.tsx가 이 화면일 때는 공용 header bar를 숨기므로(N3/N5/N6와 동일
 // 패턴) 여기서 헤더·나가기 버튼까지 전부 자체적으로 그린다.
 //
-// stages[]/progress는 GET /jobs/:jobId/tasks(JobTaskStatus) 응답을 그대로
-// 쓴다 — 몇 개가 오든, 어떤 label이 오든 그대로 순서대로 렌더한다(하드코딩
-// 없음). Figma는 5단계·특정 문구를 보여주지만 그건 그 시점의 mock 데이터일
-// 뿐, 실제 단계 구성(N2는 계약상 ocr→section→verify 3단계)은 서버가 정한다.
+// ANALYSIS LOG는 Figma가 항상 고정 5단계(01~05)를 보여준다 — 실제 백엔드는
+// OpenAPI JobTaskStatus.stages 계약상 N2에 coarse 3단계(ocr→section→verify)만
+// 준다. API를 5단계로 바꾸지 않고, 이 파일 안의 resolveCoarseStage/
+// FIVE_STEP_STATES_BY_COARSE_STAGE 두 개로 3→5 presentation 매핑만 흡수한다
+// (컴포넌트 JSX 안에는 조건문을 두지 않는다). 지금 mock은 아직 이 3단계를
+// 개별 제공하지 않고 단일 'analyze' stage만 주므로, coarse stage를 식별할
+// 수 없을 때는 실제로 모르는 진행을 완료로 부풀리지 않도록 가장 보수적인
+// 값(OCR 진행 중)으로 취급한다.
 // ─────────────────────────────────────────────────────────────────
 
 const HEADLINE_FALLBACK = '상세페이지의 구조와 문맥을 읽고 있습니다.';
 const AUTO_ADVANCE_NOTICE = '분석이 끝나면 섹션 확인 단계로 자동 이동합니다.';
 
-type StageStatus = 'pending' | 'running' | 'done' | 'failed';
+type FiveStepState = 'done' | 'active' | 'pending';
+
+const FIVE_STEP_META: { no: string; label: string }[] = [
+  { no: '01', label: '전체 텍스트 인식' },
+  { no: '02', label: '콘텐츠 영역 나누기' },
+  { no: '03', label: '문단별 역할 파악' },
+  { no: '04', label: '제품 라벨 자동 제외' },
+  { no: '05', label: '규제 · 현지 적합성 확인' },
+];
+
+// coarse stage(ocr/section/verify) → 5개 항목 각각의 presentation state.
+// 하나의 backend stage가 진행 중이어도 여러 UI 항목이 동시에 "진행 중"일
+// 수 있다(예: verify 진행 중 → 04·05 동시 진행 중).
+const FIVE_STEP_STATES_BY_COARSE_STAGE: Record<'ocr' | 'section' | 'verify' | 'done', FiveStepState[]> = {
+  ocr: ['active', 'pending', 'pending', 'pending', 'pending'],
+  section: ['done', 'active', 'active', 'pending', 'pending'],
+  verify: ['done', 'done', 'done', 'active', 'active'],
+  done: ['done', 'done', 'done', 'done', 'done'],
+};
+
+function resolveCoarseStage(
+  stages: ApiJobTaskStatus['stages'],
+): keyof typeof FIVE_STEP_STATES_BY_COARSE_STAGE {
+  const find = (key: string) => stages?.find((s) => s.key?.toLowerCase() === key);
+  const ocr = find('ocr');
+  const section = find('section');
+  const verify = find('verify');
+
+  if (verify?.status === 'done') return 'done';
+  if (verify?.status === 'running') return 'verify';
+  if (section?.status === 'running') return 'section';
+  if (ocr?.status === 'running') return 'ocr';
+  if (section?.status === 'done') return 'verify';
+  if (ocr?.status === 'done') return 'section';
+  return 'ocr';
+}
+
+function buildFiveSteps(states: FiveStepState[]) {
+  return FIVE_STEP_META.map((step, i) => ({ ...step, state: states[i] }));
+}
+
+// previewStep=N2 전용 — Figma 660:4139가 실제로 보여주는 스냅샷과 동일하게
+// 고정한다(01~03 완료 · 04 진행 중 · 05 대기 · 72%). mock task 진행이나
+// 실제 API 데이터는 건드리지 않고, 이 화면의 표시값만 디자인 확인용으로
+// 대체한다.
+const PREVIEW_FIVE_STEP_STATES: FiveStepState[] = ['done', 'done', 'done', 'active', 'pending'];
+const PREVIEW_PROGRESS_PERCENT = 72;
 
 function ExitIcon() {
   // Figma(849:7235 "보관함으로 나가기") glyph는 7일 만료 원격 asset이라
@@ -42,40 +92,50 @@ function PauseIcon() {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// ANALYSIS LOG 한 행 — done/running/pending마다 굵기·색·자간이 Figma에서
-// 다르게 지정돼 있어(현재 단계만 SemiBold+색, 나머지는 Regular/Light+회색)
-// 그 차이를 그대로 따른다. failed는 Figma에 없는 상태라 pending과 같은
-// 저채도 표현으로 최소 보완하고, 실제 실패 내용은 기존 failedItems 배너가
-// 담당한다(아래 N2AnalysisView 참고) — 이 행 자체에 새 색을 만들어 넣지 않는다.
+// ANALYSIS LOG 한 행 — done/active/pending마다 dot·굵기·색·자간이 Figma에서
+// 다르게 지정돼 있다(진행 중만 SemiBold+orange, 완료는 Regular+black 텍스트,
+// 대기는 Regular/Light+회색에 dot도 채움 없는 outline). 번호+label은 Figma
+// 원본처럼 두 칸 띄어 한 문자열로 쓴다(whitespace-pre로 공백을 보존해야
+// 브라우저가 붕괴시키지 않는다).
 // ─────────────────────────────────────────────────────────────────
-function StageRow({ label, status }: { label: string; status: StageStatus }) {
-  const dotColor = status === 'running' ? '#ff6a38' : status === 'done' ? '#171717' : '#eaeaea';
-  const isCurrent = status === 'running';
-  const isMuted = status === 'pending' || status === 'failed';
+function StageRow({ no, label, state }: { no: string; label: string; state: FiveStepState }) {
+  const isDone = state === 'done';
+  const isActive = state === 'active';
 
-  const titleClass = isCurrent
+  const dotClass = isActive ? 'bg-[#ff6a38]' : isDone ? 'bg-[#171717]' : 'border border-[#eaeaea] bg-transparent';
+
+  const titleClass = isActive
     ? "font-['Pretendard:SemiBold'] text-[14px] text-[#171717]"
-    : `font-['Pretendard:Regular'] text-[14px] tracking-[-0.01em] ${isMuted ? 'text-[#999]' : 'text-[#171717]'}`;
+    : `font-['Pretendard:Regular'] text-[14px] tracking-[-0.01em] ${isDone ? 'text-[#171717]' : 'text-[#999]'}`;
 
-  const captionText = status === 'done' ? '완료' : status === 'running' ? '진행 중' : status === 'failed' ? '실패' : '대기';
-  const captionClass = isCurrent
+  const captionText = isDone ? '완료' : isActive ? '진행 중' : '대기';
+  const captionClass = isActive
     ? "font-['Pretendard:Regular'] text-[12px] text-[#ff6a38]"
     : "font-['Pretendard:Light'] text-[12px] tracking-[-0.04em] text-[#999]";
 
   return (
     <div className="flex h-[68px] w-full items-center gap-3.5">
-      <div className="size-[10px] shrink-0 rounded-full" style={{ backgroundColor: dotColor }} aria-hidden="true" />
+      <div className={`size-[10px] shrink-0 rounded-full ${dotClass}`} aria-hidden="true" />
       <div className="flex flex-col gap-1">
-        <p className={titleClass}>{label}</p>
+        <p className={`whitespace-pre ${titleClass}`}>{`${no}  ${label}`}</p>
         <p className={captionClass}>{captionText}</p>
       </div>
     </div>
   );
 }
 
-export function N2AnalysisView({ status }: { status: ApiJobTaskStatus }) {
-  const stages = status.stages ?? [];
-  const progressPercent = Math.round((status.progress ?? 0) * 100);
+export function N2AnalysisView({
+  status,
+  isPreview = false,
+}: {
+  status: ApiJobTaskStatus;
+  /** previewStep=N2(page.tsx) 전용 — Figma 스냅샷과 동일한 고정 진행 상태로 보여준다. */
+  isPreview?: boolean;
+}) {
+  const fiveSteps = isPreview
+    ? buildFiveSteps(PREVIEW_FIVE_STEP_STATES)
+    : buildFiveSteps(FIVE_STEP_STATES_BY_COARSE_STAGE[resolveCoarseStage(status.stages)]);
+  const progressPercent = isPreview ? PREVIEW_PROGRESS_PERCENT : Math.round((status.progress ?? 0) * 100);
   const failedItems = (status.items ?? []).filter((i) => i.status === 'failed');
 
   return (
@@ -107,9 +167,14 @@ export function N2AnalysisView({ status }: { status: ApiJobTaskStatus }) {
           </div>
         </div>
 
-        {/* 본문: N2 / Brand Analysis Stage 패널 */}
-        <div className="min-h-0 flex-1 px-10 pb-10">
-          <div className="flex h-full min-h-0 gap-10 overflow-y-auto rounded-[8px] bg-[#f5f5f5] px-10 py-[58px]">
+        {/* 본문: N2 / Brand Analysis Stage 패널 — 내부 좌우 padding(68/60)과
+            좌우 콘텐츠 사이 간격은 Figma(661:4239, 1740×892 패널 기준 좌측
+            inset 68px·우측 inset 60px)를 그대로 옮긴 값이다. 패널 자체의
+            바깥쪽 우측 여백도 Figma가 60px을 쓰므로(뷰포트-패널 우측 끝
+            차이) 좌측 px-10과 비대칭으로 맞춘다 — 그대로 두면 패널 전체
+            폭이 Figma보다 넓어져 우측 컬럼이 오른쪽으로 밀린다. */}
+        <div className="min-h-0 flex-1 pt-10 pr-[60px] pb-10 pl-10">
+          <div className="flex h-full min-h-0 gap-[80px] overflow-y-auto rounded-[8px] bg-[#f5f5f5] pt-[58px] pr-[60px] pb-[58px] pl-[68px]">
             {/* 좌측 — 분석 비주얼 */}
             <div className="flex min-w-0 flex-1 flex-col gap-[54px]">
               <div className="flex max-w-[820px] flex-col gap-5">
@@ -135,8 +200,8 @@ export function N2AnalysisView({ status }: { status: ApiJobTaskStatus }) {
                   aria-hidden="true"
                   className="absolute inset-0 size-full object-cover opacity-[0.97]"
                 />
-                <p className="absolute top-7 left-6 font-['Pretendard:Light'] text-[12px] tracking-[-0.04em] text-white/[58%]">
-                  SCAN · STRUCTURE · CONTEXT
+                <p className="absolute top-7 left-6 whitespace-pre font-['Pretendard:Light'] text-[12px] tracking-[-0.04em] text-white/[58%]">
+                  {`SCAN  ·  STRUCTURE  ·  CONTEXT`}
                 </p>
                 <div className="absolute right-6 bottom-6 flex max-w-[360px] flex-col items-end gap-2 text-right">
                   <p className="font-['Pretendard:Medium'] text-[13px] text-[#ff6a38]">제품 라벨 자동 제외</p>
@@ -164,29 +229,47 @@ export function N2AnalysisView({ status }: { status: ApiJobTaskStatus }) {
                 </div>
               </div>
 
+              {/* 항상 고정 5단계를 그린다(Figma 661:4301 "N2 / Step List") —
+                  데이터 개수만큼 map하지 않는다. 이 목록 높이가 늘/줄면
+                  아래 진행률 블록이 패널 위아래로 밀리므로, 개수를 고정해야
+                  진행률이 항상 같은 위치(패널 하단부)에 남는다. */}
               <div className="flex flex-col">
-                {stages.map((stage, i) => (
-                  <StageRow
-                    key={stage.key ?? i}
-                    label={stage.label ?? ''}
-                    status={(stage.status as StageStatus | undefined) ?? 'pending'}
-                  />
-                ))}
+                {fiveSteps.map((step) => <StageRow key={step.no} no={step.no} label={step.label} state={step.state} />)}
               </div>
 
-              <div className="relative flex flex-col gap-6">
-                <div>
-                  <div className="flex items-baseline">
-                    <span className="font-['Pretendard:SemiBold'] text-[58px] leading-[64px] text-[#171717]">
-                      {progressPercent}
-                    </span>
-                    <span className="font-['Pretendard:Medium'] text-[18px] tracking-[-0.03em] text-[#999]">%</span>
+              <div className="flex flex-col gap-6">
+                <div className="flex flex-col gap-1.5">
+                  {/* 퍼센트 숫자와 일시정지 버튼이 Figma에서 같은 줄에
+                      놓여 있어(663:4332 + 918:7324) 같은 flex row로 묶는다 —
+                      버튼을 별도 absolute 좌표로 흉내내지 않는다. */}
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-baseline">
+                      <span className="font-['Pretendard:SemiBold'] text-[58px] leading-[64px] text-[#171717]">
+                        {progressPercent}
+                      </span>
+                      <span className="font-['Pretendard:Medium'] text-[18px] tracking-[-0.03em] text-[#999]">%</span>
+                    </div>
+
+                    {/* Figma(918:7324)의 일시정지 아이콘 — 분석 중단 API가
+                        계약에 없어(오늘 범위 밖) 클릭해도 아무 일도 하지
+                        않는 버튼을 만들지 않는다. N1의 "이미지 연속 여부"
+                        토글과 같은 방식(보여주되 비활성 + 이유 설명)으로
+                        최소 보완한다. */}
+                    <button
+                      type="button"
+                      disabled
+                      aria-disabled="true"
+                      title="분석 중단 기능은 아직 제공되지 않습니다."
+                      className="flex size-7 shrink-0 cursor-not-allowed items-center justify-center rounded-[4px] border border-[#eaeaea] bg-white opacity-60"
+                    >
+                      <PauseIcon />
+                    </button>
                   </div>
                   <p className="font-['Pretendard:Light'] text-[12px] tracking-[-0.04em] text-[#999]">전체 분석</p>
                 </div>
 
                 <div
-                  className="h-[3px] w-full overflow-hidden rounded-full bg-[rgba(112,112,112,0.16)]"
+                  className="h-[3px] w-[396px] max-w-full overflow-hidden rounded-full bg-[rgba(112,112,112,0.16)]"
                   role="progressbar"
                   aria-valuenow={progressPercent}
                   aria-valuemin={0}
@@ -201,20 +284,6 @@ export function N2AnalysisView({ status }: { status: ApiJobTaskStatus }) {
                 <p className="font-['Pretendard:Light'] text-[12px] tracking-[-0.04em] text-[#999]">
                   {AUTO_ADVANCE_NOTICE}
                 </p>
-
-                {/* Figma(918:7324)의 일시정지 아이콘 — 분석 중단 API가 계약에
-                    없어(오늘 범위 밖) 클릭해도 아무 일도 하지 않는 버튼을
-                    만들지 않는다. N1의 "이미지 연속 여부" 토글과 같은 방식
-                    (보여주되 비활성 + 이유 설명)으로 최소 보완한다. */}
-                <button
-                  type="button"
-                  disabled
-                  aria-disabled="true"
-                  title="분석 중단 기능은 아직 제공되지 않습니다."
-                  className="absolute top-[46px] right-0 flex size-7 shrink-0 cursor-not-allowed items-center justify-center rounded-[4px] border border-[#eaeaea] bg-white opacity-60"
-                >
-                  <PauseIcon />
-                </button>
               </div>
             </div>
           </div>

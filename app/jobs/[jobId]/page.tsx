@@ -171,7 +171,7 @@ function PageInner({ jobId }: { jobId: string }) {
 
         {tasksQuery.data && (
           <>
-            {currentStep === 'N2' && <N2AnalysisView status={tasksQuery.data} />}
+            {currentStep === 'N2' && <N2AnalysisView status={tasksQuery.data} isPreview={previewStep === 'N2'} />}
             {currentStep === 'N3' && <N3View jobId={jobId} />}
             {currentStep === 'N4' && <N4ProcessingView status={tasksQuery.data} />}
             {currentStep === 'N5' && <N5View jobId={jobId} />}
