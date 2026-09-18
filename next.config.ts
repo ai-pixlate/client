@@ -4,9 +4,9 @@ import type { NextConfig } from "next";
 // 프로덕션(next start)에서는 MSW가 꺼지므로, 이 rewrites 가 없으면 API 요청이
 // 갈 곳이 없다. rewrites 는 afterFiles(기본)로 동작해 실제 페이지 라우트
 // (예: /jobs/[jobId])와 충돌하지 않고, 페이지가 없는 API 하위경로만 프록시한다.
-// 백엔드 주소는 docker 네트워크상의 컨테이너명(pixate-api)이 기본이며,
+// 백엔드 주소는 docker 네트워크상의 컨테이너명(pixlate-api)이 기본이며,
 // 빌드 시 BACKEND_ORIGIN 환경변수로 덮어쓸 수 있다.
-const BACKEND_ORIGIN = process.env.BACKEND_ORIGIN || "http://pixate-api:8000";
+const BACKEND_ORIGIN = process.env.BACKEND_ORIGIN || "http://pixlate-api:8000";
 
 const nextConfig: NextConfig = {
   async rewrites() {
