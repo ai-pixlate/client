@@ -2,6 +2,7 @@ import { http, HttpResponse, passthrough } from 'msw';
 
 import type {
   JobCurrentStep,
+  Section as LegacySection,
   SectionBucket,
 } from '@/lib/api/types';
 import {
@@ -14,6 +15,14 @@ import {
 import { mockN5Job, mockN5Blocks, mockN5PreviewSections, buildMockN5Preview } from '@/lib/mock-api/n5-fixtures';
 import type { ApiJob, ApiJobAsyncTaskItem, ApiTextBlock } from '@/lib/api/n5-schema';
 import type { ApiAcceptedTask } from '@/lib/api/job-schema';
+import type {
+  ApiExcludedStage,
+  ApiExclusionReason,
+  ApiSection,
+  ApiSectionList,
+  ApiSectionVerdict,
+  ApiSourceImage,
+} from '@/lib/api/n3-schema';
 import type { ApiDeliverableList, ApiExportResponse, ApiLibraryCard } from '@/lib/api/n6-schema';
 
 // ─────────────────────────────────────────────
@@ -43,6 +52,93 @@ const sectionState = new Map<string, {
     { bucket: s.bucket, exclusionReason: s.exclusionReason, excludedStage: s.excludedStage },
   ])
 );
+
+/**
+ * 2단계(API 계약 정합화): fixture 내부 문자열 id('sec_01', 'src_mock_001')를
+ * 실제 계약이 요구하는 숫자 id로 바꾼다. fixtures.ts(N5와 공유)는 건드리지
+ * 않고 이 handler 응답을 조립하는 시점에서만 변환한다 — 같은 문자열은
+ * 항상 같은 숫자로 매핑되므로(끝자리 숫자 추출) 세션 내내 안정적이다.
+ */
+function toNumericId(id: string): number {
+  const digits = id.match(/\d+/)?.[0];
+  return digits ? Number(digits) : 0;
+}
+
+/**
+ * 실제 SectionVerdict 계약({id, basisArticle, reason, ...})으로 변환한다.
+ * legacy fixture의 verdict.basis(표시용 한 줄)는 근거 설명에 가까우므로
+ * reason에 담고, basisArticle(조문 식별자)은 이 fixture에 없어 null이다.
+ */
+function toWireVerdict(verdict: LegacySection['verdicts'][number]): ApiSectionVerdict {
+  return {
+    id: toNumericId(verdict.verdictId),
+    verdictStatus: verdict.verdictStatus,
+    verdictType: verdict.verdictType,
+    problemText: verdict.problemText,
+    alternativeExpression: verdict.alternativeExpression,
+    basisArticle: null,
+    evidenceUrl: verdict.evidenceUrl,
+    reason: verdict.basis,
+  };
+}
+
+/**
+ * legacy fixture Section + 현재 bucket/exclusionReason/excludedStage 상태 →
+ * 실제 Section 계약. bbox는 {x,y,width,height} → {x,y,w,h}로 필드명이
+ * 다르다. topOffset/displayTop/height/category/inpaintStatus/signals는 이
+ * fixture·N3 화면 어느 쪽도 아직 쓰지 않아 null/빈 배열로 둔다(임의 값을
+ * 지어내지 않는다는 원칙에 따라 "모른다"를 null로 표현).
+ */
+function toWireSection(
+  sec: LegacySection,
+  bucket: SectionBucket,
+  exclusionReason: string | null,
+  excludedStage: JobCurrentStep | null,
+): ApiSection {
+  return {
+    id: toNumericId(sec.sectionId),
+    sectionOrder: sec.sectionOrder,
+    sourceImageId: toNumericId(sec.sourceImageId),
+    topOffset: null,
+    displayTop: null,
+    height: null,
+    bbox: { x: sec.bbox.x, y: sec.bbox.y, w: sec.bbox.width, h: sec.bbox.height },
+    category: null,
+    bucket,
+    exclusionReason: exclusionReason as ApiExclusionReason | null,
+    excludedStage: excludedStage as ApiExcludedStage | null,
+    inpaintStatus: null,
+    warningBadge: sec.warningBadge,
+    verdicts: sec.verdicts.map(toWireVerdict),
+    signals: [],
+  };
+}
+
+/**
+ * N1 source-images mock (x-screen: N1, N3 재사용 가능). fileUrl은 presigned
+ * 계약을 흉내내 기존 정적 fixture 이미지 경로를 그대로 쓴다 — 아직 어떤
+ * 화면도 이 값을 소비하지 않는다(N1/N3 UI 연결은 이번 단계 범위 밖).
+ */
+const mockN3SourceImages: ApiSourceImage[] = [
+  {
+    id: 1,
+    uploadOrder: 1,
+    imageType: 'detail',
+    fileUrl: '/mock/n3/section-1000x1360.png',
+    width: 1000,
+    height: 1300,
+    createdAt: new Date('2026-09-01T00:00:00Z').toISOString(),
+  },
+  {
+    id: 2,
+    uploadOrder: 2,
+    imageType: 'detail',
+    fileUrl: '/mock/n3/section-830x3225.png',
+    width: 1000,
+    height: 1100,
+    createdAt: new Date('2026-09-01T00:00:00Z').toISOString(),
+  },
+];
 
 /**
  * job 진행 상태(N1~N6 공용, ApiJob 그대로). mockN5Job(원본 fixture)이 가진
@@ -311,50 +407,76 @@ export const handlers = [
   }),
 
   // ──────────────────────────────────────────
-  // N3 — 섹션 목록 조회. 경로는 실제 OpenAPI(GET /jobs/:jobId/sections)로
-  // 맞췄다(오늘 경로 정리, 이전엔 /api/jobs/:jobId/sections였다) — PATCH는
-  // 이미 실제 경로를 쓰고 있었다.
-  // 현재 인메모리 bucket 상태를 반영해 반환합니다.
+  // N3 — 섹션 목록 조회. 2단계(API 계약 정합화): 실제 응답 shape인
+  // SectionList({exclude, include}, 숫자 id, {x,y,w,h} bbox)로 맞췄다 —
+  // 이전 mock은 {sections: [...]}에 문자열 id를 그대로 얹어 실제로 없는
+  // 계약처럼 보이게 했었다. 인메모리 bucket 상태(sectionState)는 그대로
+  // 두고, 응답을 조립하는 시점에만 toWireSection으로 변환한다.
   // ──────────────────────────────────────────
   http.get('/jobs/:jobId/sections', ({ params }) => {
     const jobId = params.jobId as string;
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
 
-    const sections = mockSectionsResponse.sections.map(sec => {
+    const wireSections = mockSectionsResponse.sections.map((sec) => {
       const state = sectionState.get(sec.sectionId);
-      return state
-        ? { ...sec, bucket: state.bucket, exclusionReason: state.exclusionReason }
-        : sec;
+      return toWireSection(
+        sec,
+        state?.bucket ?? sec.bucket,
+        state?.exclusionReason ?? sec.exclusionReason,
+        state?.excludedStage ?? sec.excludedStage,
+      );
     });
 
-    return HttpResponse.json({ sections });
+    const response: ApiSectionList = {
+      exclude: wireSections.filter((s) => s.bucket === 'exclude'),
+      include: wireSections.filter((s) => s.bucket === 'include'),
+    };
+    return HttpResponse.json(response);
   }),
 
   // ──────────────────────────────────────────
-  // N3 / N5 — 섹션 bucket 변경 (포함 / 제외 전환)
-  //
-  // Request: { "bucket": "include" | "exclude" }
-  // exclusionReason은 사용자 입력 필드가 아닙니다.
-  // excludedStage는 클라이언트가 보내지 않는다 — 서버가 현재 job 단계
-  // (jobState.currentStep)를 기준으로 판단한다.
+  // N3 / N5 — 섹션 bucket 변경 (포함 / 제외 전환). 2단계: 실제 계약대로
+  // sectionId는 path의 숫자, body는 { action: 'restore' | 'exclude' }다 —
+  // 이전 mock의 { bucket } body는 실제 계약에 없다. restore=include로
+  // 이동, exclude=exclude로 이동. exclusionReason은 사용자 입력 필드가
+  // 아니라 항상 null로 비운다. excludedStage는 클라이언트가 보내지 않는다 —
+  // 서버가 현재 job 단계(jobState.currentStep)를 기준으로 판단한다. 응답은
+  // 갱신된 전체 Section이다(이전 mock처럼 {sectionId,bucket} 부분 응답이
+  // 아니다).
   // ──────────────────────────────────────────
   http.patch('/jobs/:jobId/sections/:sectionId', async ({ params, request }) => {
     const jobId = params.jobId as string;
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
 
-    const sectionId = params.sectionId as string;
-    if (!sectionState.has(sectionId)) return notFound(`Section '${sectionId}' not found`);
-
-    const body = await request.json() as Record<string, unknown>;
-    const bucket = body.bucket;
-
-    if (bucket !== 'include' && bucket !== 'exclude') {
-      return badRequest("bucket은 'include' 또는 'exclude'이어야 합니다");
+    const sectionIdNum = Number(params.sectionId);
+    const sec = mockSectionsResponse.sections.find((s) => toNumericId(s.sectionId) === sectionIdNum);
+    if (!sec || !sectionState.has(sec.sectionId)) {
+      return notFound(`Section '${params.sectionId}' not found`);
     }
 
+    const body = (await request.json()) as Record<string, unknown>;
+    const action = body.action;
+
+    if (action !== 'restore' && action !== 'exclude') {
+      return badRequest("action은 'restore' 또는 'exclude'여야 합니다");
+    }
+
+    const bucket: SectionBucket = action === 'restore' ? 'include' : 'exclude';
     const excludedStage = bucket === 'include' ? null : (jobState.currentStep as JobCurrentStep | undefined) ?? null;
-    sectionState.set(sectionId, { bucket, exclusionReason: null, excludedStage });
-    return HttpResponse.json({ sectionId, bucket, excludedStage });
+    sectionState.set(sec.sectionId, { bucket, exclusionReason: null, excludedStage });
+
+    return HttpResponse.json(toWireSection(sec, bucket, null, excludedStage));
+  }),
+
+  // ──────────────────────────────────────────
+  // N1 — 소스 이미지 목록 조회 (x-screen: N1, N3 재사용 가능). 아직 어떤
+  // 화면도 호출하지 않는다 — lib/queries/pixlate.ts의 useSourceImagesQuery
+  // 추가에 대응하는 mock만 먼저 갖춰 둔다.
+  // ──────────────────────────────────────────
+  http.get('/jobs/:jobId/source-images', ({ params }) => {
+    const jobId = params.jobId as string;
+    if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
+    return HttpResponse.json(mockN3SourceImages);
   }),
 
   // ──────────────────────────────────────────
