@@ -1,5 +1,5 @@
 /**
- * N5 검수 좌표 계산 자동 검증 (Pix/ate FE↔BE 구현 기준 v3.3.3).
+ * N5 검수 좌표 계산 자동 검증 (pix/ate FE↔BE 구현 기준 v3.3.3).
  *
  * lib/n5/coordinates.ts 는 React 도 브라우저 API 도 쓰지 않기 때문에
  * Node 에서 그대로 불러와 확인할 수 있다. (scripts/verify-coordinates.mjs와 같은 패턴)
