@@ -46,7 +46,11 @@ test('mock enabled — /jobs/{jobId} document navigation은 헤더 없이 페이
   // 뜨지 않고 500이 났을 것이다(2번 상태코드 200과 함께, "프록시 안 됨"의
   // 직접적 증거이기도 하다 — 4번은 별도 assertion 없이 2·3·7로 함께 증명됨).
   await expect(page.getByRole('progressbar')).toBeVisible();
-  await expect(page.getByText('완료되면 자동으로 다음 단계로 이동합니다.')).toBeVisible();
+  // 문구는 N2 UI가 Figma 기준으로 갱신되며 바뀌었다(구 문구 '완료되면
+  // 자동으로 다음 단계로 이동합니다.' → 현재 n2-analysis-view.tsx의
+  // AUTO_ADVANCE_NOTICE). rewrite 통과 여부와 무관한 문구라 최신 값으로
+  // 갱신한다 — 목적은 그대로 "N2 화면이 실제로 렌더됐는가" 확인이다.
+  await expect(page.getByText('분석이 끝나면 섹션 확인 단계로 자동 이동합니다.')).toBeVisible();
 
   // 5~6. 페이지 로드 후 발생하는 /jobs/... API fetch(tasks 폴링 등)에는
   // 헤더가 붙고, MSW가 정상 응답했으므로 화면이 위에서 이미 렌더된 상태다.
