@@ -113,8 +113,12 @@ function StageRow({ no, label, state }: { no: string; label: string; state: Five
     ? "font-['Pretendard:Regular'] text-[12px] text-[#ff6a38]"
     : "font-['Pretendard:Light'] text-[12px] tracking-[-0.04em] text-[#999]";
 
+  // 68px(Figma 1920 기준)~51px(1440급) 사이를 뷰포트 폭에 비례해 오간다 —
+  // 노트북에서 5단계가 한 화면에 다 들어오게 하려는 목적이라 row 높이만
+  // 줄이고, 텍스트 크기·줄간격은 그대로 둔다(요청사항: "text line-height가
+  // 답답해지지 않게").
   return (
-    <div className="flex h-[68px] w-full items-center gap-3.5">
+    <div className="flex h-[clamp(51px,3.54vw,68px)] w-full items-center gap-3.5">
       <div className={`size-[10px] shrink-0 rounded-full ${dotClass}`} aria-hidden="true" />
       <div className="flex flex-col gap-1">
         <p className={`whitespace-pre ${titleClass}`}>{`${no}  ${label}`}</p>
@@ -158,7 +162,7 @@ export function N2AnalysisView({
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {/* 헤더 */}
-        <div className="shrink-0 px-10 pt-10 pb-6">
+        <div className="shrink-0 px-[clamp(30px,2.08vw,40px)] pt-[clamp(30px,2.08vw,40px)] pb-[clamp(18px,1.25vw,24px)]">
           <div className="flex items-center gap-4">
             <h1 className="font-['Pretendard:SemiBold'] text-[20px] tracking-[-0.02em] text-[#171717]">이미지 분석</h1>
             <p className="font-['Pretendard:Regular'] text-[14px] tracking-[-0.01em] text-[#707070]">
@@ -171,17 +175,24 @@ export function N2AnalysisView({
             좌우 콘텐츠 사이 간격은 Figma(661:4239, 1740×892 패널 기준 좌측
             inset 68px·우측 inset 60px)를 그대로 옮긴 값이다. 패널 자체의
             바깥쪽 우측 여백도 Figma가 60px을 쓰므로(뷰포트-패널 우측 끝
-            차이) 좌측 px-10과 비대칭으로 맞춘다 — 그대로 두면 패널 전체
-            폭이 Figma보다 넓어져 우측 컬럼이 오른쪽으로 밀린다. */}
-        <div className="min-h-0 flex-1 pt-10 pr-[60px] pb-10 pl-10">
-          <div className="flex h-full min-h-0 gap-[80px] overflow-y-auto rounded-[8px] bg-[#f5f5f5] pt-[58px] pr-[60px] pb-[58px] pl-[68px]">
+            차이) 좌측과 비대칭으로 맞춘다 — 그대로 두면 패널 전체 폭이
+            Figma보다 넓어져 우측 컬럼이 오른쪽으로 밀린다.
+
+            모든 clamp()는 "1920 기준값 ~ 그 값의 75%(=1440/1920)" 범위를
+            뷰포트 폭(vw)에 비례해 오간다 — 1920에서는 사실상 원래 Figma
+            고정값과 동일하고(스크린샷 픽셀 비교로 검증됨), 1536·1440에서는
+            자연스럽게 축소돼 우측 progress 영역이 화면 밖으로 밀리지
+            않는다. 폰트 크기·line-height는 건드리지 않는다(텍스트가
+            급격히 작아지면 안 된다는 요구사항). */}
+        <div className="min-h-0 flex-1 pt-[clamp(30px,2.08vw,40px)] pr-[clamp(45px,3.13vw,60px)] pb-[clamp(30px,2.08vw,40px)] pl-[clamp(30px,2.08vw,40px)]">
+          <div className="flex h-full min-h-0 gap-[clamp(60px,4.17vw,80px)] overflow-y-auto rounded-[8px] bg-[#f5f5f5] pt-[clamp(43.5px,3.02vw,58px)] pr-[clamp(45px,3.13vw,60px)] pb-[clamp(43.5px,3.02vw,58px)] pl-[clamp(51px,3.54vw,68px)]">
             {/* 좌측 — 분석 비주얼 */}
-            <div className="flex min-w-0 flex-1 flex-col gap-[54px]">
-              <div className="flex max-w-[820px] flex-col gap-5">
+            <div className="flex min-w-0 flex-1 flex-col gap-[clamp(40.5px,2.81vw,54px)]">
+              <div className="flex max-w-[820px] flex-col gap-[clamp(15px,1.04vw,20px)]">
                 <div className="flex h-[26px] w-fit items-center justify-center rounded-[6px] bg-[#f5f5f5] px-2">
                   <p className="font-['Pretendard:Regular'] text-[12px] leading-[14px] text-[#171717]">진행중</p>
                 </div>
-                <div className="flex flex-col gap-3">
+                <div className="flex flex-col gap-[clamp(9px,0.625vw,12px)]">
                   <p className="font-['Pretendard:SemiBold'] text-[28px] tracking-[-0.015em] text-[#171717]">
                     {HEADLINE_FALLBACK}
                   </p>
@@ -191,8 +202,13 @@ export function N2AnalysisView({
                 </div>
               </div>
 
-              {/* 공용 GIF — N2/N4가 같은 자산을 쓴다(별도 복사본 금지) */}
-              <div className="relative h-[520px] w-full shrink-0 overflow-hidden rounded-[8px]">
+              {/* 공용 GIF — N2/N4가 같은 자산을 쓴다(별도 복사본 금지).
+                  고정 h-[520px] 대신 Figma visual frame 비율(1044:520)을
+                  aspect-ratio로 고정한다 — 좌측 컬럼 폭이 뷰포트에 따라
+                  줄어들면 높이도 같은 비율로 자연스럽게 따라 줄어든다.
+                  1920에서는 폭이 1044px에 수렴하므로 결과 높이도 520px과
+                  거의 같다. object-cover는 그대로 유지해 crop을 허용한다. */}
+              <div className="relative aspect-[1044/520] w-full shrink-0 overflow-hidden rounded-[8px]">
                 {/* eslint-disable-next-line @next/next/no-img-element -- 애니메이션 보존을 위해 next/image 최적화 대상에서 제외(GIF) */}
                 <img
                   src="/process/ai-processing.gif"
@@ -215,11 +231,14 @@ export function N2AnalysisView({
             {/* 구분선 */}
             <div className="w-px shrink-0 self-stretch bg-[#eaeaea]" />
 
-            {/* 우측 — ANALYSIS LOG */}
-            <div className="flex w-[403px] shrink-0 flex-col gap-[52px]">
-              <div className="flex max-w-[370px] flex-col gap-6">
+            {/* 우측 — ANALYSIS LOG. 폭은 403px(Figma 1920)~340px(요청한
+                최소치) 범위에서 뷰포트에 비례해 줄어든다 — 다른 값들과
+                달리 0.75배(≈302px)까지 좁히지 않고 340px에서 바닥을 둔다
+                ("340~403px 범위에서 반응형으로 유지" 요구사항). */}
+            <div className="flex w-[clamp(340px,21vw,403px)] shrink-0 flex-col gap-[clamp(39px,2.71vw,52px)]">
+              <div className="flex max-w-[370px] flex-col gap-[clamp(18px,1.25vw,24px)]">
                 <p className="font-['Pretendard:Regular'] text-[12px] tracking-[-0.02em] text-[#999]">ANALYSIS LOG</p>
-                <div className="flex flex-col gap-3">
+                <div className="flex flex-col gap-[clamp(9px,0.625vw,12px)]">
                   <h2 className="font-['Pretendard:SemiBold'] text-[20px] tracking-[-0.02em] text-[#171717]">
                     지금 처리하는 일
                   </h2>
@@ -237,7 +256,7 @@ export function N2AnalysisView({
                 {fiveSteps.map((step) => <StageRow key={step.no} no={step.no} label={step.label} state={step.state} />)}
               </div>
 
-              <div className="flex flex-col gap-6">
+              <div className="flex flex-col gap-[clamp(18px,1.25vw,24px)]">
                 <div className="flex flex-col gap-1.5">
                   {/* 퍼센트 숫자와 일시정지 버튼이 Figma에서 같은 줄에
                       놓여 있어(663:4332 + 918:7324) 같은 flex row로 묶는다 —
@@ -268,8 +287,11 @@ export function N2AnalysisView({
                   <p className="font-['Pretendard:Light'] text-[12px] tracking-[-0.04em] text-[#999]">전체 분석</p>
                 </div>
 
+                {/* 396px은 Figma 1920 실측값을 max-width로만 쓴다 — 우측
+                    panel 폭이 줄어들면 bar도 100%까지 자연스럽게 좁아진다
+                    (요청사항: "396px은 max-width로 사용"). */}
                 <div
-                  className="h-[3px] w-[396px] max-w-full overflow-hidden rounded-full bg-[rgba(112,112,112,0.16)]"
+                  className="h-[3px] w-full max-w-[396px] overflow-hidden rounded-full bg-[rgba(112,112,112,0.16)]"
                   role="progressbar"
                   aria-valuenow={progressPercent}
                   aria-valuemin={0}
