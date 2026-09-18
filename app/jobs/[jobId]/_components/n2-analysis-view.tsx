@@ -256,8 +256,14 @@ export function N2AnalysisView({
                 {fiveSteps.map((step) => <StageRow key={step.no} no={step.no} label={step.label} state={step.state} />)}
               </div>
 
-              <div className="flex flex-col gap-[clamp(18px,1.25vw,24px)]">
-                <div className="flex flex-col gap-1.5">
+              {/* progress 내부 3개 관계(72%↔전체 분석 / 전체 분석↔bar /
+                  bar↔안내문)는 Figma 원본에서 서로 다른 간격이다(node
+                  663:4332 grid의 margin-top 0/120/147으로 역산: 6px /
+                  38px / 24px). 하나의 공유 gap으로 뭉치지 않고 각 관계를
+                  독립된 clamp로 둔다 — 1920에서는 위 세 값 그대로이고,
+                  1440에서는 각각 75%까지 줄어든다. */}
+              <div className="flex flex-col">
+                <div className="flex flex-col gap-[clamp(4.5px,0.31vw,6px)]">
                   {/* 퍼센트 숫자와 일시정지 버튼이 Figma에서 같은 줄에
                       놓여 있어(663:4332 + 918:7324) 같은 flex row로 묶는다 —
                       버튼을 별도 absolute 좌표로 흉내내지 않는다. */}
@@ -289,9 +295,10 @@ export function N2AnalysisView({
 
                 {/* 396px은 Figma 1920 실측값을 max-width로만 쓴다 — 우측
                     panel 폭이 줄어들면 bar도 100%까지 자연스럽게 좁아진다
-                    (요청사항: "396px은 max-width로 사용"). */}
+                    (요청사항: "396px은 max-width로 사용"). 위쪽 간격(전체
+                    분석 ↔ bar)은 Figma에서 세 관계 중 가장 크다(38px). */}
                 <div
-                  className="h-[3px] w-full max-w-[396px] overflow-hidden rounded-full bg-[rgba(112,112,112,0.16)]"
+                  className="mt-[clamp(28.5px,1.98vw,38px)] h-[3px] w-full max-w-[396px] overflow-hidden rounded-full bg-[rgba(112,112,112,0.16)]"
                   role="progressbar"
                   aria-valuenow={progressPercent}
                   aria-valuemin={0}
@@ -303,7 +310,7 @@ export function N2AnalysisView({
                   />
                 </div>
 
-                <p className="font-['Pretendard:Light'] text-[12px] tracking-[-0.04em] text-[#999]">
+                <p className="mt-[clamp(18px,1.25vw,24px)] font-['Pretendard:Light'] text-[12px] tracking-[-0.04em] text-[#999]">
                   {AUTO_ADVANCE_NOTICE}
                 </p>
               </div>
