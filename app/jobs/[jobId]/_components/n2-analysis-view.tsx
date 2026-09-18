@@ -113,12 +113,12 @@ function StageRow({ no, label, state }: { no: string; label: string; state: Five
     ? "font-['Pretendard:Regular'] text-[12px] text-[#ff6a38]"
     : "font-['Pretendard:Light'] text-[12px] tracking-[-0.04em] text-[#999]";
 
-  // 68px(Figma 1920 기준)~51px(1440급) 사이를 뷰포트 폭에 비례해 오간다 —
-  // 노트북에서 5단계가 한 화면에 다 들어오게 하려는 목적이라 row 높이만
-  // 줄이고, 텍스트 크기·줄간격은 그대로 둔다(요청사항: "text line-height가
-  // 답답해지지 않게").
+  // 68px(Figma 1920 기준)~51px(75%) 사이를 패널 자신의 렌더링 폭(cqw)에
+  // 비례해 오간다 — 뷰포트가 아니라 패널 크기 기준이라 패널이 세로 제약
+  //때문에 줄어들 때도 정확히 같은 비율로 따라온다. 텍스트 크기·줄간격은
+  // 그대로 둔다(요청사항: "text line-height가 답답해지지 않게").
   return (
-    <div className="flex h-[clamp(51px,3.54vw,68px)] w-full items-center gap-3.5">
+    <div className="flex h-[clamp(51px,4.219cqw,68px)] w-full items-center gap-3.5">
       <div className={`size-[10px] shrink-0 rounded-full ${dotClass}`} aria-hidden="true" />
       <div className="flex flex-col gap-1">
         <p className={`whitespace-pre ${titleClass}`}>{`${no}  ${label}`}</p>
@@ -161,8 +161,11 @@ export function N2AnalysisView({
       </div>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        {/* 헤더 */}
-        <div className="shrink-0 px-[clamp(30px,2.08vw,40px)] pt-[clamp(30px,2.08vw,40px)] pb-[clamp(18px,1.25vw,24px)]">
+        {/* 헤더 — Figma(660:4168 "N1 / Header") 그대로 고정값이다. 이전에
+            여기 padding까지 반응형 clamp를 걸었던 걸 되돌린다 — 요청 대상은
+            이 헤더가 아니라 아래 회색 패널 안의 title/description이었다.
+            노트북이라고 이 헤더 위치·간격을 임의로 좁히지 않는다. */}
+        <div className="shrink-0 px-10 pt-10 pb-6">
           <div className="flex items-center gap-4">
             <h1 className="font-['Pretendard:SemiBold'] text-[20px] tracking-[-0.02em] text-[#171717]">이미지 분석</h1>
             <p className="font-['Pretendard:Regular'] text-[14px] tracking-[-0.01em] text-[#707070]">
@@ -171,28 +174,52 @@ export function N2AnalysisView({
           </div>
         </div>
 
-        {/* 본문: N2 / Brand Analysis Stage 패널 — 내부 좌우 padding(68/60)과
-            좌우 콘텐츠 사이 간격은 Figma(661:4239, 1740×892 패널 기준 좌측
-            inset 68px·우측 inset 60px)를 그대로 옮긴 값이다. 패널 자체의
-            바깥쪽 우측 여백도 Figma가 60px을 쓰므로(뷰포트-패널 우측 끝
-            차이) 좌측과 비대칭으로 맞춘다 — 그대로 두면 패널 전체 폭이
-            Figma보다 넓어져 우측 컬럼이 오른쪽으로 밀린다.
+        {/* 본문 — "헤더를 제외한 실제 작업 가능 영역"(workspace)을 정의하고
+            그 안에서 회색 N2 패널을 가로·세로 모두 중앙 정렬한다. 이전처럼
+            좌우 padding을 각각 줄여 패널을 억지로 우측 컬럼 쪽에 맞추던
+            방식(비대칭 pl/pr clamp)을 걷어내고, 대신:
+              1) 패널의 max-width/aspect-ratio를 Figma 비율(1740:892)로
+                 고정하고
+              2) 이 wrapper가 `items-center justify-center`로 패널을
+                 감싸 중앙에 배치한다.
+            뷰포트 폭만 보고 축소하던 이전 방식과 달리, `max-h-full` +
+            `aspect-[1740/892]`가 남은 세로 공간까지 함께 고려하므로
+            1536×864처럼 세로가 더 빠듯한 뷰포트에서도 패널이 폭 기준으로만
+            커지다 아래가 잘리는 대신, 가로·세로 중 더 좁은 쪽에 맞춰
+            비율대로 줄어든다. */}
+        <div className="[container-type:size] flex min-h-0 flex-1 items-center justify-center p-10">
+          {/* 패널 폭은 `aspect-ratio` + `max-height`가 자동으로 되돌려
+              계산해주길 기대하지 않는다 — 실측해보니 Chromium이 이 조합을
+              "가로가 부족할 때만" 정확히 처리하고, 세로가 병목일 때는
+              높이만 잘라내고 폭은 줄이지 않아 비율이 어긋났다(1536×864
+              실측 1376×690 ≈ 1.994, Figma 1740/892 ≈ 1.951). 그래서 폭을
+              직접 `min(1740px, 컨테이너 폭, 컨테이너 높이×1740/892)`로
+              계산한다 — 위 wrapper를 `container-type:size`로 만들어
+              cqw/cqh 둘 다 여기서 참조한다.
 
-            모든 clamp()는 "1920 기준값 ~ 그 값의 75%(=1440/1920)" 범위를
-            뷰포트 폭(vw)에 비례해 오간다 — 1920에서는 사실상 원래 Figma
-            고정값과 동일하고(스크린샷 픽셀 비교로 검증됨), 1536·1440에서는
-            자연스럽게 축소돼 우측 progress 영역이 화면 밖으로 밀리지
-            않는다. 폰트 크기·line-height는 건드리지 않는다(텍스트가
-            급격히 작아지면 안 된다는 요구사항). */}
-        <div className="min-h-0 flex-1 pt-[clamp(30px,2.08vw,40px)] pr-[clamp(45px,3.13vw,60px)] pb-[clamp(30px,2.08vw,40px)] pl-[clamp(30px,2.08vw,40px)]">
-          <div className="flex h-full min-h-0 gap-[clamp(60px,4.17vw,80px)] overflow-y-auto rounded-[8px] bg-[#f5f5f5] pt-[clamp(43.5px,3.02vw,58px)] pr-[clamp(45px,3.13vw,60px)] pb-[clamp(43.5px,3.02vw,58px)] pl-[clamp(51px,3.54vw,68px)]">
-            {/* 좌측 — 분석 비주얼 */}
-            <div className="flex min-w-0 flex-1 flex-col gap-[clamp(40.5px,2.81vw,54px)]">
-              <div className="flex max-w-[820px] flex-col gap-[clamp(15px,1.04vw,20px)]">
+              패널 자신의 padding/gap은 vw 기준을 그대로 쓴다(패널 자신이
+              [container-type:inline-size]로 자식들의 cqw 기준점이 되는
+              동시에, cq 단위는 스펙상 컨테이너 자기 자신의 padding/width에는
+              쓸 수 없다 — self-reference라 조용히 상위 컨테이너를 참조하며
+              값이 어긋난다는 걸 실측으로 확인했다). 안쪽 자식들(좌측 컬럼
+              내부 간격, 우측 컬럼 폭·간격, 5단계 row 높이, progress 간격)은
+              전부 cqw로 패널 자신의 실제 렌더링 폭에 정확히 비례한다 — 그
+              값들은 아래에서 개별적으로 처리한다. */}
+          <div
+            className="relative flex min-h-0 min-w-0 [container-type:inline-size] gap-[clamp(60px,4.17vw,80px)] overflow-y-auto rounded-[8px] bg-[#f5f5f5] pt-[clamp(43.5px,3.02vw,58px)] pr-[clamp(45px,3.13vw,60px)] pb-[clamp(43.5px,3.02vw,58px)] pl-[clamp(51px,3.54vw,68px)]"
+            style={{ width: 'min(1740px, 100cqw, calc(100cqh * 1740 / 892))', aspectRatio: '1740 / 892' }}
+          >
+            {/* 좌측 — 분석 비주얼. cqw 기준값은 패널의 content-box 폭
+                (border-box 1740 − pl68 − pr60 = 1612, 1920 기준)이다 —
+                container query 단위는 컨테이너 자신의 padding을 제외한
+                content-box만 기준으로 삼는다(실측으로 확인). 그래서
+                계수는 "Figma값 / 16.12"다. */}
+            <div className="flex min-w-0 flex-1 flex-col gap-[clamp(40.5px,3.350cqw,54px)]">
+              <div className="flex max-w-[820px] flex-col gap-[clamp(15px,1.241cqw,20px)]">
                 <div className="flex h-[26px] w-fit items-center justify-center rounded-[6px] bg-[#f5f5f5] px-2">
                   <p className="font-['Pretendard:Regular'] text-[12px] leading-[14px] text-[#171717]">진행중</p>
                 </div>
-                <div className="flex flex-col gap-[clamp(9px,0.625vw,12px)]">
+                <div className="flex flex-col gap-[clamp(9px,0.744cqw,12px)]">
                   <p className="font-['Pretendard:SemiBold'] text-[28px] tracking-[-0.015em] text-[#171717]">
                     {HEADLINE_FALLBACK}
                   </p>
@@ -231,14 +258,17 @@ export function N2AnalysisView({
             {/* 구분선 */}
             <div className="w-px shrink-0 self-stretch bg-[#eaeaea]" />
 
-            {/* 우측 — ANALYSIS LOG. 폭은 403px(Figma 1920)~340px(요청한
-                최소치) 범위에서 뷰포트에 비례해 줄어든다 — 다른 값들과
-                달리 0.75배(≈302px)까지 좁히지 않고 340px에서 바닥을 둔다
-                ("340~403px 범위에서 반응형으로 유지" 요구사항). */}
-            <div className="flex w-[clamp(340px,21vw,403px)] shrink-0 flex-col gap-[clamp(39px,2.71vw,52px)]">
-              <div className="flex max-w-[370px] flex-col gap-[clamp(18px,1.25vw,24px)]">
+            {/* 우측 — ANALYSIS LOG. 폭을 별도 vw 바닥값(340px)으로 고정하지
+                않는다 — 패널 자체가 이제 Figma 비율(1740:892)로 크기가
+                정해지므로, 우측 컬럼도 그 패널 폭의 정확히 같은 비율
+                (403/1740 ≈ 23.16%)만 그대로 따라가면 된다("403→340 숫자를
+                유지할 필요 없다, Figma처럼 보이는 게 우선" 요구사항).
+                패널이 비정상적으로 좁아지는 경우에 대한 안전장치로만
+                min-width 300px을 둔다. */}
+            <div className="flex w-[max(300px,25cqw)] shrink-0 flex-col gap-[clamp(39px,3.226cqw,52px)]">
+              <div className="flex max-w-[370px] flex-col gap-[clamp(18px,1.489cqw,24px)]">
                 <p className="font-['Pretendard:Regular'] text-[12px] tracking-[-0.02em] text-[#999]">ANALYSIS LOG</p>
-                <div className="flex flex-col gap-[clamp(9px,0.625vw,12px)]">
+                <div className="flex flex-col gap-[clamp(9px,0.744cqw,12px)]">
                   <h2 className="font-['Pretendard:SemiBold'] text-[20px] tracking-[-0.02em] text-[#171717]">
                     지금 처리하는 일
                   </h2>
@@ -263,7 +293,7 @@ export function N2AnalysisView({
                   독립된 clamp로 둔다 — 1920에서는 위 세 값 그대로이고,
                   1440에서는 각각 75%까지 줄어든다. */}
               <div className="flex flex-col">
-                <div className="flex flex-col gap-[clamp(4.5px,0.31vw,6px)]">
+                <div className="flex flex-col gap-[clamp(4.5px,0.372cqw,6px)]">
                   {/* 퍼센트 숫자와 일시정지 버튼이 Figma에서 같은 줄에
                       놓여 있어(663:4332 + 918:7324) 같은 flex row로 묶는다 —
                       버튼을 별도 absolute 좌표로 흉내내지 않는다. */}
@@ -298,7 +328,7 @@ export function N2AnalysisView({
                     (요청사항: "396px은 max-width로 사용"). 위쪽 간격(전체
                     분석 ↔ bar)은 Figma에서 세 관계 중 가장 크다(38px). */}
                 <div
-                  className="mt-[clamp(28.5px,1.98vw,38px)] h-[3px] w-full max-w-[396px] overflow-hidden rounded-full bg-[rgba(112,112,112,0.16)]"
+                  className="mt-[clamp(28.5px,2.357cqw,38px)] h-[3px] w-full max-w-[396px] overflow-hidden rounded-full bg-[rgba(112,112,112,0.16)]"
                   role="progressbar"
                   aria-valuenow={progressPercent}
                   aria-valuemin={0}
@@ -310,7 +340,7 @@ export function N2AnalysisView({
                   />
                 </div>
 
-                <p className="mt-[clamp(18px,1.25vw,24px)] font-['Pretendard:Light'] text-[12px] tracking-[-0.04em] text-[#999]">
+                <p className="mt-[clamp(18px,1.489cqw,24px)] font-['Pretendard:Light'] text-[12px] tracking-[-0.04em] text-[#999]">
                   {AUTO_ADVANCE_NOTICE}
                 </p>
               </div>
