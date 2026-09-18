@@ -40,3 +40,14 @@ body {
 .n3-thumb-settle {
   animation: n3-thumb-settle 160ms ease-out;
 }
+
+/* N3 — 좌측 삭제 섹션 nav: chevron이 scroll 조작을 대신하므로 브라우저 기본
+   scrollbar는 시각적으로 숨긴다(스크롤 자체는 그대로 동작한다). */
+.n3-scroll-hidden {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.n3-scroll-hidden::-webkit-scrollbar {
+  display: none;
+}
