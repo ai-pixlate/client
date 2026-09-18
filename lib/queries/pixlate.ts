@@ -21,7 +21,7 @@ import {
   getExportDownload,
   getExportDownloadByType,
   saveJob,
-} from '@/lib/api/pixate';
+} from '@/lib/api/pixlate';
 import type { UpdateSectionBucketRequest, CreateJobRequest, SectionsResponse } from '@/lib/api/types';
 import type { ApiBlockPatch, ApiConfirmRequest, ApiJobTaskStatus, ApiTextBlock } from '@/lib/api/n5-schema';
 import type { ApiExportRequest, ApiExportArtifactType } from '@/lib/api/n6-schema';
@@ -40,16 +40,16 @@ import type { ApiExportRequest, ApiExportArtifactType } from '@/lib/api/n6-schem
 // 달라 캐시를 공유하면 두 refetchInterval이 서로의 조건을 밟는다.
 // ─────────────────────────────────────────────
 
-export const pixateKeys = {
-  all: ['pixate'] as const,
-  job: (jobId: string) => ['pixate', 'job', jobId] as const,
-  tasks: (jobId: string) => ['pixate', 'job', jobId, 'tasks'] as const,
-  sections: (jobId: string) => ['pixate', 'job', jobId, 'sections'] as const,
-  n5Blocks: (jobId: string) => ['pixate', 'job', jobId, 'n5-blocks'] as const,
-  n5Preview: (jobId: string) => ['pixate', 'job', jobId, 'n5-preview'] as const,
-  n5Task: (jobId: string, taskId: number | null) => ['pixate', 'job', jobId, 'n5-task', taskId] as const,
-  deliverables: (jobId: string) => ['pixate', 'job', jobId, 'deliverables'] as const,
-  validation: (jobId: string) => ['pixate', 'job', jobId, 'validation'] as const,
+export const pixlateKeys = {
+  all: ['pixlate'] as const,
+  job: (jobId: string) => ['pixlate', 'job', jobId] as const,
+  tasks: (jobId: string) => ['pixlate', 'job', jobId, 'tasks'] as const,
+  sections: (jobId: string) => ['pixlate', 'job', jobId, 'sections'] as const,
+  n5Blocks: (jobId: string) => ['pixlate', 'job', jobId, 'n5-blocks'] as const,
+  n5Preview: (jobId: string) => ['pixlate', 'job', jobId, 'n5-preview'] as const,
+  n5Task: (jobId: string, taskId: number | null) => ['pixlate', 'job', jobId, 'n5-task', taskId] as const,
+  deliverables: (jobId: string) => ['pixlate', 'job', jobId, 'deliverables'] as const,
+  validation: (jobId: string) => ['pixlate', 'job', jobId, 'validation'] as const,
 };
 
 // ─────────────────────────────────────────────
@@ -102,7 +102,7 @@ export function useJobTasksQuery(jobId: string, options: { polling?: boolean } =
   const { polling = false } = options;
 
   return useQuery({
-    queryKey: pixateKeys.tasks(jobId),
+    queryKey: pixlateKeys.tasks(jobId),
     queryFn: () => getJobTasks(jobId),
     enabled: !!jobId,
     refetchInterval: polling
@@ -127,7 +127,7 @@ export function useSectionProceedMutation(jobId: string) {
   return useMutation({
     mutationFn: () => proceedSections(jobId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: pixateKeys.tasks(jobId) });
+      queryClient.invalidateQueries({ queryKey: pixlateKeys.tasks(jobId) });
     },
   });
 }
@@ -138,7 +138,7 @@ export function useSectionProceedMutation(jobId: string) {
 
 export function useSectionsQuery(jobId: string) {
   return useQuery({
-    queryKey: pixateKeys.sections(jobId),
+    queryKey: pixlateKeys.sections(jobId),
     queryFn: () => getSections(jobId),
     enabled: !!jobId,
   });
@@ -151,7 +151,7 @@ export function useSectionsQuery(jobId: string) {
 /** N5 헤더(targetCountry/targetLanguage)용 job 조회 */
 export function useJobQuery(jobId: string) {
   return useQuery({
-    queryKey: pixateKeys.job(jobId),
+    queryKey: pixlateKeys.job(jobId),
     queryFn: () => getJob(jobId),
     enabled: !!jobId,
   });
@@ -159,7 +159,7 @@ export function useJobQuery(jobId: string) {
 
 export function useN5BlocksQuery(jobId: string) {
   return useQuery({
-    queryKey: pixateKeys.n5Blocks(jobId),
+    queryKey: pixlateKeys.n5Blocks(jobId),
     queryFn: () => getN5Blocks(jobId),
     enabled: !!jobId,
   });
@@ -167,7 +167,7 @@ export function useN5BlocksQuery(jobId: string) {
 
 export function useN5PreviewQuery(jobId: string) {
   return useQuery({
-    queryKey: pixateKeys.n5Preview(jobId),
+    queryKey: pixlateKeys.n5Preview(jobId),
     queryFn: () => getN5Preview(jobId),
     enabled: !!jobId,
   });
@@ -192,7 +192,7 @@ export function usePatchN5BlockMutation(jobId: string) {
     onSuccess: (response) => {
       const updated = response.block;
       if (!updated) return;
-      queryClient.setQueryData<ApiTextBlock[]>(pixateKeys.n5Blocks(jobId), (prev) =>
+      queryClient.setQueryData<ApiTextBlock[]>(pixlateKeys.n5Blocks(jobId), (prev) =>
         prev ? prev.map((b) => (b.id === updated.id ? updated : b)) : prev,
       );
     },
@@ -206,7 +206,7 @@ export function usePatchN5BlockMutation(jobId: string) {
  */
 export function useN5TaskStatusQuery(jobId: string, taskId: number | null) {
   return useQuery({
-    queryKey: pixateKeys.n5Task(jobId, taskId),
+    queryKey: pixlateKeys.n5Task(jobId, taskId),
     queryFn: () => getJobTasks(jobId),
     enabled: taskId != null,
     refetchInterval: (query) => {
@@ -224,7 +224,7 @@ export function useN5TaskStatusQuery(jobId: string, taskId: number | null) {
 // N5 — 검수 확정 = N5→N6 (실제 계약 v3.4.2, POST /jobs/:jobId/confirm)
 //
 // 6단계: 성공(200)이면 서버가 준 최신 Job으로 job 캐시를 갱신하고, 화면
-// 전환을 구동하는 tasks 캐시(pixateKeys.tasks, 오늘부터 status 대신 이 키를
+// 전환을 구동하는 tasks 캐시(pixlateKeys.tasks, 오늘부터 status 대신 이 키를
 // 쓴다)도 함께 invalidate한다 — page.tsx가 currentStep으로 N5/N6 뷰를 고르는
 // 라우팅 메커니즘(useSectionProceedMutation과 동일 패턴)을 그대로 재사용하기
 // 위함이다. 409(ALL_SECTIONS_EXCLUDED/INVALID_STATE)는 여기서 삼키지 않는다 —
@@ -238,8 +238,8 @@ export function useConfirmN5Mutation(jobId: string) {
   return useMutation({
     mutationFn: (payload: ApiConfirmRequest) => confirmN5(jobId, payload),
     onSuccess: (job) => {
-      queryClient.setQueryData(pixateKeys.job(jobId), job);
-      queryClient.invalidateQueries({ queryKey: pixateKeys.tasks(jobId) });
+      queryClient.setQueryData(pixlateKeys.job(jobId), job);
+      queryClient.invalidateQueries({ queryKey: pixlateKeys.tasks(jobId) });
     },
   });
 }
@@ -260,7 +260,7 @@ export function useN6RenderMutation(jobId: string) {
   return useMutation({
     mutationFn: () => renderStart(jobId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: pixateKeys.tasks(jobId) });
+      queryClient.invalidateQueries({ queryKey: pixlateKeys.tasks(jobId) });
     },
   });
 }
@@ -277,7 +277,7 @@ export function useN6RenderMutation(jobId: string) {
 export function useDeliverablesQuery(jobId: string, options: { enabled?: boolean } = {}) {
   const { enabled = true } = options;
   return useQuery({
-    queryKey: pixateKeys.deliverables(jobId),
+    queryKey: pixlateKeys.deliverables(jobId),
     queryFn: () => getDeliverables(jobId),
     enabled: !!jobId && enabled,
   });
@@ -286,7 +286,7 @@ export function useDeliverablesQuery(jobId: string, options: { enabled?: boolean
 export function useValidationQuery(jobId: string, options: { enabled?: boolean } = {}) {
   const { enabled = true } = options;
   return useQuery({
-    queryKey: pixateKeys.validation(jobId),
+    queryKey: pixlateKeys.validation(jobId),
     queryFn: () => getValidation(jobId),
     enabled: !!jobId && enabled,
   });
@@ -352,8 +352,8 @@ export function useUpdateSectionBucketMutation(jobId: string) {
     mutationFn: ({ sectionId, ...payload }: { sectionId: string } & UpdateSectionBucketRequest) =>
       updateSectionBucket(jobId, sectionId, payload),
     onMutate: async ({ sectionId, bucket }) => {
-      await queryClient.cancelQueries({ queryKey: pixateKeys.sections(jobId) });
-      const previous = queryClient.getQueryData<SectionsResponse>(pixateKeys.sections(jobId));
+      await queryClient.cancelQueries({ queryKey: pixlateKeys.sections(jobId) });
+      const previous = queryClient.getQueryData<SectionsResponse>(pixlateKeys.sections(jobId));
 
       if (previous) {
         // 서버(mock) 규칙과 동일하게 맞춘다: bucket을 바꾸는 모든 PATCH는
@@ -361,7 +361,7 @@ export function useUpdateSectionBucketMutation(jobId: string) {
         // 보내지 않는다 — 서버가 현재 job 단계를 기준으로 판단한다. 이 mutation은
         // N3에서만 호출되므로 exclude 시 낙관적으로 'N3'를 반영한다. 자동 판정
         // 사유는 사용자가 직접 조작한 순간 더 이상 유효하지 않기 때문이다.
-        queryClient.setQueryData<SectionsResponse>(pixateKeys.sections(jobId), {
+        queryClient.setQueryData<SectionsResponse>(pixlateKeys.sections(jobId), {
           sections: previous.sections.map((section) =>
             section.sectionId === sectionId
               ? {
@@ -379,11 +379,11 @@ export function useUpdateSectionBucketMutation(jobId: string) {
     },
     onError: (_err, _vars, context) => {
       if (context?.previous) {
-        queryClient.setQueryData(pixateKeys.sections(jobId), context.previous);
+        queryClient.setQueryData(pixlateKeys.sections(jobId), context.previous);
       }
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: pixateKeys.sections(jobId) });
+      queryClient.invalidateQueries({ queryKey: pixlateKeys.sections(jobId) });
     },
   });
 }

@@ -3,7 +3,7 @@
 import { use, useEffect, useState } from 'react';
 import Link from 'next/link';
 
-import { useJobTasksQuery } from '@/lib/queries/pixate';
+import { useJobTasksQuery } from '@/lib/queries/pixlate';
 import { N2AnalysisView } from './_components/n2-analysis-view';
 import { N3View } from './_components/n3/n3-view';
 import { N4ProcessingView } from './_components/n4-processing-view';

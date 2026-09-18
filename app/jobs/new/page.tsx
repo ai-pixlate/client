@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
-import { useCreateJobMutation, useAnalyzeJobMutation } from '@/lib/queries/pixate';
+import { useCreateJobMutation, useAnalyzeJobMutation } from '@/lib/queries/pixlate';
 import type { ImageType } from '@/lib/api/types';
 import { StepNav } from '../[jobId]/_components/step-nav';
 
