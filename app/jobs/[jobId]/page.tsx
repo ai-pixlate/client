@@ -1,10 +1,8 @@
 'use client';
 
-import { Suspense, use, useEffect, useState } from 'react';
+import { use, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useSearchParams } from 'next/navigation';
 
-import type { JobCurrentStep } from '@/lib/api/types';
 import { useJobTasksQuery } from '@/lib/queries/pixate';
 import { N2AnalysisView } from './_components/n2-analysis-view';
 import { N3View } from './_components/n3/n3-view';
@@ -35,20 +33,6 @@ const N2_MOCK_MIN_DWELL_MS = 7000;
 const IS_MOCK_ENABLED = process.env.NEXT_PUBLIC_API_MOCKING === 'enabled';
 
 // ─────────────────────────────────────────────────────────────────
-// 디자인 확인용 preview 고정 — mock 환경 전용. `?previewStep=N2`처럼 쿼리로
-// 렌더링 화면만 특정 step에 고정한다(서버 currentStep·polling·task
-// 진행은 그대로 두고 화면 분기만 override). 이번엔 N2만 실제 지원하고,
-// 추후 N3~N6을 추가할 때는 SUPPORTED_PREVIEW_STEPS에 값만 더하면 된다 —
-// 분기 처리 지점은 이 한 곳(resolvePreviewStep)뿐이다.
-// ─────────────────────────────────────────────────────────────────
-const SUPPORTED_PREVIEW_STEPS: ReadonlySet<JobCurrentStep> = new Set<JobCurrentStep>(['N2']);
-
-function resolvePreviewStep(raw: string | null): JobCurrentStep | null {
-  if (!IS_MOCK_ENABLED || !raw) return null;
-  return (SUPPORTED_PREVIEW_STEPS as ReadonlySet<string>).has(raw) ? (raw as JobCurrentStep) : null;
-}
-
-// ─────────────────────────────────────────────────────────────────
 // 페이지 루트
 // ─────────────────────────────────────────────────────────────────
 
@@ -69,26 +53,12 @@ export default function Page({
 }) {
   const { jobId } = use(params);
 
-  // useSearchParams()는 정적 렌더링 시 이 컴포넌트를 Suspense 경계까지
-  // client-only로 opt-in시킨다(Next.js 공식 요구사항, app/jobs/new/page.tsx와
-  // 동일 패턴) — fallback 없이 즉시 그리는 얇은 wrapper로 감싼다.
-  return (
-    <Suspense fallback={null}>
-      <PageInner jobId={jobId} />
-    </Suspense>
-  );
-}
-
-function PageInner({ jobId }: { jobId: string }) {
   // tasks polling(GET /jobs/:jobId/tasks)은 페이지에서 한 번만 실행하고,
   // currentStep으로 화면을 분기한다. N2View / N4ProcessingView는 이 결과를
   // status props로 전달받아 재사용한다. currentStep/userFacingStatus는 서버
   // 응답 그대로 쓴다 — 여기서 다시 계산하지 않는다.
   const tasksQuery = useJobTasksQuery(jobId, { polling: true });
   const rawCurrentStep = tasksQuery.data?.currentStep;
-
-  const searchParams = useSearchParams();
-  const previewStep = resolvePreviewStep(searchParams.get('previewStep'));
 
   // N2 진입 시점(서버가 처음으로 currentStep==='N2'를 응답한 시점)을
   // 한 번만 기록한다 — 이미 N2를 지나 시작된 job에는 적용하지 않는다.
@@ -118,16 +88,10 @@ function PageInner({ jobId }: { jobId: string }) {
   // task는 끝났지만(rawCurrentStep이 N2를 벗어남) 최소 체류 시간이 아직
   // 안 지났으면 N2 화면을 그대로 유지한다. 두 조건이 모두 만족되면(=
   // n2DwellElapsed) 실제 서버 상태를 그대로 반영한다.
-  const dwellGatedStep =
+  const currentStep =
     IS_MOCK_ENABLED && n2EnteredAt !== null && !n2DwellElapsed && rawCurrentStep !== 'N2'
       ? 'N2'
       : rawCurrentStep;
-
-  // previewStep은 위 최소 체류 게이트보다 우선한다 — polling으로 서버
-  // currentStep이 더 진행돼도(N3 이상) 쿼리가 붙어 있는 한 화면은 그대로
-  // 고정된다. jobId+쿼리스트링만으로 매 렌더 다시 계산되는 순수 파생값이라
-  // 새로고침해도 동일하게 유지된다(별도 저장 불필요).
-  const currentStep = previewStep ?? dwellGatedStep;
   const meta = (currentStep && STEP_META[currentStep]) || STEP_META_FALLBACK;
 
   return (
@@ -171,7 +135,7 @@ function PageInner({ jobId }: { jobId: string }) {
 
         {tasksQuery.data && (
           <>
-            {currentStep === 'N2' && <N2AnalysisView status={tasksQuery.data} isPreview={previewStep === 'N2'} />}
+            {currentStep === 'N2' && <N2AnalysisView status={tasksQuery.data} />}
             {currentStep === 'N3' && <N3View jobId={jobId} />}
             {currentStep === 'N4' && <N4ProcessingView status={tasksQuery.data} />}
             {currentStep === 'N5' && <N5View jobId={jobId} />}

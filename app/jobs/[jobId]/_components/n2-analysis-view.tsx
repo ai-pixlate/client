@@ -64,13 +64,6 @@ function buildFiveSteps(states: FiveStepState[]) {
   return FIVE_STEP_META.map((step, i) => ({ ...step, state: states[i] }));
 }
 
-// previewStep=N2 전용 — Figma 660:4139가 실제로 보여주는 스냅샷과 동일하게
-// 고정한다(01~03 완료 · 04 진행 중 · 05 대기 · 72%). mock task 진행이나
-// 실제 API 데이터는 건드리지 않고, 이 화면의 표시값만 디자인 확인용으로
-// 대체한다.
-const PREVIEW_FIVE_STEP_STATES: FiveStepState[] = ['done', 'done', 'done', 'active', 'pending'];
-const PREVIEW_PROGRESS_PERCENT = 72;
-
 function ExitIcon() {
   // Figma(849:7235 "보관함으로 나가기") glyph는 7일 만료 원격 asset이라
   // 커밋 코드에 하드링크하지 않는다 — N1이 이미 같은 위치·크기의 아이콘을
@@ -128,18 +121,9 @@ function StageRow({ no, label, state }: { no: string; label: string; state: Five
   );
 }
 
-export function N2AnalysisView({
-  status,
-  isPreview = false,
-}: {
-  status: ApiJobTaskStatus;
-  /** previewStep=N2(page.tsx) 전용 — Figma 스냅샷과 동일한 고정 진행 상태로 보여준다. */
-  isPreview?: boolean;
-}) {
-  const fiveSteps = isPreview
-    ? buildFiveSteps(PREVIEW_FIVE_STEP_STATES)
-    : buildFiveSteps(FIVE_STEP_STATES_BY_COARSE_STAGE[resolveCoarseStage(status.stages)]);
-  const progressPercent = isPreview ? PREVIEW_PROGRESS_PERCENT : Math.round((status.progress ?? 0) * 100);
+export function N2AnalysisView({ status }: { status: ApiJobTaskStatus }) {
+  const fiveSteps = buildFiveSteps(FIVE_STEP_STATES_BY_COARSE_STAGE[resolveCoarseStage(status.stages)]);
+  const progressPercent = Math.round((status.progress ?? 0) * 100);
   const failedItems = (status.items ?? []).filter((i) => i.status === 'failed');
 
   return (
