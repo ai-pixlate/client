@@ -19,7 +19,7 @@ import {
   useSectionsQuery,
   useUpdateSectionBucketMutation,
   useSectionProceedMutation,
-} from '@/lib/queries/pixate';
+} from '@/lib/queries/pixlate';
 import type { Section, SectionBucket } from '@/lib/api/types';
 import { StepNav } from '../step-nav';
 import { DetailPanel } from './detail-panel';

@@ -2,7 +2,7 @@
 
 ## 목적
 
-Pixate의 현재 Mock 기본 사용자 흐름이 Chromium / Firefox / WebKit에서
+pix/ate의 현재 Mock 기본 사용자 흐름이 Chromium / Firefox / WebKit에서
 동일하게 동작하는지 Playwright로 검증했다.
 
 검증 대상은 현재 실제 구현 가능한:

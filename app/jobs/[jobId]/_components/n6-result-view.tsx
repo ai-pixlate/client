@@ -12,7 +12,7 @@ import {
   useExportDownloadMutation,
   useExportDownloadByTypeMutation,
   useSaveJobMutation,
-} from '@/lib/queries/pixate';
+} from '@/lib/queries/pixlate';
 import type { ApiDeliverable, ApiDeliverableComponent, ApiExportArtifactType } from '@/lib/api/n6-schema';
 import { StepNav } from './step-nav';
 import { ZoomControls } from './n5/n5-toolbar';

@@ -1,5 +1,5 @@
 /**
- * Pixate N1~N6 Mock fixture 데이터
+ * pix/ate N1~N6 Mock fixture 데이터
  *
  * - job_mock_001 하나를 기준으로 N2~N6 전 화면을 재사용합니다.
  * - detail 이미지 2장만 사용합니다. thumbnail fixture는 파이프라인 미확정으로 제외합니다.

@@ -1,4 +1,4 @@
-# Pix/ate — Frontend
+# pix/ate — Frontend
 
 AI 상세페이지 로컬라이제이션 서비스의 프론트엔드입니다.
 

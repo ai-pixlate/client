@@ -35,7 +35,7 @@ import type {
 // FE↔Next 프록시 식별용이라 이름에 그 의도를 그대로 담았다.
 // ─────────────────────────────────────────────
 
-const API_PROXY_HEADER = 'x-pixate-api-proxy';
+const API_PROXY_HEADER = 'x-pixlate-api-proxy';
 
 /** 기존 headers(있다면)를 보존한 채 프록시 식별 헤더만 추가한다. */
 function withProxyHeader(init?: RequestInit): RequestInit {

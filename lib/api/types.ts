@@ -1,5 +1,5 @@
 /**
- * Pixate N1~N6 API DTO 타입 정의
+ * pix/ate N1~N6 API DTO 타입 정의
  *
  * - 백엔드와 확정된 값은 union type으로 좁혔습니다.
  * - 아직 협의 중인 값은 string으로 열어두고 TODO를 달았습니다.
@@ -332,7 +332,7 @@ export interface TextBlock {
    * 소속 section 내부 local 좌표 (원본 픽셀 기준). section 자신의 원본 절대
    * 위치가 아니다 — 절대 Y가 필요하면 section.topOffset(원본 절대용)
    * 또는 section.displayTop(N5 표시용)과 더해서 구한다.
-   * (좌표계 기준: Pix/ate FE↔BE 구현 기준 v3.3.3)
+   * (좌표계 기준: pix/ate FE↔BE 구현 기준 v3.3.3)
    */
   bbox: BoundingBox;
 }

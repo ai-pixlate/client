@@ -3,7 +3,7 @@
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
 
-import { useJobQuery, useN5BlocksQuery, useN5PreviewQuery } from '@/lib/queries/pixate';
+import { useJobQuery, useN5BlocksQuery, useN5PreviewQuery } from '@/lib/queries/pixlate';
 import { toBlockViewModel, toPreviewViewModel } from '@/lib/n5/adapter';
 import type { BlockViewModel, PreviewViewModel } from '@/lib/n5/adapter';
 import type { N5ViewMode } from '@/lib/n5/viewport';
