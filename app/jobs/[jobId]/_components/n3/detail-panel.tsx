@@ -156,21 +156,34 @@ function SourceImageViewport({
       ref={viewportRef}
       data-testid="n3-source-viewport"
       className={bodyClass}
-      // 이미지가 viewport보다 짧으면(긴 상세페이지가 아닌 섹션) 위쪽에
-      // 붙지 않고 가로·세로로 중앙정렬한다. 반대로 이미지가 viewport보다
-      // 길어 scroll이 필요한 일반적인 경우(긴 상세페이지)에는 safe
-      // 키워드가 자동으로 start 정렬로 전환돼 원본 흐름(스크롤 시 맨
-      // 위부터 보임, 위 useEffect의 scrollTo(top) 로직과 일치)을 그대로
-      // 유지한다 — center 고정이면 tall 이미지의 위쪽 절반이 스크롤 없이
-      // 보이지 않게 잘려 나가는 문제가 생긴다.
-      style={{ alignItems: 'safe center', justifyContent: 'safe center' }}
+      // 세로: 이미지가 viewport보다 짧으면(긴 상세페이지가 아닌 섹션)
+      // 위쪽에 붙지 않고 중앙정렬한다. 반대로 이미지가 viewport보다 길어
+      // scroll이 필요한 일반적인 경우(긴 상세페이지)에는 safe 키워드가
+      // 자동으로 start 정렬로 전환돼 원본 흐름(스크롤 시 맨 위부터 보임,
+      // 위 useEffect의 scrollTo(top) 로직과 일치)을 그대로 유지한다 —
+      // center 고정이면 tall 이미지의 위쪽 절반이 스크롤 없이 보이지
+      // 않게 잘려 나가는 문제가 생긴다. 가로 중앙정렬은 justify-content가
+      // 아니라 아래 img의 mx-auto(flexbox auto margin이 justify-content
+      // 보다 우선한다)로 처리한다 — width:100%로 강제로 채우면 auto
+      // margin이 계산할 여유 공간 자체가 없어 중앙정렬이 무의미해지므로
+      // img를 max-width:100%+자연 크기로 바꿨다(아래 참고).
+      // scrollbarGutter: 이 컨테이너 자신이 overflow-y-auto라 세로
+      // scrollbar가 뜨면 content box 오른쪽만 줄어들어(왼쪽엔 대응하는
+      // 여백이 없어) img가 오른쪽으로 치우쳐 보이는 비대칭이 생긴다.
+      // stable both-edges로 scrollbar 유무와 무관하게 좌우에 동일한
+      // gutter를 예약해 항상 대칭이 되게 한다(미지원 브라우저는 이
+      // 프로퍼티를 무시할 뿐 기존 동작 그대로).
+      style={{ alignItems: 'safe center', scrollbarGutter: 'stable both-edges' }}
     >
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src={sourceImage.fileUrl}
         alt={`섹션 ${section.sectionOrder ?? ''} 소속 원본 상세페이지`}
-        className="block w-full"
-        style={{ height: 'auto' }}
+        // width:100%로 무조건 채우지 않는다 — 원본이 viewport보다 작으면
+        // 자연 크기 그대로 두고(확대 금지) mx-auto로 중앙정렬하고,
+        // 원본이 더 크면 max-w-full이 폭 안으로 축소한다. height는
+        // 항상 auto라 원본 비율이 그대로 유지된다(stretch/crop 없음).
+        className="mx-auto block h-auto max-w-full"
         draggable={false}
         onError={() => setImgFailed(true)}
       />
