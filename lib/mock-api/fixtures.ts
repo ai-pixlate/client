@@ -59,10 +59,14 @@ const SECTION_IMG_800x220 = '/mock/n3/section-800x220.png';
  *
  * 테스트 케이스:
  * - sec_01: 정상 include 섹션 (verdicts 없음)
- * - sec_02: regulated 판정 섹션 (verdicts 있음, bucket은 include 유지 — 정본은 section.bucket)
+ * - sec_02: verdictType='regulatory'(규제위반, 대체 표현 없음) 판정 섹션 —
+ *   기본 bucket은 반드시 exclude(auto_regulatory). regulatory_replaceable/
+ *   regulatory_conditional/needs_fix처럼 include 계열로 남는 타입과 달리
+ *   regulatory는 대체 표현이 없으므로 exclude가 정본이다.
  * - sec_03: 현지 무의미 자동 exclude 섹션 (카카오톡 상담 안내)
  * - sec_04: 정상 include 섹션 (두 번째 소스 이미지)
- * - sec_05: regulated 판정 섹션 (두 번째 소스 이미지, sensitive claim)
+ * - sec_05: verdictType='regulatory' 판정 섹션 (두 번째 소스 이미지, sensitive
+ *   claim) — sec_02와 같은 이유로 기본 bucket은 exclude(auto_regulatory).
  *
  * N3 verdictType 계약 케이스(9월 표시 5종)는 mockN3VerdictContractSections 참고
  * (이 목록에 섞으면 e2e/basic-flow.spec.ts의 include/exclude count 단언이 깨진다).
@@ -95,9 +99,11 @@ export const mockSectionsResponse: SectionsResponse = {
       thumbnailUrl: SECTION_IMG_830x3225,
       imageKey: SECTION_IMG_830x3225,
       renderImageKey: SECTION_IMG_830x3225,
-      bucket: 'include',
-      exclusionReason: null,
-      excludedStage: null,
+      // verdictType='regulatory'(대체 표현 없음)는 기본 bucket이 반드시
+      // exclude다 — scripts/verify-n3-verdict-contract.mjs의 계약과 동일.
+      bucket: 'exclude',
+      exclusionReason: 'auto_regulatory',
+      excludedStage: 'N3',
       bbox: { x: 0, y: 600, width: 1000, height: 500 },
       verdicts: [
         {
@@ -158,9 +164,10 @@ export const mockSectionsResponse: SectionsResponse = {
       thumbnailUrl: SECTION_IMG_1000x1360,
       imageKey: SECTION_IMG_1000x1360,
       renderImageKey: SECTION_IMG_1000x1360,
-      bucket: 'include',
-      exclusionReason: null,
-      excludedStage: null,
+      // sec_02와 동일 — verdictType='regulatory'는 기본 bucket이 exclude다.
+      bucket: 'exclude',
+      exclusionReason: 'auto_regulatory',
+      excludedStage: 'N3',
       bbox: { x: 0, y: 700, width: 1000, height: 400 },
       verdicts: [
         {
