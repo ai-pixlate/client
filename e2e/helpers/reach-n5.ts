@@ -59,7 +59,13 @@ export async function reachN5(page: Page): Promise<void> {
   await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 10_000 });
 
   await page.getByRole('button', { name: '번역 시작' }).click();
-  await expect(page.getByRole('heading', { name: '번역을 진행하고 있습니다' })).toBeVisible();
+  // N4는 N2와 같은 ProcessingStageLayout을 공유하는 Figma(660:4221) 기준
+  // 실제 화면이다(placeholder였던 "번역을 진행하고 있습니다" 문구는 폐기).
+  await expect(page.getByRole('heading', { name: '번역 중' })).toBeVisible();
 
-  await expect(page.locator('[data-testid="n5-panel"]')).toBeVisible({ timeout: 8_000 });
+  // N4 mock이 실제 계약(inpaint→translate→verify→render) 4단계를 모두
+  // 순서대로 최소 한 번씩 지나가도록 바뀌면서(lib/msw/handlers.ts
+  // advanceN4Processing) 2초 polling 9회(~18초)가 걸린다 — 예전 8초
+  // 타임아웃(단일 stage 2-poll 기준)보다 넉넉히 잡는다.
+  await expect(page.locator('[data-testid="n5-panel"]')).toBeVisible({ timeout: 25_000 });
 }

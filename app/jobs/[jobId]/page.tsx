@@ -125,8 +125,12 @@ export default function Page({
 
   return (
     <div className="flex h-screen flex-col bg-gray-50">
-      {/* 상단 헤더 — N2/N3/N5/N6는 Figma 기준 자체 헤더(StepNav+나가기)를 가지므로 숨긴다 */}
-      {currentStep !== 'N2' && currentStep !== 'N3' && currentStep !== 'N5' && currentStep !== 'N6' && (
+      {/* 상단 헤더 — N2/N3/N4/N5/N6는 Figma 기준 자체 헤더(StepNav+나가기)를 가지므로 숨긴다 */}
+      {currentStep !== 'N2' &&
+        currentStep !== 'N3' &&
+        currentStep !== 'N4' &&
+        currentStep !== 'N5' &&
+        currentStep !== 'N6' && (
         <header className="flex h-14 shrink-0 items-center gap-4 border-b bg-white px-6 shadow-sm">
           <Link
             href="/"

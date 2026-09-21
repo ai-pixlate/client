@@ -123,16 +123,26 @@ test('N1에서 N5 검수 화면까지 기본 작업 흐름을 완료한다', asy
   await expect(page.locator('[data-testid^="n3-thumb-include-"]')).toHaveCount(2);
 
   // ── N3 → N4 ───────────────────────────────────────────────
+  // N4는 N2와 같은 ProcessingStageLayout을 공유하는 Figma(660:4221) 기준
+  // 실제 화면이다(placeholder였던 "번역을 진행하고 있습니다" 문구는 폐기).
   await page.getByRole('button', { name: '번역 시작' }).click();
+  await expect(page.getByRole('heading', { name: '번역 중' })).toBeVisible();
+  await expect(page.getByText('확정한 섹션을 번역하고 이미지에 적용하고 있습니다.')).toBeVisible();
+  await expect(page.getByText('한글 지우고 배경 채우기')).toBeVisible();
+  await expect(page.getByText('이미지 합성')).toBeVisible();
   await expect(page.getByRole('progressbar')).toBeVisible();
-  await expect(page.getByRole('heading', { name: '번역을 진행하고 있습니다' })).toBeVisible();
 
   // ── N4 → N5 ───────────────────────────────────────────────
   // N5는 9일차에 Before/After 비교 슬라이더를 폐기하고 캔버스형 viewport로
   // 교체됨 — 상세 interaction(zoom/pan/fit/mode) 검증은 e2e/n5-viewport.spec.ts.
   // 오늘 범위가 아닌 textbox 편집은 화면에 없다. "다른 번역 보기"는 10일차에
   // 번역 후보 계약이 폐기되어 더 이상 존재하지 않는다.
-  await expect(page.locator('[data-testid="n5-panel"]')).toBeVisible({ timeout: 8_000 });
+  //
+  // N4 mock이 실제 계약(inpaint→translate→verify→render)을 4단계 모두
+  // 순서대로 최소 한 번씩 지나가도록 바뀌면서(lib/msw/handlers.ts
+  // advanceN4Processing, N4_POLL_SCHEDULE) 2초 polling 9회(~18초)가 걸린다
+  // — 예전 8초 타임아웃(단일 stage 2-poll 기준)보다 넉넉히 잡는다.
+  await expect(page.locator('[data-testid="n5-panel"]')).toBeVisible({ timeout: 25_000 });
 
   // ── N5: 기본 검증 — 좌(viewport)/우(panel) workspace 골격 ────
   await expect(page.locator('[data-testid="n5-viewport"]')).toBeVisible();
