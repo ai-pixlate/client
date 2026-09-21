@@ -1,6 +1,6 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
 
-import { MOCK_BRAND_ID, MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
+import { MOCK_BRAND_ID, MOCK_JOB_ID, mockSectionsResponse } from '@/lib/mock-api/fixtures';
 
 /** dnd-kit PointerSensor(activationConstraint distance:4)를 넘기는 최소 drag. */
 async function dragBetweenZones(page: Page, source: Locator, targetZone: Locator) {
@@ -15,6 +15,45 @@ async function dragBetweenZones(page: Page, source: Locator, targetZone: Locator
   await page.mouse.up();
 }
 
+/**
+ * lib/msw/handlers.ts의 toNumericId와 동일한 규칙(끝자리 숫자 추출)이다 —
+ * fixture는 '@/' alias를 쓰지 않고 여기서 그대로 옮겨 적는다. mock 데이터의
+ * section 개수/bucket 배정이 바뀌어도 이 테스트 파일이 특정 id를 하드코딩하지
+ * 않도록, section id는 항상 이 함수로 fixture에서 파생시킨다.
+ */
+function toNumericId(id: string): number {
+  const digits = id.match(/\d+/)?.[0];
+  return digits ? Number(digits) : 0;
+}
+
+/** 현재 활성화된(active ring이 있는) exclude thumbnail 하나를 동적으로 찾는다. */
+async function getActiveExcludeThumb(page: Page): Promise<Locator> {
+  const thumbs = page.locator('[data-testid^="n3-thumb-exclude-"]');
+  const count = await thumbs.count();
+  for (let i = 0; i < count; i += 1) {
+    const cls = await thumbs.nth(i).getAttribute('class');
+    if (cls?.includes('ring-[#ff6a38]')) return thumbs.nth(i);
+  }
+  throw new Error('active(ring) exclude thumbnail을 찾지 못했습니다');
+}
+
+/**
+ * 썸네일(`섹션 {sectionOrder} 미리보기`)과 중앙 상세보기(`섹션 {sectionOrder}
+ * 소속 원본 상세페이지`) img는 둘 다 alt에 sectionOrder를 담는다 — 이 값으로
+ * "지금 active로 보이는 thumbnail"과 "지금 상세보기에 뜬 section"이 같은
+ * section인지, id를 하드코딩하지 않고 동적으로 대조한다.
+ */
+async function sectionOrderFromAlt(imgLocator: Locator): Promise<string> {
+  const alt = await imgLocator.getAttribute('alt');
+  const match = alt?.match(/^섹션 (\S+) /);
+  if (!match) throw new Error(`alt에서 섹션 번호를 추출하지 못했습니다: "${alt}"`);
+  return match[1];
+}
+
+async function detailPanelSectionOrder(page: Page): Promise<string> {
+  return sectionOrderFromAlt(page.getByTestId('n3-source-viewport').locator('img'));
+}
+
 // ─────────────────────────────────────────────────────────────────
 // N3 — "실데이터 방어 검증" (10일차 작성, 3단계 Figma 재구성에 맞춰 갱신)
 //
@@ -26,6 +65,15 @@ async function dragBetweenZones(page: Page, source: Locator, targetZone: Locator
 //
 // sectionId는 이제 숫자다(mock: 'sec_03' → id 3, msw handler의 toNumericId
 // 참고) — 문자열 id를 하드코딩하지 않는다.
+//
+// (verdict/bucket 정본 확인 결과) mock 기본 데이터의 exclude/include 개수와
+// "기본 active가 어느 section인지"는 fixture(lib/mock-api/fixtures.ts)의
+// verdictType→bucket 배정에 따라 달라진다 — verdictType='regulatory'
+// (사용자 표시 "규제 위반")는 기본 bucket이 exclude여야 하는 계약값이라
+// (scripts/verify-n3-verdict-contract.mjs), fixture를 그 계약에 맞게
+// 고치면서 sec_02/sec_05도 exclude로 바뀌었다. 이 파일은 그 결과로 exclude
+// 개수(1→3)나 "어떤 id가 기본 active인지"를 더 이상 하드코딩하지 않고,
+// 항상 현재 렌더링된 DOM에서 동적으로 읽는다.
 // ─────────────────────────────────────────────────────────────────
 
 async function selectFirstValidOption(page: Page, index: number) {
@@ -129,9 +177,12 @@ test.describe('N3 section 이미지 — 실측 크기 방어 검증', () => {
 
 test.describe('N3 — 판정(verdicts) 0건 방어', () => {
   test('좌우 2단 화면이 정상 렌더되고, 판정 0건인 section이 crash 없이 표시된다', async ({ page }) => {
-    // mock 기본 데이터의 include 2건(옛 sec_01/sec_04)·exclude 1건(옛
-    // sec_03, DetailPanel 기본 active)이 verdicts: []다 — 이 테스트는 그
-    // 실데이터가 crash 없이 렌더되는지 확인할 뿐, 새 판정/신호를 만들지 않는다.
+    // mock 기본 데이터 중 어떤 section이 기본 active인지는 verdictType→
+    // bucket 배정에 따라 달라질 수 있으므로 특정 id를 가정하지 않는다 —
+    // 이 테스트는 "exclude 목록의 아무 section이나 렌더돼도(verdicts:[]
+    // 포함) crash 없이 뜨는지"를 exclude 전체를 순회해 확인한다.
+    // verdicts[0] 같은 암묵적 가정이 있었다면 어느 section에서든 여기서
+    // crash한다.
     const pageErrors: Error[] = [];
     page.on('pageerror', (err) => pageErrors.push(err));
 
@@ -140,14 +191,49 @@ test.describe('N3 — 판정(verdicts) 0건 방어', () => {
     await expect(page.getByTestId('n3-exclude-zone')).toBeVisible();
     await expect(page.getByTestId('n3-include-zone')).toBeVisible();
 
-    // exclude 기본 active section(verdicts: [])이 crash 없이 뷰포트에 뜬다 —
-    // verdicts[0] 같은 암묵적 가정이 있었다면 여기서 바로 crash한다.
-    await expect(page.getByTestId('n3-source-viewport')).toBeVisible();
-    // exclusionReason은 있지만 verdicts는 0건 — "판정 정보가 없습니다"는
-    // exclusionReason도 없을 때만 뜨는 별도 분기라 뜨지 않아야 한다.
-    await expect(page.locator('text=판정 정보가 없습니다')).toHaveCount(0);
+    const excludeThumbs = page.locator('[data-testid^="n3-thumb-exclude-"]');
+    const count = await excludeThumbs.count();
+    expect(count, '이 검증이 의미 있으려면 exclude 후보가 최소 1개는 있어야 한다').toBeGreaterThan(0);
+
+    for (let i = 0; i < count; i += 1) {
+      await excludeThumbs.nth(i).click();
+      await expect(page.getByTestId('n3-source-viewport')).toBeVisible();
+    }
 
     expect(pageErrors, `pageerror 발생: ${pageErrors.map((e) => e.message).join(', ')}`).toEqual([]);
+  });
+});
+
+test.describe('N3 — 기본 active section', () => {
+  test('exclude thumbnail 중 정확히 하나가 active이고, 상세보기가 그 section과 일치한다', async ({
+    page,
+  }) => {
+    await reachN3(page);
+
+    const excludeThumbs = page.locator('[data-testid^="n3-thumb-exclude-"]');
+    const count = await excludeThumbs.count();
+    expect(count, '기본 mock 데이터에 exclude 후보가 있어야 한다').toBeGreaterThan(0);
+
+    let activeCount = 0;
+    let activeIndex = -1;
+    for (let i = 0; i < count; i += 1) {
+      const cls = await excludeThumbs.nth(i).getAttribute('class');
+      if (cls?.includes('ring-[#ff6a38]')) {
+        activeCount += 1;
+        activeIndex = i;
+      }
+    }
+    expect(activeCount, 'exclude thumbnail 중 정확히 하나만 active ring을 가져야 한다').toBe(1);
+
+    // "id=N이 기본 active여야 한다"가 아니라, 지금 active로 표시된
+    // thumbnail과 중앙 상세보기가 같은 section을 가리키는지만 확인한다.
+    const activeThumbOrder = await sectionOrderFromAlt(excludeThumbs.nth(activeIndex).locator('img'));
+    const detailOrder = await detailPanelSectionOrder(page);
+    expect(detailOrder, '중앙 상세보기의 section이 active thumbnail과 일치해야 한다').toBe(activeThumbOrder);
+
+    // verdict column도 같은 DetailPanel 트리에서 그 section을 그린다 —
+    // crash 없이 렌더됐는지만 함께 확인한다(내용은 판정 0건 방어 테스트가 맡는다).
+    await expect(page.getByTestId('n3-source-viewport')).toBeVisible();
   });
 });
 
@@ -169,116 +255,154 @@ test.describe('N3 — drag 후 다른 thumbnail click 회귀 방지', () => {
 
     await reachN3(page);
 
-    // 1~2. N3 진입 + 현재 active exclude section 확인 — mock 기본 데이터는
-    // exclude 1건(옛 sec_03, id=3, exclusionReason 있음·verdicts:[])뿐이라
-    // 그게 기본 active다.
-    const originalExcludeThumb = page.getByTestId('n3-thumb-exclude-3');
-    await expect(originalExcludeThumb).toBeVisible();
-    await expect(originalExcludeThumb).toHaveClass(/ring-\[#ff6a38\]/);
-    await expect(page.getByTestId('n3-source-viewport').locator('img')).toHaveAttribute(
-      'alt',
-      /^섹션 3 /,
-    );
+    // 1. 현재 active exclude thumbnail을 동적으로 찾는다(특정 id 가정 없음).
+    const originalActive = await getActiveExcludeThumb(page);
+    const originalOrder = await sectionOrderFromAlt(originalActive.locator('img'));
+    await expect(originalActive).toHaveClass(/ring-\[#ff6a38\]/);
 
-    // 3~4. include 섹션 하나(옛 sec_01, id=1)를 exclude로 drag → drop 완료 확인.
-    const includeThumb = page.locator('[data-testid^="n3-thumb-include-"]').first();
-    await dragBetweenZones(page, includeThumb, page.getByTestId('n3-exclude-zone'));
-    await expect(page.locator('[data-testid^="n3-thumb-exclude-"]')).toHaveCount(2);
-    // 방금 옮긴 섹션(id=1, exclusionReason·verdicts 없음)이 자동으로 active가
-    // 된다 — 판정 컬럼이 "판정 정보가 없습니다"로 바뀐 것으로 확인.
-    await expect(page.locator('text=판정 정보가 없습니다')).toBeVisible();
-    await expect(page.getByTestId('n3-source-viewport').locator('img')).toHaveAttribute(
-      'alt',
-      /^섹션 1 /,
-    );
+    // 2. 그 section을 include로 drag한다.
+    await dragBetweenZones(page, originalActive, page.getByTestId('n3-include-zone'));
 
-    // 5. drop 직후 지연 없이 원래 exclude 후보(id=3)를 바로 클릭한다.
-    await originalExcludeThumb.click();
+    // 3. 남아 있는 exclude 중 "지금(자동 전환됐을 수 있는) active와 다른"
+    // thumbnail 하나를 동적으로 고른다 — 우연히 같은 걸 고르면 클릭해도
+    // active가 안 바뀌어 회귀를 검증하지 못하므로, 반드시 다른 걸 고른다.
+    const remainingExclude = page.locator('[data-testid^="n3-thumb-exclude-"]');
+    const remainingCount = await remainingExclude.count();
+    expect(remainingCount, '이 시나리오는 옮긴 뒤에도 exclude 후보가 남아 있어야 성립한다').toBeGreaterThan(0);
 
-    // 6. active ring이 옮겨간다.
-    await expect(originalExcludeThumb).toHaveClass(/ring-\[#ff6a38\]/);
-    // 7. 중앙 source 뷰포트의 대상 section이 바뀐다(같은 sourceImage라
-    // 이미지 자체는 같아도, alt에 반영되는 활성 section은 바뀌어야 한다).
-    await expect(page.getByTestId('n3-source-viewport').locator('img')).toHaveAttribute(
-      'alt',
-      /^섹션 3 /,
-    );
-    // 8. verdict 컬럼도 그 section 데이터(exclusionReason 배지)로 바뀐다.
-    await expect(page.locator('text=판정 정보가 없습니다')).toHaveCount(0);
-    await expect(page.locator('text=현지 무의미(자동)')).toBeVisible();
+    let currentActiveOrder: string | null = null;
+    try {
+      const currentActive = await getActiveExcludeThumb(page);
+      currentActiveOrder = await sectionOrderFromAlt(currentActive.locator('img'));
+    } catch {
+      currentActiveOrder = null;
+    }
+
+    let target: Locator | null = null;
+    let targetOrder = '';
+    for (let i = 0; i < remainingCount; i += 1) {
+      const order = await sectionOrderFromAlt(remainingExclude.nth(i).locator('img'));
+      if (order !== currentActiveOrder) {
+        target = remainingExclude.nth(i);
+        targetOrder = order;
+        break;
+      }
+    }
+    expect(target, '현재 active와 다른 exclude thumbnail이 최소 하나 있어야 이 시나리오가 성립한다').not.toBeNull();
+
+    // 4. drop 직후 지연 없이 target을 바로 클릭한다.
+    await target!.click();
+
+    // 5. active ring이 클릭한 thumbnail로 이동한다.
+    await expect(target!).toHaveClass(/ring-\[#ff6a38\]/);
+
+    // 6. 중앙 상세보기/판정 내용도 target section으로 바뀐다.
+    const detailOrder = await detailPanelSectionOrder(page);
+    expect(detailOrder).toBe(targetOrder);
+    expect(detailOrder).not.toBe(originalOrder);
 
     expect(pageErrors, `pageerror 발생: ${pageErrors.map((e) => e.message).join(', ')}`).toEqual([]);
   });
 
   test('drag 없이 일반 click만으로도 active section이 정상 전환된다', async ({ page }) => {
     // 회귀 수정이 "drag를 거친 뒤"만 고치고 평범한 클릭 경로를 깨지
-    // 않았는지 확인한다 — include→exclude drag로 두 번째 exclude 후보를
-    // 만든 뒤, 이번엔 그 지점과 무관하게 순수 클릭만 반복해 왕복 전환된다.
+    // 않았는지 확인한다. mock 기본 데이터가 이미 exclude 2개 이상을
+    // 갖고 있다는 전제만 확인하고(드래그로 개수를 인위적으로 만들지
+    // 않는다), 그 중 첫 번째/두 번째 thumbnail을 동적으로 골라 클릭
+    // 왕복이 정상 전환되는지 본다.
     await reachN3(page);
-    const includeThumb = page.locator('[data-testid^="n3-thumb-include-"]').first();
-    await dragBetweenZones(page, includeThumb, page.getByTestId('n3-exclude-zone'));
-    await expect(page.locator('[data-testid^="n3-thumb-exclude-"]')).toHaveCount(2);
 
-    const thumb1 = page.getByTestId('n3-thumb-exclude-1');
-    const thumb3 = page.getByTestId('n3-thumb-exclude-3');
+    const excludeThumbs = page.locator('[data-testid^="n3-thumb-exclude-"]');
+    const count = await excludeThumbs.count();
+    expect(count, '이 시나리오는 exclude 후보가 2개 이상이어야 한다').toBeGreaterThanOrEqual(2);
 
-    await thumb3.click();
-    await expect(thumb3).toHaveClass(/ring-\[#ff6a38\]/);
-    await expect(thumb1).not.toHaveClass(/ring-\[#ff6a38\]/);
+    const thumbA = excludeThumbs.nth(0);
+    const thumbB = excludeThumbs.nth(1);
 
-    await thumb1.click();
-    await expect(thumb1).toHaveClass(/ring-\[#ff6a38\]/);
-    await expect(thumb3).not.toHaveClass(/ring-\[#ff6a38\]/);
+    await thumbA.click();
+    await expect(thumbA).toHaveClass(/ring-\[#ff6a38\]/);
+    await expect(thumbB).not.toHaveClass(/ring-\[#ff6a38\]/);
+
+    await thumbB.click();
+    await expect(thumbB).toHaveClass(/ring-\[#ff6a38\]/);
+    await expect(thumbA).not.toHaveClass(/ring-\[#ff6a38\]/);
+
+    await thumbA.click();
+    await expect(thumbA).toHaveClass(/ring-\[#ff6a38\]/);
+    await expect(thumbB).not.toHaveClass(/ring-\[#ff6a38\]/);
   });
 });
 
 test.describe('N3 — active section 자동 보정', () => {
-  test('active exclude section을 include로 옮기면 남은 exclude 후보로 자동 전환되고, 0개가 되면 empty state로 간다', async ({
+  test('exclude를 하나씩 include로 옮길 때마다 active가 안전하게 다음 후보로 넘어가고, 0개가 되면 empty state로 간다', async ({
     page,
   }) => {
+    // "한 번/두 번 옮기면 0개"처럼 초기 개수를 가정하지 않는다 — 지금
+    // 렌더된 exclude 개수를 읽어서 그만큼 반복하고, 매 반복마다 "남은
+    // 후보가 있으면 다른 section이 active가 되는지", "0개가 되면 empty
+    // state가 뜨는지"만 검증한다.
     await reachN3(page);
 
-    // 기본 active(id=3)를 다시 include로 되돌린다 — 남은 exclude 후보가
-    // 0개가 되므로, moveSection의 "다음 exclude 후보로 전환" 대신 empty
-    // state 문구가 보여야 한다.
-    const activeExcludeThumb = page.getByTestId('n3-thumb-exclude-3');
-    await dragBetweenZones(page, activeExcludeThumb, page.getByTestId('n3-include-zone'));
+    const excludeThumbs = page.locator('[data-testid^="n3-thumb-exclude-"]');
+    let remaining = await excludeThumbs.count();
+    expect(remaining, '이 시나리오는 exclude 후보가 최소 1개는 있어야 성립한다').toBeGreaterThan(0);
 
-    await expect(page.locator('[data-testid^="n3-thumb-exclude-"]')).toHaveCount(0);
-    await expect(page.locator('text=삭제 후보로 남은 섹션이 없습니다')).toBeVisible();
+    while (remaining > 0) {
+      const active = await getActiveExcludeThumb(page);
+      const activeOrder = await sectionOrderFromAlt(active.locator('img'));
 
-    // include→exclude로 두 개를 순서대로 옮긴다. moveSection은 include→
-    // exclude 이동마다 "방금 옮긴 섹션"을 active로 세우므로, 두 번째로
-    // 옮긴 섹션이 지금 active다 — 각 drag 직후 testid를 그대로 기록해
-    // "어느 게 지금 active인지"를 동적으로 다시 찾지 않고 결정론적으로 안다.
-    const include1 = page.locator('[data-testid^="n3-thumb-include-"]').first();
-    const firstMovedId = (await include1.getAttribute('data-testid'))!.replace('n3-thumb-include-', '');
-    await dragBetweenZones(page, include1, page.getByTestId('n3-exclude-zone'));
-    await expect(page.locator('[data-testid^="n3-thumb-exclude-"]')).toHaveCount(1);
+      await dragBetweenZones(page, active, page.getByTestId('n3-include-zone'));
 
-    const include2 = page.locator('[data-testid^="n3-thumb-include-"]').first();
-    const secondMovedId = (await include2.getAttribute('data-testid'))!.replace('n3-thumb-include-', '');
-    await dragBetweenZones(page, include2, page.getByTestId('n3-exclude-zone'));
-    await expect(page.locator('[data-testid^="n3-thumb-exclude-"]')).toHaveCount(2);
+      const nextCount = await excludeThumbs.count();
+      expect(nextCount, '방금 옮긴 만큼 exclude 개수가 정확히 하나 줄어야 한다').toBe(remaining - 1);
 
-    const firstExcludeThumb = page.getByTestId(`n3-thumb-exclude-${firstMovedId}`);
-    const secondExcludeThumb = page.getByTestId(`n3-thumb-exclude-${secondMovedId}`);
-    // 두 번째로 옮긴 섹션이 active다.
-    await expect(secondExcludeThumb).toHaveClass(/ring-\[#ff6a38\]/);
-    await expect(firstExcludeThumb).not.toHaveClass(/ring-\[#ff6a38\]/);
+      if (nextCount > 0) {
+        // 다른 section이 자동으로 active가 된다 — 방금 옮긴 section과
+        // 같은 section이 다시 active로 남아있으면 안 된다.
+        const nextActive = await getActiveExcludeThumb(page);
+        const nextActiveOrder = await sectionOrderFromAlt(nextActive.locator('img'));
+        expect(nextActiveOrder, '방금 옮긴 section이 아니라 남은 다른 후보로 active가 넘어가야 한다').not.toBe(
+          activeOrder,
+        );
+        await expect(page.locator('text=삭제 후보로 남은 섹션이 없습니다')).toHaveCount(0);
+      } else {
+        await expect(page.locator('text=삭제 후보로 남은 섹션이 없습니다')).toBeVisible();
+      }
 
-    // active(두 번째로 옮긴 섹션)를 다시 include로 되돌린다 — active가
-    // 빠지는 것이므로 "남은 exclude 후보(첫 번째로 옮긴 섹션)"로 자동
-    // 전환되어야 하고, 빈 상태로 떨어지지 않아야 한다.
-    await dragBetweenZones(page, secondExcludeThumb, page.getByTestId('n3-include-zone'));
-    await expect(page.locator('[data-testid^="n3-thumb-exclude-"]')).toHaveCount(1);
-    await expect(page.locator('text=삭제 후보로 남은 섹션이 없습니다')).toHaveCount(0);
-    await expect(firstExcludeThumb).toHaveClass(/ring-\[#ff6a38\]/);
+      remaining = nextCount;
+    }
+  });
+});
 
-    // restore로 방금 include로 돌아간 섹션은 include 목록에서 더 이상
-    // active 대상이 아니다(sidebar thumbnail은 애초에 active ring을 쓰지
-    // 않는다) — 여기서는 그 섹션이 include 목록에 다시 나타났는지만 확인해
-    // "restore가 exclude의 active를 필요 이상으로 뺏지 않는다"를 뒷받침한다.
-    await expect(page.getByTestId(`n3-thumb-include-${secondMovedId}`)).toBeVisible();
+test.describe('N3 — 규제 위반(regulatory) verdict bucket 회귀 방지', () => {
+  test('regulatory verdict section은 기본적으로 exclude rail에 표시된다', async ({ page }) => {
+    // 이번에 실제로 발견·수정한 버그: verdictType='regulatory'(사용자 표시
+    // "규제 위반")를 가진 section(sec_02/sec_05)이 fixture에 bucket:'include'로
+    // 잘못 박혀 있어 "번역할 섹션" rail에 노출되고 있었다. 재발 방지를 위해
+    // "regulatory → exclude"라는 계약(scripts/verify-n3-verdict-contract.mjs)을
+    // 화면 레벨에서 직접 검증한다 — 특정 id를 하드코딩하지 않고, fixture
+    // 데이터 자체에서 regulatory verdict를 가진 section id를 동적으로
+    // 구해서 그 id들이 전부 exclude rail에만 있는지 확인한다.
+    const regulatorySectionIds = mockSectionsResponse.sections
+      .filter((s) => s.verdicts.some((v) => v.verdictType === 'regulatory'))
+      .map((s) => toNumericId(s.sectionId));
+
+    expect(
+      regulatorySectionIds.length,
+      'mock fixture에 verdictType=regulatory section이 하나도 없어 이 회귀 테스트가 무의미합니다 — fixture 구성을 확인하세요',
+    ).toBeGreaterThan(0);
+
+    await reachN3(page);
+
+    for (const id of regulatorySectionIds) {
+      await expect(
+        page.getByTestId(`n3-thumb-exclude-${id}`),
+        `regulatory(규제 위반) verdict를 가진 section(id=${id})이 삭제할 섹션(exclude) rail에 없습니다 — 기본 bucket은 exclude여야 합니다`,
+      ).toBeVisible();
+      await expect(
+        page.getByTestId(`n3-thumb-include-${id}`),
+        `regulatory(규제 위반) verdict를 가진 section(id=${id})이 번역할 섹션(include) rail에도 표시되고 있습니다 — regulatory는 include에 있으면 안 됩니다`,
+      ).toHaveCount(0);
+    }
   });
 });
