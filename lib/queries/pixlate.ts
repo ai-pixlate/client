@@ -8,6 +8,7 @@ import {
   getSections,
   updateSectionBucket,
   proceedSections,
+  getSourceImages,
   getJob,
   getN5Blocks,
   getN5Preview,
@@ -22,9 +23,10 @@ import {
   getExportDownloadByType,
   saveJob,
 } from '@/lib/api/pixlate';
-import type { UpdateSectionBucketRequest, CreateJobRequest, SectionsResponse } from '@/lib/api/types';
+import type { CreateJobRequest } from '@/lib/api/types';
 import type { ApiBlockPatch, ApiConfirmRequest, ApiJobTaskStatus, ApiTextBlock } from '@/lib/api/n5-schema';
 import type { ApiExportRequest, ApiExportArtifactType } from '@/lib/api/n6-schema';
+import type { ApiSection, ApiSectionBucket, ApiSectionList, ApiSectionPatch } from '@/lib/api/n3-schema';
 
 // ─────────────────────────────────────────────
 // Query Keys
@@ -45,6 +47,7 @@ export const pixlateKeys = {
   job: (jobId: string) => ['pixlate', 'job', jobId] as const,
   tasks: (jobId: string) => ['pixlate', 'job', jobId, 'tasks'] as const,
   sections: (jobId: string) => ['pixlate', 'job', jobId, 'sections'] as const,
+  sourceImages: (jobId: string) => ['pixlate', 'job', jobId, 'source-images'] as const,
   n5Blocks: (jobId: string) => ['pixlate', 'job', jobId, 'n5-blocks'] as const,
   n5Preview: (jobId: string) => ['pixlate', 'job', jobId, 'n5-preview'] as const,
   n5Task: (jobId: string, taskId: number | null) => ['pixlate', 'job', jobId, 'n5-task', taskId] as const,
@@ -140,6 +143,19 @@ export function useSectionsQuery(jobId: string) {
   return useQuery({
     queryKey: pixlateKeys.sections(jobId),
     queryFn: () => getSections(jobId),
+    enabled: !!jobId,
+  });
+}
+
+/**
+ * N1 소스 이미지 목록 (x-screen: N1, N3 재사용 가능). 아직 어떤 화면에도
+ * 연결하지 않았다 — fileUrl이 presigned(5분 만료)라 이 query 응답 범위
+ * 안에서만 쓰고 별도로 영구 저장하지 않는다.
+ */
+export function useSourceImagesQuery(jobId: string) {
+  return useQuery({
+    queryKey: pixlateKeys.sourceImages(jobId),
+    queryFn: () => getSourceImages(jobId),
     enabled: !!jobId,
   });
 }
@@ -338,10 +354,16 @@ export function useSaveJobMutation(jobId: string) {
 }
 
 // ─────────────────────────────────────────────
-// N3 — 섹션 bucket 변경
+// N3 — 섹션 bucket 변경 (3단계: N3View가 이제 ApiSection/ApiSectionList를
+// 직접 쓰므로 캐시 shape도 실제 {exclude, include}로 맞춘다)
 //
-// N3 drag & drop에서 즉시 settle 애니메이션을 보여주기 위해
-// sections 캐시를 optimistic하게 갱신한다. 실패 시 이전 값으로 롤백한다.
+// N3View는 여전히 {sectionId, bucket}으로 mutate를 부른다 — action 해석은
+// 이 hook 내부에 남겨 UI가 계약을 중복 해석하지 않게 한다(bucket→action:
+// include로 이동 = 'restore', exclude로 이동 = 'exclude').
+//
+// optimistic update는 대상 section을 원래 배열에서 빼서 목표 배열로 옮기고
+// bucket 필드만 바꾼다 — exclusionReason/excludedStage는 서버가 파생하는
+// 값이라 FE가 임의로 채워 넣지 않는다. 최신 값은 onSettled의 refetch로 받는다.
 // N5(n5Blocks/n5Preview 캐시)는 이 낙관적 갱신의 영향을 받지 않는다 — 별도 query key.
 // ─────────────────────────────────────────────
 
@@ -349,30 +371,29 @@ export function useUpdateSectionBucketMutation(jobId: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ sectionId, ...payload }: { sectionId: string } & UpdateSectionBucketRequest) =>
-      updateSectionBucket(jobId, sectionId, payload),
+    mutationFn: ({ sectionId, bucket }: { sectionId: number; bucket: ApiSectionBucket }) => {
+      const action: ApiSectionPatch['action'] = bucket === 'include' ? 'restore' : 'exclude';
+      return updateSectionBucket(jobId, sectionId, { action });
+    },
     onMutate: async ({ sectionId, bucket }) => {
       await queryClient.cancelQueries({ queryKey: pixlateKeys.sections(jobId) });
-      const previous = queryClient.getQueryData<SectionsResponse>(pixlateKeys.sections(jobId));
+      const previous = queryClient.getQueryData<ApiSectionList>(pixlateKeys.sections(jobId));
 
       if (previous) {
-        // 서버(mock) 규칙과 동일하게 맞춘다: bucket을 바꾸는 모든 PATCH는
-        // exclusionReason을 항상 null로 비운다. excludedStage는 클라이언트가
-        // 보내지 않는다 — 서버가 현재 job 단계를 기준으로 판단한다. 이 mutation은
-        // N3에서만 호출되므로 exclude 시 낙관적으로 'N3'를 반영한다. 자동 판정
-        // 사유는 사용자가 직접 조작한 순간 더 이상 유효하지 않기 때문이다.
-        queryClient.setQueryData<SectionsResponse>(pixlateKeys.sections(jobId), {
-          sections: previous.sections.map((section) =>
-            section.sectionId === sectionId
-              ? {
-                  ...section,
-                  bucket,
-                  exclusionReason: null,
-                  excludedStage: bucket === 'include' ? null : 'N3',
-                }
-              : section,
-          ),
-        });
+        const exclude = previous.exclude ?? [];
+        const include = previous.include ?? [];
+        const moving = exclude.find((s) => s.id === sectionId) ?? include.find((s) => s.id === sectionId);
+
+        if (moving) {
+          const moved: ApiSection = { ...moving, bucket };
+          const withoutMoving = { exclude: exclude.filter((s) => s.id !== sectionId), include: include.filter((s) => s.id !== sectionId) };
+          queryClient.setQueryData<ApiSectionList>(
+            pixlateKeys.sections(jobId),
+            bucket === 'include'
+              ? { exclude: withoutMoving.exclude, include: [...withoutMoving.include, moved] }
+              : { exclude: [...withoutMoving.exclude, moved], include: withoutMoving.include },
+          );
+        }
       }
 
       return { previous };

@@ -1,12 +1,7 @@
-import type {
-  SectionsResponse,
-  SectionBucket,
-  UpdateSectionBucketRequest,
-  CreateJobRequest,
-  CreateJobResponse,
-} from '@/lib/api/types';
+import type { CreateJobRequest, CreateJobResponse } from '@/lib/api/types';
 import type { ApiBlockPatch, ApiBlockPatchResponse, ApiConfirmRequest, ApiJob, ApiJobTaskStatus, ApiReviewPreview, ApiTextBlock } from '@/lib/api/n5-schema';
 import type { ApiAcceptedTask } from '@/lib/api/job-schema';
+import type { ApiSection, ApiSectionList, ApiSectionPatch, ApiSourceImage } from '@/lib/api/n3-schema';
 import type {
   ApiRenderResponse,
   ApiDeliverableList,
@@ -104,19 +99,27 @@ export function analyzeJob(jobId: string): Promise<ApiAcceptedTask> {
 }
 
 // ─────────────────────────────────────────────
-// N3 — 섹션
+// N3 — 섹션 (3단계: N3 UI가 ApiSection을 직접 소비하도록 전환 — 2단계에서
+// 쓰던 legacy SectionsResponse 변환 adapter는 제거했다)
 // ─────────────────────────────────────────────
 
-export function getSections(jobId: string): Promise<SectionsResponse> {
-  return apiFetch<SectionsResponse>(`/jobs/${jobId}/sections`);
+export function getSections(jobId: string): Promise<ApiSectionList> {
+  return apiFetch<ApiSectionList>(`/jobs/${jobId}/sections`);
 }
 
+/**
+ * N3(드래그)·N5(휴지통) 공용 PATCH. body는 실제 계약대로 { action }이다 —
+ * bucket 값을 그대로 보내지 않는다. exclude→include 이동은 action='restore',
+ * include→exclude 이동은 action='exclude'. excludedStage는 서버가 현재
+ * currentStep 기준으로 기록하므로 FE가 보내지 않는다. 응답은 갱신된 전체
+ * Section이다.
+ */
 export function updateSectionBucket(
   jobId: string,
-  sectionId: string,
-  payload: UpdateSectionBucketRequest,
-): Promise<{ sectionId: string; bucket: SectionBucket }> {
-  return apiFetch(`/jobs/${jobId}/sections/${sectionId}`, {
+  sectionId: number,
+  payload: ApiSectionPatch,
+): Promise<ApiSection> {
+  return apiFetch<ApiSection>(`/jobs/${jobId}/sections/${sectionId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -126,6 +129,16 @@ export function updateSectionBucket(
 /** 이대로 진행 = N3 → N4 (API-SEC-04). 전 섹션 제외면 409 ALL_SECTIONS_EXCLUDED. */
 export function proceedSections(jobId: string): Promise<ApiAcceptedTask> {
   return apiFetch<ApiAcceptedTask>(`/jobs/${jobId}/sections/proceed`, { method: 'POST' });
+}
+
+/**
+ * N1 소스 이미지 목록 조회 (x-screen: N1, N3에서도 재사용 가능). fileUrl은
+ * presigned(5분 만료)라 응답을 그대로 로컬 캐시에 복제해 오래 쓰지 않는다 —
+ * React Query 응답 범위 안에서만 사용한다. 이번 단계에서는 UI에 연결하지
+ * 않는다.
+ */
+export function getSourceImages(jobId: string): Promise<ApiSourceImage[]> {
+  return apiFetch<ApiSourceImage[]>(`/jobs/${jobId}/source-images`);
 }
 
 // ─────────────────────────────────────────────

@@ -152,6 +152,15 @@ export interface CreateJobResponse {
 
 // ─────────────────────────────────────────────
 // N3 — 섹션 확인
+//
+// 3단계(Figma 기준 UI 재구성)부터 실제 N3 화면(n3-view.tsx, detail-panel.tsx,
+// section-thumbnail.tsx, verdict-card.tsx)은 이 손작성 타입 대신
+// lib/api/n3-schema.ts의 generated 별칭(ApiSection 등)을 직접 쓴다. 아래
+// Section/SectionVerdict/SectionsResponse/UpdateSectionBucketRequest는 실제
+// OpenAPI 계약이 아니며, section-card.tsx(perf harness 전용,
+// app/perf/long-page/_components/n3-harness-view.tsx가 사용)만 아직 이
+// shape을 참조한다 — 그쪽까지 이번 단계에서 옮기지 않았으므로 남겨뒀다.
+// perf harness도 실제 계약으로 옮기면 이 타입들을 지운다.
 // ─────────────────────────────────────────────
 
 export interface SectionVerdict {
