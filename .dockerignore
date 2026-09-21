@@ -1,0 +1,17 @@
+node_modules
+.next
+.git
+.env
+.env.*
+.DS_Store
+test-results
+playwright-report
+tsconfig.tsbuildinfo
+perf-assets
+docs
+e2e
+.claude
+.vscode
+Dockerfile
+compose.yaml
+.dockerignore
