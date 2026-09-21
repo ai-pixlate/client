@@ -164,12 +164,20 @@ const mockN3SourceImages: ApiSourceImage[] = [
  */
 let jobState: ApiJob = { ...mockN5Job, currentStep: 'N2', userFacingStatus: 'analyzing', status: 'processing' };
 
-/** N2/N4 진행 polling 카운터. jobState.currentStep이 N2/N4로 바뀔 때마다 0으로 리셋한다. */
+/** N2 진행 polling 카운터. jobState.currentStep이 N2로 바뀔 때마다 0으로 리셋한다. */
 let jobProcessingPollCount = 0;
+
+/**
+ * N4 진행 polling index — N2의 jobProcessingPollCount(단일 stage, 2-poll)와
+ * 다르게 N4는 실제 계약(inpaint→translate→verify→render) 4단계를 순서대로
+ * 최소 한 번씩 지나가야 해서 별도 카운터를 둔다. N4_POLL_SCHEDULE의 인덱스다.
+ */
+let n4PollIndex = 0;
 
 function resetJobState() {
   jobState = { ...mockN5Job, currentStep: 'N2', userFacingStatus: 'analyzing', status: 'processing' };
   jobProcessingPollCount = 0;
+  n4PollIndex = 0;
   n6LatestRenderTaskId = null;
   n6RenderTaskState.clear();
   n6ExportArtifactState.clear();
@@ -281,23 +289,106 @@ let n6ExportArtifactIdCounter = 70000;
 const n6ExportArtifactState = new Map<number, { artifactType: ApiExportResponse['artifactType']; components: string[] }>();
 
 /**
- * N2/N4 진행 중(processing) 단계에서 다음 단계로 넘어갈 조건 — 오늘(N1→N6
+ * N2 진행 중(processing) 단계에서 다음 단계로 넘어갈 조건 — 오늘(N1→N6
  * happy path) 작업. 실제 처리 로직은 만들지 않는다 — GET /jobs/:jobId/tasks를
  * 2초 polling할 때마다 poll count만 늘려 pending→running→done을 흉내내고,
  * done이 되는 시점에 jobState.currentStep을 다음 단계로 바꾼다. 중간 실패·재시도
- * 시나리오는 오늘 범위가 아니라 failedCount/items는 항상 0/[]이다.
+ * 시나리오는 오늘 범위가 아니라 failedCount/items는 항상 0/[]이다. (N4는
+ * 이 아래 별도 로직 — N4_PROCESSING_STAGES/advanceN4Processing 참고.)
  */
-const PROCESSING_STAGES: Record<'N2' | 'N4', { key: string; label: string; next: ApiJob['currentStep']; nextUserFacingStatus: ApiJob['userFacingStatus'] }> = {
-  N2: { key: 'analyze', label: '이미지를 분석하고 있습니다', next: 'N3', nextUserFacingStatus: 'section_review' },
-  N4: { key: 'translate', label: '번역과 이미지 처리를 진행하고 있습니다', next: 'N5', nextUserFacingStatus: 'reviewing' },
+const N2_PROCESSING_STAGE = {
+  key: 'analyze',
+  label: '이미지를 분석하고 있습니다',
+  next: 'N3' as const,
+  nextUserFacingStatus: 'section_review' as const,
 };
 
+function advanceN2Processing(): {
+  progress: number;
+  total: number;
+  done: number;
+  stages: { key: string; label: string; status: 'running' | 'done' }[];
+} {
+  jobProcessingPollCount += 1;
+
+  if (jobProcessingPollCount < 2) {
+    return { progress: 0.5, total: 1, done: 0, stages: [{ ...N2_PROCESSING_STAGE, status: 'running' }] };
+  }
+
+  jobState = {
+    ...jobState,
+    currentStep: N2_PROCESSING_STAGE.next,
+    userFacingStatus: N2_PROCESSING_STAGE.nextUserFacingStatus,
+    status: 'review',
+  };
+  jobProcessingPollCount = 0;
+  return { progress: 1, total: 1, done: 1, stages: [{ ...N2_PROCESSING_STAGE, status: 'done' }] };
+}
+
 /**
- * jobState가 N2/N4(진행 중 단계)면 poll count를 진행시키고, 2번째 poll에서
- * done 처리와 함께 다음 단계로 전환한다(jobState를 직접 갱신). N1/N3/N5/N6처럼
- * 사용자 조작을 기다리는 단계면 아무것도 진행시키지 않고 빈 진행 정보를
- * 반환한다 — GET /jobs/:jobId/tasks 핸들러가 이 결과를 응답 조립에 쓴다.
+ * N4 coarse stage 순서 — 실제 OpenAPI 계약(JobTaskStatus.stages 주석:
+ * "N4 inpaint→translate→verify→render"). 예전엔 'translate' 단일 key만
+ * 2-poll로 줘서 inpaint/verify/render(04·05) 화면을 mock에서 확인할 방법이
+ * 없었다 — 4단계를 순서대로 최소 한 번씩 running→done으로 흘려보낸다.
+ *
+ * render는 화면 04(글자 수·줄바꿈 조정)·05(이미지 합성) 두 항목을 만들어야
+ * 해서 running을 두 번(전반부→04, 후반부→05) 보낸다 — 그 외 3단계는 N2와
+ * 같은 1-running-then-done 패턴이다. progress는 poll마다 커지는 누적값이고
+ * (JobTaskStatus.progress는 stage-local이 아니라 job 전체 global 값 —
+ * lib/api/generated/openapi.d.ts의 JobTaskStatus.progress에는 stage별 필드가
+ * 없고 최상위 progress 하나뿐이다), N4TranslationView의 render 04/05 분기
+ * 임계값(0.875)과 같은 "4단계 동일 비중" 가정으로 구간을 나눴다.
  */
+const N4_PROCESSING_STAGES: { key: string; label: string }[] = [
+  { key: 'inpaint', label: '한글을 지우고 배경을 복원하고 있습니다' },
+  { key: 'translate', label: '번역과 용어를 맞추고 있습니다' },
+  { key: 'verify', label: '규제 기준을 확인하고 있습니다' },
+  { key: 'render', label: '글자 수와 줄바꿈을 맞추고 이미지를 합성하고 있습니다' },
+];
+
+const N4_NEXT_STEP = 'N5' as const;
+const N4_NEXT_USER_FACING_STATUS = 'reviewing' as const;
+
+/** n4PollIndex → (어느 coarse stage, running/done, 이 poll에서 보여줄 progress). */
+const N4_POLL_SCHEDULE: { stageIndex: number; status: 'running' | 'done'; progress: number }[] = [
+  { stageIndex: 0, status: 'running', progress: 0.05 }, // inpaint 진행 중 → 01 active
+  { stageIndex: 0, status: 'done', progress: 0.25 }, // inpaint 완료 → 02 active로 승격
+  { stageIndex: 1, status: 'running', progress: 0.3 }, // translate 진행 중 → 02 active
+  { stageIndex: 1, status: 'done', progress: 0.5 }, // translate 완료 → 03 active로 승격
+  { stageIndex: 2, status: 'running', progress: 0.55 }, // verify 진행 중 → 03 active
+  { stageIndex: 2, status: 'done', progress: 0.75 }, // verify 완료 → render(04) active로 승격
+  { stageIndex: 3, status: 'running', progress: 0.8 }, // render 전반부(<0.875) → 04 active
+  { stageIndex: 3, status: 'running', progress: 0.9 }, // render 후반부(>=0.875) → 05 active
+  { stageIndex: 3, status: 'done', progress: 1 }, // render 완료 → N5로 전환
+];
+
+function advanceN4Processing(): {
+  progress: number;
+  total: number;
+  done: number;
+  stages: { key: string; label: string; status: 'running' | 'done' }[];
+} {
+  const tick = N4_POLL_SCHEDULE[Math.min(n4PollIndex, N4_POLL_SCHEDULE.length - 1)];
+  const stageMeta = N4_PROCESSING_STAGES[tick.stageIndex];
+  const isLastTick = n4PollIndex >= N4_POLL_SCHEDULE.length - 1;
+
+  n4PollIndex += 1;
+
+  if (isLastTick) {
+    // 마지막 tick(render done)에서만 다음 단계로 전환한다 — 그 전까지는
+    // stages 진행만 흉내내고 currentStep은 그대로 N4다.
+    jobState = { ...jobState, currentStep: N4_NEXT_STEP, userFacingStatus: N4_NEXT_USER_FACING_STATUS, status: 'review' };
+    n4PollIndex = 0;
+  }
+
+  return {
+    progress: tick.progress,
+    total: N4_PROCESSING_STAGES.length,
+    done: tick.status === 'done' ? tick.stageIndex + 1 : tick.stageIndex,
+    stages: [{ ...stageMeta, status: tick.status }],
+  };
+}
+
 function advanceJobProcessing(): {
   progress: number;
   total: number;
@@ -305,20 +396,9 @@ function advanceJobProcessing(): {
   stages: { key: string; label: string; status: 'running' | 'done' }[];
 } {
   const step = jobState.currentStep;
-  if (step !== 'N2' && step !== 'N4') {
-    return { progress: 1, total: 0, done: 0, stages: [] };
-  }
-
-  const stage = PROCESSING_STAGES[step];
-  jobProcessingPollCount += 1;
-
-  if (jobProcessingPollCount < 2) {
-    return { progress: 0.5, total: 1, done: 0, stages: [{ ...stage, status: 'running' }] };
-  }
-
-  jobState = { ...jobState, currentStep: stage.next, userFacingStatus: stage.nextUserFacingStatus, status: 'review' };
-  jobProcessingPollCount = 0;
-  return { progress: 1, total: 1, done: 1, stages: [{ ...stage, status: 'done' }] };
+  if (step === 'N2') return advanceN2Processing();
+  if (step === 'N4') return advanceN4Processing();
+  return { progress: 1, total: 0, done: 0, stages: [] };
 }
 
 // ─────────────────────────────────────────────
@@ -508,7 +588,7 @@ export const handlers = [
     }
 
     jobState = { ...jobState, currentStep: 'N4', userFacingStatus: 'translating', status: 'processing' };
-    jobProcessingPollCount = 0;
+    n4PollIndex = 0;
 
     const response: ApiAcceptedTask = { jobId: jobState.id, taskId: 2 };
     return HttpResponse.json(response, { status: 202 });
