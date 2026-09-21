@@ -23,6 +23,14 @@ import {
 } from '@/lib/queries/pixlate';
 import type { ApiSection, ApiSectionBucket, ApiSourceImage } from '@/lib/api/n3-schema';
 import { N3_DRAG_ACTIVATION_DISTANCE } from '@/lib/n3/constants';
+import {
+  N3_CONTENT_LEFT_INSET,
+  N3_HELP_TEXT_PADDING_BOTTOM,
+  N3_MAIN_LEFT_INSET,
+  N3_MAIN_WIDTH,
+  N3_RAIL_HEIGHT,
+  N3_RAIL_WIDTH,
+} from '@/lib/n3/layout';
 import { StepNav } from '../step-nav';
 import { DetailPanel } from './detail-panel';
 import { SectionCropThumbnail } from './section-crop-thumbnail';
@@ -186,9 +194,12 @@ export function N3View({ jobId }: { jobId: string }) {
           </div>
         </div>
 
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          {/* 헤더 */}
-          <div className="flex shrink-0 justify-center px-8 pt-[52px] pb-6">
+        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+          {/* 헤더 — Figma 실측: 화면 전체 중앙정렬이 아니라 workspace 카드
+              좌측 시작선(x≈403)에 맞춰 좌측정렬된다. pt-[60px]는 Figma
+              y=60과 그대로 대응(헤더가 column의 첫 자식이라 block top=0
+              기준 pt 값이 곧 text y다). */}
+          <div className="flex shrink-0 pr-8 pt-[60px] pb-6" style={{ paddingLeft: N3_MAIN_LEFT_INSET }}>
             <div className="flex items-center gap-4">
               <h1 className="text-[20px] font-semibold tracking-[-0.02em] whitespace-nowrap text-[#171717]">
                 삭제할 섹션
@@ -200,7 +211,7 @@ export function N3View({ jobId }: { jobId: string }) {
           </div>
 
           {/* 본문: 삭제 섹션 nav + 중앙 workspace */}
-          <div className="flex min-h-0 flex-1 gap-4 px-8 pb-2">
+          <div className="flex min-h-0 flex-1 gap-4 pr-8 pb-2" style={{ paddingLeft: N3_CONTENT_LEFT_INSET }}>
             {sectionsQuery.isLoading ? (
               <div className="flex flex-1 items-center justify-center">
                 <span className="text-sm text-gray-400">섹션 목록을 불러오는 중...</span>
@@ -231,12 +242,21 @@ export function N3View({ jobId }: { jobId: string }) {
             )}
           </div>
 
-          {/* 하단 안내 문구 — Figma: 우측 sidebar 바로 왼쪽 하단. 뷰포트 폭을
-              하드코딩하지 않고, 이 main content column 자체가 sidebar와
-              바로 맞닿아 있다는(outer flex row에 gap 없음) 구조를 이용해
-              text-right + 최소 오른쪽 padding만으로 sidebar 경계에
-              붙인다 — 1536/1440에서도 이 column 폭을 그대로 따라간다. */}
-          <p className="shrink-0 pr-4 pl-8 pb-6 text-right text-[12px] font-light tracking-[-0.02em] text-[#999]">
+          {/* 하단 안내 문구 — Figma(589:4901) 실측: sidebar까지 넓게 퍼진
+              박스 안에서 text-right로 맞추는 게 아니라, workspace 카드와
+              동일한 x=403/width=985 frame이다. 두 곳에 403/985를 각각
+              하드코딩하지 않도록 detail-panel.tsx의 카드와 같은
+              N3_MAIN_LEFT_INSET/N3_MAIN_WIDTH를 그대로 재사용한다.
+              absolute로 flex 흐름 밖에 둬서, 이 padding 값을 바꿔도 위
+              workspace 카드의 세로 위치(margin-top 고정)에 영향을 주지
+              않게 분리한다. padding-bottom은 독립적인 vh 값이 아니라
+              down chevron과 같은 기준(N3_RAIL_BOTTOM, lib/n3/layout.ts)
+              에서 역산한 N3_HELP_TEXT_PADDING_BOTTOM이다 — 그래야
+              viewport가 줄어들어도 두 요소의 세로 중심이 같이 움직인다. */}
+          <p
+            className="absolute bottom-0 text-right text-[12px] font-light tracking-[-0.02em] text-[#999]"
+            style={{ left: N3_MAIN_LEFT_INSET, width: N3_MAIN_WIDTH, paddingBottom: N3_HELP_TEXT_PADDING_BOTTOM }}
+          >
             해당 섹션을 통과된 섹션으로 끌어다 놓으면 섹션이 되살아나요!
           </p>
         </div>
@@ -285,7 +305,7 @@ function ExcludeDropZone({
     <div
       ref={setNodeRef}
       data-testid="n3-exclude-zone"
-      className={`flex min-h-0 flex-1 gap-4 transition-[outline-color] duration-150 ${
+      className={`flex min-h-0 flex-1 gap-5 transition-[outline-color] duration-150 ${
         showHighlight ? 'outline-2 outline-dashed outline-[#ff6a38] outline-offset-[-2px]' : 'outline-2 outline-transparent'
       }`}
     >
@@ -332,7 +352,30 @@ function ExcludeThumbnailNav({
   }
 
   return (
-    <div className="flex h-full w-[262px] shrink-0 flex-col items-center gap-5 overflow-hidden py-5">
+    <div
+      // Figma 실측: rail 컨테이너는 x=121,y=60,w=263,h=960 — workspace
+      // 카드보다 위에서 시작해 아래까지 이어진다. height를 행(같은
+      // ExcludeDropZone) 크기에서 자동 계산(stretch - margin)하지 않고
+      // 78.4vh 카드처럼 명시적 clamp로 고정한다 — 하단 안내 문구 padding
+      // 등 형제 요소 크기가 바뀌어도 rail 높이가 같이 흔들리지 않는다.
+      // margin-top(-54px)만으로 y=60(헤더 블록 높이 114px = pt-60 기준)
+      // 위치를 잡는다 — 헤더 pt를 바꿀 때 이 값도 같이 보정해야 한다.
+      // 헤더는 x≈403부터 시작해(위 헤더 참고) rail(x 121~383)과 겹치지
+      // 않으므로 y가 겹쳐도 실제 충돌은 없다. 이 margin/height는
+      // droppable(ExcludeDropZone)의 hit-box 자체를 넓히지 않는다 —
+      // dnd-kit은 ref를 건 부모 엘리먼트의 rect만 보므로 기존 DnD 동작은
+      // 그대로 유지된다.
+      // up/down chevron의 상하 padding은 py-5(양쪽 20px) 균등이 아니라
+      // 비대칭이다 — pt-[3px]는 up chevron의 시각적 중심을 "삭제할
+      // 섹션" 헤더 제목의 중심과 맞추고(헤더 y=60,h=30 → 중심 75, rail
+      // 컨테이너 top=60 기준 pt=3이면 중심 75), pb-0은 down chevron을
+      // rail 컨테이너 하단(N3_RAIL_BOTTOM = 60 + N3_RAIL_HEIGHT — height가
+      // vh로 줄어들면 이 값도 같이 줄어든다)에 붙인다. 하단 안내 문구의
+      // padding-bottom(N3_HELP_TEXT_PADDING_BOTTOM)이 바로 이 값에서
+      // 역산되므로 viewport가 바뀌어도 두 중심이 같이 움직인다.
+      className="-mt-[54px] flex shrink-0 flex-col items-center gap-5 overflow-hidden pt-[3px] pb-0"
+      style={{ width: N3_RAIL_WIDTH, height: N3_RAIL_HEIGHT }}
+    >
       <button
         type="button"
         onClick={() => scrollByStep(-1)}
