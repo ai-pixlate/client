@@ -32,15 +32,36 @@ import type {
 
 const API_PROXY_HEADER = 'x-pixlate-api-proxy';
 
-/** 기존 headers(있다면)를 보존한 채 프록시 식별 헤더만 추가한다. */
-function withProxyHeader(init?: RequestInit): RequestInit {
+/**
+ * 개발용 임시 access token의 sessionStorage key. 실제 로그인/refresh 구현 전까지
+ * 개발자가 콘솔에서 직접 넣는 smoke test 용도 — 소스/환경변수/Git에 토큰을 두지 않는다.
+ */
+export const DEV_ACCESS_TOKEN_KEY = 'pixlate.devAccessToken';
+
+function readDevAccessToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.sessionStorage.getItem(DEV_ACCESS_TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 모든 backend 요청의 공통 헤더: 기존 headers 보존 + 프록시 식별 헤더 +
+ * (브라우저에 임시 토큰이 있을 때만) Authorization Bearer.
+ * 토큰이 없으면 헤더를 붙이지 않아 backend의 401을 그대로 받는다.
+ */
+function withApiHeaders(init?: RequestInit): RequestInit {
   const headers = new Headers(init?.headers);
   headers.set(API_PROXY_HEADER, '1');
+  const token = readDevAccessToken();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
   return { ...init, headers };
 }
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, withProxyHeader(init));
+  const res = await fetch(url, withApiHeaders(init));
   if (!res.ok) {
     let message = `API error: ${res.status}`;
     try {
@@ -179,7 +200,7 @@ export async function patchN5Block(
   blockId: number,
   payload: ApiBlockPatch,
 ): Promise<ApiBlockPatchResponse> {
-  const res = await fetch(`/jobs/${jobId}/blocks/${blockId}`, withProxyHeader({
+  const res = await fetch(`/jobs/${jobId}/blocks/${blockId}`, withApiHeaders({
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -206,7 +227,7 @@ export function getJobTasks(jobId: string): Promise<ApiJobTaskStatus> {
  * 던져 error.code로 분기할 수 있게 한다(patchN5Block과 같은 패턴).
  */
 export async function confirmN5(jobId: string, payload: ApiConfirmRequest): Promise<ApiJob> {
-  const res = await fetch(`/jobs/${jobId}/confirm`, withProxyHeader({
+  const res = await fetch(`/jobs/${jobId}/confirm`, withApiHeaders({
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
