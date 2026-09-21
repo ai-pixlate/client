@@ -13,7 +13,7 @@ import { useEffect, useState } from "react";
 let mswReadyPromise: Promise<void> | null = null;
 
 function enableMocking(): Promise<void> {
-  if (process.env.NODE_ENV !== 'development') return Promise.resolve();
+  if (process.env.NEXT_PUBLIC_API_MOCKING !== 'enabled') return Promise.resolve();
   if (typeof window === 'undefined') return Promise.resolve();
   if (mswReadyPromise) return mswReadyPromise;
 
@@ -37,8 +37,10 @@ function enableMocking(): Promise<void> {
  * 공용 useJobStatusQuery가 진입 직후 첫 요청을 보낸다), 이 파일(공용 Providers)
  * 하나만 고치면 전체가 해결된다 — 개별 화면의 polling 로직은 건드리지 않는다.
  * mockingReady === false인 동안 children을 아예 마운트하지 않아 그 어떤 쿼리도
- * MSW 등록 전에 나가지 못하게 한다. production에서는 mocking 자체가 없으므로
- * 초기값을 true로 두어 지연이 없다.
+ * MSW 등록 전에 나가지 못하게 한다. NEXT_PUBLIC_API_MOCKING !== 'enabled'(값이
+ * 없거나 disabled)면 mocking 자체가 없으므로 초기값을 true로 두어 지연이 없다 —
+ * 이 값은 NODE_ENV(production 여부)와 독립이다: production 배포라도 이 값을
+ * 'enabled'로 두면 MSW가 켜진다(그렇게 두지 않는 게 배포 시 원칙이다).
  */
 export default function Providers({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(
@@ -54,7 +56,7 @@ export default function Providers({ children }: { children: React.ReactNode }) {
       }),
   );
 
-  const [mockingReady, setMockingReady] = useState(process.env.NODE_ENV !== 'development');
+  const [mockingReady, setMockingReady] = useState(process.env.NEXT_PUBLIC_API_MOCKING !== 'enabled');
 
   // enableMocking()은 module-level Promise를 캐시해 두므로 여러 번(HMR 재마운트
   // 등) 불려도 안전하다 — 그래서 이 effect는 의존성 없이 마운트 시 한 번만
