@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
-import { ApiRequestError } from '@/lib/api/pixate';
+import { ApiRequestError } from '@/lib/api/pixlate';
 import type { ApiTextBlock } from '@/lib/api/n5-schema';
 import {
   areAllSectionsExcluded,
@@ -18,11 +18,11 @@ import {
 import type { BlockViewModel, PreviewSectionViewModel, SignalBadge } from '@/lib/n5/adapter';
 import type { N5ViewMode } from '@/lib/n5/viewport';
 import {
-  pixateKeys,
+  pixlateKeys,
   usePatchN5BlockMutation,
   useN5TaskStatusQuery,
   useConfirmN5Mutation,
-} from '@/lib/queries/pixate';
+} from '@/lib/queries/pixlate';
 import { ViewModeToggle } from './n5-toolbar';
 
 // ─────────────────────────────────────────────────────────────────
@@ -201,8 +201,8 @@ function TranslationEditor({ jobId, block }: { jobId: string; block: BlockViewMo
     if (handledTaskIdRef.current === activeTaskItem.taskId) return;
     handledTaskIdRef.current = activeTaskItem.taskId ?? null;
     if (activeTaskItem.status === 'done') {
-      queryClient.invalidateQueries({ queryKey: pixateKeys.n5Blocks(jobId) });
-      queryClient.invalidateQueries({ queryKey: pixateKeys.n5Preview(jobId) });
+      queryClient.invalidateQueries({ queryKey: pixlateKeys.n5Blocks(jobId) });
+      queryClient.invalidateQueries({ queryKey: pixlateKeys.n5Preview(jobId) });
     }
   }, [activeTaskItem, jobId, queryClient]);
 
@@ -234,7 +234,7 @@ function TranslationEditor({ jobId, block }: { jobId: string; block: BlockViewMo
   function handleLoadServerValue() {
     if (!conflictLatest) return;
     const latest = conflictLatest;
-    queryClient.setQueryData<ApiTextBlock[]>(pixateKeys.n5Blocks(jobId), (prev) =>
+    queryClient.setQueryData<ApiTextBlock[]>(pixlateKeys.n5Blocks(jobId), (prev) =>
       prev ? prev.map((b) => (b.id === latest.id ? latest : b)) : prev,
     );
     setDraft(latest.trans1 ?? '');
@@ -447,7 +447,7 @@ export function N5Panel({
         setConfirmError('확정은 됐지만 예상과 다른 응답입니다. 새로고침 후 다시 확인해 주세요.');
       }
       // currentStep==='N6'이면 별도 navigate가 필요 없다 — useConfirmN5Mutation의
-      // onSuccess가 이미 pixateKeys.status를 invalidate했고, page.tsx가 그
+      // onSuccess가 이미 pixlateKeys.status를 invalidate했고, page.tsx가 그
       // 결과(currentStep)로 N6 화면을 고른다(기존 useAdvanceJobStepMutation과
       // 같은 라우팅 메커니즘 재사용).
     } catch (err) {
@@ -462,7 +462,7 @@ export function N5Panel({
           // 내가 보낸 경고 집합이 서버의 현재 집합과 달랐다는 뜻이다 — block
           // 목록이 낡았을 수 있으니 다음 시도가 최신 signals로 다시 계산되게
           // 재조회한다(어떤 경고가 있었는지는 FE가 임의로 지어내지 않는다).
-          queryClient.invalidateQueries({ queryKey: pixateKeys.n5Blocks(jobId) });
+          queryClient.invalidateQueries({ queryKey: pixlateKeys.n5Blocks(jobId) });
           return;
         }
         if (parsed) {

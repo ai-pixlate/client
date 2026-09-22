@@ -1,10 +1,11 @@
 'use client';
 
-import { use, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 
-import { useCreateJobMutation } from '@/lib/queries/pixate';
+import { useCreateJobMutation, useAnalyzeJobMutation } from '@/lib/queries/pixlate';
 import type { ImageType } from '@/lib/api/types';
+import { StepNav } from '../[jobId]/_components/step-nav';
 
 // ─────────────────────────────────────────────────────────────────
 // UI용 임시 상수 — 실제 백엔드 연결 시 API 데이터로 교체할 것
@@ -21,12 +22,26 @@ const COUNTRY_OPTIONS = [
 
 // TODO: 백엔드 언어 목록 API 연결 시 교체
 const LANGUAGE_OPTIONS = [
-  { value: 'en', label: '영어 (en)' },
-  { value: 'ja', label: '일본어 (ja)' },
-  { value: 'zh', label: '중국어 간체 (zh)' },
-  { value: 'de', label: '독일어 (de)' },
-  { value: 'fr', label: '프랑스어 (fr)' },
+  { value: 'en', label: '영어' },
+  { value: 'ja', label: '일본어' },
+  { value: 'zh', label: '중국어 간체' },
+  { value: 'de', label: '독일어' },
+  { value: 'fr', label: '프랑스어' },
 ];
+
+/**
+ * 국가 → 추천 언어. N1 Figma 재정합(3단계) 조사 결과, 이 관계를 일반적으로
+ * 정의한 매핑(맵/API)이 백엔드·설계 문서 어디에도 없다 — 오히려
+ * docs/reference/pixate-frontend-data-spec.md는 "국가와 언어는 독립 축이며
+ * 자유 조합을 허용한다"고 명시한다. 실제 데이터로 뒷받침되는 조합은
+ * lib/mock-api/n5-fixtures.ts의 mockN5Job(targetCountry:'US',
+ * targetLanguage:'en')과 Figma(525:3023)가 직접 보여준 "미국→영어" 하나뿐이라,
+ * 그 조합만 담는다. JP→ja, CN→zh, DE→de, FR→fr 같은 나머지 조합은 실제
+ * 데이터 근거가 없어 임의로 추가하지 않았다 — 관계가 정의되면 이 맵에 추가한다.
+ */
+const COUNTRY_RECOMMENDED_LANGUAGE: Partial<Record<string, string>> = {
+  US: 'en',
+};
 
 // TODO: 백엔드 규제 분류 목록 API 연결 시 교체
 const REGULATORY_CLASS_OPTIONS = [
@@ -37,17 +52,77 @@ const REGULATORY_CLASS_OPTIONS = [
   { value: 'general', label: '일반 상품' },
 ];
 
-// TODO: 백엔드 카테고리 목록 API 연결 시 교체
-const CATEGORY_OPTIONS = [
-  { value: 'skincare', label: '스킨케어' },
-  { value: 'haircare', label: '헤어케어' },
-  { value: 'makeup', label: '메이크업' },
-  { value: 'supplements', label: '건강기능식품' },
-  { value: 'electronics', label: '전자제품' },
-  { value: 'fashion', label: '패션' },
-  { value: 'food_beverage', label: '식품·음료' },
-  { value: 'other', label: '기타' },
+// ─────────────────────────────────────────────────────────────────
+// 카테고리 계층 — Figma 카테고리 선택 모달(381:6293)이 실제로 보여준 값만
+// 그대로 옮긴다. "화장품/향수 → 스킨케어 → 스킨/토너 → {토너,에센스 토너,패드}"
+// 경로만 4단계 전부(세분류까지) 문서화돼 있다. 나머지 형제 항목(바디/헤어,
+// 건강식품, 선케어, 팩/마스크, 클렌징, 에센스/세럼, 크림/젤/밤, 미스트)은
+// Figma에 라벨만 보이고 그 하위 트리는 어디에도 없다 — 임의로 하위 항목을
+// 지어내지 않는다. children이 없는 노드는 그 자체가 선택 가능한 leaf다
+// (더 드릴다운할 데이터가 없으므로 클릭 즉시 선택으로 처리한다).
+// TODO: 백엔드 카테고리 목록 API 연결 시 교체.
+// ─────────────────────────────────────────────────────────────────
+
+interface CategoryNode {
+  value: string;
+  label: string;
+  children?: CategoryNode[];
+}
+
+const CATEGORY_TREE: CategoryNode[] = [
+  {
+    value: 'cosmetics_perfume',
+    label: '화장품/향수',
+    children: [
+      {
+        value: 'skincare',
+        label: '스킨케어',
+        children: [
+          {
+            value: 'toner_type',
+            label: '스킨/토너',
+            children: [
+              { value: 'toner', label: '토너' },
+              { value: 'essence_toner', label: '에센스 토너' },
+              { value: 'pad', label: '패드' },
+            ],
+          },
+          { value: 'essence_serum', label: '에센스/세럼' },
+          { value: 'cream_gel_balm', label: '크림/젤/밤' },
+          { value: 'mist', label: '미스트' },
+        ],
+      },
+      { value: 'suncare', label: '선케어' },
+      { value: 'pack_mask', label: '팩/마스크' },
+      { value: 'cleansing', label: '클렌징' },
+    ],
+  },
+  { value: 'body_hair', label: '바디/헤어' },
+  { value: 'health_food', label: '건강식품' },
 ];
+
+function findCategoryLabel(nodes: CategoryNode[], value: string): string | null {
+  for (const node of nodes) {
+    if (node.value === value) return node.label;
+    if (node.children) {
+      const found = findCategoryLabel(node.children, value);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function findCategoryPath(nodes: CategoryNode[], value: string, path: CategoryNode[] = []): CategoryNode[] | null {
+  for (const node of nodes) {
+    const nextPath = [...path, node];
+    if (node.value === value) return nextPath;
+    if (node.children) {
+      const found = findCategoryPath(node.children, value, nextPath);
+      if (found) return found;
+    }
+  }
+  return null;
+}
 
 // ─────────────────────────────────────────────────────────────────
 // 로컬 이미지 항목 타입 (업로드 이전 브라우저 상태)
@@ -56,37 +131,256 @@ const CATEGORY_OPTIONS = [
 interface LocalImage {
   localId: string;
   file: File;
+  /** Figma(925:2529) 썸네일 미리보기용 — addFiles에서 생성하고, 제거/언마운트
+   * 시 revoke한다(메모리 누수 방지). */
+  previewUrl: string;
 }
 
 // ─────────────────────────────────────────────────────────────────
-// 섹션 레이블 공통 컴포넌트
+// 공용 아이콘 — Figma glyph는 7일 만료 원격 asset이라 커밋 코드에 하드링크하지
+// 않는다(N5 X 아이콘과 같은 방식). 최소한의 inline SVG만 쓴다.
 // ─────────────────────────────────────────────────────────────────
 
-function SectionLabel({ step, title }: { step: string; title: string }) {
+function ChevronDownIcon() {
   return (
-    <div className="flex items-center gap-2">
-      <span className="flex h-6 w-6 items-center justify-center rounded-full bg-blue-100 text-xs font-bold text-blue-700">
-        {step}
-      </span>
-      <h2 className="text-sm font-semibold text-gray-800">{title}</h2>
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+      <path d="M3.5 5.5L7 9L10.5 5.5" stroke="#707070" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function SearchIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+      <circle cx="6" cy="6" r="4.5" stroke="#707070" strokeWidth="1.3" />
+      <path d="M12 12L9.5 9.5" stroke="#707070" strokeWidth="1.3" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function PlusIcon({ size = 24 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M12 4V20M4 12H20" stroke="#171717" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+// Figma(929:7386 "Icon Button" Circle/XXS/Secondary) 실측: Glyph는 12px
+// 아이콘 박스 안에서 inset-1/4(사방 25%=3px)만큼 들여 그려진다 — 즉 실제
+// 선은 12px 전체가 아니라 가운데 6×6 영역(3~9) 안에만 있다. 색상도 이
+// 노드에 등록된 3색(#fff bg / #eaeaea border / #707070) 중 유일하게 남는
+// text/secondary #707070이다(검정 #171717이 아니다).
+function CloseIcon({ size = 12 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 12 12" fill="none" aria-hidden="true">
+      <path d="M3 3L9 9M9 3L3 9" stroke="#707070" strokeWidth="1.2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function ChevronRightIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+      <path d="M5.5 3.5L9 7L5.5 10.5" stroke="#999" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────
+// 필드 레이블 — Figma 기준(필수: text-[#171717] + orange *, 선택: text-[#707070])
+// ─────────────────────────────────────────────────────────────────
+
+function FieldLabel({ children, required }: { children: React.ReactNode; required?: boolean }) {
+  return (
+    <p className={`text-[16px] tracking-[-0.03em] ${required ? 'text-[#171717]' : 'text-[#707070]'}`}>
+      {children}
+      {required && <span className="ml-1 text-[#ff6a38]">*</span>}
+    </p>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────
+// 카테고리 선택 모달 (Figma 381:6293 "카테고리 선택")
+//
+// Figma 프레임 자체엔 backdrop 딤(어둡게 가리기)·제목/설명·확인/닫기 버튼이
+// 보이지 않는다 — 흰 카드(drop-shadow) + 검색 입력 + 4단 목록뿐이다. 그
+// 카드를 그대로 옮기고, "확인" 버튼 대신 leaf(더 하위 데이터가 없는 노드)를
+// 클릭하면 즉시 선택·닫힘으로 처리했다 — Figma에 없는 버튼을 임의로 만들지
+// 않기 위한 최소 보완이다. backdrop은 화면을 어둡게 가리진 않되(Figma에
+// 없음), 바깥 영역 클릭 시 닫히는 투명 캐처로는 둔다.
+// ─────────────────────────────────────────────────────────────────
+
+function CategoryColumn({
+  heading,
+  items,
+  selectedValue,
+  onSelect,
+  showChevron,
+}: {
+  heading: string;
+  items: CategoryNode[];
+  selectedValue: string | null;
+  onSelect: (node: CategoryNode) => void;
+  showChevron: boolean;
+}) {
+  return (
+    <div className="flex w-[277px] shrink-0 flex-col items-start">
+      <div className="flex w-full items-center px-4 py-2">
+        <p className="text-[12px] font-light tracking-[-0.04em] text-[#999]">{heading}</p>
+      </div>
+      {items.length === 0 && <p className="px-4 py-[18px] text-[12px] text-[#999]">검색 결과가 없습니다.</p>}
+      {items.map((item) => {
+        const isSelected = item.value === selectedValue;
+        return (
+          <button
+            key={item.value}
+            type="button"
+            onClick={() => onSelect(item)}
+            aria-pressed={isSelected}
+            className={`flex w-full items-center justify-between px-4 py-[18px] text-left text-[14px] tracking-[-0.01em] transition-colors ${
+              isSelected ? 'bg-[#f5f5f5] text-[#ff6a38]' : 'text-[#707070] hover:bg-gray-50'
+            }`}
+          >
+            <span>{item.label}</span>
+            {showChevron && item.children && <ChevronRightIcon />}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function CategoryModal({
+  currentValue,
+  onClose,
+  onSelect,
+}: {
+  currentValue: string;
+  onClose: () => void;
+  onSelect: (value: string) => void;
+}) {
+  const initialPath = useMemo(() => findCategoryPath(CATEGORY_TREE, currentValue) ?? [], [currentValue]);
+  const [selectedL1, setSelectedL1] = useState<CategoryNode | null>(initialPath[0] ?? null);
+  const [selectedL2, setSelectedL2] = useState<CategoryNode | null>(initialPath[1] ?? null);
+  const [selectedL3, setSelectedL3] = useState<CategoryNode | null>(initialPath[2] ?? null);
+  const [search, setSearch] = useState('');
+
+  const commit = (node: CategoryNode) => {
+    onSelect(node.value);
+    onClose();
+  };
+
+  const query = search.trim().toLowerCase();
+  const filterItems = (nodes: CategoryNode[]) =>
+    query ? nodes.filter((n) => n.label.toLowerCase().includes(query)) : nodes;
+
+  return (
+    <div className="fixed inset-0 z-50" onClick={onClose} role="presentation">
+      <div
+        role="dialog"
+        aria-label="카테고리 선택"
+        onClick={(e) => e.stopPropagation()}
+        className="absolute top-1/2 left-1/2 flex w-[1203px] max-w-[calc(100vw-48px)] -translate-x-1/2 -translate-y-1/2 flex-col items-start gap-3 rounded-[5px] bg-white px-7 py-5 drop-shadow-[2px_2px_12px_rgba(0,0,0,0.06)]"
+      >
+        {/* 다른 모든 텍스트 입력(상품명/상품코드/핵심키워드 등)과 같은 focus
+            처리(Design Direction §8: "Focus에서 Orange Accent")를 그대로
+            재사용한다 — 이 검색 입력만 border를 감싼 div에 올려두고
+            focus 스타일을 빠뜨렸던 것을 다른 input들과 같은 패턴(직접
+            border+focus:border-[#ff6a38])으로 맞췄다. */}
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="카테고리명 검색"
+          className="w-[150px] rounded-[6px] border border-[#eaeaea] bg-white px-4 py-2.5 text-[14px] text-[#707070] outline-none placeholder:text-[#707070] focus:border-[#ff6a38]"
+        />
+
+        <div className="flex w-full items-stretch gap-1.5 overflow-x-auto">
+          <CategoryColumn
+            heading="대분류"
+            items={filterItems(CATEGORY_TREE)}
+            selectedValue={selectedL1?.value ?? null}
+            showChevron
+            onSelect={(node) => {
+              if (node.children) {
+                setSelectedL1(node);
+                setSelectedL2(null);
+                setSelectedL3(null);
+              } else {
+                commit(node);
+              }
+            }}
+          />
+          <div className="w-px shrink-0 self-stretch bg-[#eaeaea]" />
+          <CategoryColumn
+            heading="중분류"
+            items={filterItems(selectedL1?.children ?? [])}
+            selectedValue={selectedL2?.value ?? null}
+            showChevron
+            onSelect={(node) => {
+              if (node.children) {
+                setSelectedL2(node);
+                setSelectedL3(null);
+              } else {
+                commit(node);
+              }
+            }}
+          />
+          <div className="w-px shrink-0 self-stretch bg-[#eaeaea]" />
+          <CategoryColumn
+            heading="소분류"
+            items={filterItems(selectedL2?.children ?? [])}
+            selectedValue={selectedL3?.value ?? null}
+            showChevron
+            onSelect={(node) => {
+              if (node.children) setSelectedL3(node);
+              else commit(node);
+            }}
+          />
+          <div className="w-px shrink-0 self-stretch bg-[#eaeaea]" />
+          <CategoryColumn
+            heading="세분류"
+            items={filterItems(selectedL3?.children ?? [])}
+            selectedValue={null}
+            showChevron={false}
+            onSelect={(node) => commit(node)}
+          />
+        </div>
+      </div>
     </div>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────
-// N1 페이지
+// N1 페이지 (Figma node 525:3023 "N1 이미지 정보 입력" 기준)
 // ─────────────────────────────────────────────────────────────────
 
-export default function NewJobPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
-}) {
-  const { brandId: rawBrandId } = use(searchParams);
-  const brandId = typeof rawBrandId === 'string' ? rawBrandId : '';
+export default function NewJobPage() {
+  // useSearchParams()는 정적 렌더링 시 이 컴포넌트를 Suspense 경계까지
+  // client-only로 opt-in시킨다(Next.js 공식 요구사항) — fallback 없이 즉시
+  // 그리는 얇은 wrapper로 감싼다.
+  return (
+    <Suspense fallback={null}>
+      <NewJobPageInner />
+    </Suspense>
+  );
+}
+
+function NewJobPageInner() {
+  // Client Component page에 Next.js가 넘겨주는 searchParams prop(Promise)은
+  // 최초 진입(하드 로드)에서만 정확하고, 같은 경로에서 쿼리스트링만 바뀌는
+  // 클라이언트 사이드(soft) 네비게이션에서는 갱신되지 않는다(Next.js 공식
+  // 문서가 명시한 known caveat) — 이번 재현에서 실제 사용자는 앱 안에서
+  // 링크를 타고 들어왔고(soft navigation), 그 결과 brandId가 URL엔 있는데
+  // state는 빈 값으로 고정돼 있었다. 클라이언트 라우팅에도 반응하는
+  // useSearchParams()로 바꿔 URL을 실제 source of truth로 삼는다.
+  const searchParamsObj = useSearchParams();
+  const brandId = searchParamsObj.get('brandId') ?? '';
 
   const router = useRouter();
-  const mutation = useCreateJobMutation();
+  const createMutation = useCreateJobMutation();
+  const analyzeMutation = useAnalyzeJobMutation();
 
   // ── 폼 상태 ─────────────────────────────────────────────────────
   const [targetCountry, setTargetCountry] = useState('');
@@ -98,8 +392,22 @@ export default function NewJobPage({
   const [images, setImages] = useState<LocalImage[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // productName/productCode — Figma(525:3023)에서 새로 보이는 입력 필드이자
+  // 실제 OpenAPI(JobCreate/Job) 필드명 그대로(CLAUDE.md: productName 필수,
+  // productCode 선택). CreateJobRequest/POST /jobs 페이로드에 실어 보낸다
+  // (이번 계약 보정 반영). productCode는 빈 문자열이면 아예 보내지 않는다
+  // (trim 후 빈 값이면 undefined → JSON.stringify가 키 자체를 제거).
+  const [productName, setProductName] = useState('');
+  const [productCode, setProductCode] = useState('');
+
+  const [isDragOver, setIsDragOver] = useState(false);
+
   // ── 나가기 확인 ─────────────────────────────────────────────────
   const [showExitConfirm, setShowExitConfirm] = useState(false);
+
+  // ── 카테고리 선택 모달 (Figma 381:6293) ─────────────────────────
+  const [categoryModalOpen, setCategoryModalOpen] = useState(false);
+  const selectedCategoryLabel = displayCategory ? findCategoryLabel(CATEGORY_TREE, displayCategory) : null;
 
   // ── 키워드 ──────────────────────────────────────────────────────
 
@@ -123,49 +431,102 @@ export default function NewJobPage({
 
   // ── 이미지 업로드 ────────────────────────────────────────────────
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files ?? []);
+  const addFiles = (files: File[]) => {
     if (files.length === 0) return;
-
     const newItems: LocalImage[] = files.map((file, i) => ({
       localId: `local_${Date.now()}_${i}`,
       file,
+      previewUrl: URL.createObjectURL(file),
     }));
     setImages((prev) => [...prev, ...newItems]);
+  };
 
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    addFiles(Array.from(e.target.files ?? []));
     // 같은 파일 재선택 허용을 위해 input 초기화
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  const removeImage = (localId: string) => {
-    setImages((prev) => prev.filter((img) => img.localId !== localId));
+  // 드래그 앤 드롭 — Figma FileUploader가 "파일을 이곳에 놓아주세요"를 보여주므로
+  // 그 시각적 약속에 맞춰 최소한의 네이티브 drop 처리만 추가한다. 파일이
+  // addFiles로 들어가는 이후 흐름(images state, 업로드 목록, 검증)은 클릭
+  // 업로드와 완전히 동일하다 — 새 데이터 흐름이 아니라 같은 입력 경로를
+  // 여는 것뿐이다.
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    addFiles(Array.from(e.dataTransfer.files ?? []));
   };
 
-  const moveImage = (localId: string, direction: 'up' | 'down') => {
+  const removeImage = (localId: string) => {
     setImages((prev) => {
-      const idx = prev.findIndex((img) => img.localId === localId);
-      if (idx < 0) return prev;
+      const removed = prev.find((img) => img.localId === localId);
+      if (removed) URL.revokeObjectURL(removed.previewUrl);
+      return prev.filter((img) => img.localId !== localId);
+    });
+  };
+
+  // 언마운트 시 남아있는 미리보기 objectURL을 모두 해제한다(메모리 누수 방지).
+  // images를 직접 deps에 넣지 않고 ref로 최신값을 들고 있다가 언마운트
+  // 시점에만 실행 — 매 렌더마다 cleanup이 재실행되는 걸 막는다. ref는
+  // effect 안에서만 갱신한다(render 중 ref.current 쓰기 금지 — react-hooks 규칙).
+  const imagesRef = useRef(images);
+  useEffect(() => {
+    imagesRef.current = images;
+  }, [images]);
+  useEffect(() => {
+    return () => {
+      imagesRef.current.forEach((img) => URL.revokeObjectURL(img.previewUrl));
+    };
+  }, []);
+
+  // 썸네일 드래그 순서 변경(Figma 925:2529) — up/down 버튼은 이 Figma
+  // 썸네일 카드에 없다(X 삭제만 있음), 드래그로 대체한다. 내부 재정렬
+  // 드래그와 OS 파일 드래그(업로드)를 dataTransfer로 구분해야 하므로,
+  // draggingLocalId가 채워져 있을 때만(=우리 쪽 썸네일 drag) preventDefault/
+  // stopPropagation해서 상위 드롭존(파일 업로드용 onDrop)으로 번지지 않게
+  // 막는다 — OS 파일 드래그는 그대로 버블시켜 기존 handleDrop이 처리한다.
+  const [draggingLocalId, setDraggingLocalId] = useState<string | null>(null);
+  const [dragOverLocalId, setDragOverLocalId] = useState<string | null>(null);
+
+  const reorderImages = (fromLocalId: string, toLocalId: string) => {
+    if (fromLocalId === toLocalId) return;
+    setImages((prev) => {
+      const fromIdx = prev.findIndex((img) => img.localId === fromLocalId);
+      const toIdx = prev.findIndex((img) => img.localId === toLocalId);
+      if (fromIdx < 0 || toIdx < 0) return prev;
       const next = [...prev];
-      const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
-      if (swapIdx < 0 || swapIdx >= next.length) return prev;
-      [next[idx], next[swapIdx]] = [next[swapIdx], next[idx]];
+      const [moved] = next.splice(fromIdx, 1);
+      next.splice(toIdx, 0, moved);
       return next;
     });
   };
 
   // ── 유효성 검사 ──────────────────────────────────────────────────
 
+  // 실제 OpenAPI JobCreate는 brandId만 required다(categoryId/productCode/
+  // keywords는 전부 optional). N1 폼은 productName/targetCountry/
+  // targetLanguage/regulatoryClass/이미지 1장 이상만 화면 자체 필수값으로
+  // 좁혀서 쓴다(기존 결정 유지) — displayCategory(카테고리)는 그 목록에
+  // 없었으므로 여기서 제거한다. productCode/keywords는 애초에 isValid에
+  // 없었다(이미 선택값으로 처리돼 있었다).
   const isValid =
     !!brandId &&
+    !!productName &&
     !!targetCountry &&
     !!targetLanguage &&
     !!regulatoryClass &&
-    !!displayCategory &&
     images.length > 0;
 
   // ── 제출 ────────────────────────────────────────────────────────
+  //
+  // 오늘(N1→N6 happy path): 생성과 분석 시작을 분리한다(CLAUDE.md 원칙 —
+  // 작업 생성만으로 분석이 자동 시작된다고 가정하지 않는다). createJob이
+  // 성공한 jobId로 analyzeJob을 이어 호출한 뒤에만 N2로 이동한다. 이 폼이
+  // 한 번에 보내는 입력값 payload 자체(실제 draft-first 다단계 계약과 다름)는
+  // 오늘 범위가 아니라 그대로 뒀다.
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!isValid) return;
 
     // 9월 MVP: 입력 유형 선택 UI는 12월 예정 — imageType은 'multi_section' 고정
@@ -175,46 +536,541 @@ export default function NewJobPage({
       imageType: 'multi_section' as ImageType,
     }));
 
-    mutation.mutate(
-      {
+    try {
+      const created = await createMutation.mutateAsync({
         brandId,
+        productName,
+        productCode: productCode.trim() || undefined,
         targetCountry,
         targetLanguage,
         regulatoryClass,
         specId: 'spec_original',
-        displayCategory,
+        displayCategory: displayCategory || undefined,
         keywords,
         sourceImages,
-      },
-      {
-        onSuccess: (data) => {
-          router.push(`/jobs/${data.jobId}`);
-        },
-      },
-    );
+      });
+      await analyzeMutation.mutateAsync(created.jobId);
+      router.push(`/jobs/${created.jobId}`);
+    } catch {
+      // createMutation/analyzeMutation의 isError·error가 그대로 하단 안내에 반영된다.
+    }
   };
+
+  const submitError = createMutation.error ?? analyzeMutation.error;
+  const isSubmitting = createMutation.isPending || analyzeMutation.isPending;
+
+  // 추천 태그는 targetLanguage(언어 select의 현재 선택값)가 아니라
+  // targetCountry에서만 파생된다 — 국가를 바꿔도 이미 고른 언어 값은
+  // 건드리지 않는다. 태그를 클릭했을 때만 setTargetLanguage가 호출된다.
+  const recommendedLanguageValue = COUNTRY_RECOMMENDED_LANGUAGE[targetCountry];
+  const recommendedLanguageOption = recommendedLanguageValue
+    ? (LANGUAGE_OPTIONS.find((o) => o.value === recommendedLanguageValue) ?? null)
+    : null;
 
   // ── 렌더링 ──────────────────────────────────────────────────────
 
   return (
-    <div className="flex min-h-screen flex-col bg-gray-50">
-      {/* 상단 헤더 */}
-      <header className="flex h-14 shrink-0 items-center gap-4 border-b bg-white px-6 shadow-sm">
-        <div className="flex items-center gap-2">
-          <span className="rounded bg-blue-100 px-2 py-0.5 text-xs font-bold text-blue-700">
-            N1
-          </span>
-          <span className="text-sm font-medium text-gray-700">신규 작업</span>
-        </div>
-        <div className="flex-1" />
+    // 폰트는 app/layout.tsx(전역 1곳)에서 Pretendard를 로드하고
+    // globals.css의 body font-family로 전체 화면에 적용한다 — N1에서
+    // 별도로 <link>를 넣거나 font-family를 다시 걸지 않는다(body에서
+    // 상속받는다).
+    <div className="flex h-screen w-full bg-white">
+      {/* N1 Figma 재정합(재수정) — Figma(525:3023) 실측: X 버튼(608:1434)
+          x=40,y=40,w=40,h=40 → bottom=80. StepNav(608:1440) x=36,y=150,
+          w=44,h=860(1080 프레임 기준). 이전 시도는 "top:calc(50%+40px)
+          -translate-y-1/2"로 Figma의 1080-프레임 공식을 그대로 옮겼는데,
+          이 공식은 뷰포트 높이가 1080보다 많이 작아지면(예: 800px) 계산된
+          top이 X 버튼의 bottom(80)보다 작아져 1번 step이 X 버튼 뒤로
+          들어가 버린다(실측 확인: 1440×800에서 겹침 재현). Figma의 860px
+          자체를 억지로 재현하는 대신, X 버튼 bottom(80)+여유 20px=100px를
+          "항상 지켜야 할 최소 상단 여백"으로 고정하고, 그 아래 남는 공간을
+          모두 StepNav에 준다 — 뷰포트가 얼마나 짧아지든 1번 step은 X
+          버튼보다 항상 아래에서 시작한다(공식이 아니라 고정 오프셋 + 남는
+          공간 채우기라 음수가 될 수 없다). */}
+      <div className="relative ml-9 h-full w-[44px] shrink-0">
         <button
           type="button"
           onClick={() => setShowExitConfirm(true)}
-          className="text-sm text-gray-400 transition-colors hover:text-gray-700"
+          aria-label="보관함으로 나가기"
+          className="absolute top-10 left-1/2 z-20 flex size-10 -translate-x-1/2 shrink-0 items-center justify-center rounded-md border border-[#eaeaea] bg-white text-[#171717] transition-colors hover:bg-gray-50"
         >
-          보관함으로 나가기
+          {/* Figma(925:2530 "보관함으로 나가기") 실측: 16px Glyph 박스
+              안에서 inset-1/4(사방 25%=4px)만큼 들여 그려진다 — 실제
+              X선은 박스 전체가 아니라 가운데 8×8 영역(4~12)에만 있다. */}
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M4 4L12 12M12 4L4 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+          </svg>
         </button>
-      </header>
+        <div className="absolute inset-0 pt-[100px] pb-6">
+          <StepNav currentStep="N1" />
+        </div>
+      </div>
+
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        {/* 헤더 — X 버튼이 좌측 rail로 옮겨가면서, 여기는 이제 제목/설명 행만
+            남는다(N1 Figma 재정합 1단계). */}
+        <div className="shrink-0 px-10 pt-10 pb-6">
+          <div className="flex items-center gap-4">
+            <h1 className="text-[20px] font-semibold tracking-[-0.02em] text-[#171717]">이미지 입력</h1>
+            <p className="text-[14px] tracking-[-0.01em] text-[#707070]">
+              번역할 원본 이미지를 등록하고 작업 조건을 설정합니다.
+            </p>
+          </div>
+
+          {/* 국가선택 / 언어선택 — Figma(525:3023, node 787:6016) 두 필드를
+              한 줄에 배치. 각 필드 그룹은 w-[385px] 고정이고(늘어나 퍼지는
+              구조가 아니다), 두 그룹 사이 gap은 40px다 — 예전엔 flex-1 +
+              justify-between이라 뷰포트가 넓을수록 두 select가 거의 절반씩
+              퍼졌다(N1 Figma 재정합 3단계). */}
+          <div className="mt-6 flex items-center gap-10">
+            <div className="flex w-[385px] shrink-0 items-center gap-5">
+              <p className="shrink-0 text-[12px] tracking-[-0.02em] text-[#707070]">국가선택</p>
+              <div className="relative flex-1">
+                <select
+                  value={targetCountry}
+                  onChange={(e) => setTargetCountry(e.target.value)}
+                  className="w-full appearance-none rounded-[6px] border border-[#eaeaea] bg-white px-[14px] py-[10px] text-[14px] tracking-[-0.01em] text-[#707070] outline-none focus:border-[#ff6a38]"
+                >
+                  <option value="">선택하세요</option>
+                  {COUNTRY_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </select>
+                <div className="pointer-events-none absolute top-1/2 right-3.5 -translate-y-1/2">
+                  <ChevronDownIcon />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex w-[385px] shrink-0 items-center gap-5">
+              <p className="shrink-0 text-[12px] tracking-[-0.02em] text-[#707070]">언어선택</p>
+              {/* 추천 태그 — 국가 선택에서 파생되는 별도 표시값이다.
+                  targetLanguage(실제 선택값)를 그대로 되비추던 예전 로직과
+                  분리했다: 국가만 바꿔도 언어 select는 그대로 두고, 이 태그를
+                  "클릭"해야만 select 값이 바뀐다(N1 Figma 재정합 3단계). */}
+              {recommendedLanguageOption && (
+                <button
+                  type="button"
+                  onClick={() => setTargetLanguage(recommendedLanguageOption.value)}
+                  aria-pressed={targetLanguage === recommendedLanguageOption.value}
+                  className="flex h-7 shrink-0 items-center justify-center gap-1 rounded-[6px] border border-[#ff6a38] bg-white px-2 text-[12px] leading-[14px] text-[#ff6a38] transition-colors hover:bg-[#faf3ed]"
+                >
+                  {recommendedLanguageOption.label}
+                </button>
+              )}
+              <div className="relative flex-1">
+                <select
+                  value={targetLanguage}
+                  onChange={(e) => setTargetLanguage(e.target.value)}
+                  className="w-full appearance-none rounded-[6px] border border-[#eaeaea] bg-white px-[14px] py-[10px] text-[14px] tracking-[-0.01em] text-[#707070] outline-none focus:border-[#ff6a38]"
+                >
+                  <option value="">선택하세요</option>
+                  {LANGUAGE_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </select>
+                <div className="pointer-events-none absolute top-1/2 right-3.5 -translate-y-1/2">
+                  <ChevronDownIcon />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* 본문: 좌 FileUploader + 우 필드 패널. 아래 pb는 Figma 실측
+            (패널 bottom 932, 다음 버튼 top 965 → 33px)을 그대로 쓴다. */}
+        <div className="flex min-h-0 flex-1 gap-6 px-10 pb-[33px]">
+          {/* 좌측 — 업로드 영역 */}
+          <div
+            data-testid="n1-image-dropzone"
+            onDragOver={(e) => {
+              e.preventDefault();
+              setIsDragOver(true);
+            }}
+            onDragLeave={() => setIsDragOver(false)}
+            onDrop={handleDrop}
+            // min-w-0 — 4열 그리드(1039px 고정)가 flex-1 아이템의 기본
+            // min-width:auto(콘텐츠 크기) 때문에 부모 row를 밀어내 우측
+            // 516px 패널이 뷰포트 밖으로 잘려나가는 걸 막는다(실측
+            // 확인). 안쪽 스크롤 wrapper(overflow-auto)가 실제 스크롤을
+            // 담당하고, 이 div는 그 스크롤 영역이 자기 폭보다 좁아지는
+            // 걸 허용만 하면 된다.
+            className={`flex min-w-0 flex-1 flex-col items-center justify-center gap-10 rounded-[8px] border transition-colors ${
+              isDragOver ? 'border-[#ff6a38] bg-[#faf3ed]' : 'border-[#eaeaea] bg-white'
+            }`}
+          >
+            {images.length === 0 ? (
+              <div className="flex flex-col items-center gap-10 px-6">
+                <div className="flex flex-col items-center gap-5">
+                  <div className="flex size-[72px] items-center justify-center rounded-full border border-[#eaeaea] bg-white">
+                    <PlusIcon />
+                  </div>
+                  <div className="flex flex-col items-center gap-2 text-center">
+                    <p className="text-[18px] font-medium tracking-[-0.03em] whitespace-nowrap text-[#171717]">
+                      파일을 이곳에 놓아주세요.
+                    </p>
+                    <p className="text-[14px] tracking-[-0.01em] whitespace-nowrap text-[#707070]">또는 클릭해서 선택 · JPG, PNG</p>
+                  </div>
+                  <label
+                    htmlFor="image-upload"
+                    className="cursor-pointer rounded-[6px] bg-[#171717] px-8 py-3.5 text-[14px] font-medium tracking-[-0.03em] whitespace-nowrap text-white"
+                  >
+                    파일 선택
+                  </label>
+                </div>
+                <p className="max-w-xl text-center text-[12px] font-light tracking-[-0.04em] text-[#999]">
+                  최대 1GB · 여러 파일을 한 번에 업로드할 수 있습니다.
+                  <br />
+                  인증·시험 정보의 적용 가능 여부를 사용자가 최종 확인해야 하며 문제 발생 시 플랫폼이 책임지지 않습니다.
+                </p>
+              </div>
+            ) : (
+              // Figma(925:2529 "N1 이미지 업로드 썸네일") 실측 비율은
+              // 244:320, gap은 21px(가로)/20px(세로, row1 bottom 522 →
+              // row2 top 542), X 버튼은 24px 원(rounded-12) + top/right
+              // 12px(=카드 폭의 4.92%) 오프셋 — 하지만 이 Figma 프레임 자체가
+              // 1920px 루트라, 244px 절대값을 그대로 쓰면 1440px 뷰포트에서
+              // 우측 516px 패널과 함께 4열이 가로 스크롤 없이 안 들어간다.
+              // "4열×2행 한눈에 보기"가 우선이므로 카드 폭은 고정값이
+              // 아니라 grid-template-columns: repeat(4, 1fr)로 부모 가용
+              // 폭을 4등분한 값을 쓰고, 세로는 aspect-[244/320]로 자동
+              // 계산한다(가로/세로를 따로 줄이지 않아 비율이 절대 안
+              // 깨진다). 마지막 칸에 FileUploader(273:2103) 컴팩트
+              // variant를 그대로 "파일 추가" 자리로 쓴다(Figma에 별도
+              // "+이미지 추가" 헤더 버튼은 없다). up/down 버튼은 이 카드에
+              // 없다(X만 있음) — 대신 드래그 재정렬로 대체한다.
+              <div className="flex h-full w-full flex-col gap-4 overflow-y-auto p-6">
+                <p className="text-[14px] text-[#707070]">이미지 {images.length}개</p>
+                <div className="grid grid-cols-4 gap-x-4 gap-y-5">
+                  {images.map((img) => {
+                    const isDragging = draggingLocalId === img.localId;
+                    const isDragOverTarget = dragOverLocalId === img.localId && draggingLocalId !== img.localId;
+                    return (
+                      <div
+                        key={img.localId}
+                        draggable
+                        onDragStart={(e) => {
+                          e.dataTransfer.effectAllowed = 'move';
+                          e.dataTransfer.setData('text/plain', img.localId);
+                          // 브라우저 기본 drag ghost가 카드 대신 내부 <img>만
+                          // 원본 픽셀 크기로 캡처하는 경우가 있어(브라우저마다
+                          // 다름) 카드 엘리먼트 자체를 drag image로 명시
+                          // 지정한다. 카드 폭이 이제 뷰포트에 따라 달라지므로
+                          // 절반 오프셋도 그 순간의 실제 렌더 크기에서
+                          // 계산한다(고정 122/160 하드코딩 금지) — 어떤
+                          // 뷰포트에서도 244×320 비율·object-contain 여백이
+                          // 그대로 유지된 채 드래그된다.
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          e.dataTransfer.setDragImage(e.currentTarget, rect.width / 2, rect.height / 2);
+                          setDraggingLocalId(img.localId);
+                        }}
+                        onDragEnd={() => {
+                          setDraggingLocalId(null);
+                          setDragOverLocalId(null);
+                        }}
+                        onDragOver={(e) => {
+                          // draggingLocalId가 있을 때만 우리 쪽 썸네일 재정렬
+                          // 드래그다 — 그 외(OS 파일 드래그)는 막지 않고
+                          // 그대로 상위 드롭존으로 버블시킨다.
+                          if (!draggingLocalId) return;
+                          e.preventDefault();
+                          e.stopPropagation();
+                          if (draggingLocalId !== img.localId) setDragOverLocalId(img.localId);
+                        }}
+                        onDrop={(e) => {
+                          if (!draggingLocalId) return;
+                          e.preventDefault();
+                          e.stopPropagation();
+                          reorderImages(draggingLocalId, img.localId);
+                          setDraggingLocalId(null);
+                          setDragOverLocalId(null);
+                        }}
+                        className={`relative aspect-[244/320] w-full max-w-[244px] cursor-grab overflow-hidden bg-[#eee] transition-opacity ${
+                          isDragging ? 'opacity-50' : ''
+                        } ${isDragOverTarget ? 'ring-2 ring-[#ff6a38]' : ''}`}
+                      >
+                        {/* object-contain — 원본 비율 유지, crop/stretch
+                            없음. 카드 배경이 이미 #eee라 이미지가 축소
+                            표시될 때 생기는 여백은 그대로 카드 배경색이
+                            채운다(세로형은 좌우, 가로형은 상하 letterbox). */}
+                        {/* eslint-disable-next-line @next/next/no-img-element -- 로컬 blob: objectURL이라 next/image 최적화 대상이 아니다 */}
+                        <img src={img.previewUrl} alt={img.file.name} className="h-full w-full object-contain" />
+                        <button
+                          type="button"
+                          onClick={() => removeImage(img.localId)}
+                          aria-label={`${img.file.name} 삭제`}
+                          // top/right를 %로 둬서(12px÷244px≈4.92%) 카드가
+                          // 축소돼도 여백 비율이 그대로 유지된다 — 버튼
+                          // 자체 크기(24px)는 클릭 타겟 확보를 위해 고정.
+                          className="absolute top-[4.92%] right-[4.92%] flex size-6 items-center justify-center rounded-full border border-[#eaeaea] bg-white hover:bg-gray-50"
+                        >
+                          <CloseIcon />
+                        </button>
+                      </div>
+                    );
+                  })}
+
+                  <div className="flex aspect-[244/320] w-full max-w-[244px] flex-col items-center justify-center gap-5 rounded-[8px] border border-[#eaeaea] bg-white px-6 py-8">
+                    <div className="flex size-10 items-center justify-center rounded-full border border-[#eaeaea] bg-white">
+                      <PlusIcon size={16} />
+                    </div>
+                    <div className="flex flex-col items-center gap-2 text-center">
+                      <p className="text-[16px] font-medium tracking-[-0.03em] whitespace-nowrap text-[#171717]">
+                        파일을 드래그하거나 선택
+                      </p>
+                      <p className="text-[12px] tracking-[-0.01em] whitespace-nowrap text-[#707070]">JPG, PNG · 최대 1GB</p>
+                    </div>
+                    {/* 기존 빈 상태와 동일한 label 패턴 — htmlFor로 숨은
+                        input#image-upload를 직접 연다(accessible name이
+                        타일 전체 텍스트로 뭉개지지 않도록 label을 이
+                        버튼 텍스트에만 좁게 건다). */}
+                    <label
+                      htmlFor="image-upload"
+                      className="cursor-pointer rounded-[6px] bg-[#171717] px-5 py-2.5 text-[14px] font-medium tracking-[-0.03em] whitespace-nowrap text-white hover:opacity-90"
+                    >
+                      파일 선택
+                    </label>
+                  </div>
+                </div>
+              </div>
+            )}
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept="image/*"
+              className="hidden"
+              onChange={handleFileChange}
+              id="image-upload"
+            />
+          </div>
+
+          {/* 우측 — 필드 패널 */}
+          {/* 우측 필드 패널 — Figma(643:5942) 폭 516px. get_metadata로 4개
+              블록(상품명~규제분류 묶음/토글/결과물규격/핵심키워드)의 실제
+              y좌표를 각각 다시 쟀다: 643:5913 bottom=305 → 673:7820
+              top=359.67(gap 54.67), 673:7820 bottom=401.67 → 643:5914
+              top=456.33(gap 54.66), 643:5914 bottom=616.33 → 643:5924
+              top=671(gap 54.67) — 네 간격이 모두 54.6~54.7px로 사실상
+              같은 값이라 gap-[55px] 하나로도 Figma 실측과 맞는다(블록마다
+              다른 값을 억지로 만들지 않았다 — 실제로 같다).
+              패널 자체 높이(770)는 Figma의 1080 프레임 기준이라, 그보다
+              낮은 실제 브라우저 창에서는 자연 높이(~757)가 남는 공간을
+              넘어설 수 있다 — 이전엔 고정 height 없이 그대로 뒀더니
+              부모 flex-1 row가 패널을 눌러 압축했고, 핵심 키워드가 패널
+              테두리 밖으로 그대로 흘러나와 다음 버튼과 겹쳤다(1440×800
+              실측 재현). overflow-y-auto를 다시 두되, 이번엔 "필요 이상
+              공간을 만들어 생기는" 스크롤이 아니라 "실제 콘텐츠가 진짜
+              가용 공간보다 클 때만" 나오는 안전장치다 — 평소 뷰포트에서는
+              나타나지 않는다. */}
+          <div className="flex min-h-0 w-[516px] shrink-0 flex-col gap-[55px] overflow-y-auto rounded-[8px] border border-[#eaeaea] p-5">
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-1">
+                <FieldLabel required>상품명</FieldLabel>
+                <input
+                  type="text"
+                  value={productName}
+                  onChange={(e) => setProductName(e.target.value)}
+                  placeholder="상품 이름을 입력해주세요"
+                  className="w-full rounded-[6px] border border-[#eaeaea] px-4 py-2.5 text-[14px] tracking-[-0.01em] text-[#171717] outline-none placeholder:text-[#707070] focus:border-[#ff6a38]"
+                />
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <FieldLabel>상품코드</FieldLabel>
+                <input
+                  type="text"
+                  value={productCode}
+                  onChange={(e) => setProductCode(e.target.value)}
+                  placeholder="상품 코드를 입력해주세요"
+                  className="w-full rounded-[6px] border border-[#eaeaea] px-4 py-2.5 text-[14px] tracking-[-0.01em] text-[#171717] outline-none placeholder:text-[#707070] focus:border-[#ff6a38]"
+                />
+              </div>
+
+              {/* 카테고리 — Figma(643:5824)는 검색 표시 입력(w-323) + "선택하기"
+                  버튼(w-108) 두 요소가 한 행에 나란히 있다. 버튼을 누르면
+                  카테고리 선택 모달(381:6293)이 뜬다 — 실제 값 변경은 모달의
+                  leaf 클릭으로만 일어나고, 이 표시 필드 자체는 읽기 전용이다. */}
+              <div className="flex flex-col gap-1">
+                <FieldLabel>카테고리</FieldLabel>
+                <div className="flex items-center gap-4">
+                  <div className="flex h-[39px] flex-1 items-center justify-between rounded-[6px] border border-[#eaeaea] bg-white px-[14px] py-[10px]">
+                    <span
+                      className={`truncate text-[14px] tracking-[-0.01em] ${
+                        selectedCategoryLabel ? 'text-[#171717]' : 'text-[#707070]'
+                      }`}
+                    >
+                      {selectedCategoryLabel ?? '검색 하기'}
+                    </span>
+                    <SearchIcon />
+                  </div>
+                  {/* h-[37px]를 고정한 채 py-2.5(=line-height 21px과 합쳐 41px)를
+                      그대로 두면 실제 필요한 높이(41px)가 선언한 높이(37px)를
+                      넘어서 텍스트가 세로 중앙에서 어긋나 보였다(실측: 다른
+                      버튼과 달리 이 버튼만 고정 height를 썼는데 flex 정렬이
+                      없었다) — Figma 치수(w-108/h-37/py-10)는 그대로 두고
+                      flex items-center justify-center로 항상 정중앙에 오게
+                      고쳤다. */}
+                  <button
+                    type="button"
+                    onClick={() => setCategoryModalOpen(true)}
+                    className="flex h-[37px] w-[108px] shrink-0 items-center justify-center rounded-[6px] border border-[#eaeaea] bg-white px-5 py-2.5 text-[14px] font-medium tracking-[-0.03em] text-[#171717] hover:bg-gray-50"
+                  >
+                    선택하기
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <FieldLabel required>규제 분류</FieldLabel>
+                <div className="relative">
+                  <select
+                    value={regulatoryClass}
+                    onChange={(e) => setRegulatoryClass(e.target.value)}
+                    className="w-full appearance-none rounded-[6px] border border-[#eaeaea] bg-white px-[14px] py-[10px] text-[14px] tracking-[-0.01em] text-[#707070] outline-none focus:border-[#ff6a38]"
+                  >
+                    <option value="">선택</option>
+                    {REGULATORY_CLASS_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
+                  <div className="pointer-events-none absolute top-1/2 right-3.5 -translate-y-1/2">
+                    <ChevronDownIcon />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* 이미지 연속 여부 토글 — 9월 MVP는 이 입력 유형 선택 자체가 아직
+                없다(12월 예정, imageType='multi_section' 고정 — 기존 결정
+                유지). Figma는 이 토글을 필수(*) 입력으로 보여주는데 아직
+                실제로 값을 바꿀 수 없는 상태라 디자인과 현재 계약이 충돌한다
+                — 그대로 숨기지 않고, "출력 규격"의 나머지 옵션과 같은 방식
+                (보여주되 비활성)으로 처리하고 보고에 남긴다. */}
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-2">
+                <p className="text-[18px] font-medium tracking-[-0.03em] text-[#171717]">
+                  이미지 안에 여러 내용이 이어져 있나요?
+                </p>
+                <div
+                  role="switch"
+                  aria-checked={false}
+                  aria-disabled="true"
+                  title="9월 MVP는 다중 섹션 이미지 유형만 지원합니다."
+                  className="flex h-5 w-9 shrink-0 cursor-not-allowed items-center rounded-full border border-[#eaeaea] bg-[#f5f5f5] p-0.5 opacity-60"
+                >
+                  <div className="size-4 rounded-full bg-white shadow-sm" />
+                </div>
+                <span className="text-[18px] font-medium tracking-[-0.03em] text-[#ff6a38]">*</span>
+              </div>
+              {/* Figma(673:7819)는 이 helper text를 라벨/토글과 같은 좌측
+                  기준선에 맞춘다 — 혼자 text-center로 떠 있던 것을 고쳤다. */}
+              <p className="text-left text-[12px] font-light tracking-[-0.04em] text-[#707070]">
+                이미지 유형에 따라 분석 방식이 달라집니다.
+              </p>
+            </div>
+
+            {/* 결과물 규격 — Figma 기본값은 "사이트 맞춤" 탭이 활성이지만, 9월
+                MVP는 원본 규격만 실제로 지원한다(기존 결정 유지, lib/api/types.ts
+                SpecType 주석 참고). 디자인과 계약이 다시 충돌해 Figma의 활성
+                탭을 그대로 베끼지 않고, 실제로 쓸 수 있는 "원본 사이즈"를
+                활성으로 두고 나머지 두 탭은 비활성으로 보여준다. */}
+            <div className="flex flex-col gap-4">
+              {/* Figma(925:2573-2575) — 이 라벨의 asterisk만 18px Medium이다
+                  (다른 라벨의 asterisk는 16px 상속). FieldLabel 공용
+                  컴포넌트의 기본 16px 상속 asterisk와 다르므로 이 자리만
+                  직접 마크업한다. */}
+              <div className="flex items-center gap-2">
+                <p className="text-[16px] tracking-[-0.03em] text-[#171717]">결과물 규격</p>
+                <span className="text-[18px] font-medium tracking-[-0.03em] text-[#ff6a38]">*</span>
+              </div>
+              <div className="flex h-8 w-full items-center">
+                <div className="flex-1 border-b border-[#eaeaea] pb-2 text-center">
+                  <span className="text-[16px] tracking-[-0.03em] text-[#171717]">원본 사이즈</span>
+                </div>
+                <div className="flex-1 cursor-not-allowed pb-2 text-center" title="준비 중입니다.">
+                  <span className="text-[16px] tracking-[-0.03em] text-[#999]">사이트 맞춤</span>
+                </div>
+                <div className="flex-1 cursor-not-allowed pb-2 text-center" title="준비 중입니다.">
+                  <span className="text-[16px] tracking-[-0.03em] text-[#999]">커스텀</span>
+                </div>
+              </div>
+              <p className="text-[12px] font-light tracking-[-0.04em] text-[#999]">업로드된 이미지의 원본 크기를 유지합니다.</p>
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <FieldLabel>핵심 키워드</FieldLabel>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={keywordInput}
+                  onChange={(e) => setKeywordInput(e.target.value)}
+                  onKeyDown={handleKeywordKeyDown}
+                  placeholder="키워드를 입력해주세요."
+                  className="flex-1 rounded-[6px] border border-[#eaeaea] px-4 py-2.5 text-[14px] tracking-[-0.01em] text-[#171717] outline-none placeholder:text-[#707070] focus:border-[#ff6a38]"
+                />
+                <button
+                  type="button"
+                  onClick={addKeyword}
+                  className="shrink-0 rounded-[6px] border border-[#eaeaea] px-4 py-2 text-[12px] font-medium text-[#171717] hover:bg-gray-50"
+                >
+                  추가
+                </button>
+              </div>
+              <p className="text-[12px] font-light tracking-[-0.04em] text-[#707070]">
+                번역 중 강조할 표현을 태그로 추가합니다.
+              </p>
+              {keywords.length > 0 && (
+                <div className="mt-1 flex flex-wrap gap-1.5">
+                  {keywords.map((kw) => (
+                    <span
+                      key={kw}
+                      className="inline-flex items-center gap-1 rounded-[6px] border border-[#eaeaea] bg-[#f5f5f5] px-2.5 py-1 text-[12px] font-medium text-[#707070]"
+                    >
+                      {kw}
+                      <button
+                        type="button"
+                        onClick={() => removeKeyword(kw)}
+                        className="ml-0.5 text-[#999] hover:text-[#171717]"
+                        aria-label={`${kw} 삭제`}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* 하단 — 에러 메시지 + 다음 버튼 (Figma는 버튼만 우하단에 둔다) */}
+        <div className="flex shrink-0 items-center justify-end gap-4 px-10 pb-10">
+          {submitError && (
+            <p className="flex-1 text-sm text-red-500">
+              {submitError instanceof Error ? submitError.message : '오류가 발생했습니다. 다시 시도해 주세요.'}
+            </p>
+          )}
+          <button
+            type="button"
+            onClick={handleSubmit}
+            disabled={!isValid || isSubmitting}
+            title={!isValid ? '필수 항목을 모두 입력해 주세요.' : undefined}
+            className="w-[148px] shrink-0 rounded-[6px] bg-[#171717] px-8 py-3.5 text-[14px] font-medium tracking-[-0.03em] text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {isSubmitting ? '생성 중...' : '다음'}
+          </button>
+        </div>
+      </div>
+
+      {/* 카테고리 선택 모달 (Figma 381:6293) */}
+      {categoryModalOpen && (
+        <CategoryModal
+          currentValue={displayCategory}
+          onClose={() => setCategoryModalOpen(false)}
+          onSelect={(value) => setDisplayCategory(value)}
+        />
+      )}
 
       {/* 나가기 확인 오버레이 */}
       {showExitConfirm && (
@@ -253,316 +1109,6 @@ export default function NewJobPage({
           </div>
         </div>
       )}
-
-      {/* 본문 */}
-      <main className="mx-auto w-full max-w-2xl flex-1 px-6 py-8">
-
-        {/* 브랜드 없음 안내 */}
-        {!brandId && (
-          <div className="mb-6 rounded-lg border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-orange-700">
-            브랜드를 먼저 선택해 주세요. URL에 <code className="font-mono text-xs">?brandId=</code> 파라미터가 필요합니다.
-          </div>
-        )}
-
-        {/* 브랜드 확인 칩 */}
-        {brandId && (
-          <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs text-blue-700">
-            <span className="h-2 w-2 rounded-full bg-blue-400" />
-            브랜드: {brandId}
-          </div>
-        )}
-
-        <div className="space-y-8">
-
-          {/* ── 1. 번역 대상 ────────────────────────────────────── */}
-          <section className="rounded-xl border bg-white p-6 shadow-sm">
-            <SectionLabel step="1" title="번역 · 현지화 대상" />
-            <div className="mt-5 grid grid-cols-2 gap-4">
-              {/* 국가 */}
-              <div>
-                <label className="mb-1.5 block text-xs font-medium text-gray-600">
-                  대상 국가 <span className="text-red-400">*</span>
-                </label>
-                <select
-                  value={targetCountry}
-                  onChange={(e) => setTargetCountry(e.target.value)}
-                  className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800 outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100"
-                >
-                  <option value="">선택하세요</option>
-                  {COUNTRY_OPTIONS.map((o) => (
-                    <option key={o.value} value={o.value}>{o.label}</option>
-                  ))}
-                </select>
-              </div>
-
-              {/* 언어 */}
-              <div>
-                <label className="mb-1.5 block text-xs font-medium text-gray-600">
-                  대상 언어 <span className="text-red-400">*</span>
-                </label>
-                <select
-                  value={targetLanguage}
-                  onChange={(e) => setTargetLanguage(e.target.value)}
-                  className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800 outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100"
-                >
-                  <option value="">선택하세요</option>
-                  {LANGUAGE_OPTIONS.map((o) => (
-                    <option key={o.value} value={o.value}>{o.label}</option>
-                  ))}
-                </select>
-              </div>
-
-              {/* 규제 분류 */}
-              <div>
-                <label className="mb-1.5 block text-xs font-medium text-gray-600">
-                  규제 분류 <span className="text-red-400">*</span>
-                </label>
-                <select
-                  value={regulatoryClass}
-                  onChange={(e) => setRegulatoryClass(e.target.value)}
-                  className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800 outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100"
-                >
-                  <option value="">선택하세요</option>
-                  {REGULATORY_CLASS_OPTIONS.map((o) => (
-                    <option key={o.value} value={o.value}>{o.label}</option>
-                  ))}
-                </select>
-              </div>
-
-              {/* 카테고리 */}
-              <div>
-                <label className="mb-1.5 block text-xs font-medium text-gray-600">
-                  상품 카테고리 <span className="text-red-400">*</span>
-                </label>
-                <select
-                  value={displayCategory}
-                  onChange={(e) => setDisplayCategory(e.target.value)}
-                  className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800 outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100"
-                >
-                  <option value="">선택하세요</option>
-                  {CATEGORY_OPTIONS.map((o) => (
-                    <option key={o.value} value={o.value}>{o.label}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          </section>
-
-          {/* ── 2. 원본 이미지 ─────────────────────────────────── */}
-          <section className="rounded-xl border bg-white p-6 shadow-sm">
-            <SectionLabel step="2" title="원본 이미지 업로드" />
-            <p className="mt-1 text-xs text-gray-400">
-              상세페이지 이미지를 순서대로 업로드하세요. 각 이미지의 유형을 지정하세요.
-            </p>
-
-            {/* 업로드 버튼 */}
-            <div className="mt-4">
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                accept="image/*"
-                className="hidden"
-                onChange={handleFileChange}
-                id="image-upload"
-              />
-              <label
-                htmlFor="image-upload"
-                className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-dashed border-blue-300 bg-blue-50 px-4 py-2.5 text-sm font-medium text-blue-600 hover:border-blue-400 hover:bg-blue-100"
-              >
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-                </svg>
-                이미지 추가
-              </label>
-            </div>
-
-            {/* 이미지 목록 */}
-            {images.length > 0 && (
-              <ul className="mt-4 space-y-2">
-                {images.map((img, idx) => (
-                  <li
-                    key={img.localId}
-                    className="flex items-center gap-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5"
-                  >
-                    {/* 순번 */}
-                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-gray-200 text-xs font-medium text-gray-600">
-                      {idx + 1}
-                    </span>
-
-                    {/* 파일명 */}
-                    <span className="min-w-0 flex-1 truncate text-sm text-gray-700" title={img.file.name}>
-                      {img.file.name}
-                    </span>
-
-                    {/* 순서 이동 */}
-                    <div className="flex shrink-0 gap-0.5">
-                      <button
-                        type="button"
-                        onClick={() => moveImage(img.localId, 'up')}
-                        disabled={idx === 0}
-                        className="rounded p-1 text-gray-400 hover:bg-gray-200 hover:text-gray-600 disabled:opacity-30"
-                        aria-label="위로 이동"
-                      >
-                        <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 15l7-7 7 7" />
-                        </svg>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => moveImage(img.localId, 'down')}
-                        disabled={idx === images.length - 1}
-                        className="rounded p-1 text-gray-400 hover:bg-gray-200 hover:text-gray-600 disabled:opacity-30"
-                        aria-label="아래로 이동"
-                      >
-                        <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-                        </svg>
-                      </button>
-                    </div>
-
-                    {/* 삭제 */}
-                    <button
-                      type="button"
-                      onClick={() => removeImage(img.localId)}
-                      className="shrink-0 rounded p-1 text-gray-400 hover:bg-red-100 hover:text-red-500"
-                      aria-label="삭제"
-                    >
-                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                      </svg>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-
-            {images.length === 0 && (
-              <p className="mt-4 text-center text-sm text-gray-400">
-                이미지를 추가해 주세요. <span className="text-red-400">*</span>
-              </p>
-            )}
-          </section>
-
-          {/* ── 3. 핵심 키워드 ─────────────────────────────────── */}
-          <section className="rounded-xl border bg-white p-6 shadow-sm">
-            <SectionLabel step="3" title="핵심 키워드" />
-            <p className="mt-1 text-xs text-gray-400">
-              번역 품질 향상에 사용됩니다. Enter로 추가하세요.
-            </p>
-            <div className="mt-4 flex gap-2">
-              <input
-                type="text"
-                value={keywordInput}
-                onChange={(e) => setKeywordInput(e.target.value)}
-                onKeyDown={handleKeywordKeyDown}
-                placeholder="키워드 입력 후 Enter"
-                className="flex-1 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100"
-              />
-              <button
-                type="button"
-                onClick={addKeyword}
-                className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50"
-              >
-                추가
-              </button>
-            </div>
-
-            {keywords.length > 0 && (
-              <div className="mt-3 flex flex-wrap gap-1.5">
-                {keywords.map((kw) => (
-                  <span
-                    key={kw}
-                    className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2.5 py-1 text-xs font-medium text-blue-700"
-                  >
-                    {kw}
-                    <button
-                      type="button"
-                      onClick={() => removeKeyword(kw)}
-                      className="ml-0.5 rounded-full text-blue-400 hover:text-blue-700"
-                      aria-label={`${kw} 삭제`}
-                    >
-                      ×
-                    </button>
-                  </span>
-                ))}
-              </div>
-            )}
-          </section>
-
-          {/* ── 4. 규격 ────────────────────────────────────────── */}
-          <section className="rounded-xl border bg-white p-6 shadow-sm">
-            <SectionLabel step="4" title="출력 규격" />
-            <p className="mt-1 text-xs text-gray-400">
-              9월 MVP 기준으로 원본 규격만 사용합니다.
-            </p>
-            <div className="mt-4 space-y-2">
-              {/* 원본 규격 — 활성 */}
-              <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-blue-200 bg-blue-50 p-3">
-                <input
-                  type="radio"
-                  name="spec"
-                  value="spec_original"
-                  defaultChecked
-                  readOnly
-                  className="mt-0.5 accent-blue-500"
-                />
-                <div>
-                  <p className="text-sm font-medium text-blue-800">원본 규격</p>
-                  <p className="text-xs text-blue-600">업로드된 이미지의 원본 크기를 유지합니다.</p>
-                </div>
-              </label>
-
-              {/* 사이트별 규격 — 비활성 */}
-              <label className="flex cursor-not-allowed items-start gap-3 rounded-lg border border-gray-100 bg-gray-50 p-3 opacity-40">
-                <input type="radio" name="spec" disabled className="mt-0.5" />
-                <div>
-                  <p className="text-sm font-medium text-gray-500">사이트별 규격</p>
-                  <p className="text-xs text-gray-400">준비 중입니다.</p>
-                </div>
-              </label>
-
-              {/* 커스텀 규격 — 비활성 */}
-              <label className="flex cursor-not-allowed items-start gap-3 rounded-lg border border-gray-100 bg-gray-50 p-3 opacity-40">
-                <input type="radio" name="spec" disabled className="mt-0.5" />
-                <div>
-                  <p className="text-sm font-medium text-gray-500">커스텀 규격</p>
-                  <p className="text-xs text-gray-400">준비 중입니다.</p>
-                </div>
-              </label>
-            </div>
-          </section>
-
-        </div>
-      </main>
-
-      {/* 하단 액션 바 — sticky */}
-      <footer className="sticky bottom-0 border-t bg-white px-6 py-4 shadow-[0_-1px_4px_rgba(0,0,0,0.06)]">
-        <div className="mx-auto flex max-w-2xl items-center justify-between gap-4">
-          {/* 에러 메시지 */}
-          {mutation.isError && (
-            <p className="flex-1 text-sm text-red-500">
-              {mutation.error instanceof Error
-                ? mutation.error.message
-                : '오류가 발생했습니다. 다시 시도해 주세요.'}
-            </p>
-          )}
-          {!mutation.isError && (
-            <p className="flex-1 text-sm text-gray-400">
-              {!isValid ? '필수 항목을 모두 입력해 주세요.' : '모든 항목이 입력됐습니다.'}
-            </p>
-          )}
-
-          <button
-            type="button"
-            onClick={handleSubmit}
-            disabled={!isValid || mutation.isPending}
-            className="shrink-0 rounded-lg bg-blue-500 px-6 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-blue-600 active:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {mutation.isPending ? '생성 중...' : '다음 →'}
-          </button>
-        </div>
-      </footer>
     </div>
   );
 }

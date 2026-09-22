@@ -1,5 +1,5 @@
 /**
- * Pixate N1~N6 Mock fixture 데이터
+ * pix/ate N1~N6 Mock fixture 데이터
  *
  * - job_mock_001 하나를 기준으로 N2~N6 전 화면을 재사용합니다.
  * - detail 이미지 2장만 사용합니다. thumbnail fixture는 파이프라인 미확정으로 제외합니다.
@@ -9,11 +9,10 @@
  */
 
 import type {
-  JobStatusResponse,
   SectionsResponse,
   Section,
-  JobResultResponse,
 } from '@/lib/api/types';
+import type { ApiDeliverable, ApiDeliverableList, ApiValidationDetail } from '@/lib/api/n6-schema';
 
 // ─────────────────────────────────────────────
 // 공통 ID 상수
@@ -45,34 +44,11 @@ const SECTION_IMG_EXTREME_TALL = '/mock/n3/section-212x8000.png';
 const SECTION_IMG_830x3225 = '/mock/n3/section-830x3225.png';
 const SECTION_IMG_800x220 = '/mock/n3/section-800x220.png';
 
-// ─────────────────────────────────────────────
-// N2 — 분석 중 상태
-// ─────────────────────────────────────────────
-
-/** N2: 섹션 자동 분해 진행 중 */
-export const mockN2ProcessingStatus: JobStatusResponse = {
-  jobId: MOCK_JOB_ID,
-  currentStep: 'N2',
-  dbStatus: 'processing',
-  progress: 55,
-  // TODO: 백엔드 파이프라인 명세 확정 후 N2 ProcessingSubStep union으로 좁힐 것
-  processingSubStep: 'section_decomposition',
-  activeSubSteps: [],
-  hasFailed: false,
-  failedItems: [],
-};
-
-/** N2: OCR 완료, 규제 판정 진행 중 */
-export const mockN2VerdictStatus: JobStatusResponse = {
-  jobId: MOCK_JOB_ID,
-  currentStep: 'N2',
-  dbStatus: 'processing',
-  progress: 85,
-  processingSubStep: 'verdict',
-  activeSubSteps: [],
-  hasFailed: false,
-  failedItems: [],
-};
+// N2 — 분석 중 상태(구 GET /api/jobs/:jobId/status 전용 mockN2ProcessingStatus/
+// mockN2VerdictStatus)는 오늘(N1→N6 happy path) 작업에서 실제 계약인 GET
+// /jobs/:jobId/tasks(JobTaskStatus) 기반 진행으로 교체하며 제거했다 —
+// lib/msw/handlers.ts의 advanceJobProcessing()이 고정 fixture 대신 poll count로
+// 그 자리를 대신한다.
 
 // ─────────────────────────────────────────────
 // N3 — 섹션 목록
@@ -83,10 +59,14 @@ export const mockN2VerdictStatus: JobStatusResponse = {
  *
  * 테스트 케이스:
  * - sec_01: 정상 include 섹션 (verdicts 없음)
- * - sec_02: regulated 판정 섹션 (verdicts 있음, bucket은 include 유지 — 정본은 section.bucket)
+ * - sec_02: verdictType='regulatory'(규제위반, 대체 표현 없음) 판정 섹션 —
+ *   기본 bucket은 반드시 exclude(auto_regulatory). regulatory_replaceable/
+ *   regulatory_conditional/needs_fix처럼 include 계열로 남는 타입과 달리
+ *   regulatory는 대체 표현이 없으므로 exclude가 정본이다.
  * - sec_03: 현지 무의미 자동 exclude 섹션 (카카오톡 상담 안내)
  * - sec_04: 정상 include 섹션 (두 번째 소스 이미지)
- * - sec_05: regulated 판정 섹션 (두 번째 소스 이미지, sensitive claim)
+ * - sec_05: verdictType='regulatory' 판정 섹션 (두 번째 소스 이미지, sensitive
+ *   claim) — sec_02와 같은 이유로 기본 bucket은 exclude(auto_regulatory).
  *
  * N3 verdictType 계약 케이스(9월 표시 5종)는 mockN3VerdictContractSections 참고
  * (이 목록에 섞으면 e2e/basic-flow.spec.ts의 include/exclude count 단언이 깨진다).
@@ -119,9 +99,11 @@ export const mockSectionsResponse: SectionsResponse = {
       thumbnailUrl: SECTION_IMG_830x3225,
       imageKey: SECTION_IMG_830x3225,
       renderImageKey: SECTION_IMG_830x3225,
-      bucket: 'include',
-      exclusionReason: null,
-      excludedStage: null,
+      // verdictType='regulatory'(대체 표현 없음)는 기본 bucket이 반드시
+      // exclude다 — scripts/verify-n3-verdict-contract.mjs의 계약과 동일.
+      bucket: 'exclude',
+      exclusionReason: 'auto_regulatory',
+      excludedStage: 'N3',
       bbox: { x: 0, y: 600, width: 1000, height: 500 },
       verdicts: [
         {
@@ -182,9 +164,10 @@ export const mockSectionsResponse: SectionsResponse = {
       thumbnailUrl: SECTION_IMG_1000x1360,
       imageKey: SECTION_IMG_1000x1360,
       renderImageKey: SECTION_IMG_1000x1360,
-      bucket: 'include',
-      exclusionReason: null,
-      excludedStage: null,
+      // sec_02와 동일 — verdictType='regulatory'는 기본 bucket이 exclude다.
+      bucket: 'exclude',
+      exclusionReason: 'auto_regulatory',
+      excludedStage: 'N3',
       bbox: { x: 0, y: 700, width: 1000, height: 400 },
       verdicts: [
         {
@@ -356,64 +339,10 @@ export const mockN3VerdictContractSections: Section[] = [
   },
 ];
 
-// ─────────────────────────────────────────────
-// N4 — 번역 / 인페인팅 처리 중
-// ─────────────────────────────────────────────
-
-/** N4: 정상 처리 중 (인페인팅 + 번역 병렬) */
-export const mockN4ProcessingStatus: JobStatusResponse = {
-  jobId: MOCK_JOB_ID,
-  currentStep: 'N4',
-  dbStatus: 'processing',
-  progress: 63,
-  // TODO: 백엔드 파이프라인 명세 확정 후 N4 ProcessingSubStep union으로 좁힐 것
-  processingSubStep: 'translation',
-  activeSubSteps: ['inpainting', 'translation'],
-  hasFailed: false,
-  failedItems: [],
-};
-
-/** N4: 인페인팅 + 번역 완료, 렌더링 진행 중 (2일차 auto-progress 2번째 응답용) */
-export const mockN4RenderingStatus: JobStatusResponse = {
-  jobId: MOCK_JOB_ID,
-  currentStep: 'N4',
-  dbStatus: 'processing',
-  progress: 90,
-  processingSubStep: 'render',
-  activeSubSteps: ['render'],
-  hasFailed: false,
-  failedItems: [],
-};
-
-/** N6: 렌더링 진행 중 (handler의 'n6-rendering' scenario용 최소 fixture) */
-export const mockN6RenderingStatus: JobStatusResponse = {
-  jobId: MOCK_JOB_ID,
-  currentStep: 'N6',
-  dbStatus: 'processing',
-  progress: 80,
-  processingSubStep: 'render',
-  activeSubSteps: ['render'],
-  hasFailed: false,
-  failedItems: [],
-};
-
-/** N4: 부분 실패 케이스 — textBlock 1개 번역 타임아웃 */
-export const mockN4PartialFailureStatus: JobStatusResponse = {
-  jobId: MOCK_JOB_ID,
-  currentStep: 'N4',
-  dbStatus: 'processing',
-  progress: 90,
-  processingSubStep: 'render',
-  activeSubSteps: ['render'],
-  hasFailed: false, // 전체 실패가 아니라 부분 실패이므로 false
-  failedItems: [
-    {
-      id: 'blk_04',
-      type: 'textBlock',
-      reason: 'TRANSLATION_TIMEOUT',
-    },
-  ],
-};
+// N4/N6 — 처리 중 상태(구 mockN4ProcessingStatus/mockN4RenderingStatus/
+// mockN6RenderingStatus/mockN4PartialFailureStatus)도 위 N2 fixture와 같은
+// 이유로 오늘 제거했다 — GET /jobs/:jobId/tasks 기반 진행으로 대체됐다.
+// 중간 실패/재시도 시나리오(부분 실패 포함)는 오늘 작업 범위가 아니다.
 
 // N5 — 검수(구 /review·/preview, v3.4.1 계약)는 3단계부터 lib/mock-api/n5-fixtures.ts의
 // 실제 계약(v3.4.2, GET /jobs/{jobId}/blocks·/preview)으로 대체됐다. 이 fixture
@@ -422,106 +351,68 @@ export const mockN4PartialFailureStatus: JobStatusResponse = {
 // mockSectionsResponse(N3) 등 다른 fixture가 계속 쓰므로 위에 그대로 남아 있다.
 
 // ─────────────────────────────────────────────
-// N6 — 최종 결과
+// N6 — 저장 및 내보내기 (실제 계약: GET /jobs/{jobId}/deliverables·/validation)
+//
+// render task(job 단위, lib/msw/handlers.ts의 n6RenderTaskState)가 done이 된
+// 뒤에 조회된다는 전제로 만든 고정 fixture다 — renderStatus는 항상 'done',
+// 렌더 진행 중 상태는 render task polling(GET /jobs/:jobId/tasks)이 표현하고
+// 이 fixture는 표현하지 않는다.
 // ─────────────────────────────────────────────
 
-/** N6: 렌더링 완료, 전체 검증 통과 */
-export const mockJobResultResponse: JobResultResponse = {
-  jobId: MOCK_JOB_ID,
-  renderStatus: 'done',
+/**
+ * 화면에 표시할 결과 이미지 2장. deliverable.validationResult는 9월 계약상
+ * unknown 블록이라(백엔드 구조 미확정) 검증 표시는 별도 /validation 응답을
+ * 쓴다 — 여기서는 null로 둔다.
+ *
+ * imageUrl: 4단계(Final Preview mock 이미지 정상화) — 실제 파일이 없던
+ * '/mock/result-a.jpg'·'/mock/result-b.jpg'(존재하지 않아 404) 대신, 이미
+ * 저장소에 커밋돼 있는 N5 section fixture PNG(scripts/make-n5-section-fixture-images.mjs
+ * 생성, public/mock/n5/sections/)를 그대로 재사용한다 — N6 전용 새 이미지를
+ * 만들지 않는다. "번역 후(TRANSLATED)" 레이어라 N6 "최종 렌더 결과"라는
+ * 맥락과도 맞는다.
+ */
+export const mockN6Deliverables: ApiDeliverable[] = [
+  {
+    id: 9601,
+    sourceImageId: 9101,
+    usageType: 'detail',
+    imageUrl: '/mock/n5/sections/501-translated.png',
+    format: 'PNG',
+    colorSpace: 'RGB',
+    fileSize: 1_843_200,
+    renderStatus: 'done',
+    validationResult: null,
+  },
+  {
+    id: 9602,
+    sourceImageId: 9102,
+    usageType: 'detail',
+    imageUrl: '/mock/n5/sections/502-translated.png',
+    format: 'PNG',
+    colorSpace: 'RGB',
+    fileSize: 2_105_344,
+    renderStatus: 'done',
+    validationResult: null,
+  },
+];
 
-  // 화면에 표시할 결과 이미지 (exportArtifacts 다운로드 파일과 별개)
-  deliverables: [
-    {
-      deliverableId: 'dlv_001',
-      sourceImageId: SRC_A,
-      imageUrl: '/mock/result-a.jpg',
-      format: 'JPG',
-      colorSpace: 'RGB',
-      fileSizeBytes: 1_843_200,
-      renderStatus: 'done',
-      // 9월 MVP: FORMAT_CHECK + COLOR_SPACE_CHECK만 검증
-      validationResult: {
-        passed: true,
-        items: [
-          {
-            ruleId: 'FORMAT_CHECK',
-            name: '지원 포맷',
-            passed: true,
-            actualValue: 'JPG',
-            violationReason: null,
-          },
-          {
-            ruleId: 'COLOR_SPACE_CHECK',
-            name: '색공간',
-            passed: true,
-            actualValue: 'RGB',
-            violationReason: null,
-          },
-        ],
-      },
-    },
-    {
-      deliverableId: 'dlv_002',
-      sourceImageId: SRC_B,
-      imageUrl: '/mock/result-b.jpg',
-      format: 'JPG',
-      colorSpace: 'RGB',
-      fileSizeBytes: 2_105_344,
-      renderStatus: 'done',
-      // 색공간 검증 실패 케이스 — 파일 용량은 실측 표시만, 통과/실패 판정 없음
-      validationResult: {
-        passed: false,
-        items: [
-          {
-            ruleId: 'FORMAT_CHECK',
-            name: '지원 포맷',
-            passed: true,
-            actualValue: 'JPG',
-            violationReason: null,
-          },
-          {
-            ruleId: 'COLOR_SPACE_CHECK',
-            name: '색공간',
-            passed: false,
-            actualValue: 'CMYK',
-            violationReason: 'CMYK 색공간은 지원하지 않습니다. RGB로 변환하세요.',
-          },
-        ],
-      },
-    },
-  ],
+/**
+ * N6 산출물 구성요소 상태 — Figma(643:5523) N6 저장 화면 기준: images/
+ * content.csv/HTML 3행은 전부 선택 가능한 흰 배경 체크박스로 나오고,
+ * PSD 한 행만 "12월 제공 예정"으로 비활성이다(html은 API-FIN-02가
+ * should(🟡)로 표시한 9월 계약이지만, 이 mock의 happy path 완료 상태는
+ * html도 이미 생성된 것으로 둔다 — psd만 항상 isActive=false).
+ */
+export const mockN6Components: NonNullable<ApiDeliverableList['components']> = [
+  { artifactId: null, type: 'images', status: 'generated', isGenerated: true, isActive: true, failedCount: 0, retryAction: null },
+  { artifactId: null, type: 'csv', status: 'generated', isGenerated: true, isActive: true, failedCount: 0, retryAction: null },
+  { artifactId: null, type: 'html', status: 'generated', isGenerated: true, isActive: true, failedCount: 0, retryAction: null },
+  { artifactId: null, type: 'psd', status: 'pending', isGenerated: false, isActive: false, failedCount: 0, retryAction: null },
+];
 
-  // 다운로드 산출물 구성요소.
-  // manifest.json: 서버 내부용 — 이 목록에 포함 안 함.
-  // export_zip: 구성요소가 아니라 묶음 다운로드 동작 — exportZipUrl 사용.
-  // PSD: 12월 예정 — 배열에 넣지 않고 UI에서 비활성으로만 표시.
-  exportArtifacts: [
-    {
-      type: 'images',
-      downloadUrl: '/mock/download/images/',
-      fileCount: 2,
-    },
-    {
-      type: 'content_csv',
-      downloadUrl: '/mock/download/content.csv',
-    },
-    // html은 9월 should
-    {
-      type: 'html',
-      downloadUrl: '/mock/download/content.html',
-    },
-  ],
-
-  // 선택 구성요소를 ZIP으로 묶어 받는 URL.
-  // TODO: 백엔드 확정 후 필드명·동작 방식 조율 필요.
-  exportZipUrl: '/mock/download/export.zip',
-
-  saved: false,
-};
-
-/** N6: 렌더링 완료 후 보관함 저장된 상태 */
-export const mockJobResultSaved: JobResultResponse = {
-  ...mockJobResultResponse,
-  saved: true,
-};
+/** 9월 MVP 규격 검증: 포맷·색공간만(용량 passed=null, 계약 그대로). */
+export const mockN6Validation: ApiValidationDetail[] = [
+  { itemKey: 'format', scope: 'detail', passed: true, measuredValue: 'JPG', severity: 'error' },
+  { itemKey: 'color_space', scope: 'detail', passed: true, measuredValue: 'RGB', severity: 'error' },
+  { itemKey: 'file_size', scope: 'all', passed: null, measuredValue: null, severity: 'warning' },
+];

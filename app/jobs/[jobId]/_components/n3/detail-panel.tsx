@@ -1,47 +1,87 @@
 'use client';
 
-import { useState } from 'react';
-import { useDraggable } from '@dnd-kit/core';
-import { CSS } from '@dnd-kit/utilities';
+import { useEffect, useRef, useState } from 'react';
 
-import type { Section } from '@/lib/api/types';
 import { EXCLUSION_REASON_LABELS } from '@/lib/api/labels';
-import { StatusChip, VerdictCard } from './verdict-card';
+import type { ApiSection, ApiSourceImage } from '@/lib/api/n3-schema';
+import { N3_MAIN_WIDTH } from '@/lib/n3/layout';
+import { InfoBadge, VerdictCard } from './verdict-card';
 
 // ─────────────────────────────────────────────────────────────────
-// N3 — 가운데 "삭제할 섹션 상세 보기"
-// 현재 activeSection(exclude bucket)의 원본 이미지 + 판정/근거 카드.
-// Figma 570:5136(N3 / 원본 상세페이지 스크롤 뷰포트 + 판정 카드) 대응.
+// N3 — 중앙 workspace 카드 (Figma 570:5136 "N3 / 원본 상세페이지 스크롤
+// 뷰포트" + 판정 카드 컬럼).
 //
-// 데이터 계약에 섹션별 "전체 원본 상세페이지" 이미지 필드가 없어
-// (Section에는 thumbnailUrl만 존재) 같은 이미지를 크게 보여준다.
+// 3단계 데이터 가정: section 자체 이미지가 아니라, section.sourceImageId와
+// 같은 SourceImage.fileUrl "전체 원본"을 보여준다. object-cover로 잘라내지
+// 않고 원본 비율 그대로 폭에 맞춰 축소한 뒤 세로 scroll한다.
 // ─────────────────────────────────────────────────────────────────
 
-export function DetailPanel({ section }: { section: Section | null }) {
+export function DetailPanel({
+  section,
+  sourceImage,
+  sourceImagesLoading,
+  sourceImagesError,
+}: {
+  section: ApiSection | null;
+  sourceImage: ApiSourceImage | null;
+  sourceImagesLoading: boolean;
+  sourceImagesError: boolean;
+}) {
+  const cardClass = 'rounded-[20px] bg-white shadow-[2px_2px_24px_0px_rgba(0,0,0,0.06)]';
+  // Figma(570:5136) 실측: 카드 x=403,y=117.5, 985×847px @ 1920 기준
+  // (985/1920 ≈ 51.3vw, 847/1080 ≈ 78.4vh). 폭은 헤더/하단 안내 문구와
+  // 공유하는 N3_MAIN_WIDTH(lib/n3/layout.ts)를 그대로 쓴다 — 403/985를
+  // 파일마다 다시 하드코딩하지 않는다. flex-1/h-full로 행의 남는 공간을
+  // 전부 먹지 않고, 이 크기를 상한으로 비례 축소한다. y는 self-center
+  // (행 높이에 따라 흔들림, 하단 안내 문구 padding을 바꿀 때마다 같이
+  // 밀림)가 아니라 헤더 높이 기준 고정 margin-top(3px)으로 고정한다 —
+  // 헤더 블록 높이(pt-60+text+pb-6=114px)만으로 정해지고 하단 안내
+  // 문구/행 높이 변경과 무관하게 y=117을 유지한다. 헤더의 pt 값을 바꾸면
+  // 이 margin도 같이 보정해야 한다.
+  const CARD_WIDTH = N3_MAIN_WIDTH;
+  const CARD_HEIGHT = 'clamp(560px, 78.4vh, 847px)';
+  const CARD_MARGIN_TOP = '3px';
+
   if (!section) {
     return (
-      <div className="flex h-full flex-1 items-center justify-center rounded-[8px] bg-white">
+      <div
+        className={`flex flex-none items-center justify-center ${cardClass}`}
+        style={{ width: CARD_WIDTH, height: CARD_HEIGHT, marginTop: CARD_MARGIN_TOP }}
+      >
         <p className="text-sm text-[#999]">삭제 후보로 남은 섹션이 없습니다.</p>
       </div>
     );
   }
 
-  return (
-    <div className="flex h-full flex-1 items-start gap-4 overflow-hidden">
-      <DraggableDetailImage section={section} />
+  const exclusionLabel = section.exclusionReason ? EXCLUSION_REASON_LABELS[section.exclusionReason] : null;
+  const verdicts = section.verdicts ?? [];
 
-      <div className="flex h-full w-[402px] shrink-0 flex-col gap-7 overflow-y-auto py-2 pr-1">
-        {section.exclusionReason && (
-          <div className="flex w-full flex-col items-start gap-3 rounded-[8px] bg-white p-5">
-            <StatusChip label={EXCLUSION_REASON_LABELS[section.exclusionReason]} />
+  return (
+    <div
+      className={`grid flex-none gap-4 overflow-hidden pl-5 ${cardClass}`}
+      style={{
+        width: CARD_WIDTH,
+        height: CARD_HEIGHT,
+        marginTop: CARD_MARGIN_TOP,
+        // 원본 이미지 viewport : 판정 컬럼 = 516:402(Figma 실측) 비율을
+        // 카드가 축소되어도 그대로 유지 — 고정 w-402가 아니라 fr 비율로.
+        gridTemplateColumns: 'minmax(240px, 516fr) minmax(260px, 402fr)',
+      }}
+    >
+      <SourceImageViewport section={section} sourceImage={sourceImage} isLoading={sourceImagesLoading} isError={sourceImagesError} />
+
+      <div className="flex h-full min-w-0 flex-col gap-10 overflow-y-auto py-10 pr-10 pl-3">
+        {exclusionLabel && (
+          <div className="flex w-full flex-col items-start gap-3 rounded-[8px] bg-white px-5 py-3">
+            <InfoBadge label={exclusionLabel} />
           </div>
         )}
 
-        {section.verdicts.map((verdict) => (
-          <VerdictCard key={verdict.verdictId} verdict={verdict} />
+        {verdicts.map((verdict) => (
+          <VerdictCard key={verdict.id ?? `${section.id}-${verdict.verdictType}`} verdict={verdict} />
         ))}
 
-        {!section.exclusionReason && section.verdicts.length === 0 && (
+        {!exclusionLabel && verdicts.length === 0 && (
           <p className="px-1 text-sm text-[#999]">판정 정보가 없습니다.</p>
         )}
       </div>
@@ -49,45 +89,104 @@ export function DetailPanel({ section }: { section: Section | null }) {
   );
 }
 
-function DraggableDetailImage({ section }: { section: Section }) {
+function SourceImageViewport({
+  section,
+  sourceImage,
+  isLoading,
+  isError,
+}: {
+  section: ApiSection;
+  sourceImage: ApiSourceImage | null;
+  isLoading: boolean;
+  isError: boolean;
+}) {
+  const viewportRef = useRef<HTMLDivElement>(null);
   const [imgFailed, setImgFailed] = useState(false);
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
-    id: `detail-${section.sectionId}`,
-    data: { sectionId: section.sectionId, sourceBucket: section.bucket },
-  });
 
-  const aspectRatio = `${section.bbox.width} / ${section.bbox.height}`;
+  // sourceImage가 바뀌면 이전 이미지의 로드 실패 상태를 이어받지 않는다.
+  // effect 대신 렌더 중 상태를 보정하는 React 권장 패턴을 쓴다(리렌더 한
+  // 번을 아끼고, "effect 안에서 곧장 setState" lint 규칙도 피한다).
+  const [trackedSourceImageId, setTrackedSourceImageId] = useState(sourceImage?.id);
+  if (sourceImage?.id !== trackedSourceImageId) {
+    setTrackedSourceImageId(sourceImage?.id);
+    setImgFailed(false);
+  }
+
+  // active section이 바뀔 때만 그 section의 bbox.y가 보이도록 scroll을
+  // 옮긴다 — 사용자가 직접 스크롤 중일 때 강제로 되돌리지 않기 위해
+  // section.id 변경에만 반응한다(렌더마다 도는 effect가 아니다).
+  // bbox가 없으면 어디로 옮길지 알 수 없으므로 스크롤을 강제하지 않는다.
+  useEffect(() => {
+    const el = viewportRef.current;
+    const y = section.bbox?.y;
+    if (!el || y == null || !sourceImage?.width) return;
+    const scale = el.clientWidth / sourceImage.width;
+    el.scrollTo({ top: y * scale, behavior: 'smooth' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [section.id, sourceImage?.id]);
+
+  const bodyClass = 'flex h-full min-w-0 items-center justify-center overflow-y-auto overflow-x-hidden rounded-[8px] bg-white';
+
+  if (isLoading) {
+    return (
+      <div ref={viewportRef} data-testid="n3-source-viewport" className={bodyClass}>
+        <p className="text-sm text-[#999]">원본 이미지를 불러오는 중...</p>
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div ref={viewportRef} data-testid="n3-source-viewport" className={bodyClass}>
+        <p className="text-sm text-[#999]">원본 이미지를 불러오지 못했습니다.</p>
+      </div>
+    );
+  }
+
+  if (!sourceImage || imgFailed) {
+    return (
+      <div ref={viewportRef} data-testid="n3-source-viewport" className={bodyClass}>
+        <p className="text-sm text-[#999]">원본 이미지를 찾을 수 없습니다.</p>
+      </div>
+    );
+  }
 
   return (
     <div
-      ref={setNodeRef}
-      data-testid={`n3-detail-image-${section.sectionId}`}
-      {...listeners}
-      {...attributes}
-      style={{ transform: CSS.Translate.toString(transform), touchAction: 'none' }}
-      className={`h-full flex-1 cursor-grab overflow-y-auto rounded-[8px] bg-white transition-opacity duration-150 active:cursor-grabbing ${
-        isDragging ? 'opacity-30' : 'opacity-100'
-      }`}
+      ref={viewportRef}
+      data-testid="n3-source-viewport"
+      className={bodyClass}
+      // 세로: 이미지가 viewport보다 짧으면(긴 상세페이지가 아닌 섹션)
+      // 위쪽에 붙지 않고 중앙정렬한다. 반대로 이미지가 viewport보다 길어
+      // scroll이 필요한 일반적인 경우(긴 상세페이지)에는 safe 키워드가
+      // 자동으로 start 정렬로 전환돼 원본 흐름(스크롤 시 맨 위부터 보임,
+      // 위 useEffect의 scrollTo(top) 로직과 일치)을 그대로 유지한다 —
+      // center 고정이면 tall 이미지의 위쪽 절반이 스크롤 없이 보이지
+      // 않게 잘려 나가는 문제가 생긴다. 가로 중앙정렬은 justify-content가
+      // 아니라 아래 img의 mx-auto(flexbox auto margin이 justify-content
+      // 보다 우선한다)로 처리한다 — width:100%로 강제로 채우면 auto
+      // margin이 계산할 여유 공간 자체가 없어 중앙정렬이 무의미해지므로
+      // img를 max-width:100%+자연 크기로 바꿨다(아래 참고).
+      // scrollbarGutter: 이 컨테이너 자신이 overflow-y-auto라 세로
+      // scrollbar가 뜨면 content box 오른쪽만 줄어들어(왼쪽엔 대응하는
+      // 여백이 없어) img가 오른쪽으로 치우쳐 보이는 비대칭이 생긴다.
+      // stable both-edges로 scrollbar 유무와 무관하게 좌우에 동일한
+      // gutter를 예약해 항상 대칭이 되게 한다(미지원 브라우저는 이
+      // 프로퍼티를 무시할 뿐 기존 동작 그대로).
+      style={{ alignItems: 'safe center', scrollbarGutter: 'stable both-edges' }}
     >
-      {!imgFailed ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={section.thumbnailUrl}
-          alt={`섹션 ${section.sectionOrder} 원본`}
-          className="w-full object-cover"
-          style={{ aspectRatio }}
-          draggable={false}
-          onError={() => setImgFailed(true)}
-        />
-      ) : (
-        <div
-          className="flex w-full flex-col items-center justify-center gap-2 bg-gray-100"
-          style={{ aspectRatio }}
-        >
-          <div className="h-8 w-8 rounded bg-gray-200" />
-          <span className="text-xs text-gray-400">이미지 없음</span>
-        </div>
-      )}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={sourceImage.fileUrl}
+        alt={`섹션 ${section.sectionOrder ?? ''} 소속 원본 상세페이지`}
+        // width:100%로 무조건 채우지 않는다 — 원본이 viewport보다 작으면
+        // 자연 크기 그대로 두고(확대 금지) mx-auto로 중앙정렬하고,
+        // 원본이 더 크면 max-w-full이 폭 안으로 축소한다. height는
+        // 항상 auto라 원본 비율이 그대로 유지된다(stretch/crop 없음).
+        className="mx-auto block h-auto max-w-full"
+        draggable={false}
+        onError={() => setImgFailed(true)}
+      />
     </div>
   );
 }

@@ -1,5 +1,5 @@
 /**
- * N5 검수 좌측 뷰어 좌표 계산 — Pix/ate FE↔BE 구현 기준 v3.3.3.
+ * N5 검수 좌측 뷰어 좌표 계산 — pix/ate FE↔BE 구현 기준 v3.3.3.
  *
  * React 도 브라우저 API 도 쓰지 않는 순수 함수만 모아둔다. 그래서 Node에서
  * 화면 없이 바로 검증할 수 있고(scripts/verify-n5-coordinates.mjs), block

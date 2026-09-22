@@ -20,7 +20,9 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  /* Pretendard 우선, 로드 전/실패 시 기존 Arial/Helvetica로 폴백 —
+     app/layout.tsx에서 Pretendard 웹폰트를 한 번만 로드한다. */
+  font-family: 'Pretendard', Arial, Helvetica, sans-serif;
 }
 
 /* N3 — 섹션이 bucket 간 drag & drop으로 이동한 뒤 리스트에 자리잡을 때의 절제된 settle 효과 */
@@ -37,4 +39,15 @@ body {
 
 .n3-thumb-settle {
   animation: n3-thumb-settle 160ms ease-out;
+}
+
+/* N3 — 좌측 삭제 섹션 nav: chevron이 scroll 조작을 대신하므로 브라우저 기본
+   scrollbar는 시각적으로 숨긴다(스크롤 자체는 그대로 동작한다). */
+.n3-scroll-hidden {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.n3-scroll-hidden::-webkit-scrollbar {
+  display: none;
 }

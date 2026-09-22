@@ -1,4 +1,4 @@
-# Pixate Git 작업 규칙
+# pix/ate Git 작업 규칙
 
 ## 목적
 

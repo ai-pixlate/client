@@ -2,8 +2,11 @@ import { type Page, expect } from '@playwright/test';
 
 import { MOCK_BRAND_ID, MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 
-// N1 combobox 순서: 국가 → 언어 → 규제 분류 → 카테고리
-// 현재 label이 select에 htmlFor/id로 연결돼 있지 않아 getByLabel을 쓸 수 없다.
+// N1 combobox 순서(Figma 525:3023 재정합 후): 국가 → 언어 → 규제 분류
+// (카테고리는 더 이상 combobox가 아니다 — 검색 표시 필드 + "선택하기" 버튼
+// →카테고리 선택 모달(381:6293)로 바뀌었다. 아래 openCategoryModalAndPick이
+// 그 흐름을 대신한다). 어느 select든 첫 번째 유효한 option을 고르는
+// 동작이라 순서 자체는 영향 없다.
 async function selectFirstValidOption(page: Page, index: number) {
   const select = page.getByRole('combobox').nth(index);
   const firstRealOption = select.locator('option').nth(1);
@@ -26,26 +29,43 @@ const TINY_PNG_BASE64 =
 export async function reachN5(page: Page): Promise<void> {
   await page.goto(`/jobs/new?brandId=${MOCK_BRAND_ID}`);
 
+  await page.getByPlaceholder('상품 이름을 입력해주세요').fill('E2E 테스트 상품');
   await selectFirstValidOption(page, 0); // 국가
   await selectFirstValidOption(page, 1); // 언어
-  await selectFirstValidOption(page, 2); // 규제 분류
-  await selectFirstValidOption(page, 3); // 카테고리
 
-  await page.getByLabel('이미지 추가').setInputFiles({
+  // 카테고리 — "선택하기" 클릭 → 모달(381:6293)에서 하위 데이터가 없는
+  // 최상위 항목("바디/헤어")을 눌러 즉시 선택·닫힘 처리한다(가장 짧은 경로).
+  await page.getByRole('button', { name: '선택하기' }).click();
+  const categoryModal = page.getByRole('dialog', { name: '카테고리 선택' });
+  await categoryModal.getByRole('button', { name: '바디/헤어' }).click();
+
+  await selectFirstValidOption(page, 2); // 규제 분류 (카테고리가 combobox에서 빠지며 인덱스가 3→2로 당겨졌다)
+
+  await page.getByLabel('파일 선택').setInputFiles({
     name: 'e2e-test.png',
     mimeType: 'image/png',
     buffer: Buffer.from(TINY_PNG_BASE64, 'base64'),
   });
-  await expect(page.getByText('e2e-test.png')).toBeVisible();
+  // N1 재정합(925:2529) — 업로드 후 파일명 텍스트 대신 썸네일 그리드로
+  // 표시된다. 업로드 성공 확인은 해당 파일의 썸네일 img(alt=파일명)로 한다.
+  await expect(page.locator('img[alt="e2e-test.png"]')).toBeVisible();
 
-  await page.getByRole('button', { name: '다음 →' }).click();
+  await page.getByRole('button', { name: '다음' }).click();
   await expect(page).toHaveURL(new RegExp(`/jobs/${MOCK_JOB_ID}$`));
 
-  // N3 고유 UI가 나타날 때까지 대기 (고정 sleep 대신 polling 완료를 기다림)
-  await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 8_000 });
+  // N3 고유 UI가 나타날 때까지 대기 (고정 sleep 대신 polling 완료를 기다림).
+  // mock 환경 N2 최소 체류(7초, app/jobs/[jobId]/page.tsx)를 감안한 여유
+  // 타임아웃.
+  await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 10_000 });
 
   await page.getByRole('button', { name: '번역 시작' }).click();
-  await expect(page.getByRole('heading', { name: '번역을 진행하고 있습니다' })).toBeVisible();
+  // N4는 N2와 같은 ProcessingStageLayout을 공유하는 Figma(660:4221) 기준
+  // 실제 화면이다(placeholder였던 "번역을 진행하고 있습니다" 문구는 폐기).
+  await expect(page.getByRole('heading', { name: '번역 중' })).toBeVisible();
 
-  await expect(page.locator('[data-testid="n5-panel"]')).toBeVisible({ timeout: 8_000 });
+  // N4 mock이 실제 계약(inpaint→translate→verify→render) 4단계를 모두
+  // 순서대로 최소 한 번씩 지나가도록 바뀌면서(lib/msw/handlers.ts
+  // advanceN4Processing) 2초 polling 9회(~18초)가 걸린다 — 예전 8초
+  // 타임아웃(단일 stage 2-poll 기준)보다 넉넉히 잡는다.
+  await expect(page.locator('[data-testid="n5-panel"]')).toBeVisible({ timeout: 25_000 });
 }
