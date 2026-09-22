@@ -1,3 +1,4 @@
+import { ensureBackendSession, getAccessToken, isApiMockingEnabled, setAccessToken } from '@/lib/api/session';
 import type { CreateJobRequest, CreateJobResponse } from '@/lib/api/types';
 import type { ApiBlockPatch, ApiBlockPatchResponse, ApiConfirmRequest, ApiJob, ApiJobTaskStatus, ApiReviewPreview, ApiTextBlock } from '@/lib/api/n5-schema';
 import type { ApiAcceptedTask } from '@/lib/api/job-schema';
@@ -32,41 +33,44 @@ import type {
 
 const API_PROXY_HEADER = 'x-pixlate-api-proxy';
 
-/**
- * 개발용 임시 access token의 sessionStorage key. 실제 로그인/refresh 구현 전까지
- * 개발자가 콘솔에서 직접 넣는 smoke test 용도 — 소스/환경변수/Git에 토큰을 두지 않는다.
- */
-export const DEV_ACCESS_TOKEN_KEY = 'pixlate.devAccessToken';
-
-function readDevAccessToken(): string | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    return window.sessionStorage.getItem(DEV_ACCESS_TOKEN_KEY);
-  } catch {
-    return null;
-  }
-}
-
-/**
- * 모든 backend 요청의 공통 헤더: 기존 headers 보존 + 프록시 식별 헤더 +
- * (브라우저에 임시 토큰이 있을 때만) Authorization Bearer.
- * 토큰이 없으면 헤더를 붙이지 않아 backend의 401을 그대로 받는다.
- */
-function withApiHeaders(init?: RequestInit): RequestInit {
+/** 기존 headers(있다면)를 보존한 채 프록시 식별 헤더만 추가한다. */
+function withProxyHeader(init?: RequestInit): RequestInit {
   const headers = new Headers(init?.headers);
   headers.set(API_PROXY_HEADER, '1');
-  const token = readDevAccessToken();
-  if (token) headers.set('Authorization', `Bearer ${token}`);
+  if (!isApiMockingEnabled()) {
+    const token = getAccessToken();
+    if (token) headers.set('Authorization', `Bearer ${token}`);
+  }
   return { ...init, headers };
 }
 
+function errorMessageFromBody(body: unknown, status: number): string {
+  if (body && typeof body === 'object') {
+    const rec = body as { message?: unknown; error?: { message?: unknown; code?: unknown } };
+    if (typeof rec.error?.message === 'string') return rec.error.message;
+    if (typeof rec.error?.code === 'string') return rec.error.code;
+    if (typeof rec.message === 'string') return rec.message;
+  }
+  return `API error: ${status}`;
+}
+
+async function authorizedFetch(url: string, init?: RequestInit): Promise<Response> {
+  await ensureBackendSession();
+  let res = await fetch(url, withProxyHeader(init));
+  if (res.status === 401 && !isApiMockingEnabled()) {
+    setAccessToken(null);
+    await ensureBackendSession();
+    res = await fetch(url, withProxyHeader(init));
+  }
+  return res;
+}
+
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, withApiHeaders(init));
+  const res = await authorizedFetch(url, init);
   if (!res.ok) {
     let message = `API error: ${res.status}`;
     try {
-      const body = (await res.json()) as { message?: string };
-      if (typeof body.message === 'string') message = body.message;
+      message = errorMessageFromBody(await res.json(), res.status);
     } catch {
       // body가 JSON이 아닌 경우 status 기반 메시지를 그대로 사용
     }
@@ -102,12 +106,19 @@ export class ApiRequestError extends Error {
 // 만드는 건 더 큰 화면 작업이라 별도로 다룬다.
 // ─────────────────────────────────────────────
 
-export function createJob(payload: CreateJobRequest): Promise<CreateJobResponse> {
-  return apiFetch<CreateJobResponse>('/jobs', {
+export async function createJob(payload: CreateJobRequest): Promise<CreateJobResponse> {
+  const brandIdNum = Number(payload.brandId);
+  const created = await apiFetch<CreateJobResponse>('/jobs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({
+      ...payload,
+      brandId: Number.isFinite(brandIdNum) ? brandIdNum : payload.brandId,
+    }),
   });
+  // 실백엔드는 jobId를 number로 주고, mock은 MOCK_JOB_ID 문자열을 준다.
+  // 이후 analyze/router.push가 둘 다 문자열 jobId를 기대하므로 여기서 맞춘다.
+  return { ...created, jobId: String(created.jobId) };
 }
 
 // ─────────────────────────────────────────────
@@ -200,11 +211,11 @@ export async function patchN5Block(
   blockId: number,
   payload: ApiBlockPatch,
 ): Promise<ApiBlockPatchResponse> {
-  const res = await fetch(`/jobs/${jobId}/blocks/${blockId}`, withApiHeaders({
+  const res = await authorizedFetch(`/jobs/${jobId}/blocks/${blockId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
-  }));
+  });
   const body = await res.json().catch(() => null);
   if (!res.ok) throw new ApiRequestError(res.status, body);
   return body as ApiBlockPatchResponse;
@@ -227,11 +238,11 @@ export function getJobTasks(jobId: string): Promise<ApiJobTaskStatus> {
  * 던져 error.code로 분기할 수 있게 한다(patchN5Block과 같은 패턴).
  */
 export async function confirmN5(jobId: string, payload: ApiConfirmRequest): Promise<ApiJob> {
-  const res = await fetch(`/jobs/${jobId}/confirm`, withApiHeaders({
+  const res = await authorizedFetch(`/jobs/${jobId}/confirm`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
-  }));
+  });
   const body = await res.json().catch(() => null);
   if (!res.ok) throw new ApiRequestError(res.status, body);
   return body as ApiJob;

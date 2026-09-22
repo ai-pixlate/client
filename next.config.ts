@@ -1,10 +1,12 @@
-import type { NextConfig } from "next";
+﻿import type { NextConfig } from "next";
 
 // FE와 같은 오리진으로 들어오는 백엔드 API 요청을 실제 백엔드로 프록시한다.
 // 프로덕션(next start)에서는 MSW가 꺼지므로, 이 rewrites 가 없으면 API 요청이
-// 갈 곳이 없다. 백엔드 주소는 docker 네트워크상의 컨테이너명(pixate-api)이
-// 기본이며, 빌드 시 BACKEND_ORIGIN 환경변수로 덮어쓸 수 있다.
-const BACKEND_ORIGIN = process.env.BACKEND_ORIGIN || "http://pixate-api:8000";
+// 갈 곳이 없다. rewrites 는 afterFiles(기본)로 동작해 실제 페이지 라우트
+// (예: /jobs/[jobId])와 충돌하지 않고, 페이지가 없는 API 하위경로만 프록시한다.
+// 백엔드 주소는 docker 네트워크상의 컨테이너명(pixlate-api)이 기본이며,
+// 빌드 시 BACKEND_ORIGIN 환경변수로 덮어쓸 수 있다.
+const BACKEND_ORIGIN = process.env.BACKEND_ORIGIN || "http://pixlate-api:8000";
 
 // rewrites()가 배열을 반환하면 Next.js는 이를 afterFiles로 취급하는데,
 // afterFiles는 "비동적(non-dynamic) 페이지"보다는 뒤지만 "동적 라우트"보다는
