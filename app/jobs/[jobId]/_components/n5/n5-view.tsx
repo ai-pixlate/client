@@ -81,8 +81,19 @@ function N5Loaded({
           aria-label="보관함으로 나가기"
           className="absolute top-10 left-1/2 z-20 flex size-10 -translate-x-1/2 shrink-0 items-center justify-center rounded-md border border-[#eaeaea] bg-white text-[#171717] transition-colors hover:bg-gray-50"
         >
+          {/* N5 3차 디테일 정렬 — Figma(849:7253 "Card/Navigation/Close", 16px
+              glyph) 실제 asset을 내려받아 좌표를 확인했다: X선은 16px 박스
+              전체가 아니라 가운데 8×8 영역(4~12, inset 25%)에만 있고,
+              stroke-width는 1.25다. 기존엔 2~14(12×12, inset 12.5%) +
+              strokeWidth 1.5라 Figma보다 크고 굵었다. */}
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path d="M2 2L14 14M14 2L2 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            <path
+              d="M4 4L12 12M12 4L4 12"
+              stroke="currentColor"
+              strokeWidth="1.25"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
           </svg>
         </Link>
         <div className="absolute inset-0 pt-[100px] pb-6">

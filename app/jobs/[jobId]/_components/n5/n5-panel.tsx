@@ -120,11 +120,20 @@ function SignalTag({ badge }: { badge: SignalBadge }) {
   );
 }
 
-/** block 선택 표시(Figma Card/Number 배지 값 그대로: size-5 원형, 기본/선택 2색) */
+/**
+ * block 선택 표시(Figma Card/Number 배지 값 그대로: size-5 원형, 기본/선택 2색).
+ * Figma는 이 숫자를 텍스트가 아니라 전용 벡터 numeral glyph(Icon/Number
+ * 컴포넌트, 903:7266 등)로 그린다 — 0~9 벡터를 새로 만들지 않고 텍스트를
+ * 쓰되, `leading-none`(line-height:1)으로 폰트 기본 line-height가 만드는
+ * 수직 오프셋을 없앤다. flex center(align-items/justify-content)만으로는
+ * 텍스트 노드의 기본 line-height(보통 폰트 크기의 1.2~1.5배)가 위아래
+ * 비대칭 여백을 만들어 중앙에서 살짝 벗어나 보였다 — padding으로 억지로
+ * 맞추지 않고 line-height 자체를 1로 없앴다.
+ */
 function BlockNumberBadge({ index, isSelected }: { index: number; isSelected: boolean }) {
   return (
     <span
-      className={`flex size-5 shrink-0 items-center justify-center rounded-full text-[11px] ${
+      className={`flex size-5 shrink-0 items-center justify-center rounded-full text-[11px] leading-none ${
         isSelected ? 'bg-[#ff6a38] text-white' : 'border border-[#eaeaea] bg-white text-[#171717]'
       }`}
     >
@@ -170,24 +179,34 @@ function SourceField({ text }: { text: string }) {
 }
 
 /**
- * 번역근거 — Figma(544:3168)의 "번역근거" 카드 구조를 재사용하되, 실제
- * 데이터가 있는 badge(SignalBadge.reason)만 모은다. BlockViewModel에
- * 번역근거 전용 필드가 없어(위 파일 상단 주석 참고) 지어낸 문구를 넣지
- * 않는다 — reason이 있는 badge가 하나도 없으면 아무것도 렌더하지 않는다.
+ * 번역근거 — Figma(903:7265/7274-7276) 기준: "번역근거" 제목과 내용 박스는
+ * 번역문 모드에서 항상 보인다(재정합) — 이전엔 reason 데이터가 있는 badge가
+ * 하나도 없으면 영역 전체를 숨겼는데, Figma는 제목 자체를 상시 요소로 둔다.
+ * 실제 데이터는 이미 있는 badge(SignalBadge.reason/basisArticle)만 모은다 —
+ * BlockViewModel에 번역근거 전용 필드가 없어(위 파일 상단 주석 참고)
+ * 지어낸 문구를 넣지 않는다. 데이터가 없으면 Figma의 미완성 placeholder
+ * 문구("뭐 넣자고 했는데 기억이 안남")를 그대로 쓰지 않고, 이 파일이 이미
+ * 쓰는 빈 값 표기 관례("—", SourceField/ReadOnlyTranslation과 동일)를
+ * 따른다.
  */
 function EvidenceSection({ badges }: { badges: SignalBadge[] }) {
   const withReason = badges.filter((b) => b.reason);
-  if (withReason.length === 0) return null;
   return (
-    <div className="mt-4 flex flex-col gap-1">
+    <div className="mt-4 flex flex-col gap-2">
       <p className="text-[14px] tracking-[-0.01em] text-[#707070]">번역근거</p>
-      <div className="flex flex-col gap-2 rounded-[6px] border border-[#eaeaea] bg-white p-3">
-        {withReason.map((badge, i) => (
-          <p key={`${badge.code}-${i}`} className="text-[14px] tracking-[-0.01em] text-[#707070]">
-            {badge.reason}
-            {badge.basisArticle ? ` (${badge.basisArticle})` : ''}
-          </p>
-        ))}
+      <div className="rounded-[6px] border border-[#eaeaea] bg-white p-5">
+        {withReason.length > 0 ? (
+          <div className="flex flex-col gap-2">
+            {withReason.map((badge, i) => (
+              <p key={`${badge.code}-${i}`} className="text-[14px] tracking-[-0.01em] text-[#707070]">
+                {badge.reason}
+                {badge.basisArticle ? ` (${badge.basisArticle})` : ''}
+              </p>
+            ))}
+          </div>
+        ) : (
+          <p className="text-[14px] tracking-[-0.01em] text-[#999]">—</p>
+        )}
       </div>
     </div>
   );
@@ -289,68 +308,77 @@ function TranslationEditor({ jobId, block }: { jobId: string; block: BlockViewMo
   }
 
   return (
-    <div className="mt-4 rounded-[6px] bg-[#f5f5f5] p-5">
-      <p className="text-[12px] font-light tracking-[-0.02em] text-[#999]">번역문</p>
-      {/* N5 3차 정렬 — 이제 번역문 모드가 기본값이라 이 textarea가 항상
-          보이고, row 클릭(가운데 지점)이 이 textarea 위에 떨어지는 경우가
-          흔해졌다. 이전엔 여기서 stopPropagation()으로 row의 onSelect
-          (block 선택)를 막았는데, "텍스트를 편집하려고 클릭"한 것과
-          "그 block을 선택"하는 것은 서로 막을 이유가 없는 동작이다 —
-          편집 중인 block이 선택 상태로도 표시되는 게 오히려 자연스럽다.
-          그래서 이 stopPropagation을 제거했다(실측: e2e F-CFM-13류 selection
-          테스트가 이 stopPropagation 때문에 row 클릭이 선택으로 이어지지
-          않아 실패했었다). "확인"/"최신 값 불러오기" 버튼의
-          stopPropagation은 그대로 둔다 — 그 버튼들은 실제 액션(저장/불러
-          오기)이라 row 선택과 뒤섞이면 안 된다. */}
-      <textarea
-        data-testid={`n5-block-editor-${block.id}`}
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        rows={3}
-        className="mt-1 w-full resize-none bg-transparent text-[16px] tracking-[-0.03em] text-[#171717] outline-none"
-      />
-      <div className="mt-2 flex items-center justify-end gap-2">
-        {isRerendering && <span className="text-[11px] text-[#999]">재렌더링 중…</span>}
-        <button
-          type="button"
-          data-testid={`n5-block-save-${block.id}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            handleSave();
-          }}
-          disabled={!isDirty || patchMutation.isPending}
-          className="rounded-[4px] bg-white px-2.5 py-[5px] text-[12px] text-[#171717] disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          {patchMutation.isPending ? '저장 중…' : '확인'}
-        </button>
-      </div>
-
-      {rerenderFailed && (
-        <p className="mt-2 text-[11px] text-red-500">재렌더에 실패했습니다. 다시 시도해 주세요.</p>
-      )}
-      {saveError && <p className="mt-2 text-[11px] text-red-500">{saveError}</p>}
-
-      {conflictLatest && (
-        <div
-          data-testid={`n5-block-conflict-${block.id}`}
-          className="mt-2 rounded-[6px] border border-[#eaeaea] bg-white p-3"
-        >
-          <p className="text-[11px] text-red-500">다른 곳에서 이미 수정되어 저장할 수 없습니다.</p>
-          <p className="mt-1 text-[12px] font-light text-[#999]">서버 최신값</p>
-          <p className="mt-0.5 text-[14px] text-[#707070]">{conflictLatest.trans1 || '—'}</p>
+    // N5 3차 디테일 정렬 — Figma(903:7265/7267-7268)는 회색 편집 박스
+    // 바로 위에 "직접 수정하기" 라벨을 상시 노출한다(클릭해야 나타나는
+    // 숨김 버튼이 아니다 — 평문 <p>, 박스와 8px 간격). 이전 구현엔 이
+    // 라벨 자체가 없었다 — 새 인터랙션(클릭→editor 활성화)을 만들지
+    // 않고, Figma가 보여준 그대로 "항상 보이는 설명 라벨 + 항상 편집
+    // 가능한 박스" 구조로 복구했다. PATCH/revision 로직은 그대로다.
+    <div className="mt-4 flex flex-col gap-2">
+      <p className="text-[16px] tracking-[-0.03em] text-[#171717]">직접 수정하기</p>
+      <div className="rounded-[6px] bg-[#f5f5f5] p-5">
+        <p className="text-[12px] font-light tracking-[-0.02em] text-[#999]">번역문</p>
+        {/* N5 3차 정렬 — 이제 번역문 모드가 기본값이라 이 textarea가 항상
+            보이고, row 클릭(가운데 지점)이 이 textarea 위에 떨어지는 경우가
+            흔해졌다. 이전엔 여기서 stopPropagation()으로 row의 onSelect
+            (block 선택)를 막았는데, "텍스트를 편집하려고 클릭"한 것과
+            "그 block을 선택"하는 것은 서로 막을 이유가 없는 동작이다 —
+            편집 중인 block이 선택 상태로도 표시되는 게 오히려 자연스럽다.
+            그래서 이 stopPropagation을 제거했다(실측: e2e F-CFM-13류 selection
+            테스트가 이 stopPropagation 때문에 row 클릭이 선택으로 이어지지
+            않아 실패했었다). "확인"/"최신 값 불러오기" 버튼의
+            stopPropagation은 그대로 둔다 — 그 버튼들은 실제 액션(저장/불러
+            오기)이라 row 선택과 뒤섞이면 안 된다. */}
+        <textarea
+          data-testid={`n5-block-editor-${block.id}`}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          rows={3}
+          className="mt-1 w-full resize-none bg-transparent text-[16px] tracking-[-0.03em] text-[#171717] outline-none"
+        />
+        <div className="mt-2 flex items-center justify-end gap-2">
+          {isRerendering && <span className="text-[11px] text-[#999]">재렌더링 중…</span>}
           <button
             type="button"
-            data-testid={`n5-block-conflict-load-${block.id}`}
+            data-testid={`n5-block-save-${block.id}`}
             onClick={(e) => {
               e.stopPropagation();
-              handleLoadServerValue();
+              handleSave();
             }}
-            className="mt-2 rounded-[4px] border border-[#eaeaea] bg-white px-2.5 py-1 text-[11px] text-[#171717]"
+            disabled={!isDirty || patchMutation.isPending}
+            className="rounded-[4px] bg-white px-2.5 py-[5px] text-[12px] text-[#171717] disabled:cursor-not-allowed disabled:opacity-40"
           >
-            최신 값 불러오기
+            {patchMutation.isPending ? '저장 중…' : '확인'}
           </button>
         </div>
-      )}
+
+        {rerenderFailed && (
+          <p className="mt-2 text-[11px] text-red-500">재렌더에 실패했습니다. 다시 시도해 주세요.</p>
+        )}
+        {saveError && <p className="mt-2 text-[11px] text-red-500">{saveError}</p>}
+
+        {conflictLatest && (
+          <div
+            data-testid={`n5-block-conflict-${block.id}`}
+            className="mt-2 rounded-[6px] border border-[#eaeaea] bg-white p-3"
+          >
+            <p className="text-[11px] text-red-500">다른 곳에서 이미 수정되어 저장할 수 없습니다.</p>
+            <p className="mt-1 text-[12px] font-light text-[#999]">서버 최신값</p>
+            <p className="mt-0.5 text-[14px] text-[#707070]">{conflictLatest.trans1 || '—'}</p>
+            <button
+              type="button"
+              data-testid={`n5-block-conflict-load-${block.id}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                handleLoadServerValue();
+              }}
+              className="mt-2 rounded-[4px] border border-[#eaeaea] bg-white px-2.5 py-1 text-[11px] text-[#171717]"
+            >
+              최신 값 불러오기
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -416,24 +444,27 @@ function BlockRow({
         </div>
 
         {/* content slot — 원문/번역문을 동시에 쌓지 않는다. 같은 자리에서
-            viewMode에 따라 통째로 바뀐다(요청 5번). 번역근거·자동 글자 크기
-            조정 안내는 번역문을 보는 중일 때만 의미가 있어 같이 묶는다. */}
+            viewMode에 따라 통째로 바뀐다(요청 5번). 번역근거는 Figma(903:7265)
+            기준으로 번역문 모드에서는 editable 여부와 무관하게 항상 보여준다
+            (요청 5 — "번역문 mode에서는 번역 근거 제목 자체는 항상 보여준다") */}
         {viewMode === 'original' ? (
           <div className="mt-4">
             <SourceField text={block.sourceText} />
           </div>
-        ) : block.editable ? (
+        ) : (
           <>
-            <TranslationEditor jobId={jobId} block={block} />
-            <EvidenceSection badges={block.badges} />
-            {block.autoAdjust.applied && (
+            {block.editable ? (
+              <TranslationEditor jobId={jobId} block={block} />
+            ) : (
+              <ReadOnlyTranslation text={block.translatedText} />
+            )}
+            {block.editable && block.autoAdjust.applied && (
               <p className="mt-2 text-[11px] tracking-[-0.02em] text-[#999]">
                 자동 글자 크기 조정 적용됨 ({Math.round(block.autoAdjust.fontScale * 100)}%)
               </p>
             )}
+            <EvidenceSection badges={block.badges} />
           </>
-        ) : (
-          <ReadOnlyTranslation text={block.translatedText} />
         )}
       </div>
     </li>
@@ -568,9 +599,18 @@ export function N5Panel({
         <ViewModeToggle mode={viewMode} onChange={onViewModeChange} />
       </div>
 
+      {/* N5 3차 디테일 정렬 — Figma(903:7293 Scroll/Thumb)는 트랙이 거의
+          안 보이고 thumb만 약 3px 얇은 회색이다. 이전엔 thumb을 항상
+          bg-[#eaeaea]로 그려서 스크롤이 필요 없을 때도 늘 보였다 — 기본
+          상태는 thumb도 투명(사실상 안 보임)으로 두고, panel 자신에
+          hover했을 때만 thumb이 #eaeaea로 나타나게 한다. width(3px)는
+          hover 여부와 무관하게 항상 동일해서(scrollbar-width:thin 고정)
+          thumb 색만 바뀔 뿐 트랙 폭 자체가 늘었다 줄었다 하며 카드 폭을
+          흔들지 않는다. Firefox는 scrollbar-color(thumb track)로 같은
+          토글을 맞춘다. */}
       <div
         data-testid="n5-panel-body"
-        className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto pr-2 [scrollbar-width:thin] [&::-webkit-scrollbar]:w-[3px] [&::-webkit-scrollbar-thumb]:rounded-[2px] [&::-webkit-scrollbar-thumb]:bg-[#eaeaea] [&::-webkit-scrollbar-track]:bg-transparent"
+        className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto pr-2 [scrollbar-width:thin] [scrollbar-color:transparent_transparent] hover:[scrollbar-color:#eaeaea_transparent] [&::-webkit-scrollbar]:w-[3px] [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-[2px] [&::-webkit-scrollbar-thumb]:bg-transparent hover:[&::-webkit-scrollbar-thumb]:bg-[#eaeaea]"
       >
         {groups.length === 0 ? (
           <p className="flex flex-1 items-center justify-center text-center text-sm text-[#999]">

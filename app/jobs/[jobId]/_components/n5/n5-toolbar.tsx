@@ -252,38 +252,24 @@ export function FitControls({
 //   않는다 — 같은 기능으로 임의 연결하지 않았다). Figma의 시각 요소는
 //   그대로 만들되, 실제 삭제 기능이 없다는 걸 disabled + title로 정직하게
 //   보여준다(ProcessingStageLayout의 일시정지 버튼과 같은 기존 패턴).
+//
+// N5 3차 디테일 정렬 — 아래 세 아이콘은 "의미만 비슷한" 임의 SVG가 아니라
+// Figma 실제 asset(node 686:7988/7990/7996)을 다운로드해 path 좌표를
+// 그대로 옮긴 것이다(이 프로젝트 관례상 만료되는 Figma 원격 URL을
+// 코드에 하드링크하지 않고, 좌표만 옮겨 inline SVG로 재구현한다 — 다른
+// 아이콘들과 같은 패턴). 각 아이콘은 Figma가 그 Glyph를 담는 slot
+// 크기(Pointer 24×24, Section/Delete 20×20) 그대로 viewBox를 잡았다.
 // ─────────────────────────────────────────────────────────────────
 
+/** Figma 686:7988 "Card/Editor/Pointer" — 24×24 glyph slot, stroke 1.5, fill white(버튼 배경과 동색이라 컷아웃처럼 보임). */
 function PointerIcon() {
   return (
-    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
       <path
-        d="M5 3.5L15.5 10.5L11 11.3L13 16L11 16.8L9 12.1L5.6 15V3.5Z"
+        d="M8 3.6L18.8 13.2L13.76 14.04L16.4 18.96L13.88 20.28L11.24 15.24L8 18V3.6Z"
+        fill="white"
         stroke="currentColor"
-        strokeWidth="1.2"
-        strokeLinejoin="round"
-        fill="currentColor"
-        fillOpacity="0.08"
-      />
-    </svg>
-  );
-}
-
-function SectionMarqueeIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
-      <rect x="3" y="5.5" width="12" height="7" rx="1.25" stroke="currentColor" strokeWidth="1.15" strokeDasharray="2.2 2" />
-    </svg>
-  );
-}
-
-function TrashIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
-      <path
-        d="M3.5 5.5H14.5M7 5.5V4A1 1 0 0 1 8 3H10A1 1 0 0 1 11 4V5.5M5.5 5.5L6.2 14.2A1 1 0 0 0 7.2 15.1H10.8A1 1 0 0 0 11.8 14.2L12.5 5.5"
-        stroke="currentColor"
-        strokeWidth="1.15"
+        strokeWidth="1.5"
         strokeLinecap="round"
         strokeLinejoin="round"
       />
@@ -291,6 +277,126 @@ function TrashIcon() {
   );
 }
 
+/** Figma 686:7990 — 실제로는 asset이 아니라 순수 사각형 테두리(14×8, 1.25px, 각진 모서리)다. 20×20 glyph slot 중앙에 위치. */
+function SectionSelectIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <rect x="3" y="6" width="14" height="8" stroke="currentColor" strokeWidth="1.25" />
+    </svg>
+  );
+}
+
+/** Figma 686:7996 "Card/Action/Trash" — 20×20 glyph slot, stroke 1.25. */
+function TrashIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path
+        d="M4.5 6H15.5M8 3.5H12M6 6L6.7 16H13.3L14 6M8.5 8.5V13.5M11.5 8.5V13.5"
+        stroke="currentColor"
+        strokeWidth="1.25"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/**
+ * Figma 686:7988 "Tool / Pointer" — 텍스트/block 선택 도구. 48×48, 항상
+ * bg-white, rounded-[24px](=48px 박스에서 rounded-full과 동일한 완전
+ * 원). 선택(active) 상태는 orange 배경이 아니라 "border만 orange로
+ * 바뀌는" 것이 Figma가 실제로 보여준 값이다(686:8207 "Property 1=select"
+ * — Selected tool은 흰 배경 유지, border/아이콘 색만 orange) — 요청 2·6이
+ * 지적한 "단순 orange icon만 적용"이 아니라 컴포넌트 전체 상태(배경 유지 +
+ * border 전환)를 그대로 따른다. 비활성 기본은 border-transparent(테두리
+ * 없어 보임) — 이 상태의 border 색은 Figma에 명시된 값이 없어(이 인스턴스는
+ * 항상 selected로만 캡처돼 있음) 중립적으로 투명 처리했다.
+ */
+function ToolPointerButton({ isActive, onClick }: { isActive: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      data-testid="n5-tool-text"
+      title="텍스트 선택"
+      aria-label="텍스트 선택"
+      aria-pressed={isActive}
+      onClick={onClick}
+      className={`flex size-12 shrink-0 items-center justify-center rounded-full border bg-white transition-colors ${
+        isActive ? 'border-[#ff6a38] text-[#ff6a38]' : 'border-transparent text-[#171717] hover:bg-[#f5f5f5]'
+      }`}
+    >
+      <PointerIcon />
+    </button>
+  );
+}
+
+/**
+ * Figma 686:7989 "After" — 두 Icon Button(686:7990 섹션 선택, 686:7996
+ * 삭제)이 하나로 붙어 있는 96×48 그룹. 개별 버튼에 각자 좌/우 모서리만
+ * (rounded-bl/tl, rounded-br/tr) 라운드가 걸려 있는 걸 그대로 옮기는 대신,
+ * 그룹 wrapper 하나에 overflow-hidden + rounded-[6px]를 줘서 같은 시각
+ * 결과(바깥 4모서리만 6px, 가운데 접합부는 각짐)를 얻는다 — 두 버튼을
+ * "따로 둥근 버튼"처럼 보이지 않게 하는 핵심이 이 wrapper다.
+ */
+function ConnectedToolGroup({ children }: { children: React.ReactNode }) {
+  return <div className="flex shrink-0 items-stretch overflow-hidden rounded-[6px]">{children}</div>;
+}
+
+/** Figma 686:7990 — 48×48, bg-white, border(1px solid). 기본 #eaeaea, 선택 시 #ff6a38(Pointer와 같은 "배경 유지+border 전환" 규칙). */
+function SectionSelectButton({ isActive, onClick }: { isActive: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      data-testid="n5-tool-section"
+      title="섹션 선택"
+      aria-label="섹션 선택"
+      aria-pressed={isActive}
+      onClick={onClick}
+      className={`flex size-12 items-center justify-center border bg-white transition-colors ${
+        isActive ? 'border-[#ff6a38] text-[#ff6a38]' : 'border-[#eaeaea] text-[#171717] hover:bg-[#f5f5f5]'
+      }`}
+    >
+      <SectionSelectIcon />
+    </button>
+  );
+}
+
+/**
+ * Figma 686:7996 — 48×48, bg-[#f5f5f5], border 없음. 실제 delete
+ * handler/API가 없어(요청 6) disabled를 유지한다 — Figma가 이 인스턴스에서
+ * 이미 이 muted 톤(#f5f5f5, border 없음)으로 보여주고 있어 "비활성처럼
+ * 보이는 기본 상태"와 "실제 disabled"가 우연히 같은 톤으로 일치한다.
+ */
+function DeleteButton() {
+  return (
+    <button
+      type="button"
+      data-testid="n5-tool-delete"
+      title="삭제 기능은 아직 제공되지 않습니다."
+      disabled
+      aria-disabled="true"
+      className="flex size-12 cursor-not-allowed items-center justify-center bg-[#f5f5f5] text-[#999]"
+    >
+      <TrashIcon />
+    </button>
+  );
+}
+
+/**
+ * Figma 686:8207 "Property 1=select" 인스턴스(686:8237로 N5 화면에
+ * 배치) 전체를 그대로 옮긴 컴포넌트다 — 아이콘 3개를 스타일 없이 나열한
+ * 것이 아니라, Figma 노드 트리와 1:1 대응하는 하위 컴포넌트로 구성했다:
+ *
+ *   PlacementToolbar (686:8207, 148×48, gap-[4px])
+ *   ├─ ToolPointerButton (686:7988, 48×48)
+ *   └─ ConnectedToolGroup (686:7989 "After", 96×48)
+ *      ├─ SectionSelectButton (686:7990, 48×48)
+ *      └─ DeleteButton (686:7996, 48×48)
+ *
+ * 실측(1920×1080, headless Chromium): 전체 148×48, Pointer↔After group
+ * gap 4px, After group 96×48 — 전부 Figma 값과 일치를 확인했다(보고
+ * 참고).
+ */
 export function PlacementToolbar({
   activeTool,
   onSelectTextTool,
@@ -300,50 +406,13 @@ export function PlacementToolbar({
   onSelectTextTool: () => void;
   onSelectSectionTool: () => void;
 }) {
-  const isTextActive = activeTool === 'text';
-  const isSectionActive = activeTool === 'section';
   return (
     <div data-testid="n5-placement-toolbar" className="flex items-center gap-1">
-      <button
-        type="button"
-        data-testid="n5-tool-text"
-        title="텍스트 선택"
-        aria-label="텍스트 선택"
-        aria-pressed={isTextActive}
-        onClick={onSelectTextTool}
-        className={`flex size-12 shrink-0 items-center justify-center rounded-full border transition-colors ${
-          isTextActive ? 'border-[#ff6a38] text-[#ff6a38]' : 'border-transparent text-[#171717] hover:bg-[#f5f5f5]'
-        } bg-white`}
-      >
-        <PointerIcon />
-      </button>
-      <div className="flex shrink-0 items-stretch overflow-hidden rounded-[6px]">
-        <button
-          type="button"
-          data-testid="n5-tool-section"
-          title="섹션 선택"
-          aria-label="섹션 선택"
-          aria-pressed={isSectionActive}
-          onClick={onSelectSectionTool}
-          className={`flex size-12 items-center justify-center border transition-colors ${
-            isSectionActive
-              ? 'border-[#ff6a38] bg-white text-[#ff6a38]'
-              : 'border-[#eaeaea] bg-white text-[#171717] hover:bg-[#f5f5f5]'
-          }`}
-        >
-          <SectionMarqueeIcon />
-        </button>
-        <button
-          type="button"
-          data-testid="n5-tool-delete"
-          title="삭제 기능은 아직 제공되지 않습니다."
-          disabled
-          aria-disabled="true"
-          className="flex size-12 cursor-not-allowed items-center justify-center bg-[#f5f5f5] text-[#999]"
-        >
-          <TrashIcon />
-        </button>
-      </div>
+      <ToolPointerButton isActive={activeTool === 'text'} onClick={onSelectTextTool} />
+      <ConnectedToolGroup>
+        <SectionSelectButton isActive={activeTool === 'section'} onClick={onSelectSectionTool} />
+        <DeleteButton />
+      </ConnectedToolGroup>
     </div>
   );
 }

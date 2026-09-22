@@ -113,10 +113,13 @@ function SectionSelectedTag({ sectionOrder }: { sectionOrder: number }) {
  * 맞추고, block rect의 좌상단 모서리에 걸치도록 배치한다(Figma가 보여준
  * "텍스트 바로 옆" 위치를 일반화한 규칙).
  */
+/** n5-panel.tsx BlockNumberBadge와 같은 규칙 — leading-none으로 폰트
+ *  line-height가 만드는 수직 오프셋을 없애 숫자를 정중앙에 둔다(N5 3차
+ *  디테일 정렬, 좌/우 배지가 같은 컴포넌트 톤을 공유하므로 동일하게 고친다). */
 function BlockPinBadge({ index, isSelected }: { index: number; isSelected: boolean }) {
   return (
     <span
-      className={`flex size-5 shrink-0 items-center justify-center rounded-full text-[11px] ${
+      className={`flex size-5 shrink-0 items-center justify-center rounded-full text-[11px] leading-none ${
         isSelected ? 'bg-[#ff6a38] text-white' : 'border border-[#eaeaea] bg-white text-[#171717]'
       }`}
     >
