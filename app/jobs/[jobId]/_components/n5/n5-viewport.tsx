@@ -17,7 +17,7 @@ import {
   type Point,
   type Size,
 } from '@/lib/n5/viewport';
-import { ZoomControls, FitControls } from './n5-toolbar';
+import { ZoomControls, FitControls, PlacementToolbar } from './n5-toolbar';
 
 // ─────────────────────────────────────────────────────────────────
 // N5 — 캔버스형 viewport (Figma 544:3168 "N5 검수" 기준)
@@ -136,6 +136,7 @@ function BlockOverlay({
   index: number;
   scale: number;
   isSelected: boolean;
+  /** ImageLayer가 현재 selectionTool에 맞춰 이미 만들어 둔 클릭 동작(block 선택 또는 section 선택)을 그대로 받는다. */
   onSelect: () => void;
 }) {
   if (!block.bbox) return null;
@@ -176,6 +177,7 @@ function ImageLayer({
   blocksBySection,
   blockIndexById,
   mode,
+  selectionTool,
   excludedSectionIds,
   onExcludeSection,
   onRestoreSection,
@@ -190,6 +192,10 @@ function ImageLayer({
   /** 우측 panel과 같은 번호(BlockNumberBadge)를 canvas 배지에도 쓰기 위한 공유 인덱스 */
   blockIndexById: Map<number, number>;
   mode: N5ViewMode;
+  /** 하단 배치 편집 toolbar의 현재 활성 도구. 'section'일 때는 block을 눌러도
+   *  그 block이 아니라 소속 section만 선택한다(block 선택은 유지/해제하지
+   *  않고, 애초에 block 클릭 자체를 section 클릭으로 취급한다). */
+  selectionTool: 'text' | 'section';
   /** F-CFM-14 — 로컬로 제외 처리된 sectionId 집합. slice 자체는 그대로 두고 위에 오버레이만 덮는다. */
   excludedSectionIds: Set<number>;
   onExcludeSection: (sectionId: number) => void;
@@ -253,7 +259,11 @@ function ImageLayer({
                   index={blockIndexById.get(block.id) ?? 0}
                   scale={scale}
                   isSelected={block.id === selectedBlockId}
-                  onSelect={() => onSelectBlock(block)}
+                  onSelect={
+                    selectionTool === 'section'
+                      ? () => onSelectSection(block.sectionId)
+                      : () => onSelectBlock(block)
+                  }
                 />
               ))}
             {!isExcluded && slice.sectionId === selectedSectionId && (
@@ -346,6 +356,29 @@ export function N5Viewport({
   const [transform, setTransform] = useState<Transform>(INITIAL_TRANSFORM);
   const [isSpaceHeld, setIsSpaceHeld] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
+
+  // 하단 배치 편집 toolbar의 현재 도구 — 로컬 UI state다(새 API/선택 데이터
+  // 구조를 만들지 않는다). 기본은 'text'(지금까지의 기본 클릭 동작과 동일:
+  // block을 누르면 block을, 빈 section 배경을 누르면 section을 선택한다).
+  // 'section'으로 바꾸면 block 위를 눌러도 block이 아니라 그 section만
+  // 선택한다 — selectedBlockId/selectedSectionId 정본(N5View 소유)은 그대로
+  // 재사용하고, 이 tool state는 "클릭을 어떻게 해석할지"만 바꾼다.
+  const [selectionTool, setSelectionTool] = useState<'text' | 'section'>('text');
+
+  const handleSelectTextTool = useCallback(() => {
+    setSelectionTool('text');
+  }, []);
+
+  // 섹션 선택 도구로 전환하는 순간, 이미 선택된 block이 있으면 그 block의
+  // section으로 다운그레이드한다("block selection은 해제하거나 section
+  // selection 규칙에 맞게 처리" — onSelectSection이 이미 selectedBlockId를
+  // null로 정리하는 handleSelectSection(n5-view.tsx)을 그대로 호출한다).
+  const handleSelectSectionTool = useCallback(() => {
+    setSelectionTool('section');
+    if (selectedBlockId != null && selectedSectionId != null) {
+      onSelectSection(selectedSectionId);
+    }
+  }, [selectedBlockId, selectedSectionId, onSelectSection]);
 
   // F-CFM-14 — N5에서 제외된 section의 회색 오버레이(sectionId 기준 로컬 state).
   // 서버 render.status==='excluded'(bucket/excludedStage 파생)를 초기값으로만
@@ -622,6 +655,32 @@ export function N5Viewport({
             <FitControls onFitWidth={handleFitWidth} onFitHeight={handleFitHeight} />
           </div>
 
+          {/* N5 4차 정리 — 캔버스 전체를 덮던 상시 안내("번역문 미리보기가
+              아직 생성되지 않았습니다")는 제거했다. render 없는 section에는
+              원래도 그 section 자신의 "렌더 대기 중" 오버레이가 있는데(아래
+              ImageLayer의 isPending), 일부 section만 렌더가 안 된 경우에도
+              캔버스 전체가 "미리보기 자체가 없다"처럼 보이는 중복·과장된
+              표현이었다 — section-local 표시 하나로 충분하다. */}
+
+          {/* N5 3차 정렬 — 텍스트 선택/섹션 선택은 이제 실제로 클릭 가능한
+              tool이다(pointer-events-none로 회피하지 않는다). fit-height로
+              캔버스가 이 toolbar와 같은 화면 위치(하단 중앙)까지 꽉 찰 때
+              그 지점을 클릭하면 toolbar가 우선한다 — 이는 Figma가 보여주는
+              대로 toolbar가 캔버스 위에 항상 떠 있는 고정 컨트롤이라는
+              점에서 의도된 동작이다(다른 캔버스형 툴의 floating toolbar와
+              동일). 삭제하기만 실제 handler가 없어 disabled 상태를 유지한다
+              (아래 PlacementToolbar 정의, n5-toolbar.tsx). */}
+          <div
+            data-testid="n5-placement-toolbar-wrap"
+            className="absolute bottom-5 left-1/2 z-10 -translate-x-1/2"
+          >
+            <PlacementToolbar
+              activeTool={selectionTool}
+              onSelectTextTool={handleSelectTextTool}
+              onSelectSectionTool={handleSelectSectionTool}
+            />
+          </div>
+
           <div
             data-testid="n5-canvas"
             // data-zoom/pan-*은 화면에 보이지 않는 테스트 전용 hook이다 — e2e가
@@ -642,6 +701,7 @@ export function N5Viewport({
               blocksBySection={blocksBySection}
               blockIndexById={blockIndexById}
               mode={viewMode}
+              selectionTool={selectionTool}
               excludedSectionIds={excludedSectionIds}
               onExcludeSection={handleExcludeSection}
               onRestoreSection={handleRestoreSection}

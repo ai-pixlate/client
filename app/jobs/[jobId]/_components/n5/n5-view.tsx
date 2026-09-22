@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import Link from 'next/link';
 
 import { useJobQuery, useN5BlocksQuery, useN5PreviewQuery } from '@/lib/queries/pixlate';
@@ -35,30 +35,23 @@ import { N5Panel } from './n5-panel';
 
 function N5Loaded({
   jobId,
-  targetCountry,
-  targetLanguage,
   preview,
   blocks,
 }: {
   jobId: string;
-  targetCountry: string | null;
-  targetLanguage: string | null;
   preview: PreviewViewModel;
   blocks: BlockViewModel[];
 }) {
-  // 번역 후(renderedUrl) 이미지가 하나라도 없는(제외 섹션 제외) include section이
-  // 있으면 「번역문」 토글을 기본으로 켜지 않는다 — 보여줄 이미지가 없기 때문이다.
-  // resolveSectionRenderState(Adapter)가 이미 렌더 전/제외/실패를 구분해 둔 값을
-  // 그대로 쓴다 — renderedUrl===null을 이 컴포넌트가 다시 실패로 단정하지 않는다.
-  const translatedDisabled = useMemo(
-    () =>
-      preview.sections.some(
-        (section) => section.bucket === 'include' && section.render.status !== 'ready',
-      ),
-    [preview.sections],
-  );
-
-  const [viewMode, setViewMode] = useState<N5ViewMode>(() => (translatedDisabled ? 'original' : 'translated'));
+  // N5는 번역 검수 화면이다 — 렌더 이미지가 없다는 이유로 원문 모드로
+  // 강제 전환하지 않는다. 최초 진입은 항상 'translated'다(요청 3). 렌더가
+  // 안 된 section은 캔버스 쪽에서 개별 section 단위로 "렌더 대기 중"을
+  // 보여줄 뿐(n5-viewport.tsx ImageLayer의 isPending, 변경하지 않음),
+  // 패널의 번역문 편집 자체를 막지 않는다. "번역 렌더 이미지가 없다"는
+  // 캔버스 전용 개념이라 N5Panel은 이 상태를 아예 모른다 — 한때 이
+  // 컴포넌트가 계산해 N5Viewport에 내려주던 전체 안내용 플래그
+  // (translatedPreviewUnavailable)는 section-local 표시와 중복돼 4차
+  // 정리에서 없앴다.
+  const [viewMode, setViewMode] = useState<N5ViewMode>('translated');
   const [selectedBlockId, setSelectedBlockId] = useState<number | null>(null);
   const [selectedSectionId, setSelectedSectionId] = useState<number | null>(null);
 
@@ -118,13 +111,10 @@ function N5Loaded({
         />
         <N5Panel
           jobId={jobId}
-          targetCountry={targetCountry}
-          targetLanguage={targetLanguage}
           sections={preview.sections}
           blocks={blocks}
           viewMode={viewMode}
           onViewModeChange={setViewMode}
-          translatedDisabled={translatedDisabled}
           selectedBlockId={selectedBlockId}
           selectedSectionId={selectedSectionId}
           onSelectBlock={handleSelectBlock}
@@ -167,13 +157,5 @@ export function N5View({ jobId }: { jobId: string }) {
   const blocks = blocksQuery.data.map(toBlockViewModel);
   const preview = toPreviewViewModel(previewQuery.data);
 
-  return (
-    <N5Loaded
-      jobId={jobId}
-      targetCountry={jobQuery.data.targetCountry ?? null}
-      targetLanguage={jobQuery.data.targetLanguage ?? null}
-      preview={preview}
-      blocks={blocks}
-    />
-  );
+  return <N5Loaded jobId={jobId} preview={preview} blocks={blocks} />;
 }

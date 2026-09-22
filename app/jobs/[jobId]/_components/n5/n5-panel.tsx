@@ -79,15 +79,35 @@ import { ViewModeToggle } from './n5-toolbar';
 // 있는 구 status polling 캐시를 invalidate해 화면 전환을 맡긴다 — N6 화면
 // 자체는 이미 구현돼 있고(n6-result-view.tsx), 그 화면의 렌더 task 등록·
 // JOB-05 폴링만 이번 단계 범위 밖이다.
+//
+// N5 2차 정렬(이번 반영) — block card를 Figma(544:3168) 구조에 맞춰 다시
+// 짰다:
+// - "제목"/"본문" 칩(RoleTag, block.roleLabel)을 화면에서 뺐다. Figma의
+//   번호별 card(903:7265)에는 번호 배지 바로 다음에 role 구분 칩이 없다
+//   — 이 칩이 어디서 왔는지 추적한 결과 BlockViewModel.roleLabel(=DB role
+//   필드를 한글로만 바꾼 값, lib/n5/adapter.ts BLOCK_ROLE_LABELS)을 그대로
+//   렌더한 것이었다. 데이터 모델(block.role/roleLabel)은 그대로 둔다 —
+//   화면에 안 그릴 뿐이다. signal 경고 칩(SignalTag)은 role 구분과 무관한
+//   기능(translationFailed 등)이라 그대로 유지한다.
+// - 원문(SourceField)과 번역문(TranslationEditor/ReadOnlyTranslation)을
+//   한 카드 안에 동시에 쌓아 보여주던 구조를 없앴다. `viewMode`가 이제
+//   "같은 content slot에서 무엇을 보여줄지"를 결정한다 — 'original'이면
+//   원문만, 'translated'면 번역문(+확인 버튼+번역근거)만 보인다. 이
+//   viewMode는 이미 N5View가 소유하던 그 상태 그대로다(새 state 없음).
+// - "번역근거" 영역을 추가했다 — 단, Figma의 실제 문구("뭐 넣자고 했는데
+//   기억이 안남")는 디자이너 미완성 placeholder라 그대로 베끼지 않았다(이미
+//   n5-toolbar.tsx 이전 주석에서도 같은 문제가 지적됨). BlockViewModel에는
+//   "번역근거"에 해당하는 별도 필드가 없다 — 대신 이미 있는
+//   SignalBadge.reason/basisArticle(각 경고 signal이 갖고 있는 실제 근거
+//   텍스트, 지금까지는 SignalTag의 title 툴팁으로만 노출됐었다)을 재사용해,
+//   reason이 있는 badge만 "번역근거" 카드에 모아 보여준다(EvidenceSection).
+//   reason이 있는 badge가 하나도 없으면 이 영역 자체를 렌더하지 않는다 —
+//   빈 placeholder 박스를 새로 지어내지 않는다.
+// - "US (EN) · N개 텍스트 블록" 줄을 없앴다 — 검수에 필요한 정보가 아니라
+//   디버깅성 메타였고 Figma에도 이 위치에 대응하는 요소가 없다. 이 줄에만
+//   쓰이던 targetCountry/targetLanguage props도 함께 걷어냈다(N5View →
+//   N5Panel로 내려오던 죽은 prop을 남기지 않는다).
 // ─────────────────────────────────────────────────────────────────
-
-function RoleTag({ label }: { label: string }) {
-  return (
-    <span className="rounded-[4px] border border-[#eaeaea] bg-white px-2 py-0.5 text-[11px] tracking-[-0.02em] text-[#171717]">
-      {label}
-    </span>
-  );
-}
 
 function SignalTag({ badge }: { badge: SignalBadge }) {
   return (
@@ -138,12 +158,37 @@ function SectionTag({
   );
 }
 
-/** 원문(sourceKo) — 항상 읽기 전용. 흰 바탕 border 카드("번역근거"와 같은 참고자료 톤) */
+/** 원문(sourceKo) — viewMode==='original'일 때만 그려지는 읽기 전용 표시.
+ *  흰 바탕 border 카드("번역근거"와 같은 참고자료 톤) */
 function SourceField({ text }: { text: string }) {
   return (
-    <div className="mt-4 rounded-[6px] border border-[#eaeaea] bg-white p-3">
+    <div className="rounded-[6px] border border-[#eaeaea] bg-white p-3">
       <p className="text-[12px] font-light tracking-[-0.02em] text-[#999]">원문</p>
       <p className="mt-1 text-[14px] tracking-[-0.01em] text-[#707070]">{text || '—'}</p>
+    </div>
+  );
+}
+
+/**
+ * 번역근거 — Figma(544:3168)의 "번역근거" 카드 구조를 재사용하되, 실제
+ * 데이터가 있는 badge(SignalBadge.reason)만 모은다. BlockViewModel에
+ * 번역근거 전용 필드가 없어(위 파일 상단 주석 참고) 지어낸 문구를 넣지
+ * 않는다 — reason이 있는 badge가 하나도 없으면 아무것도 렌더하지 않는다.
+ */
+function EvidenceSection({ badges }: { badges: SignalBadge[] }) {
+  const withReason = badges.filter((b) => b.reason);
+  if (withReason.length === 0) return null;
+  return (
+    <div className="mt-4 flex flex-col gap-1">
+      <p className="text-[14px] tracking-[-0.01em] text-[#707070]">번역근거</p>
+      <div className="flex flex-col gap-2 rounded-[6px] border border-[#eaeaea] bg-white p-3">
+        {withReason.map((badge, i) => (
+          <p key={`${badge.code}-${i}`} className="text-[14px] tracking-[-0.01em] text-[#707070]">
+            {badge.reason}
+            {badge.basisArticle ? ` (${badge.basisArticle})` : ''}
+          </p>
+        ))}
+      </div>
     </div>
   );
 }
@@ -246,11 +291,21 @@ function TranslationEditor({ jobId, block }: { jobId: string; block: BlockViewMo
   return (
     <div className="mt-4 rounded-[6px] bg-[#f5f5f5] p-5">
       <p className="text-[12px] font-light tracking-[-0.02em] text-[#999]">번역문</p>
+      {/* N5 3차 정렬 — 이제 번역문 모드가 기본값이라 이 textarea가 항상
+          보이고, row 클릭(가운데 지점)이 이 textarea 위에 떨어지는 경우가
+          흔해졌다. 이전엔 여기서 stopPropagation()으로 row의 onSelect
+          (block 선택)를 막았는데, "텍스트를 편집하려고 클릭"한 것과
+          "그 block을 선택"하는 것은 서로 막을 이유가 없는 동작이다 —
+          편집 중인 block이 선택 상태로도 표시되는 게 오히려 자연스럽다.
+          그래서 이 stopPropagation을 제거했다(실측: e2e F-CFM-13류 selection
+          테스트가 이 stopPropagation 때문에 row 클릭이 선택으로 이어지지
+          않아 실패했었다). "확인"/"최신 값 불러오기" 버튼의
+          stopPropagation은 그대로 둔다 — 그 버튼들은 실제 액션(저장/불러
+          오기)이라 row 선택과 뒤섞이면 안 된다. */}
       <textarea
         data-testid={`n5-block-editor-${block.id}`}
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
-        onClick={(e) => e.stopPropagation()}
         rows={3}
         className="mt-1 w-full resize-none bg-transparent text-[16px] tracking-[-0.03em] text-[#171717] outline-none"
       />
@@ -314,6 +369,7 @@ function BlockRow({
   jobId,
   block,
   index,
+  viewMode,
   isSelected,
   onSelect,
   rowRef,
@@ -321,6 +377,8 @@ function BlockRow({
   jobId: string;
   block: BlockViewModel;
   index: number;
+  /** content slot(원문/번역문)이 이 값에 따라 통째로 바뀐다 — 동시에 쌓아 보여주지 않는다. */
+  viewMode: N5ViewMode;
   isSelected: boolean;
   onSelect: () => void;
   rowRef: (el: HTMLLIElement | null) => void;
@@ -352,24 +410,30 @@ function BlockRow({
       >
         <div className="flex flex-wrap items-center gap-1.5">
           <BlockNumberBadge index={index} isSelected={isSelected} />
-          <RoleTag label={block.roleLabel} />
           {block.badges.map((badge, i) => (
             <SignalTag key={`${badge.code}-${i}`} badge={badge} />
           ))}
         </div>
 
-        <SourceField text={block.sourceText} />
-
-        {block.editable ? (
-          <TranslationEditor jobId={jobId} block={block} />
+        {/* content slot — 원문/번역문을 동시에 쌓지 않는다. 같은 자리에서
+            viewMode에 따라 통째로 바뀐다(요청 5번). 번역근거·자동 글자 크기
+            조정 안내는 번역문을 보는 중일 때만 의미가 있어 같이 묶는다. */}
+        {viewMode === 'original' ? (
+          <div className="mt-4">
+            <SourceField text={block.sourceText} />
+          </div>
+        ) : block.editable ? (
+          <>
+            <TranslationEditor jobId={jobId} block={block} />
+            <EvidenceSection badges={block.badges} />
+            {block.autoAdjust.applied && (
+              <p className="mt-2 text-[11px] tracking-[-0.02em] text-[#999]">
+                자동 글자 크기 조정 적용됨 ({Math.round(block.autoAdjust.fontScale * 100)}%)
+              </p>
+            )}
+          </>
         ) : (
           <ReadOnlyTranslation text={block.translatedText} />
-        )}
-
-        {block.autoAdjust.applied && (
-          <p className="mt-2 text-[11px] tracking-[-0.02em] text-[#999]">
-            자동 글자 크기 조정 적용됨 ({Math.round(block.autoAdjust.fontScale * 100)}%)
-          </p>
         )}
       </div>
     </li>
@@ -398,26 +462,20 @@ function groupBlocksBySection(
 
 export function N5Panel({
   jobId,
-  targetCountry,
-  targetLanguage,
   sections,
   blocks,
   viewMode,
   onViewModeChange,
-  translatedDisabled,
   selectedBlockId,
   selectedSectionId,
   onSelectBlock,
   onSelectSection,
 }: {
   jobId: string;
-  targetCountry: string | null;
-  targetLanguage: string | null;
   sections: PreviewSectionViewModel[];
   blocks: BlockViewModel[];
   viewMode: N5ViewMode;
   onViewModeChange: (mode: N5ViewMode) => void;
-  translatedDisabled: boolean;
   selectedBlockId: number | null;
   selectedSectionId: number | null;
   onSelectBlock: (block: BlockViewModel) => void;
@@ -502,21 +560,12 @@ export function N5Panel({
       data-testid="n5-panel"
       className="flex h-full w-[clamp(360px,22.55vw,433px)] shrink-0 flex-col pt-[clamp(24px,5.56vh,60px)] pb-[clamp(40px,7.41vh,80px)]"
     >
-      {/* 7단계 — Figma(544:3168 재확인)는 타이틀과 번역문/원문 토글이 한 줄에
-          justify-between으로 나란히 있다. 이전엔 토글이 타이틀 위 별도 줄이었다. */}
-      <div className="shrink-0 pb-4">
-        <div className="flex items-start justify-between">
-          <h2 className="text-[18px] font-medium tracking-[-0.03em] text-[#171717]">번역 결과</h2>
-          <ViewModeToggle
-            mode={viewMode}
-            onChange={onViewModeChange}
-            translatedDisabled={translatedDisabled}
-          />
-        </div>
-        <p className="mt-1 text-[12px] tracking-[-0.02em] text-[#999]">
-          {targetCountry ?? '-'}
-          {targetLanguage ? ` (${targetLanguage.toUpperCase()})` : ''} · {blocks.length}개 텍스트 블록
-        </p>
+      {/* Figma(544:3168)는 타이틀과 번역문/원문 토글이 한 줄에 justify-between으로
+          나란히 있다. 국가/언어·블록 개수 메타 줄은 Figma에 대응 요소가 없고
+          검수에 필수인 정보도 아니라 뺐다(위 파일 상단 주석 참고). */}
+      <div className="flex shrink-0 items-start justify-between pb-4">
+        <h2 className="text-[18px] font-medium tracking-[-0.03em] text-[#171717]">번역 결과</h2>
+        <ViewModeToggle mode={viewMode} onChange={onViewModeChange} />
       </div>
 
       <div
@@ -553,6 +602,7 @@ export function N5Panel({
                     jobId={jobId}
                     block={block}
                     index={blockIndex + 1}
+                    viewMode={viewMode}
                     isSelected={block.id === selectedBlockId}
                     onSelect={() => onSelectBlock(block)}
                     rowRef={(el) => {
