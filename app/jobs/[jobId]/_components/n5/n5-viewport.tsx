@@ -222,7 +222,9 @@ function ImageLayer({
             data-testid={`n5-slice-${mode}-${slice.sectionId}`}
             role="button"
             tabIndex={0}
-            className="relative shrink-0 cursor-pointer"
+            // Figma(544:3168)는 section마다 border(border-[#eaeaea])로 구획을
+            // 나눈다 — 쌓인 section 사이 경계가 시각적으로 보이게 한다.
+            className="relative shrink-0 cursor-pointer border border-[#eaeaea]"
             onClick={() => onSelectSection(slice.sectionId)}
             onKeyDown={(e) => {
               if (e.key !== 'Enter' && e.key !== ' ') return;
@@ -401,13 +403,14 @@ export function N5Viewport({
     return map;
   }, [blocks]);
 
-  // 우측 panel(n5-panel.tsx groupBlocksBySection)과 정확히 같은 순서(section
-  // 오름차순 → 그 section 안 block 순서)로 번호를 매겨 좌/우 배지 숫자가
-  // 항상 일치하게 한다.
+  // 번호는 section-local index다(section마다 1부터 다시 시작) — job 전체
+  // 기준으로 계속 증가하는 전역 번호를 화면 번호로 쓰지 않는다. 우측
+  // panel(n5-panel.tsx groupBlocksBySection)도 같은 규칙(section 안
+  // blockIndex+1)으로 계산하므로 좌/우 배지 숫자가 항상 일치한다.
   const blockIndexById = useMemo(() => {
     const map = new Map<number, number>();
-    let index = 0;
     for (const slice of slices) {
+      let index = 0;
       for (const block of blocksBySection.get(slice.sectionId) ?? []) {
         index += 1;
         map.set(block.id, index);
@@ -435,6 +438,13 @@ export function N5Viewport({
   useEffect(() => {
     canvasSizeRef.current = canvasSize;
   }, [canvasSize]);
+
+  // 최초 진입 시 가로 중앙 정렬을 시도했으나(F-CFM-13/14 e2e 실행 결과)
+  // 뷰포트가 좁고 canvas가 그보다 더 좁을 때 section 우상단 "제외하기"
+  // 버튼이 화면 우상단 고정 zoom/fit 컨트롤 영역과 겹쳐 클릭을 가로채는
+  // 회귀가 실측 확인됐다(e2e/n5-viewport.spec.ts F-CFM-14, 기본 1280×720
+  // 뷰포트). zoom/pan 조작 경로 자체는 이번 작업 범위 밖(회귀 금지 대상)
+  // 이라 안전하게 되돌렸다 — INITIAL_TRANSFORM(pan={0,0}) 그대로 유지한다.
 
   // ── Space 키 상태 추적 — 텍스트 입력창에 focus가 있으면 pan을 발동하지 않는다 ──
   useEffect(() => {

@@ -491,10 +491,17 @@ export function N5Panel({
     }
   }, [selectedBlockId, selectedSectionId]);
 
-  let runningIndex = 0;
-
   return (
-    <div data-testid="n5-panel" className="flex h-full w-[430px] shrink-0 flex-col">
+    // width: Figma(544:3168) 실측 433px(1920 기준, 433/1920≈22.55vw)를 상한으로
+    // 쓰고, 하한(360px)은 패널이 지나치게 좁아지는 걸 막는 안전장치다.
+    // pt/pb: 패널이 이제 rail과 같은 h-full(세로 전체)이라, Figma가 보여준
+    // "패널 타이틀 y=60, 저장 버튼 하단 여백=80"을 패널 자신의 바깥 padding
+    // 으로 준다 — 60/1080=5.56vh, 80/1080≈7.41vh(다른 화면의 하단 gutter와
+    // 같은 계수, ProcessingStageLayout의 pb-[clamp(60px,7.41vh,80px)] 참고).
+    <div
+      data-testid="n5-panel"
+      className="flex h-full w-[clamp(360px,22.55vw,433px)] shrink-0 flex-col pt-[clamp(24px,5.56vh,60px)] pb-[clamp(40px,7.41vh,80px)]"
+    >
       {/* 7단계 — Figma(544:3168 재확인)는 타이틀과 번역문/원문 토글이 한 줄에
           justify-between으로 나란히 있다. 이전엔 토글이 타이틀 위 별도 줄이었다. */}
       <div className="shrink-0 pb-4">
@@ -536,23 +543,24 @@ export function N5Panel({
                 />
               </div>
               <ul className="flex flex-col gap-4">
-                {group.blocks.map((block) => {
-                  runningIndex += 1;
-                  return (
-                    <BlockRow
-                      key={block.id}
-                      jobId={jobId}
-                      block={block}
-                      index={runningIndex}
-                      isSelected={block.id === selectedBlockId}
-                      onSelect={() => onSelectBlock(block)}
-                      rowRef={(el) => {
-                        if (el) blockRowRefs.current.set(block.id, el);
-                        else blockRowRefs.current.delete(block.id);
-                      }}
-                    />
-                  );
-                })}
+                {/* 번호는 section-local index다(blockIndex + 1) — section마다
+                    1부터 다시 시작한다. job 전체를 관통하는 전역 index나
+                    DB id를 화면 번호로 쓰지 않는다(좌측 캔버스와 동일 규칙,
+                    n5-viewport.tsx blockIndexById 참고). */}
+                {group.blocks.map((block, blockIndex) => (
+                  <BlockRow
+                    key={block.id}
+                    jobId={jobId}
+                    block={block}
+                    index={blockIndex + 1}
+                    isSelected={block.id === selectedBlockId}
+                    onSelect={() => onSelectBlock(block)}
+                    rowRef={(el) => {
+                      if (el) blockRowRefs.current.set(block.id, el);
+                      else blockRowRefs.current.delete(block.id);
+                    }}
+                  />
+                ))}
               </ul>
             </div>
           ))
