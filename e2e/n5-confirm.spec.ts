@@ -86,8 +86,15 @@ test.describe('정상 confirm', () => {
 test.describe('unresolved warning — acknowledgedWarnings 불일치', () => {
   test('서버의 현재 경고 집합과 다르면 409 INVALID_STATE, N5에 그대로 머무른다', async ({ page }) => {
     await page.getByTestId('n5-zoom-in').click();
-    const zoomBefore = await readTransform(page);
     await page.getByTestId('n5-block-row-9101').click();
+    // 9/24 F-CFM-13 양방향 이동 반영 — 우측 row 클릭이 selectedBlockId를
+    // 바꾸면 그 block이 화면 밖일 때 좌측 pan이 실제로 이동한다(의도된
+    // 신규 동작, n5-viewport.tsx의 selectionAutoMove effect 참고). 이 테스트의
+    // 실제 목적은 "confirm 실패가 N5 상태를 건드리지 않는다"이므로, 스냅샷은
+    // 그 이동까지 끝난 뒤(= 두 setup 동작이 모두 끝난 뒤) 찍어야 한다 —
+    // 이 시점 이후로는 아래 raw fetch confirm 실패만 추가로 일어나고, 그
+    // 실패가 pan/zoom을 전혀 건드리지 않는다는 것만 확인하면 된다.
+    const zoomBefore = await readTransform(page);
 
     // 실제 앱 코드를 우회해 "낡은"(경고 일부가 빠진) acknowledgedWarnings로
     // 직접 confirm을 호출한다 — 서버가 진짜로 집합 불일치를 검사하는지 확인.
