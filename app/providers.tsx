@@ -15,7 +15,14 @@ import { ensureBackendSession, isApiMockingEnabled } from "@/lib/api/session";
 let mswReadyPromise: Promise<void> | null = null;
 
 function enableMocking(): Promise<void> {
-  if (process.env.NODE_ENV !== 'development') return Promise.resolve();
+  // MSW on/off 기준은 NODE_ENV가 아니라 NEXT_PUBLIC_API_MOCKING 하나다
+  // (lib/api/session.ts의 isApiMockingEnabled()가 SSOT) — 아래 useEffect의
+  // ensureBackendSession 분기와 lib/api/pixlate.ts의 인증 처리도 이미 같은
+  // 기준을 쓴다. NODE_ENV로 판단하면 배포 환경에서 이 값을 'enabled'로 둬도
+  // worker가 아예 시작되지 않으면서 인증 흐름은 이미 "mock이니 건너뛴다"고
+  // 판단해 버려, 실제로는 아무도 요청을 가로채지 않는데 인증 토큰도 없이
+  // 백엔드로 나가는 상태가 생긴다.
+  if (!isApiMockingEnabled()) return Promise.resolve();
   if (typeof window === 'undefined') return Promise.resolve();
   if (mswReadyPromise) return mswReadyPromise;
 
@@ -39,8 +46,8 @@ function enableMocking(): Promise<void> {
  * 공용 useJobStatusQuery가 진입 직후 첫 요청을 보낸다), 이 파일(공용 Providers)
  * 하나만 고치면 전체가 해결된다 — 개별 화면의 polling 로직은 건드리지 않는다.
  * mockingReady === false인 동안 children을 아예 마운트하지 않아 그 어떤 쿼리도
- * MSW 등록 전에 나가지 못하게 한다. production에서는 mocking 자체가 없으므로
- * 초기값을 true로 두어 지연이 없다.
+ * MSW 등록 전에 나가지 못하게 한다. isApiMockingEnabled()가 false면
+ * enableMocking()이 즉시 resolve하므로 지연 자체가 거의 없다.
  */
 export default function Providers({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(

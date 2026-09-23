@@ -19,6 +19,7 @@
     "make:n5-section-fixtures": "node scripts/make-n5-section-fixture-images.mjs",
     "generate:openapi-types": "openapi-typescript https://ai-pixlate.github.io/server/openapi.yaml -o lib/api/generated/openapi.d.ts",
     "verify:n5-adapter": "node --experimental-strip-types scripts/verify-n5-adapter.mjs",
+    "verify:msw-flag": "node --experimental-strip-types scripts/verify-msw-mocking-flag.mjs",
     "typecheck": "tsc --noEmit",
     "test:e2e": "playwright test"
   },
