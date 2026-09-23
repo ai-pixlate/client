@@ -88,28 +88,27 @@ function RenderProgress({
 
 // ─────────────────────────────────────────────────────────────────
 // 완료 배너 — Figma node 665:4062 "N6 / Completion Banner". Orange Glow와
-// pix/ate 마크(3개 layer)는 실제 Figma 자산을 받아 public/mock/n6/에 커밋해
-// 두고 그대로 쓴다(직접 그린 대체 svg 아님).
+// pix/ate 마크는 실제 Figma 자산을 받아 public/mock/n6/에 커밋해 두고 그대로
+// 쓴다(직접 그린 대체 svg 아님).
+//
+// 9/23 — Layer_1(667:7648, 66×66) 원본 export(completion-mark.svg)를 받아
+// 3개 조각(top-left/main/bottom-right)을 absolute inset으로 짜맞추던 이전
+// 구조를 걷어내고 이 파일 하나만 쓴다. viewBox가 정사각형(0 0 1080 1080)
+// 이라 66×66(역시 정사각형)로 줄여도 종횡비가 그대로 유지된다 — object-fit
+// crop이나 transform:scale 없이 width/height만 66px로 고정한다.
 // ─────────────────────────────────────────────────────────────────
 
 function PixMark() {
   return (
-    <div className="relative size-[66px] overflow-hidden" aria-hidden="true">
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src="/mock/n6/pix-mark-top-left.svg" alt="" className="absolute inset-[0_53.55%_53.55%_0] block size-full" />
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src="/mock/n6/pix-mark-bottom-right.svg"
-        alt=""
-        className="absolute inset-[53.55%_0_0_53.55%] block size-full"
-      />
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src="/mock/n6/pix-mark-main.svg"
-        alt=""
-        className="absolute inset-[10.71%_10.71%_10.71%_14.28%] block size-full"
-      />
-    </div>
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src="/mock/n6/completion-mark.svg"
+      alt=""
+      aria-hidden="true"
+      width={66}
+      height={66}
+      className="block size-[66px]"
+    />
   );
 }
 
