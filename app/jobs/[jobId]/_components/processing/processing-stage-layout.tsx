@@ -107,11 +107,13 @@ function StageRow({ no, label, state }: ProcessingStep) {
     ? "font-['Pretendard:Regular'] text-[12px] text-[#ff6a38]"
     : "font-['Pretendard:Light'] text-[12px] tracking-[-0.04em] text-[#999]";
 
-  // 68px(Figma 1920 기준)~51px(75%) 사이를 패널 자신의 렌더링 폭(cqw)에
-  // 비례해 오간다 — 뷰포트가 아니라 패널 크기 기준이라 패널이 세로
-  // 제약 때문에 줄어들 때도 정확히 같은 비율로 따라온다.
+  // 68px(Figma 1920 기준)를 상한으로, 패널 자신의 렌더링 폭(cqw)과
+  // 세로 크기(cqh) 중 더 작은 쪽에 비례해 줄어든다 — 가로만 넓고 세로가
+  // 짧은 실제 브라우저 창에서도(예: 1920 폭·950 미만 높이) 5단계가
+  // 세로 공간에 맞춰 함께 압축된다. 하한(34px)은 10px 점 + 2줄 텍스트가
+  // 겹치지 않는 최소값이다.
   return (
-    <div className="flex h-[clamp(51px,4.219cqw,68px)] w-full items-center gap-3.5">
+    <div className="flex h-[clamp(34px,min(4.219cqw,8.8cqh),68px)] w-full items-center gap-3.5">
       <div className={`size-[10px] shrink-0 rounded-full ${dotClass}`} aria-hidden="true" />
       <div className="flex flex-col gap-1">
         <p className={`whitespace-pre ${titleClass}`}>{`${no}  ${label}`}</p>
@@ -199,26 +201,38 @@ export function ProcessingStageLayout({
               간격이다). */}
         <div className="min-h-0 flex-1 pt-[clamp(0px,calc(10vh_-_94px),14px)] pr-[clamp(45px,3.125vw,60px)] pb-[clamp(60px,7.41vh,80px)] pl-[clamp(0px,calc(6.25vw_-_80px),40px)]">
           {/* 패널 내부 padding/gap은 vw 기준을 그대로 쓴다(패널 자신이
-              [container-type:inline-size]로 자식들의 cqw 기준점이 되는
-              동시에, cq 단위는 스펙상 컨테이너 자기 자신의 padding/width에는
-              쓸 수 없다 — self-reference라 조용히 상위 컨테이너를 참조하며
-              값이 어긋난다). 안쪽 자식들(좌측 컬럼 내부 간격, 우측 컬럼
-              폭·간격, 5단계 row 높이, progress 간격)은 전부 cqw로 패널
-              자신의 실제 렌더링 폭에 정확히 비례한다. */}
-          <div className="relative flex h-full min-h-0 min-w-0 w-full [container-type:inline-size] gap-[clamp(60px,4.17vw,80px)] overflow-y-auto rounded-[8px] bg-[#f5f5f5] pt-[clamp(43.5px,3.02vw,58px)] pr-[clamp(45px,3.13vw,60px)] pb-[clamp(43.5px,3.02vw,58px)] pl-[clamp(51px,3.54vw,68px)]">
+              [container-type:size]로 자식들의 cqw/cqh 기준점이 되는 동시에,
+              cq 단위는 스펙상 컨테이너 자기 자신의 padding/width에는 쓸 수
+              없다 — self-reference라 조용히 상위 컨테이너를 참조하며 값이
+              어긋난다). 안쪽 자식들(좌측 컬럼 내부 간격, 우측 컬럼 폭·간격,
+              5단계 row 높이, progress 간격)의 가로 크기는 cqw로 패널의
+              실제 렌더링 폭에 비례한다.
+
+              세로 여백(gap/margin-top)은 `min(Ncqw, Mcqh)`로 cqw·cqh 중
+              더 작은 쪽을 쓴다 — 가로만 넓고 세로가 짧은 실제 브라우저
+              창(예: 1920 폭인데 innerHeight는 950 미만)에서 cqw만 쓰면
+              세로 간격이 줄지 않아 패널 안쪽 콘텐츠 높이가 패널 자신의
+              세로 크기(h-full, 뷰포트 기준)를 넘어버린다 — 그게 실제로
+              재현됐던 N2/N4 공용 내부 스크롤바의 원인이다. container-type
+              을 size로 바꿔 cqh(패널 자신의 세로 크기 대비 %)까지 쓸 수
+              있게 하고, 각 clamp의 하한(px)도 "정상 노트북 뷰포트에서
+              실제로 줄어들 수 있는" 값으로 낮췄다 — 상한(px)은 그대로
+              Figma 1920×1080 실측값이라 여유 있는 뷰포트에서는 이전과
+              동일하게 보인다. */}
+          <div className="relative flex h-full min-h-0 min-w-0 w-full [container-type:size] gap-[clamp(60px,4.17vw,80px)] overflow-y-auto rounded-[8px] bg-[#f5f5f5] pt-[clamp(43.5px,3.02vw,58px)] pr-[clamp(45px,3.13vw,60px)] pb-[clamp(43.5px,3.02vw,58px)] pl-[clamp(51px,3.54vw,68px)]">
             {/* 좌측 — 진행 비주얼. cqw 기준값은 패널의 content-box 폭
                 (border-box 1740 − pl68 − pr60 = 1612, 1920 기준)이다 —
                 container query 단위는 컨테이너 자신의 padding을 제외한
                 content-box만 기준으로 삼는다. 그래서 계수는
                 "Figma값 / 16.12"다. */}
-            <div className="flex min-w-0 flex-1 flex-col gap-[clamp(40.5px,3.350cqw,54px)]">
-              <div className="flex max-w-[820px] flex-col gap-[clamp(15px,1.241cqw,20px)]">
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-[clamp(16px,min(3.350cqw,7cqh),54px)]">
+              <div className="flex max-w-[820px] shrink-0 flex-col gap-[clamp(8px,min(1.241cqw,2.6cqh),20px)]">
                 <div className="flex h-[26px] w-fit items-center justify-center rounded-[6px] bg-[#f5f5f5] px-2">
                   <p className="font-['Pretendard:Regular'] text-[12px] leading-[14px] text-[#171717]">
                     {statusTagLabel}
                   </p>
                 </div>
-                <div className="flex flex-col gap-[clamp(9px,0.744cqw,12px)]">
+                <div className="flex flex-col gap-[clamp(5px,min(0.744cqw,1.55cqh),12px)]">
                   <p className="font-['Pretendard:SemiBold'] text-[28px] tracking-[-0.015em] text-[#171717]">
                     {visual.headline}
                   </p>
@@ -228,26 +242,56 @@ export function ProcessingStageLayout({
                 </div>
               </div>
 
-              {/* 고정 h-[520px] 대신 Figma visual frame 비율(1044:520)을
-                  aspect-ratio로 고정한다 — 좌측 컬럼 폭이 뷰포트에 따라
-                  줄어들면 높이도 같은 비율로 자연스럽게 따라 줄어든다.
-                  object-cover는 그대로 유지해 crop을 허용한다. */}
-              <div className="relative aspect-[1044/520] w-full shrink-0 overflow-hidden rounded-[8px]">
-                {/* eslint-disable-next-line @next/next/no-img-element -- 애니메이션 보존을 위해 next/image 최적화 대상에서 제외(GIF) */}
-                <img
-                  src={visual.src}
-                  alt=""
-                  aria-hidden="true"
-                  className="absolute inset-0 size-full object-cover opacity-[0.97]"
-                />
-                <p className="absolute top-7 left-6 whitespace-pre font-['Pretendard:Light'] text-[12px] tracking-[-0.04em] text-white/[58%]">
-                  {visual.overlayTopLabel}
-                </p>
-                <div className="absolute right-6 bottom-6 flex max-w-[360px] flex-col items-end gap-2 text-right">
-                  <p className="font-['Pretendard:Medium'] text-[13px] text-[#ff6a38]">{visual.overlayBottomTitle}</p>
-                  <p className="font-['Pretendard:Regular'] text-[12px] text-white/[58%]">
-                    {visual.overlayBottomDescription}
+              {/* 슬롯 — 헤드라인 블록(shrink-0)을 뺀 좌측 컬럼의 나머지
+                  세로 공간을 그대로 받는다(flex-1 + min-h-0). 이 슬롯
+                  자체는 비율을 주장하지 않는다 — 세로 공간이 얼마가
+                  남든(뷰포트가 짧아도) 그 이상 커지거나 넘치지 않는다. */}
+              <div className="min-h-0 w-full flex-1">
+                {/* 실제 비주얼 박스 — aspect-[1044/520]로 Figma 비율을
+                    "목표"로 유지하되 max-h-full로 위 슬롯 높이를 넘지
+                    않게 캡핑한다. 세로 공간이 넉넉하면 정확히 1044:520로
+                    렌더돼 Figma와 같고(이전과 동일), 부족하면 슬롯 높이
+                    만큼만 줄어든다 — width는 항상 100%를 유지하므로
+                    가로폭은 강제로 줄이지 않는다(회귀 금지 대상: 예전에
+                    max-height로 전체를 눌렀다가 좁은 노트북에서 폭까지
+                    같이 줄어 패널이 Figma보다 훨씬 좁게 떠버린 적이 있다
+                    — 이번엔 폭은 그대로 두고 높이만 캡핑한다).
+
+                    object-cover → object-contain: 박스가 1044:520보다
+                    납작해져도(세로 공간 부족) GIF를 crop하지 않는다 —
+                    항상 전체 프레임이 보인다. 남는 자리(letterbox)는
+                    GIF 자체 배경색과 같은 bg-black으로 채워 실측(코너/
+                    중앙 픽셀 (0,0,0)~(16,16,16))상 거의 티가 나지 않게
+                    한다. */}
+                <div className="relative aspect-[1044/520] max-h-full w-full overflow-hidden rounded-[8px] bg-black">
+                  {/* eslint-disable-next-line @next/next/no-img-element -- 애니메이션 보존을 위해 next/image 최적화 대상에서 제외(GIF) */}
+                  <img
+                    src={visual.src}
+                    alt=""
+                    aria-hidden="true"
+                    className="absolute inset-0 size-full object-contain opacity-[0.97]"
+                  />
+                  <p className="absolute top-7 left-6 whitespace-pre font-['Pretendard:Light'] text-[12px] tracking-[-0.04em] text-white/[58%]">
+                    {visual.overlayTopLabel}
                   </p>
+                  {/* 9/23 — 흰색 description은 Figma처럼 항상 한 줄이다. 실측
+                      결과 컨테이너 자체가 좁아서 줄바꿈이 나던 게 아니라(우측
+                      GIF 영역 안에서 이 블록이 쓸 수 있는 폭은 여유가 있다)
+                      caption 문구 자체가 Figma 원본보다 길었던 게 원인이라,
+                      문구를 Figma 분량에 맞춰 짧게 정리하고 whitespace-nowrap
+                      으로 줄바꿈 자체를 막았다 — font-size를 줄이거나 <br>을
+                      넣지 않는다. w-max(콘텐츠 실제 폭만큼만)로 고정 max-w가
+                      불필요한 줄바꿈을 만들지 않게 하되, GIF 박스 좌측 끝을
+                      넘어가지 않도록 max-w-[calc(100%-48px)](좌우 6 inset
+                      상쇄)를 안전 상한으로만 둔다. */}
+                  <div className="absolute right-6 bottom-6 flex w-max max-w-[calc(100%-48px)] flex-col items-end gap-2 text-right">
+                    <p className="whitespace-nowrap font-['Pretendard:Medium'] text-[13px] text-[#ff6a38]">
+                      {visual.overlayBottomTitle}
+                    </p>
+                    <p className="whitespace-nowrap font-['Pretendard:Regular'] text-[12px] text-white/[58%]">
+                      {visual.overlayBottomDescription}
+                    </p>
+                  </div>
                 </div>
               </div>
             </div>
@@ -260,12 +304,12 @@ export function ProcessingStageLayout({
                 우측 컬럼도 그 패널 폭의 정확히 같은 비율(403/1740 ≈
                 23.16%)만 따라가면 된다. 패널이 비정상적으로 좁아지는
                 경우에 대한 안전장치로만 min-width 300px을 둔다. */}
-            <div className="flex w-[max(300px,25cqw)] shrink-0 flex-col gap-[clamp(39px,3.226cqw,52px)]">
-              <div className="flex max-w-[370px] flex-col gap-[clamp(18px,1.489cqw,24px)]">
+            <div className="flex w-[max(300px,25cqw)] shrink-0 flex-col gap-[clamp(16px,min(3.226cqw,6.7cqh),52px)]">
+              <div className="flex max-w-[370px] flex-col gap-[clamp(8px,min(1.489cqw,3.1cqh),24px)]">
                 <p className="font-['Pretendard:Regular'] text-[12px] tracking-[-0.02em] text-[#999]">
                   {log.sectionLabel}
                 </p>
-                <div className="flex flex-col gap-[clamp(9px,0.744cqw,12px)]">
+                <div className="flex flex-col gap-[clamp(5px,min(0.744cqw,1.55cqh),12px)]">
                   <h2 className="font-['Pretendard:SemiBold'] text-[20px] tracking-[-0.02em] text-[#171717]">
                     {log.heading}
                   </h2>
@@ -290,7 +334,7 @@ export function ProcessingStageLayout({
                   bar↔안내문)는 Figma 원본에서 서로 다른 간격이다 — 하나의
                   공유 gap으로 뭉치지 않고 각 관계를 독립된 clamp로 둔다. */}
               <div className="flex flex-col">
-                <div className="flex flex-col gap-[clamp(4.5px,0.372cqw,6px)]">
+                <div className="flex flex-col gap-[clamp(3px,min(0.372cqw,0.78cqh),6px)]">
                   {/* 퍼센트 숫자와 일시정지 버튼이 Figma에서 같은 줄에
                       놓여 있어 같은 flex row로 묶는다 — 버튼을 별도
                       absolute 좌표로 흉내내지 않는다. */}
@@ -323,7 +367,7 @@ export function ProcessingStageLayout({
                     좁아진다. 위쪽 간격(전체 분석 ↔ bar)은 Figma에서 세
                     관계 중 가장 크다. */}
                 <div
-                  className="mt-[clamp(28.5px,2.357cqw,38px)] h-[3px] w-full max-w-[396px] overflow-hidden rounded-full bg-[rgba(112,112,112,0.16)]"
+                  className="mt-[clamp(12px,min(2.357cqw,4.9cqh),38px)] h-[3px] w-full max-w-[396px] overflow-hidden rounded-full bg-[rgba(112,112,112,0.16)]"
                   role="progressbar"
                   aria-valuenow={progressPercent}
                   aria-valuemin={0}
@@ -335,7 +379,7 @@ export function ProcessingStageLayout({
                   />
                 </div>
 
-                <p className="mt-[clamp(18px,1.489cqw,24px)] font-['Pretendard:Light'] text-[12px] tracking-[-0.04em] text-[#999]">
+                <p className="mt-[clamp(8px,min(1.489cqw,3.1cqh),24px)] font-['Pretendard:Light'] text-[12px] tracking-[-0.04em] text-[#999]">
                   {progressHint}
                 </p>
               </div>

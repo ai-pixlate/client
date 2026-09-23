@@ -8,7 +8,7 @@ import { ProcessingStageLayout, type ProcessingStep } from './processing/process
 // 동일해(Figma가 N4의 5단계 목록 컴포넌트를 "N2 / Step List"로 그대로
 // 재사용할 정도) ./processing/processing-stage-layout.tsx로 뺐다. 이
 // 파일에는 N2 고유의 것만 남는다:
-// - copy(헤더/헤드라인/로그/5단계 라벨/안내문 텍스트)
+// - copy(헤더/헤드라인/로그/5단계 라벨/안내문 텍스트/GIF 하단 caption)
 // - N2의 backend stage(ocr/section/verify) → 5단계 상태 해석
 // - mock 전용 progressOverride/dwell 처리(page.tsx가 계산해 내려줌)
 //
@@ -23,8 +23,27 @@ import { ProcessingStageLayout, type ProcessingStep } from './processing/process
 // stage가 하나라도 있으면 이 fallback은 아예 쓰이지 않고 항상 실제 stage가
 // 우선한다.
 //
+// 하나의 backend coarse stage가 진행 중이어도 오른쪽 목록의 여러 시각
+// 항목이 동시에 "진행 중"일 수 있다(section 진행 중 → 02·03 동시 진행
+// 중, verify 진행 중 → 04·05 동시 진행 중) — 이 계약(coarse 3단계)에서는
+// 실제로 그게 맞는 표현이다. N2는 backend가 stage별 progress를 전혀
+// 주지 않으므로(OpenAPI JobTaskStatus — 최상위 progress 1개뿐), 이걸
+// 억지로 02/03·04/05로 쪼개려면 top-level progress로 FE가 그 경계를
+// 지어내야 한다 — 서버가 안 주는 세부 상태를 FE가 추론하는 것이므로 하지
+// 않는다(9/23 재확인: 한 번 이렇게 시도했다가 되돌렸다).
+//
 // 이 해석 로직은 N4와 절대 공유하지 않는다 — N4는 backend stage 어휘 자체가
 // 다르다(inpaint/translate/verify/render, n4-processing-view.tsx 참고).
+//
+// 9/23 — GIF 하단 caption(주황 title + 회색 description)을 추가했다.
+// 이전엔 backend stage와 무관하게 항상 같은 문구(04 캡션)만 보였다.
+// N2는 02·03(또는 04·05)이 동시에 active라 "active 시각 항목 하나 =
+// caption"이라는 전제를 쓸 수 없다(N4는 이 전제가 성립해서 그렇게
+// 한다) — 대신 caption도 오른쪽 목록과 "같은 coarse stage 값"
+// (resolveCoarseStage 결과, ocr/section/verify/done)을 그대로 참조한다.
+// 즉 하나의 backend stage가 오른쪽에서는 세부 항목 여러 개를 동시에
+// active로 보여주고, GIF에서는 그 stage를 포괄하는 문구 하나로
+// 설명한다 — progress%로 caption이나 substage를 다시 추론하지 않는다.
 // ─────────────────────────────────────────────────────────────────
 
 const HEADLINE_FALLBACK = '상세페이지의 구조와 문맥을 읽고 있습니다.';
@@ -48,6 +67,35 @@ const FIVE_STEP_STATES_BY_COARSE_STAGE: Record<'ocr' | 'section' | 'verify' | 'd
   verify: ['done', 'done', 'done', 'active', 'active'],
   done: ['done', 'done', 'done', 'done', 'done'],
 };
+
+// coarse stage → GIF 하단 caption. 오른쪽 목록이 참조하는 것과 같은
+// coarse stage 값을 그대로 쓴다(steps에서 active를 다시 찾지 않는다) —
+// section/verify는 시각 항목이 2개씩 걸려 있어 그 둘을 포괄하는 문구
+// 하나로 쓴다.
+// 9/23 재조정 — 흰색 description은 Figma처럼 한 줄이어야 한다(processing-
+// stage-layout.tsx의 whitespace-nowrap 처리 참고). 이전 문구는 Figma 원본
+// 분량보다 길어 실측상 줄바꿈이 났다 — 뜻은 유지하되 분량만 Figma 수준으로
+// 줄였다(font-size를 줄이거나 컨테이너를 늘리는 방식으로 우회하지 않는다).
+const OVERLAY_CAPTION_BY_COARSE_STAGE: Record<'ocr' | 'section' | 'verify', { title: string; description: string }> = {
+  ocr: {
+    title: '텍스트 영역 인식 중',
+    description: '이미지 속 텍스트와 위치를 인식하고 있습니다.',
+  },
+  section: {
+    title: '콘텐츠 구조 분석 중',
+    description: '콘텐츠 영역과 텍스트 역할을 구분하고 있습니다.',
+  },
+  verify: {
+    title: '번역 대상·적합성 확인 중',
+    description: '번역 제외 대상과 현지 적합성을 확인하고 있습니다.',
+  },
+};
+
+/** 'done'에는 별도 caption이 없다 — 새 "완료 중" 문구를 짓지 않고 마지막
+ *  coarse stage(verify)의 caption을 그대로 유지한 채 다음 화면으로 넘어간다. */
+function resolveOverlayCaption(stage: keyof typeof FIVE_STEP_STATES_BY_COARSE_STAGE) {
+  return OVERLAY_CAPTION_BY_COARSE_STAGE[stage === 'done' ? 'verify' : stage];
+}
 
 // progressOverride(mock 전용 표시 progress, 0~1)가 있고 실제 ocr/section/
 // verify stage가 하나도 없을 때만 쓰는 fallback. 실제 BE 데이터가 존재하면
@@ -101,7 +149,9 @@ export function N2AnalysisView({
    */
   progressOverride?: number;
 }) {
-  const steps = buildFiveSteps(FIVE_STEP_STATES_BY_COARSE_STAGE[resolveCoarseStage(status.stages, progressOverride)]);
+  const coarseStage = resolveCoarseStage(status.stages, progressOverride);
+  const steps = buildFiveSteps(FIVE_STEP_STATES_BY_COARSE_STAGE[coarseStage]);
+  const caption = resolveOverlayCaption(coarseStage);
   const progressPercent = Math.round((progressOverride ?? status.progress ?? 0) * 100);
   const failedItems = (status.items ?? []).filter((i) => i.status === 'failed');
 
@@ -119,8 +169,8 @@ export function N2AnalysisView({
         headline: HEADLINE_FALLBACK,
         description: '텍스트만 추출하지 않고, 번역에 필요한 섹션과 판단 근거를 함께 정리합니다.',
         overlayTopLabel: 'SCAN  ·  STRUCTURE  ·  CONTEXT',
-        overlayBottomTitle: '제품 라벨 자동 제외',
-        overlayBottomDescription: '제품 라벨로 인식된 영역은 번역 대상에서 자동으로 제외합니다.',
+        overlayBottomTitle: caption.title,
+        overlayBottomDescription: caption.description,
       }}
       log={{
         sectionLabel: 'ANALYSIS LOG',

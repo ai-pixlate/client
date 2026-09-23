@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 
 import {
@@ -34,6 +34,15 @@ import { ZoomControls } from './n5/n5-toolbar';
 // validation(GET /jobs/{jobId}/validation) 조회는 계약대로 유지하지만,
 // Figma에 별도 검증 상세 카드가 없어 그 결과를 화면에 렌더하지 않는다 —
 // deliverables/render 완료 여부만 이 화면의 "완료" 판단에 쓴다.
+//
+// 9/23 Figma 정렬(node 643:5523 재확인): 나가기 버튼+StepNav를 본문 헤더 위에
+// 세로로 쌓던 구조를 n5-view.tsx와 같은 "떠 있는 좌측 rail" 패턴으로 바꿨다 —
+// Figma가 보여준 나가기 버튼(849:7259, x≈39/y≈39)과 헤더 텍스트(655:6107,
+// x≈139/y≈59)는 서로 다른 x축에서 독립적으로 배치되는데, 이전 구조는 버튼을
+// 헤더와 같은 세로 스택 안에 두어 헤더가 Figma보다 아래로 밀려 보였다. Final
+// Preview 안쪽 콘텐츠 폭(990px, N5와 동일 소스), 우측 export 컬럼의 scrollbar를
+// n5-panel.tsx와 같은 hover-reveal 패턴으로도 맞췄다 — 기능(render/export/
+// download/save 흐름)은 전혀 바꾸지 않았다.
 // ─────────────────────────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────────
@@ -79,28 +88,27 @@ function RenderProgress({
 
 // ─────────────────────────────────────────────────────────────────
 // 완료 배너 — Figma node 665:4062 "N6 / Completion Banner". Orange Glow와
-// pix/ate 마크(3개 layer)는 실제 Figma 자산을 받아 public/mock/n6/에 커밋해
-// 두고 그대로 쓴다(직접 그린 대체 svg 아님).
+// pix/ate 마크는 실제 Figma 자산을 받아 public/mock/n6/에 커밋해 두고 그대로
+// 쓴다(직접 그린 대체 svg 아님).
+//
+// 9/23 — Layer_1(667:7648, 66×66) 원본 export(completion-mark.svg)를 받아
+// 3개 조각(top-left/main/bottom-right)을 absolute inset으로 짜맞추던 이전
+// 구조를 걷어내고 이 파일 하나만 쓴다. viewBox가 정사각형(0 0 1080 1080)
+// 이라 66×66(역시 정사각형)로 줄여도 종횡비가 그대로 유지된다 — object-fit
+// crop이나 transform:scale 없이 width/height만 66px로 고정한다.
 // ─────────────────────────────────────────────────────────────────
 
 function PixMark() {
   return (
-    <div className="relative size-[66px] overflow-hidden" aria-hidden="true">
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src="/mock/n6/pix-mark-top-left.svg" alt="" className="absolute inset-[0_53.55%_53.55%_0] block size-full" />
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src="/mock/n6/pix-mark-bottom-right.svg"
-        alt=""
-        className="absolute inset-[53.55%_0_0_53.55%] block size-full"
-      />
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src="/mock/n6/pix-mark-main.svg"
-        alt=""
-        className="absolute inset-[10.71%_10.71%_10.71%_14.28%] block size-full"
-      />
-    </div>
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src="/mock/n6/completion-mark.svg"
+      alt=""
+      aria-hidden="true"
+      width={66}
+      height={66}
+      className="block size-[66px]"
+    />
   );
 }
 
@@ -113,10 +121,18 @@ function CompletionBanner() {
           <img src="/mock/n6/orange-glow.svg" alt="" className="block size-full max-w-none" />
         </div>
       </div>
+      {/* 9/23 — Figma 텍스트 frame(24,20,300×114) 실측: eyebrow h=14, title
+          h=24, description(2줄) h=28, 항목 사이 gap 24px씩 — 합이
+          14+24+24+24+28=114로 배너 하단까지 정확히 16px(150-20-114)이
+          남는다. 이전엔 각 줄의 line-height를 지정하지 않아(description은
+          leading-normal, 대략 1.5배) 전체 스택이 114px보다 커져서 description
+          이 배너 하단에 붙거나 overflow-hidden에 잘렸다 — 글자 크기나 배너
+          높이를 바꾸는 대신 Figma가 실제로 쓰는 타이트한 line-height(eyebrow/
+          description 14px, title 24px)를 그대로 맞췄다. */}
       <div className="absolute left-6 top-5 flex w-[300px] flex-col gap-6">
-        <p className="text-[12px] font-light tracking-[-0.04em] text-[#b8b8b8]">READY TO EXPORT</p>
-        <p className="text-[20px] font-semibold tracking-[-0.02em] text-white">번역이 완료되었습니다.</p>
-        <div className="text-[12px] font-light leading-normal tracking-[-0.04em] text-[#b8b8b8]">
+        <p className="text-[12px] leading-[14px] font-light tracking-[-0.04em] text-[#b8b8b8]">READY TO EXPORT</p>
+        <p className="text-[20px] leading-[24px] font-semibold tracking-[-0.02em] text-white">번역이 완료되었습니다.</p>
+        <div className="text-[12px] leading-[14px] font-light tracking-[-0.04em] text-[#b8b8b8]">
           <p>최종 결과물을 원하는 형식으로 내려받거나</p>
           <p>보관함에 저장할 수 있습니다.</p>
         </div>
@@ -168,6 +184,51 @@ function FinalPreview({ deliverables }: { deliverables: ApiDeliverable[] }) {
   const [zoom, setZoom] = useState(1);
   const hasContent = deliverables.length > 0;
 
+  // 9/23 — CSS transform:scale()은 레이아웃 박스 크기(offsetWidth/Height)를
+  // 바꾸지 않는다(순수 페인트 단계 연산) — 그래서 scale만으로는 overflow:auto
+  // 조상의 scrollWidth/scrollHeight가 커지지 않아 확대해도 실제 스크롤이
+  // 생기지 않았다(실측 확인: zoom 250%에서도 scrollWidth===clientWidth 그대로).
+  //
+  // scrollRef(overflow:auto 컨테이너)의 실제 가용 폭에서 canvasWidth(=83%,
+  // 990px 상한)를 JS로 계산해 canvas에 명시적 px width로 준다 — 기존처럼
+  // canvas 자신의 Tailwind %가 아니라 scrollRef 기준으로 한 번만 계산해야,
+  // 아래 "바깥 sizing wrapper"의 width(canvasWidth*zoom)가 canvas의 %기준을
+  // 다시 바꿔버리는 순환(확대할수록 canvas가 오히려 작아지는) 버그가 없다.
+  // canvasHeight는 그 canvasWidth로 실제 렌더된 canvas의 자연 높이(이미지
+  // 스택 합)를 측정한다. 바깥 wrapper는 (canvasWidth*zoom, canvasHeight*zoom)
+  // 를 그대로 레이아웃 크기로 가져 overflow:auto가 실제로 그 크기를
+  // scrollWidth/Height에 반영한다 — zoom 배율 계산/버튼(ZoomControls)은
+  // 손대지 않았다.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const [canvasWidth, setCanvasWidth] = useState(0);
+  const [canvasHeight, setCanvasHeight] = useState(0);
+
+  useLayoutEffect(() => {
+    const scrollEl = scrollRef.current;
+    if (!scrollEl) return;
+    function measureWidth() {
+      const available = scrollEl!.clientWidth - 48; // p-6 좌우 24px×2
+      setCanvasWidth(Math.max(0, Math.min(available * 0.83, 990)));
+    }
+    measureWidth();
+    const resizeObserver = new ResizeObserver(measureWidth);
+    resizeObserver.observe(scrollEl);
+    return () => resizeObserver.disconnect();
+  }, []);
+
+  useLayoutEffect(() => {
+    const canvasEl = canvasRef.current;
+    if (!canvasEl) return;
+    function measureHeight() {
+      setCanvasHeight(canvasEl!.offsetHeight);
+    }
+    measureHeight();
+    const resizeObserver = new ResizeObserver(measureHeight);
+    resizeObserver.observe(canvasEl);
+    return () => resizeObserver.disconnect();
+  }, [deliverables, canvasWidth]);
+
   return (
     <div
       data-testid="n6-final-preview"
@@ -184,20 +245,48 @@ function FinalPreview({ deliverables }: { deliverables: ApiDeliverable[] }) {
         </div>
       )}
 
-      <div className="h-full overflow-y-auto p-6 [scrollbar-width:thin] [&::-webkit-scrollbar]:w-[3px] [&::-webkit-scrollbar-thumb]:rounded-[2px] [&::-webkit-scrollbar-thumb]:bg-[#999] [&::-webkit-scrollbar-track]:bg-transparent">
+      {/* 9/23 — Figma는 Final Preview에 세로(655:6237)/가로(655:6238) scroll을
+          모두 정의한다. zoom으로 캔버스가 커지면 가로로도 넘칠 수 있어
+          overflow-y-auto만으로는(스펙상 반대 축이 암묵적 auto가 되긴 하지만)
+          의도를 명시하지 않는다 — overflow-auto로 두 축 모두 명시적으로
+          scroll 가능하게 한다. 우측 export column과는 별개 scroll
+          container라 서로 상태가 연결되지 않는다. */}
+      <div
+        ref={scrollRef}
+        className="h-full overflow-auto p-6 [scrollbar-width:thin] [&::-webkit-scrollbar]:w-[3px] [&::-webkit-scrollbar-thumb]:rounded-[2px] [&::-webkit-scrollbar-thumb]:bg-[#999] [&::-webkit-scrollbar-track]:bg-transparent"
+      >
         {!hasContent ? (
           <div className="flex h-full items-center justify-center text-[14px] text-[#999]">
             표시할 결과 이미지가 없습니다.
           </div>
         ) : (
+          // 바깥 sizing wrapper — (canvasWidth×zoom, canvasHeight×zoom)의 실제
+          // px 크기를 가져 scrollRef(overflow:auto)가 확대를 실제 레이아웃
+          // overflow로 인식하게 한다. canvasWidth가 아직 측정 전(0)이면
+          // width/height를 주지 않아(auto) 첫 렌더가 깨지지 않는다.
           <div
-            data-testid="n6-preview-canvas"
-            className="mx-auto flex w-[792px] flex-col items-start border border-[#eaeaea] bg-white"
-            style={{ transform: `scale(${zoom})`, transformOrigin: 'top center' }}
+            className="mx-auto"
+            style={canvasWidth > 0 ? { width: canvasWidth * zoom, height: canvasHeight * zoom || undefined } : undefined}
           >
-            {deliverables.map((dlv, i) => (
-              <PreviewImage key={dlv.id ?? i} deliverable={dlv} />
-            ))}
+            <div
+              ref={canvasRef}
+              data-testid="n6-preview-canvas"
+              // 9/23 Figma 정렬 — Final Preview 컨테이너(643:5526, 1195폭) 안의 실제
+              // 콘텐츠는 990px(같은 소스 이미지를 쓰는 N5의 990px 컬럼과 동일 폭)이다.
+              // 이전엔 792px 고정값이라(어느 Figma 실측과도 안 맞는 값) 뷰포트가
+              // 1195보다 좁아지는 화면에서 콘텐츠가 상대적으로 더 크게(과하게 확대된
+              // 것처럼) 보였다 — scrollRef 기준 비율(990/1195≈83%, Figma 실측값
+              // 990px을 상한으로)을 JS로 계산해 명시적 px width로 준다(위 canvasWidth
+              // useLayoutEffect 참고) — Tailwind %가 아니라 px 고정값을 쓰는 이유는
+              // 바깥 sizing wrapper의 width(canvasWidth*zoom)가 % 기준을 다시
+              // 바꿔버리는 순환을 막기 위해서다.
+              className="flex flex-col items-start border border-[#eaeaea] bg-white"
+              style={{ width: canvasWidth || undefined, transform: `scale(${zoom})`, transformOrigin: 'top left' }}
+            >
+              {deliverables.map((dlv, i) => (
+                <PreviewImage key={dlv.id ?? i} deliverable={dlv} />
+              ))}
+            </div>
           </div>
         )}
       </div>
@@ -223,7 +312,19 @@ const ARTIFACT_DESC: Record<string, string> = {
   psd: '레이어 편집이 가능한 PSD 산출물',
 };
 
-const DEFAULT_SELECTED_TYPES = new Set(['images', 'csv']);
+// 9/23 — 화면 표시 순서만 바꾼다(backend type/enum 값이나 의미는 그대로다).
+// 이전엔 components(백엔드 응답 배열)를 온 순서 그대로 렌더해 images→csv→
+// html→psd로 보였다 — 요청한 순서(images→html→csv→psd)에 맞게 이 배열
+// 하나로 정렬 기준만 둔다. checkbox/개수/개별 다운로드는 여전히 각 행의
+// 실제 component.type 값을 그대로 쓴다(아래 ExportPanel 정렬 로직 참고).
+const ARTIFACT_DISPLAY_ORDER = ['images', 'html', 'csv', 'psd'];
+
+// 9/23 재정합 — N6 진입 기본 선택을 images/ + HTML로 바꿨다(이전 images/ +
+// content.csv). 이 Set 하나가 ExportPanel의 checkbox/개수 summary/"한 번에
+// 내려받기" 대상/handleExport 페이로드까지 전부 공유하는 단일 SSOT다(아래
+// ExportPanel의 `selected` state 초기값으로만 쓰이고, 파생값은 전부 그
+// state에서 다시 계산한다) — 화면 표시만 바꾸는 별도 상수를 추가하지 않는다.
+const DEFAULT_SELECTED_TYPES = new Set(['images', 'html']);
 
 /** Figma Checkbox(28:77) — checked(white+orange border)/unchecked(white+gray border)/disabled(gray fill) 3종. */
 function ArtifactCheckbox({
@@ -290,8 +391,14 @@ function ArtifactRow({
     <div className="flex w-full flex-col gap-4">
       <div className="flex w-full items-center gap-4">
         <ArtifactCheckbox id={`artifact-${type}`} checked={checked} disabled={disabled} onChange={onToggle} />
-        <div className="flex items-center gap-2">
-          <label htmlFor={`artifact-${type}`} className="flex w-[310px] flex-col gap-2">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          {/* 9/23 — 우측 컬럼에 좌우 20px padding을 새로 주면서(아래 ExportPanel
+              참고) Figma 고정폭(310px)이 더 이상 들어맞지 않는다(체크박스+
+              gap+버튼을 뺀 실제 남는 폭이 310보다 좁아짐) — 라벨을 flex-1로
+              바꿔 실제 남는 폭에 맞게 줄어들게 한다. checkbox→라벨→버튼 순서와
+              역할(Figma hierarchy)은 그대로다, 폭 계산 방식만 고정값에서
+              가변으로 바꿨다. */}
+          <label htmlFor={`artifact-${type}`} className="flex min-w-0 flex-1 flex-col gap-2">
             <span className={`text-[14px] tracking-[-0.01em] ${disabled ? 'text-[#999]' : 'text-[#171717]'}`}>{label}</span>
             <span className={`text-[12px] font-light tracking-[-0.04em] ${disabled ? 'text-[#b8b8b8]' : 'text-[#707070]'}`}>
               {desc}
@@ -337,6 +444,16 @@ function ArtifactRow({
 }
 
 function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeliverableComponent[] }) {
+  // 표시 순서만 ARTIFACT_DISPLAY_ORDER로 정렬한다 — component 객체 자체(type
+  // 포함)는 그대로라 checkbox/선택 state/handleExport 페이로드의 타입 의미는
+  // 전혀 바뀌지 않는다. 정렬 기준에 없는 type이 오면(방어적으로) 맨 뒤로 보낸다
+  // (indexOf가 -1을 주면 맨 앞으로 가버려서 length로 fallback한다).
+  const orderRank = (type: string) => {
+    const i = ARTIFACT_DISPLAY_ORDER.indexOf(type);
+    return i === -1 ? ARTIFACT_DISPLAY_ORDER.length : i;
+  };
+  const orderedComponents = [...components].sort((a, b) => orderRank(a.type ?? '') - orderRank(b.type ?? ''));
+
   const [selected, setSelected] = useState<Set<string>>(
     () => new Set(components.filter((c) => c.isActive && DEFAULT_SELECTED_TYPES.has(c.type ?? '')).map((c) => c.type as string)),
   );
@@ -369,101 +486,125 @@ function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeli
   };
 
   return (
-    <div data-testid="n6-export-panel" className="flex h-full w-[456px] shrink-0 flex-col gap-8 overflow-y-auto pr-1">
+    <div
+      data-testid="n6-export-panel"
+      // 9/23 재정렬 — Figma는 우측 컬럼 전체를 감싸는 상시 노출 outer
+      // scrollbar 구조가 아니다(1920×1080에서는 컨텐츠가 한 화면에 다 들어간다).
+      // n5-panel.tsx와 같은 hover-reveal thin scrollbar로 맞춘다 — 실제로 넘칠
+      // 때만(좁은 뷰포트) 얇은 thumb이 hover 시에만 보인다.
+      //
+      // overflow-x-hidden — 컬럼 폭(456px)을 넘는 가로 스크롤은 이 컬럼의 책임이
+      // 아니다(가로/세로 overflow는 Final Preview만 담당, 아래 FinalPreview
+      // 참고). overflow-y-auto만 있으면 CSS 스펙상 "한쪽 축이 visible이 아니면
+      // 반대쪽도 auto로 계산"돼(overflow-x가 암묵적으로 auto가 된다) 이 컬럼의
+      // 실제 내용 폭이 456px 예산을 아주 살짝(측정: 452px 중 0px 여유)만
+      // 넘어도 컬럼 맨 아래에 원치 않는 가로 스크롤바가 생길 수 있었다 —
+      // 구조적으로 아예 그 가능성을 없앤다(pr-1의 좁은 여유 대신 실측 여유가
+      // 있는 px-5 wrapper, 아래 참고).
+      className="flex h-full w-[456px] shrink-0 flex-col gap-8 overflow-x-hidden overflow-y-auto [scrollbar-width:thin] [scrollbar-color:transparent_transparent] hover:[scrollbar-color:#eaeaea_transparent] [&::-webkit-scrollbar]:w-[3px] [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-[2px] [&::-webkit-scrollbar-thumb]:bg-transparent hover:[&::-webkit-scrollbar-thumb]:bg-[#eaeaea]"
+    >
       <CompletionBanner />
 
-      <div className="flex w-full flex-col gap-5">
-        <div className="flex flex-col gap-2">
-          <p className="text-[18px] font-medium tracking-[-0.03em] text-[#171717]">산출물 내보내기</p>
-          <p className="text-[12px] font-light tracking-[-0.04em] text-[#707070]">
-            필요한 항목을 선택해 개별로 받거나 한 번에 내려받을 수 있습니다.
+      {/* 9/23 — Completion Banner 아래 나머지 블록(산출물 목록/선택 요약/버튼)을
+          하나의 padded wrapper로 묶었다. Banner는 Figma 값(24px 내부 텍스트
+          inset)을 그대로 쓰고 이 wrapper 밖에 남겨, 여기 px-5(20px)의 영향을
+          받지 않는다. mt-3(block1의 자체 margin) + 이 아래 panel gap-8(32px)
+          = 44px로 Banner→"산출물 내보내기" 간격을 Figma 실측(bottom 258 →
+          export top 302)에 맞춘다. */}
+      <div className="flex w-full flex-col gap-8 px-5">
+        <div className="mt-3 flex w-full flex-col gap-5">
+          <div className="flex flex-col gap-2">
+            <p className="text-[18px] font-medium tracking-[-0.03em] text-[#171717]">산출물 내보내기</p>
+            <p className="text-[12px] font-light tracking-[-0.04em] text-[#707070]">
+              필요한 항목을 선택해 개별로 받거나 한 번에 내려받을 수 있습니다.
+            </p>
+          </div>
+
+          <div className="flex w-full flex-col gap-7">
+            <div className="h-px w-full bg-[#eaeaea]" />
+            {orderedComponents.map((component) => (
+              <ArtifactRow
+                key={component.type ?? 'unknown'}
+                jobId={jobId}
+                component={component}
+                checked={selected.has(component.type ?? '')}
+                onToggle={() => toggle(component.type ?? '')}
+              />
+            ))}
+          </div>
+        </div>
+
+        <div className="flex w-full flex-col gap-1">
+          <div className="flex w-full flex-col gap-2 rounded-[4px] bg-[#f5f5f5] p-5">
+            <p className="text-[14px] font-medium tracking-[-0.03em] text-[#171717]">선택된 산출물 {selected.size}개</p>
+            <p className="text-[12px] font-light tracking-[-0.04em] text-[#707070]">
+              {hasSelection ? `${selectedLabels.join(' + ')} · export.zip으로 묶어 다운로드합니다.` : '내보낼 항목을 선택해 주세요.'}
+            </p>
+          </div>
+          <p className="text-[12px] tracking-[-0.02em] text-[#707070]">
+            일부 산출물 생성에 실패해도 성공한 항목은 내려받을 수 있습니다.
           </p>
         </div>
 
-        <div className="flex w-full flex-col gap-7">
-          <div className="h-px w-full bg-[#eaeaea]" />
-          {components.map((component) => (
-            <ArtifactRow
-              key={component.type ?? 'unknown'}
-              jobId={jobId}
-              component={component}
-              checked={selected.has(component.type ?? '')}
-              onToggle={() => toggle(component.type ?? '')}
-            />
-          ))}
-        </div>
-      </div>
-
-      <div className="flex w-full flex-col gap-1">
-        <div className="flex w-full flex-col gap-2 rounded-[4px] bg-[#f5f5f5] p-5">
-          <p className="text-[14px] font-medium tracking-[-0.03em] text-[#171717]">선택된 산출물 {selected.size}개</p>
-          <p className="text-[12px] font-light tracking-[-0.04em] text-[#707070]">
-            {hasSelection ? `${selectedLabels.join(' + ')} · export.zip으로 묶어 다운로드합니다.` : '내보낼 항목을 선택해 주세요.'}
-          </p>
-        </div>
-        <p className="text-[12px] tracking-[-0.02em] text-[#707070]">
-          일부 산출물 생성에 실패해도 성공한 항목은 내려받을 수 있습니다.
-        </p>
-      </div>
-
-      <div className="flex w-full flex-col gap-2">
-        <button
-          type="button"
-          data-testid="n6-export-button"
-          onClick={handleExport}
-          disabled={!hasSelection || exportMutation.isPending}
-          className="w-full rounded-[6px] bg-[#171717] px-8 py-3.5 text-[14px] font-medium tracking-[-0.03em] text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          {exportMutation.isPending ? '내보내는 중...' : '선택 항목 내보내기'}
-        </button>
-
-        {exportMutation.isError && (
-          <p className="text-[12px] text-red-500" data-testid="n6-export-error">
-            내보내기에 실패했습니다. 다시 시도해주세요.
-          </p>
-        )}
-        {downloadMutation.isPending && <p className="text-[12px] text-[#999]">다운로드 링크 준비 중...</p>}
-        {downloadMutation.data && (
-          <a
-            href={downloadMutation.data.url}
-            download={downloadMutation.data.fileName}
-            target="_blank"
-            rel="noreferrer"
-            data-testid="n6-download-link"
-            className="w-full rounded-[6px] border border-[#eaeaea] bg-white px-8 py-3 text-center text-[14px] font-medium tracking-[-0.03em] text-[#ff6a38] hover:bg-[#faf3ed]"
-          >
-            {downloadMutation.data.fileName} 다운로드
-          </a>
-        )}
-        {downloadMutation.isError && (
-          <p className="text-[12px] text-red-500" data-testid="n6-download-error">
-            다운로드 링크를 가져오지 못했습니다.
-          </p>
-        )}
-
-        {saveMutation.isSuccess ? (
-          <span
-            data-testid="n6-save-done"
-            className="flex w-full items-center justify-center gap-1.5 rounded-[6px] border border-[#eaeaea] bg-white px-8 py-3.5 text-[14px] font-medium tracking-[-0.03em] text-[#04421f]"
-          >
-            보관함에 저장됨
-          </span>
-        ) : (
+        <div className="flex w-full flex-col gap-2">
           <button
             type="button"
-            data-testid="n6-save-button"
-            onClick={() => saveMutation.mutate()}
-            disabled={saveMutation.isPending}
-            className="w-full rounded-[6px] border border-[#eaeaea] bg-white px-8 py-3.5 text-[14px] font-medium tracking-[-0.03em] text-[#171717] transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
+            data-testid="n6-export-button"
+            onClick={handleExport}
+            disabled={!hasSelection || exportMutation.isPending}
+            className="w-full rounded-[6px] bg-[#171717] px-8 py-3.5 text-[14px] font-medium tracking-[-0.03em] text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {saveMutation.isPending ? '저장하는 중…' : '보관함에 저장'}
+            {exportMutation.isPending ? '내보내는 중...' : '선택 항목 내보내기'}
           </button>
-        )}
-        {saveMutation.isError && (
-          <p className="text-[12px] text-red-500" data-testid="n6-save-error">
-            저장에 실패했습니다. 다시 시도해주세요.
-          </p>
-        )}
+
+          {exportMutation.isError && (
+            <p className="text-[12px] text-red-500" data-testid="n6-export-error">
+              내보내기에 실패했습니다. 다시 시도해주세요.
+            </p>
+          )}
+          {downloadMutation.isPending && <p className="text-[12px] text-[#999]">다운로드 링크 준비 중...</p>}
+          {downloadMutation.data && (
+            <a
+              href={downloadMutation.data.url}
+              download={downloadMutation.data.fileName}
+              target="_blank"
+              rel="noreferrer"
+              data-testid="n6-download-link"
+              className="w-full rounded-[6px] border border-[#eaeaea] bg-white px-8 py-3 text-center text-[14px] font-medium tracking-[-0.03em] text-[#ff6a38] hover:bg-[#faf3ed]"
+            >
+              {downloadMutation.data.fileName} 다운로드
+            </a>
+          )}
+          {downloadMutation.isError && (
+            <p className="text-[12px] text-red-500" data-testid="n6-download-error">
+              다운로드 링크를 가져오지 못했습니다.
+            </p>
+          )}
+
+          {saveMutation.isSuccess ? (
+            <span
+              data-testid="n6-save-done"
+              className="flex w-full items-center justify-center gap-1.5 rounded-[6px] border border-[#eaeaea] bg-white px-8 py-3.5 text-[14px] font-medium tracking-[-0.03em] text-[#04421f]"
+            >
+              보관함에 저장됨
+            </span>
+          ) : (
+            <button
+              type="button"
+              data-testid="n6-save-button"
+              onClick={() => saveMutation.mutate()}
+              disabled={saveMutation.isPending}
+              className="w-full rounded-[6px] border border-[#eaeaea] bg-white px-8 py-3.5 text-[14px] font-medium tracking-[-0.03em] text-[#171717] transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {saveMutation.isPending ? '저장하는 중…' : '보관함에 저장'}
+            </button>
+          )}
+          {saveMutation.isError && (
+            <p className="text-[12px] text-red-500" data-testid="n6-save-error">
+              저장에 실패했습니다. 다시 시도해주세요.
+            </p>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -543,7 +684,16 @@ export function N6ResultView({ jobId }: { jobId: string }) {
     const components = deliverablesQuery.data?.components ?? [];
 
     body = (
-      <div className="flex min-h-0 flex-1 gap-6 px-8 pb-8">
+      // 가로/세로 padding은 이제 상위 rail 옆 flex-col 컨테이너(px-8 pb-8 역할을
+      // pr/pl/pb로 대체)가 준다 — 여기서 또 주면 이중 padding이 된다.
+      //
+      // 9/23 — Preview↔우측 컬럼 gap을 Figma 실측(1920 기준: preview right
+      // 1335, 우측 컬럼 x 1404 → gap 69px)에 맞춰 24px 고정에서
+      // clamp(24px,3.594vw,69px)로 바꿨다(69/1920≈3.594vw). 우측 컬럼은
+      // shrink-0 고정폭(456px)이라 gap이 줄어도 그 폭 자체는 안 변하고,
+      // FinalPreview(flex-1)만 남는 공간을 그만큼 더/덜 받는 방식이라 1536/
+      // 1440에서도 레이아웃이 깨지지 않는다. transform:scale()은 쓰지 않는다.
+      <div className="flex min-h-0 flex-1 gap-[clamp(24px,3.594vw,69px)]">
         <FinalPreview deliverables={deliverables} />
         <ExportPanel jobId={jobId} components={components} />
       </div>
@@ -552,28 +702,44 @@ export function N6ResultView({ jobId }: { jobId: string }) {
 
   return (
     <div className="flex h-full w-full bg-white">
-      <StepNav currentStep="N6" />
+      {/* 좌측 rail — 나가기 버튼 + StepNav. 9/23 Figma 정렬: node 849:7259(나가기)는
+          x≈39,y≈39,40×40로 StepNav(585:3392)와 별개의 떠 있는 요소이고, N5(n5-view.tsx)가
+          이미 쓰는 rail 패턴(ml-9 + 44px 컬럼 + 버튼 절대 중앙 배치)과 정확히 같은 값이다 —
+          같은 패턴을 그대로 재사용한다. 이전 구조는 나가기 버튼을 헤더 줄 위에 mb-6로
+          쌓아, 헤더 텍스트가 Figma보다 아래로(버튼 높이+여백만큼) 밀려 보였다. */}
+      <div className="relative ml-9 h-full w-[44px] shrink-0">
+        <Link
+          href="/"
+          aria-label="보관함으로 나가기"
+          className="absolute top-10 left-1/2 z-20 flex size-10 -translate-x-1/2 shrink-0 items-center justify-center rounded-md border border-[#eaeaea] bg-white text-[#171717] transition-colors hover:bg-gray-50"
+        >
+          {/* n5-view.tsx와 같은 실측 asset 좌표(가운데 8×8, strokeWidth 1.25) —
+              화면마다 다른 X 아이콘을 새로 그리지 않고 그대로 재사용한다. */}
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M4 4L12 12M12 4L4 12" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </Link>
+        <div className="absolute inset-0 pt-[100px] pb-6">
+          <StepNav currentStep="N6" />
+        </div>
+      </div>
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        {/* 헤더 — Figma(643:5523, node 849:7259 "보관함으로 나가기")는 N1·N5와
-            동일한 닫기(X) 아이콘 + 제목/설명 조합이다. */}
-        <div className="shrink-0 px-8 pt-8 pb-4">
-          <Link
-            href="/"
-            className="mb-6 flex size-10 shrink-0 items-center justify-center rounded-md border border-[#eaeaea] bg-white text-[#171717] transition-colors hover:bg-gray-50"
-            aria-label="보관함으로 나가기"
-          >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <path d="M2 2L14 14M14 2L2 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-            </svg>
-          </Link>
-
-          <div className="flex items-center gap-4">
-            <h1 className="text-[20px] font-semibold tracking-[-0.02em] text-[#171717]">저장 및 내보내기</h1>
-            <p className="text-[14px] tracking-[-0.01em] text-[#707070]">
-              최종 결과물을 확인하고 내려받거나 보관함에 저장합니다.
-            </p>
-          </div>
+      {/* 본문 — 헤더 텍스트(655:6107)와 Final Preview(643:5526)가 Figma에서 같은
+          x(=140)에서 시작한다. 9/23 재확인 — 이전엔 이 pl에 N5(n5-view.tsx)의
+          calc(6.25vw-80px) 공식을 그대로 재사용했는데, N5와 N6는 Figma 좌측
+          inset 목표 x가 서로 다르다(N5는 x=120대, N6는 x=140) — 그 결과 1920
+          에서 Preview x가 120으로 20px 왼쪽으로 더 밀려 있었다(우측 gap=69는
+          우연히 맞았지만 width가 1195가 아니라 1215였다). N6 전용으로
+          다시 유도한다: rail(ml-9 36px + 44px폭 = 80px)을 먼저 상쇄하고,
+          목표 x=140/1920=7.2917vw를 쓰면 1920에서 정확히 140-80=60px가
+          나온다(그래서 상한도 40→60으로 바꿨다) — pr(3.125vw, 60px 상한)과
+          gap(3.594vw, 69px 상한) 쪽은 원래도 N6 자체 실측값이라 그대로 둔다. */}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 pt-10 pr-[clamp(45px,3.125vw,60px)] pb-8 pl-[clamp(0px,calc(7.2917vw_-_80px),60px)]">
+        <div className="flex shrink-0 items-center gap-4">
+          <h1 className="text-[20px] font-semibold tracking-[-0.02em] text-[#171717]">저장 및 내보내기</h1>
+          <p className="text-[14px] tracking-[-0.01em] text-[#707070]">
+            최종 결과물을 확인하고 내려받거나 보관함에 저장합니다.
+          </p>
         </div>
 
         {body}

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import type { BlockViewModel, PreviewSectionViewModel, PreviewViewModel } from '@/lib/n5/adapter';
 import { getBlockDisplayRect } from '@/lib/n5/coordinates';
@@ -17,7 +17,7 @@ import {
   type Point,
   type Size,
 } from '@/lib/n5/viewport';
-import { ZoomControls, FitControls } from './n5-toolbar';
+import { ZoomControls, FitControls, PlacementToolbar } from './n5-toolbar';
 
 // ─────────────────────────────────────────────────────────────────
 // N5 — 캔버스형 viewport (Figma 544:3168 "N5 검수" 기준)
@@ -113,10 +113,13 @@ function SectionSelectedTag({ sectionOrder }: { sectionOrder: number }) {
  * 맞추고, block rect의 좌상단 모서리에 걸치도록 배치한다(Figma가 보여준
  * "텍스트 바로 옆" 위치를 일반화한 규칙).
  */
+/** n5-panel.tsx BlockNumberBadge와 같은 규칙 — leading-none으로 폰트
+ *  line-height가 만드는 수직 오프셋을 없애 숫자를 정중앙에 둔다(N5 3차
+ *  디테일 정렬, 좌/우 배지가 같은 컴포넌트 톤을 공유하므로 동일하게 고친다). */
 function BlockPinBadge({ index, isSelected }: { index: number; isSelected: boolean }) {
   return (
     <span
-      className={`flex size-5 shrink-0 items-center justify-center rounded-full text-[11px] ${
+      className={`flex size-5 shrink-0 items-center justify-center rounded-full text-[11px] leading-none ${
         isSelected ? 'bg-[#ff6a38] text-white' : 'border border-[#eaeaea] bg-white text-[#171717]'
       }`}
     >
@@ -136,6 +139,7 @@ function BlockOverlay({
   index: number;
   scale: number;
   isSelected: boolean;
+  /** ImageLayer가 현재 selectionTool에 맞춰 이미 만들어 둔 클릭 동작(block 선택 또는 section 선택)을 그대로 받는다. */
   onSelect: () => void;
 }) {
   if (!block.bbox) return null;
@@ -163,7 +167,15 @@ function BlockOverlay({
       <div
         data-testid={`n5-block-pin-${block.id}`}
         className="pointer-events-none absolute z-10"
-        style={{ left: rect.left - 10, top: rect.top - 10 }}
+        // 9/23 재확인 — rect.left/top은 preview.scale(소수)이 곱해진 값이라
+        // 그대로 쓰면 배지가 소수 px 위치에 놓인다. Playwright로 Pretendard
+        // leading-none 배지의 실제 glyph-vs-circle 중심 오차를 측정한 결과
+        // (숫자 1~9 전량, 소수/정수 offset 양쪽 모두) dx/dy가 0.01px 이내로
+        // 이미 사실상 완전히 중앙이었다 — 배지 자체의 flex 정렬은 깨져있지
+        // 않다. 다만 소수 px 위치는 브라우저마다 서브픽셀 렌더링 방식이 달라
+        // 미세한 흐림/치우침 인상을 줄 수 있어, 정수 px로 스냅한다(패딩/
+        // translate로 임의 보정한 값이 아니라 위치 자체를 반올림한 것).
+        style={{ left: Math.round(rect.left - 10), top: Math.round(rect.top - 10) }}
       >
         <BlockPinBadge index={index} isSelected={isSelected} />
       </div>
@@ -176,6 +188,7 @@ function ImageLayer({
   blocksBySection,
   blockIndexById,
   mode,
+  selectionTool,
   excludedSectionIds,
   onExcludeSection,
   onRestoreSection,
@@ -190,6 +203,10 @@ function ImageLayer({
   /** 우측 panel과 같은 번호(BlockNumberBadge)를 canvas 배지에도 쓰기 위한 공유 인덱스 */
   blockIndexById: Map<number, number>;
   mode: N5ViewMode;
+  /** 하단 배치 편집 toolbar의 현재 활성 도구. 'section'일 때는 block을 눌러도
+   *  그 block이 아니라 소속 section만 선택한다(block 선택은 유지/해제하지
+   *  않고, 애초에 block 클릭 자체를 section 클릭으로 취급한다). */
+  selectionTool: 'text' | 'section';
   /** F-CFM-14 — 로컬로 제외 처리된 sectionId 집합. slice 자체는 그대로 두고 위에 오버레이만 덮는다. */
   excludedSectionIds: Set<number>;
   onExcludeSection: (sectionId: number) => void;
@@ -222,7 +239,9 @@ function ImageLayer({
             data-testid={`n5-slice-${mode}-${slice.sectionId}`}
             role="button"
             tabIndex={0}
-            className="relative shrink-0 cursor-pointer"
+            // Figma(544:3168)는 section마다 border(border-[#eaeaea])로 구획을
+            // 나눈다 — 쌓인 section 사이 경계가 시각적으로 보이게 한다.
+            className="relative shrink-0 cursor-pointer border border-[#eaeaea]"
             onClick={() => onSelectSection(slice.sectionId)}
             onKeyDown={(e) => {
               if (e.key !== 'Enter' && e.key !== ' ') return;
@@ -251,7 +270,11 @@ function ImageLayer({
                   index={blockIndexById.get(block.id) ?? 0}
                   scale={scale}
                   isSelected={block.id === selectedBlockId}
-                  onSelect={() => onSelectBlock(block)}
+                  onSelect={
+                    selectionTool === 'section'
+                      ? () => onSelectSection(block.sectionId)
+                      : () => onSelectBlock(block)
+                  }
                 />
               ))}
             {!isExcluded && slice.sectionId === selectedSectionId && (
@@ -345,6 +368,29 @@ export function N5Viewport({
   const [isSpaceHeld, setIsSpaceHeld] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
 
+  // 하단 배치 편집 toolbar의 현재 도구 — 로컬 UI state다(새 API/선택 데이터
+  // 구조를 만들지 않는다). 기본은 'text'(지금까지의 기본 클릭 동작과 동일:
+  // block을 누르면 block을, 빈 section 배경을 누르면 section을 선택한다).
+  // 'section'으로 바꾸면 block 위를 눌러도 block이 아니라 그 section만
+  // 선택한다 — selectedBlockId/selectedSectionId 정본(N5View 소유)은 그대로
+  // 재사용하고, 이 tool state는 "클릭을 어떻게 해석할지"만 바꾼다.
+  const [selectionTool, setSelectionTool] = useState<'text' | 'section'>('text');
+
+  const handleSelectTextTool = useCallback(() => {
+    setSelectionTool('text');
+  }, []);
+
+  // 섹션 선택 도구로 전환하는 순간, 이미 선택된 block이 있으면 그 block의
+  // section으로 다운그레이드한다("block selection은 해제하거나 section
+  // selection 규칙에 맞게 처리" — onSelectSection이 이미 selectedBlockId를
+  // null로 정리하는 handleSelectSection(n5-view.tsx)을 그대로 호출한다).
+  const handleSelectSectionTool = useCallback(() => {
+    setSelectionTool('section');
+    if (selectedBlockId != null && selectedSectionId != null) {
+      onSelectSection(selectedSectionId);
+    }
+  }, [selectedBlockId, selectedSectionId, onSelectSection]);
+
   // F-CFM-14 — N5에서 제외된 section의 회색 오버레이(sectionId 기준 로컬 state).
   // 서버 render.status==='excluded'(bucket/excludedStage 파생)를 초기값으로만
   // 씨드하고, 이후로는 서버와 왕복하지 않는다 — 제외하기/되돌리기 둘 다 이
@@ -401,13 +447,14 @@ export function N5Viewport({
     return map;
   }, [blocks]);
 
-  // 우측 panel(n5-panel.tsx groupBlocksBySection)과 정확히 같은 순서(section
-  // 오름차순 → 그 section 안 block 순서)로 번호를 매겨 좌/우 배지 숫자가
-  // 항상 일치하게 한다.
+  // 번호는 section-local index다(section마다 1부터 다시 시작) — job 전체
+  // 기준으로 계속 증가하는 전역 번호를 화면 번호로 쓰지 않는다. 우측
+  // panel(n5-panel.tsx groupBlocksBySection)도 같은 규칙(section 안
+  // blockIndex+1)으로 계산하므로 좌/우 배지 숫자가 항상 일치한다.
   const blockIndexById = useMemo(() => {
     const map = new Map<number, number>();
-    let index = 0;
     for (const slice of slices) {
+      let index = 0;
       for (const block of blocksBySection.get(slice.sectionId) ?? []) {
         index += 1;
         map.set(block.id, index);
@@ -435,6 +482,44 @@ export function N5Viewport({
   useEffect(() => {
     canvasSizeRef.current = canvasSize;
   }, [canvasSize]);
+
+  // 9/23 재도입 — 최초 진입 시 section을 viewport 가용 가로 영역 기준으로
+  // 가운데 정렬한다(세로는 기존 top 정렬 INITIAL_TRANSFORM.y=0 그대로 유지,
+  // pan.x만 다룬다). 이전 시도가 겪은 회귀(좁은 뷰포트에서 우상단 zoom/fit
+  // 컨트롤의 "빈" 영역이 그 아래 section의 "제외하기" 버튼 클릭을 가로챔)는
+  // 이번엔 centering을 포기하는 대신, 그 컨트롤들의 바깥 absolute wrapper를
+  // pointer-events-none으로 바꾸고 실제 버튼(ZoomControls/FitControls 루트,
+  // n5-toolbar.tsx)만 pointer-events-auto로 다시 켜서 근본 원인(빈 영역이
+  // 클릭을 가로채는 것)을 없앴다 — 아래 JSX 참고.
+  //
+  // hasInteractedRef — 사용자가 pan/zoom/fit을 한 번이라도 직접 조작하면
+  // true로 바뀌고, 이후로는 resize가 나도(사이드바 폭 변화 등) 다시
+  // 가운데로 끌고 오지 않는다("초기 positioning O, 계속 강제 centering X").
+  const hasInteractedRef = useRef(false);
+
+  // DOM이 실제로 측정 가능한 시점(레이아웃 이후)에만 계산한다 — 대충 추정한
+  // 값으로 먼저 그렸다가 나중에 튀지 않도록 useLayoutEffect(페인트 전
+  // 동기 실행) + ResizeObserver(그 뒤에도 실제 렌더 크기가 바뀌면 재계산)를
+  // 함께 쓴다.
+  useLayoutEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+
+    function centerHorizontallyIfUntouched() {
+      if (hasInteractedRef.current) return;
+      const canvas = canvasSizeRef.current;
+      if (canvas.width <= 0) return;
+      const usable = computeUsableViewportSize(el!.clientWidth, el!.clientHeight, readPadding(el!));
+      const centered = computeCenteredPan(canvas, transformRef.current.zoom, usable);
+      setTransform((prev) => ({ ...prev, pan: { x: centered.x, y: prev.pan.y } }));
+    }
+
+    centerHorizontallyIfUntouched(); // 최초 1회 — 이미 레이아웃이 끝난 뒤라 바로 정확한 값을 쓴다
+
+    const resizeObserver = new ResizeObserver(() => centerHorizontallyIfUntouched());
+    resizeObserver.observe(el);
+    return () => resizeObserver.disconnect();
+  }, []);
 
   // ── Space 키 상태 추적 — 텍스트 입력창에 focus가 있으면 pan을 발동하지 않는다 ──
   useEffect(() => {
@@ -482,6 +567,7 @@ export function N5Viewport({
     function handleWheel(e: WheelEvent) {
       e.preventDefault();
       if (canvasSizeRef.current.width <= 0 && canvasSizeRef.current.height <= 0) return; // 빈 상태 — 조작 비활성화
+      hasInteractedRef.current = true; // 사용자가 직접 조작 — 이후 자동 중앙 정렬 중단
 
       if (e.ctrlKey || e.metaKey) {
         const rect = el!.getBoundingClientRect();
@@ -512,6 +598,7 @@ export function N5Viewport({
     if (!spaceHeldRef.current) return;
     if (canvasSizeRef.current.width <= 0 && canvasSizeRef.current.height <= 0) return; // 빈 상태 — pan 비활성화
     e.preventDefault();
+    hasInteractedRef.current = true; // 사용자가 직접 조작 — 이후 자동 중앙 정렬 중단
     e.currentTarget.setPointerCapture(e.pointerId);
     isPanningRef.current = true;
     setIsPanning(true);
@@ -546,6 +633,7 @@ export function N5Viewport({
   const handleZoomButton = useCallback((direction: 1 | -1) => {
     const el = viewportRef.current;
     if (!el) return;
+    hasInteractedRef.current = true; // 사용자가 직접 조작 — 이후 자동 중앙 정렬 중단
     const rect = el.getBoundingClientRect();
     const center: Point = { x: rect.width / 2, y: rect.height / 2 };
     const usable = computeUsableViewportSize(el.clientWidth, el.clientHeight, readPadding(el));
@@ -558,6 +646,7 @@ export function N5Viewport({
   const handleSetZoom = useCallback((nextZoom: number) => {
     const el = viewportRef.current;
     if (!el) return;
+    hasInteractedRef.current = true; // 사용자가 직접 조작 — 이후 자동 중앙 정렬 중단
     const rect = el.getBoundingClientRect();
     const center: Point = { x: rect.width / 2, y: rect.height / 2 };
     const usable = computeUsableViewportSize(el.clientWidth, el.clientHeight, readPadding(el));
@@ -570,6 +659,7 @@ export function N5Viewport({
   const handleFitWidth = useCallback(() => {
     const el = viewportRef.current;
     if (!el || canvasSize.width <= 0) return;
+    hasInteractedRef.current = true; // 사용자가 직접 조작 — 이후 자동 중앙 정렬 중단
     const usable = computeUsableViewportSize(el.clientWidth, el.clientHeight, readPadding(el));
     const zoom = computeFitWidthScale(usable, canvasSize);
     setTransform({ zoom, pan: computeCenteredPan(canvasSize, zoom, usable) });
@@ -578,6 +668,7 @@ export function N5Viewport({
   const handleFitHeight = useCallback(() => {
     const el = viewportRef.current;
     if (!el || canvasSize.height <= 0) return;
+    hasInteractedRef.current = true; // 사용자가 직접 조작 — 이후 자동 중앙 정렬 중단
     const usable = computeUsableViewportSize(el.clientWidth, el.clientHeight, readPadding(el));
     const zoom = computeFitHeightScale(usable, canvasSize);
     setTransform({ zoom, pan: computeCenteredPan(canvasSize, zoom, usable) });
@@ -602,7 +693,15 @@ export function N5Viewport({
         </div>
       ) : (
         <>
-          <div className="absolute top-5 right-5 z-10 flex items-center gap-2">
+          {/* 9/23 — 바깥 wrapper 자체는 pointer-events-none이다. ZoomControls/
+              FitControls 두 그룹 "사이"의 빈 gap-2 영역까지 이 div의 클릭
+              가능 영역이 돼 버리면(원래 기본값), 초기 가로 중앙 정렬을 켰을
+              때 그 빈 영역 아래 놓이는 section의 "제외하기" 버튼 클릭을
+              가로채는 회귀가 있었다(위 hasInteractedRef 주석 참고). 실제
+              버튼이 있는 두 컴포넌트 루트에만 pointer-events-auto를 다시
+              켜서(n5-toolbar.tsx), 빈 영역은 클릭이 아래 canvas로 그대로
+              통과하게 한다. */}
+          <div className="pointer-events-none absolute top-5 right-5 z-10 flex items-center gap-2">
             <ZoomControls
               zoom={transform.zoom}
               onZoomIn={() => handleZoomButton(1)}
@@ -610,6 +709,32 @@ export function N5Viewport({
               onSetZoom={handleSetZoom}
             />
             <FitControls onFitWidth={handleFitWidth} onFitHeight={handleFitHeight} />
+          </div>
+
+          {/* N5 4차 정리 — 캔버스 전체를 덮던 상시 안내("번역문 미리보기가
+              아직 생성되지 않았습니다")는 제거했다. render 없는 section에는
+              원래도 그 section 자신의 "렌더 대기 중" 오버레이가 있는데(아래
+              ImageLayer의 isPending), 일부 section만 렌더가 안 된 경우에도
+              캔버스 전체가 "미리보기 자체가 없다"처럼 보이는 중복·과장된
+              표현이었다 — section-local 표시 하나로 충분하다. */}
+
+          {/* N5 3차 정렬 — 텍스트 선택/섹션 선택은 이제 실제로 클릭 가능한
+              tool이다(pointer-events-none로 회피하지 않는다). fit-height로
+              캔버스가 이 toolbar와 같은 화면 위치(하단 중앙)까지 꽉 찰 때
+              그 지점을 클릭하면 toolbar가 우선한다 — 이는 Figma가 보여주는
+              대로 toolbar가 캔버스 위에 항상 떠 있는 고정 컨트롤이라는
+              점에서 의도된 동작이다(다른 캔버스형 툴의 floating toolbar와
+              동일). 삭제하기만 실제 handler가 없어 disabled 상태를 유지한다
+              (아래 PlacementToolbar 정의, n5-toolbar.tsx). */}
+          <div
+            data-testid="n5-placement-toolbar-wrap"
+            className="absolute bottom-5 left-1/2 z-10 -translate-x-1/2"
+          >
+            <PlacementToolbar
+              activeTool={selectionTool}
+              onSelectTextTool={handleSelectTextTool}
+              onSelectSectionTool={handleSelectSectionTool}
+            />
           </div>
 
           <div
@@ -632,6 +757,7 @@ export function N5Viewport({
               blocksBySection={blocksBySection}
               blockIndexById={blockIndexById}
               mode={viewMode}
+              selectionTool={selectionTool}
               excludedSectionIds={excludedSectionIds}
               onExcludeSection={handleExcludeSection}
               onRestoreSection={handleRestoreSection}

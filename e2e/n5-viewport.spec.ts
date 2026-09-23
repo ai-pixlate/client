@@ -15,7 +15,9 @@ import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 //   section 501~505 (id=sectionOrder*100+1 아님 — id와 sectionOrder는 별개
 //   값이다. 501~505는 sectionOrder 1~5와 1:1 대응).
 //     - 503: bucket=exclude, excludedStage='N5' (F-CFM-14 회귀 확인용)
-//     - 504: renderedUrl=null (렌더 전 — 번역 후 토글 disabled 확인용)
+//     - 504: renderedUrl=null (렌더 전 — 캔버스 "번역문 미리보기가 아직
+//       생성되지 않았습니다" 안내 확인용. N5 3차 정렬 이후 이 상태는 toggle을
+//       막지 않는다 — 번역문 mode가 기본값이고 toggle은 항상 활성화된다)
 //   block 9101~9112 (role 6종·seller signal 6종 전부 최소 1건).
 //     - 9101: 501/title, 9103: 502/price, 9104: 502/caution(charLimit=120,
 //       초기 overflow=true+autoAdjust 있음), 9105: 502/product_label
@@ -44,23 +46,41 @@ test.beforeEach(async ({ page }) => {
 test.describe('N5 진입 — section별 preview 렌더', () => {
   test('section별 own 이미지가 렌더되고, 우측 block 목록도 함께 뜬다', async ({ page }) => {
     await expect(page.getByTestId('n5-canvas')).toBeVisible();
-    await expect(page.getByTestId('n5-slice-original-501')).toBeVisible();
-    await expect(page.getByTestId('n5-slice-original-502')).toBeVisible();
+    // N5 3차 정렬 — 기본 mode가 'translated'로 바뀌면서 slice testid도
+    // n5-slice-original-*이 아니라 n5-slice-translated-*로 렌더된다(요청 3).
+    await expect(page.getByTestId('n5-slice-translated-501')).toBeVisible();
+    await expect(page.getByTestId('n5-slice-translated-502')).toBeVisible();
     // 503은 N5에서 이미 제외된 상태(F-CFM-14) — 슬라이스 자체는 존재하고 회색
     // 오버레이가 그 위를 덮는다(걸러내지 않는다).
     await expect(page.getByTestId('n5-section-excluded-503')).toBeVisible();
 
     await expect(page.getByTestId('n5-panel-body')).toBeVisible();
     await expect(page.getByTestId('n5-block-row-9101')).toBeVisible();
-    await expect(page.getByText('12개 텍스트 블록')).toBeVisible();
+    // "US (EN) · N개 텍스트 블록" 메타 줄은 N5 2차 정렬에서 의도적으로
+    // 제거했다(검수에 필수가 아닌 디버깅성 정보, Figma에도 대응 요소 없음)
+    // — 옛 UI 계약을 확인하던 이 assertion은 새 계약(그 줄 자체가 없음)에
+    // 맞춰 제거한다. 문구를 UI에 다시 넣지 않는다.
   });
 
-  test('renderedUrl===null(섹션 504)이면 번역 후 토글이 비활성화되고 번역 전으로 진입한다', async ({
+  test('renderedUrl===null(섹션 504)이어도 번역문 mode가 기본값이고 toggle은 항상 활성화된다', async ({
     page,
   }) => {
-    await expect(page.getByTestId('n5-view-mode-original')).toHaveAttribute('aria-pressed', 'true');
-    await expect(page.getByTestId('n5-view-mode-translated')).toBeDisabled();
-    await expect(page.getByTestId('n5-render-missing-notice')).toBeVisible();
+    // N5 3차 정렬 — "번역 렌더 이미지가 없다"(캔버스 전용 개념)와 "번역문
+    // 텍스트 검수가 가능하다"(패널 전용 개념)를 분리했다(요청 1·2). 렌더
+    // 이미지가 없는 section이 있어도 원문으로 강제 전환하거나 toggle을
+    // disabled 처리하지 않는다 — 기본 mode는 항상 'translated'이고 toggle은
+    // 항상 클릭 가능하다.
+    //
+    // N5 4차 정리 — 캔버스 전체를 덮던 상시 안내(n5-render-missing-notice)는
+    // 제거했다. 일부 section만 렌더가 안 됐는데 캔버스 전체가 "미리보기
+    // 없음"처럼 보이는 중복 표현이었다 — render 없는 section에는 원래도
+    // 그 section 자신의 "렌더 대기 중" 오버레이가 있었으므로(변경 없음,
+    // n5-viewport.tsx ImageLayer의 isPending), 그걸로 충분하다. 여기서는
+    // 그 section-local 표시만 확인한다.
+    await expect(page.getByTestId('n5-view-mode-translated')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('n5-view-mode-translated')).toBeEnabled();
+    await expect(page.getByTestId('n5-view-mode-original')).toBeEnabled();
+    await expect(page.getByTestId('n5-slice-translated-504').getByText('렌더 대기 중')).toBeVisible();
   });
 
   test('isExcluded 블록(9105, product_label)은 편집 input 자체를 렌더하지 않는다', async ({ page }) => {
@@ -100,12 +120,32 @@ test.describe('F-CFM-13 — 좌우 selection 연동 + 자동 스크롤', () => {
   }) => {
     await page.getByTestId('n5-fit-height').click();
 
-    const slice = page.getByTestId('n5-slice-original-505');
+    // N5 3차 정렬 — 기본 mode가 'translated'라 slice testid도 그에 맞춘다.
+    const slice = page.getByTestId('n5-slice-translated-505');
     const box = await slice.boundingBox();
     if (!box) throw new Error('section 505 슬라이스를 찾지 못했습니다');
-    // block bbox가 없는 하단 영역(섹션 배경)을 클릭한다 — block 선택이 아니라
-    // section 선택으로 처리돼야 한다.
-    await page.mouse.click(box.x + box.width / 2, box.y + box.height * 0.9);
+
+    // N5 3차 정렬로 하단 배치 편집 toolbar(n5-placement-toolbar)가 화면
+    // 하단 중앙에 실제로 클릭 가능해졌다(요청 5·6, pointer-events-none로
+    // 회피하지 않는다 — Figma가 보여주는 대로 toolbar가 캔버스 위에 항상
+    // 떠 있는 고정 컨트롤이라 의도된 동작이다). fit-height 뒤에는 section
+    // 하단부가 화면 하단·toolbar와 겹칠 수 있어, block bbox가 없는
+    // section 배경이면서도 (a) 실제로 화면에 보이는 영역 안이고 (b)
+    // toolbar 영역 밖인 지점을 계산해서 클릭한다 — 실제 사용자도 이
+    // toolbar를 피해 클릭해야 하는 것과 같은 제약이다.
+    const viewportBox = await page.getByTestId('n5-viewport').boundingBox();
+    const toolbarBox = await page.getByTestId('n5-placement-toolbar-wrap').boundingBox();
+    if (!viewportBox || !toolbarBox) throw new Error('viewport 또는 toolbar bounding box를 찾지 못했습니다');
+
+    const clickX = box.x + box.width * 0.15; // toolbar는 가로 중앙에 있으므로 왼쪽으로 피한다
+    // section 하단(90%)을 우선 시도하되, 실제로 화면에 보이는 범위(viewportBox)
+    // 를 넘지 않게 clamp하고, 그래도 toolbar 세로 범위와 겹치면 toolbar
+    // 바로 위까지 끌어올린다.
+    let clickY = Math.min(box.y + box.height * 0.9, viewportBox.y + viewportBox.height - 8);
+    if (clickY >= toolbarBox.y - 8) {
+      clickY = toolbarBox.y - 8;
+    }
+    await page.mouse.click(clickX, clickY);
 
     await expect(page.getByTestId('n5-section-selected-tag')).toHaveText('Section5');
     await expect(page.getByTestId('n5-section-tag-5')).toHaveAttribute('aria-pressed', 'true');

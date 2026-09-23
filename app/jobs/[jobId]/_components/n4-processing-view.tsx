@@ -37,18 +37,58 @@ import { ProcessingStageLayout, type ProcessingStep } from './processing/process
 // 04/05를 모두 보여주기 위해 running을 두 번(progress 0.8 → 04, 0.9 →
 // 05) 보낸다. stages가 완전히 비어 있거나 전혀 다른 key만 오는 경우(다른
 // mock/실제 배포 전환기)를 대비해 progress 기반 fallback도 별도로 둔다.
+//
+// 9/23 — GIF 하단 caption을 5단계 각각의 고정 문구로 추가했다(N2와 같은
+// 방식). N4는 presentation stage가 이미 5개 화면 항목 중 정확히 하나만
+// active이므로(위 주석) 별도 재분할 없이 steps에서 active 하나를 그대로
+// 찾아 caption에 쓴다 — progress%로 caption을 따로 추론하지 않는다.
 // ─────────────────────────────────────────────────────────────────
 
 const N4_HEADLINE = '번역과 배경 복원을 함께 진행하고 있습니다.';
 const N4_AUTO_ADVANCE_NOTICE = '완료되면 검수 화면으로 자동 이동합니다.';
 const N4_PAUSE_BUTTON_TITLE = '번역 중단 기능은 아직 제공되지 않습니다.';
 
-const FIVE_STEP_META: { no: string; label: string }[] = [
-  { no: '01', label: '한글 지우고 배경 채우기' },
-  { no: '02', label: '번역 · 용어 맞춤' },
-  { no: '03', label: '규제 기준 확인' },
-  { no: '04', label: '글자 수, 줄바꿈 조정' },
-  { no: '05', label: '이미지 합성' },
+// 9/23 재조정 — 흰색 description은 Figma처럼 한 줄이어야 한다(processing-
+// stage-layout.tsx의 whitespace-nowrap 처리 참고). 이전 문구는 Figma 원본
+// 분량보다 길어 실측상 줄바꿈이 났다 — 뜻은 유지하되 분량만 Figma 수준으로
+// 줄였다(font-size를 줄이거나 컨테이너를 늘리는 방식으로 우회하지 않는다).
+const FIVE_STEP_META: {
+  no: string;
+  label: string;
+  /** GIF 하단 주황 title — 이 step이 active일 때만 보인다. */
+  visualTitle: string;
+  visualDescription: string;
+}[] = [
+  {
+    no: '01',
+    label: '한글 지우고 배경 채우기',
+    visualTitle: '원문 제거·배경 복원 중',
+    visualDescription: '원문을 지우고 주변 배경을 자연스럽게 복원하고 있습니다.',
+  },
+  {
+    no: '02',
+    label: '번역 · 용어 맞춤',
+    visualTitle: '번역·용어 맞춤 중',
+    visualDescription: '번역문과 제품·브랜드 용어를 맞추고 있습니다.',
+  },
+  {
+    no: '03',
+    label: '규제 기준 확인',
+    visualTitle: '규제 기준 확인 중',
+    visualDescription: '번역문이 대상 국가의 규제 기준에 맞는지 확인합니다.',
+  },
+  {
+    no: '04',
+    label: '글자 수, 줄바꿈 조정',
+    visualTitle: '문장 길이·줄바꿈 조정 중',
+    visualDescription: '번역문을 원래 디자인 안에 맞게 조정하고 있습니다.',
+  },
+  {
+    no: '05',
+    label: '이미지 합성',
+    visualTitle: '최종 이미지 합성 중',
+    visualDescription: '조정된 번역문을 원래 위치에 합성하고 있습니다.',
+  },
 ];
 
 // render를 04(전반부)/05(후반부)로 쪼갠 6개 presentation 상태. 5개 화면
@@ -130,7 +170,33 @@ function resolveN4PresentationStage(
 }
 
 function buildFiveSteps(states: ProcessingStep['state'][]): ProcessingStep[] {
-  return FIVE_STEP_META.map((step, i) => ({ ...step, state: states[i] }));
+  return FIVE_STEP_META.map((step, i) => ({ no: step.no, label: step.label, state: states[i] }));
+}
+
+/**
+ * GIF 하단 caption — steps(오른쪽 로그, 위에서 이미 계산한 바로 그 배열)에서
+ * active인 항목을 그대로 찾아 쓴다. progress%를 다시 보고 추론하지 않는다.
+ * active가 하나도 없으면(presentation stage 'done') "완료 중" 같은 문구를
+ * 새로 만들지 않고 마지막 step(05)의 caption을 그대로 유지한다.
+ *
+ * 9/23 N2 재검토 후 명확히 남기는 주석 — N4는 "active 시각 항목이 항상
+ * 정확히 하나"라는 전제가 이미 성립해서(위 FIVE_STEP_STATES_BY_N4_
+ * PRESENTATION_STAGE 참고, render_04/render_05 어느 쪽이든 다른 하나는 항상
+ * pending) 그 하나를 caption에 그대로 재사용할 수 있다. 이 전제 자체
+ * (render를 04/05로 가르는 RENDER_SUBSTAGE_SPLIT=0.875 및 그 해석 로직)는
+ * 이번 caption 작업 이전부터 있던 기존 FE presentation 규칙이며, 이번
+ * 작업에서 threshold 값도 stage 해석 로직도 바꾸지 않았다 — caption은 그
+ * 결과값(steps)을 읽기만 한다. backend가 render를 04/05 두 stage로
+ * 나눠 주는 것이 아니라는 점도 그대로다(OpenAPI 계약엔 여전히 coarse
+ * render 하나뿐). N2는 이 전제(단일 active) 자체가 성립하지 않아(같은
+ * coarse stage에 시각 항목 2개가 동시 active) 이 함수와 같은 방식을 쓰지
+ * 않고 coarse stage 값을 caption에 직접 매핑한다
+ * (n2-analysis-view.tsx의 resolveOverlayCaption 참고, 서로 다른 접근이다).
+ */
+function resolveActiveVisualCaption(steps: ProcessingStep[]): { title: string; description: string } {
+  const activeIndex = steps.findIndex((s) => s.state === 'active');
+  const meta = FIVE_STEP_META[activeIndex >= 0 ? activeIndex : FIVE_STEP_META.length - 1];
+  return { title: meta.visualTitle, description: meta.visualDescription };
 }
 
 export function N4ProcessingView({ status }: { status: ApiJobTaskStatus }) {
@@ -139,6 +205,7 @@ export function N4ProcessingView({ status }: { status: ApiJobTaskStatus }) {
   // stages가 비어 있을 때, 그리고 render 내부 04/05를 가를 때 이 값을 쓴다.
   const presentationStage = resolveN4PresentationStage(status.stages, status.progress);
   const steps = buildFiveSteps(FIVE_STEP_STATES_BY_N4_PRESENTATION_STAGE[presentationStage]);
+  const caption = resolveActiveVisualCaption(steps);
   const progressPercent = Math.round((status.progress ?? 0) * 100);
   const failedItems = (status.items ?? []).filter((i) => i.status === 'failed');
 
@@ -156,8 +223,8 @@ export function N4ProcessingView({ status }: { status: ApiJobTaskStatus }) {
         headline: N4_HEADLINE,
         description: '확정한 섹션의 원문을 지우고 번역한 뒤, 원래 레이아웃에 맞게 다시 구성합니다.',
         overlayTopLabel: 'SOURCE  →  LOCALIZED',
-        overlayBottomTitle: '글자 수, 줄바꿈 조정 중',
-        overlayBottomDescription: '번역문을 원래 디자인 안에 다시 맞추고 있습니다.',
+        overlayBottomTitle: caption.title,
+        overlayBottomDescription: caption.description,
       }}
       log={{
         sectionLabel: 'TRANSLATION LOG',

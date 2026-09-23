@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import Link from 'next/link';
 
 import { useJobQuery, useN5BlocksQuery, useN5PreviewQuery } from '@/lib/queries/pixlate';
@@ -35,30 +35,23 @@ import { N5Panel } from './n5-panel';
 
 function N5Loaded({
   jobId,
-  targetCountry,
-  targetLanguage,
   preview,
   blocks,
 }: {
   jobId: string;
-  targetCountry: string | null;
-  targetLanguage: string | null;
   preview: PreviewViewModel;
   blocks: BlockViewModel[];
 }) {
-  // 번역 후(renderedUrl) 이미지가 하나라도 없는(제외 섹션 제외) include section이
-  // 있으면 「번역문」 토글을 기본으로 켜지 않는다 — 보여줄 이미지가 없기 때문이다.
-  // resolveSectionRenderState(Adapter)가 이미 렌더 전/제외/실패를 구분해 둔 값을
-  // 그대로 쓴다 — renderedUrl===null을 이 컴포넌트가 다시 실패로 단정하지 않는다.
-  const translatedDisabled = useMemo(
-    () =>
-      preview.sections.some(
-        (section) => section.bucket === 'include' && section.render.status !== 'ready',
-      ),
-    [preview.sections],
-  );
-
-  const [viewMode, setViewMode] = useState<N5ViewMode>(() => (translatedDisabled ? 'original' : 'translated'));
+  // N5는 번역 검수 화면이다 — 렌더 이미지가 없다는 이유로 원문 모드로
+  // 강제 전환하지 않는다. 최초 진입은 항상 'translated'다(요청 3). 렌더가
+  // 안 된 section은 캔버스 쪽에서 개별 section 단위로 "렌더 대기 중"을
+  // 보여줄 뿐(n5-viewport.tsx ImageLayer의 isPending, 변경하지 않음),
+  // 패널의 번역문 편집 자체를 막지 않는다. "번역 렌더 이미지가 없다"는
+  // 캔버스 전용 개념이라 N5Panel은 이 상태를 아예 모른다 — 한때 이
+  // 컴포넌트가 계산해 N5Viewport에 내려주던 전체 안내용 플래그
+  // (translatedPreviewUnavailable)는 section-local 표시와 중복돼 4차
+  // 정리에서 없앴다.
+  const [viewMode, setViewMode] = useState<N5ViewMode>('translated');
   const [selectedBlockId, setSelectedBlockId] = useState<number | null>(null);
   const [selectedSectionId, setSelectedSectionId] = useState<number | null>(null);
 
@@ -74,54 +67,70 @@ function N5Loaded({
 
   return (
     <div className="flex h-full w-full bg-white">
-      <StepNav currentStep="N5" />
-
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        {/* 헤더 — Figma(544:3168 재확인, node 849:7253 "보관함으로 나가기")는
-            뒤로가기 화살표가 아니라 닫기(X) 아이콘이다. 별도 타이틀은 없다. */}
-        <div className="shrink-0 px-8 pt-8 pb-4">
-          <Link
-            href="/"
-            className="flex size-10 shrink-0 items-center justify-center rounded-md border border-[#eaeaea] bg-white text-[#171717] transition-colors hover:bg-gray-50"
-            aria-label="보관함으로 나가기"
-          >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <path
-                d="M2 2L14 14M14 2L2 14"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                strokeLinecap="round"
-              />
-            </svg>
-          </Link>
+      {/* 좌측 rail — 나가기 버튼 + StepNav. Figma(544:3168) 실측: 나가기
+          버튼(849:7253)은 x=40,y=40,w=40,h=40로 StepNav와 별개의 떠 있는
+          요소이고, StepNav(585:3283)는 세로 중앙(top:calc(50%+40px))에
+          온다 — N1/N2/N4(processing-stage-layout.tsx)가 이미 쓰는 같은
+          rail 패턴을 그대로 재사용한다(새 레이아웃을 만들지 않는다). 이전
+          구조는 나가기 버튼을 본문 위 헤더 줄로 올려서, 그 아래 gray
+          workspace가 Figma처럼 세로 꽉 채움(top:0, height:1080)이 아니라
+          헤더 높이만큼 아래로 밀려 있었다. */}
+      <div className="relative ml-9 h-full w-[44px] shrink-0">
+        <Link
+          href="/"
+          aria-label="보관함으로 나가기"
+          className="absolute top-10 left-1/2 z-20 flex size-10 -translate-x-1/2 shrink-0 items-center justify-center rounded-md border border-[#eaeaea] bg-white text-[#171717] transition-colors hover:bg-gray-50"
+        >
+          {/* N5 3차 디테일 정렬 — Figma(849:7253 "Card/Navigation/Close", 16px
+              glyph) 실제 asset을 내려받아 좌표를 확인했다: X선은 16px 박스
+              전체가 아니라 가운데 8×8 영역(4~12, inset 25%)에만 있고,
+              stroke-width는 1.25다. 기존엔 2~14(12×12, inset 12.5%) +
+              strokeWidth 1.5라 Figma보다 크고 굵었다. */}
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path
+              d="M4 4L12 12M12 4L4 12"
+              stroke="currentColor"
+              strokeWidth="1.25"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </Link>
+        <div className="absolute inset-0 pt-[100px] pb-6">
+          <StepNav currentStep="N5" />
         </div>
+      </div>
 
-        {/* 본문: 중앙 viewer + 우측 panel */}
-        <div className="flex min-h-0 flex-1 gap-6 px-8 pb-8">
-          <N5Viewport
-            preview={preview}
-            blocks={blocks}
-            viewMode={viewMode}
-            selectedBlockId={selectedBlockId}
-            selectedSectionId={selectedSectionId}
-            onSelectBlock={handleSelectBlock}
-            onSelectSection={handleSelectSection}
-          />
-          <N5Panel
-            jobId={jobId}
-            targetCountry={targetCountry}
-            targetLanguage={targetLanguage}
-            sections={preview.sections}
-            blocks={blocks}
-            viewMode={viewMode}
-            onViewModeChange={setViewMode}
-            translatedDisabled={translatedDisabled}
-            selectedBlockId={selectedBlockId}
-            selectedSectionId={selectedSectionId}
-            onSelectBlock={handleSelectBlock}
-            onSelectSection={handleSelectSection}
-          />
-        </div>
+      {/* 본문: 중앙 viewer + 우측 panel. 세로 padding을 주지 않는다 — Figma의
+          gray workspace(602:4953)가 top:0, height:1080(뷰포트 전체)이라,
+          이 행 자체가 위아래 여백 없이 h-full을 그대로 채워야 workspace도
+          같이 꽉 찬다(세로 여백은 N5Panel 안쪽에서 개별적으로 준다, 아래
+          참고). 좌우 padding은 rail→workspace 간격(pl, ProcessingStageLayout
+          의 calc(6.25vw-80px) 공식과 동일 — rail 몫 80px을 먼저 상쇄)과
+          panel→프레임 오른쪽 끝 간격(pr, 같은 화면들의 clamp(45px,3.125vw,
+          60px)과 동일)을 그대로 재사용한다. workspace와 panel 사이 gap은
+          Figma 실측(52px, 1920 기준 2.708vw)을 상한으로 쓴다. */}
+      <div className="flex h-full min-h-0 min-w-0 flex-1 gap-[clamp(20px,2.708vw,52px)] pr-[clamp(45px,3.125vw,60px)] pl-[clamp(0px,calc(6.25vw_-_80px),40px)]">
+        <N5Viewport
+          preview={preview}
+          blocks={blocks}
+          viewMode={viewMode}
+          selectedBlockId={selectedBlockId}
+          selectedSectionId={selectedSectionId}
+          onSelectBlock={handleSelectBlock}
+          onSelectSection={handleSelectSection}
+        />
+        <N5Panel
+          jobId={jobId}
+          sections={preview.sections}
+          blocks={blocks}
+          viewMode={viewMode}
+          onViewModeChange={setViewMode}
+          selectedBlockId={selectedBlockId}
+          selectedSectionId={selectedSectionId}
+          onSelectBlock={handleSelectBlock}
+          onSelectSection={handleSelectSection}
+        />
       </div>
     </div>
   );
@@ -159,13 +168,5 @@ export function N5View({ jobId }: { jobId: string }) {
   const blocks = blocksQuery.data.map(toBlockViewModel);
   const preview = toPreviewViewModel(previewQuery.data);
 
-  return (
-    <N5Loaded
-      jobId={jobId}
-      targetCountry={jobQuery.data.targetCountry ?? null}
-      targetLanguage={jobQuery.data.targetLanguage ?? null}
-      preview={preview}
-      blocks={blocks}
-    />
-  );
+  return <N5Loaded jobId={jobId} preview={preview} blocks={blocks} />;
 }
