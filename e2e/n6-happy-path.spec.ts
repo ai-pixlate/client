@@ -58,6 +58,14 @@ test('render → deliverables → validation → export → download → save �
   await expect(page.locator('#artifact-psd')).toBeDisabled();
   await expect(page.getByText('12월 제공 예정')).toBeVisible();
 
+  // 9/23 — 표시 순서: images → HTML → content.csv → PSD (backend type 값은
+  // 그대로, ARTIFACT_DISPLAY_ORDER로 presentation만 재정렬). 각 행 라벨을
+  // DOM 등장 순서 그대로 읽어 순서 자체를 회귀 검증한다.
+  const labelTexts = await page
+    .locator('[data-testid="n6-export-panel"] div.flex.w-full.items-center.gap-4 label span')
+    .allTextContents();
+  expect(labelTexts.filter((_, i) => i % 2 === 0)).toEqual(['images/', 'HTML', 'content.csv', 'PSD']);
+
   // ── content.csv 선택/해제 ────────────────────────────────────────
   await page.locator('label[for="artifact-csv"]').click();
   await expect(page.locator('#artifact-csv')).toBeChecked();

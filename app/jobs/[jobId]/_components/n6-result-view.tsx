@@ -121,10 +121,18 @@ function CompletionBanner() {
           <img src="/mock/n6/orange-glow.svg" alt="" className="block size-full max-w-none" />
         </div>
       </div>
+      {/* 9/23 — Figma 텍스트 frame(24,20,300×114) 실측: eyebrow h=14, title
+          h=24, description(2줄) h=28, 항목 사이 gap 24px씩 — 합이
+          14+24+24+24+28=114로 배너 하단까지 정확히 16px(150-20-114)이
+          남는다. 이전엔 각 줄의 line-height를 지정하지 않아(description은
+          leading-normal, 대략 1.5배) 전체 스택이 114px보다 커져서 description
+          이 배너 하단에 붙거나 overflow-hidden에 잘렸다 — 글자 크기나 배너
+          높이를 바꾸는 대신 Figma가 실제로 쓰는 타이트한 line-height(eyebrow/
+          description 14px, title 24px)를 그대로 맞췄다. */}
       <div className="absolute left-6 top-5 flex w-[300px] flex-col gap-6">
-        <p className="text-[12px] font-light tracking-[-0.04em] text-[#b8b8b8]">READY TO EXPORT</p>
-        <p className="text-[20px] font-semibold tracking-[-0.02em] text-white">번역이 완료되었습니다.</p>
-        <div className="text-[12px] font-light leading-normal tracking-[-0.04em] text-[#b8b8b8]">
+        <p className="text-[12px] leading-[14px] font-light tracking-[-0.04em] text-[#b8b8b8]">READY TO EXPORT</p>
+        <p className="text-[20px] leading-[24px] font-semibold tracking-[-0.02em] text-white">번역이 완료되었습니다.</p>
+        <div className="text-[12px] leading-[14px] font-light tracking-[-0.04em] text-[#b8b8b8]">
           <p>최종 결과물을 원하는 형식으로 내려받거나</p>
           <p>보관함에 저장할 수 있습니다.</p>
         </div>
@@ -304,6 +312,13 @@ const ARTIFACT_DESC: Record<string, string> = {
   psd: '레이어 편집이 가능한 PSD 산출물',
 };
 
+// 9/23 — 화면 표시 순서만 바꾼다(backend type/enum 값이나 의미는 그대로다).
+// 이전엔 components(백엔드 응답 배열)를 온 순서 그대로 렌더해 images→csv→
+// html→psd로 보였다 — 요청한 순서(images→html→csv→psd)에 맞게 이 배열
+// 하나로 정렬 기준만 둔다. checkbox/개수/개별 다운로드는 여전히 각 행의
+// 실제 component.type 값을 그대로 쓴다(아래 ExportPanel 정렬 로직 참고).
+const ARTIFACT_DISPLAY_ORDER = ['images', 'html', 'csv', 'psd'];
+
 // 9/23 재정합 — N6 진입 기본 선택을 images/ + HTML로 바꿨다(이전 images/ +
 // content.csv). 이 Set 하나가 ExportPanel의 checkbox/개수 summary/"한 번에
 // 내려받기" 대상/handleExport 페이로드까지 전부 공유하는 단일 SSOT다(아래
@@ -429,6 +444,16 @@ function ArtifactRow({
 }
 
 function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeliverableComponent[] }) {
+  // 표시 순서만 ARTIFACT_DISPLAY_ORDER로 정렬한다 — component 객체 자체(type
+  // 포함)는 그대로라 checkbox/선택 state/handleExport 페이로드의 타입 의미는
+  // 전혀 바뀌지 않는다. 정렬 기준에 없는 type이 오면(방어적으로) 맨 뒤로 보낸다
+  // (indexOf가 -1을 주면 맨 앞으로 가버려서 length로 fallback한다).
+  const orderRank = (type: string) => {
+    const i = ARTIFACT_DISPLAY_ORDER.indexOf(type);
+    return i === -1 ? ARTIFACT_DISPLAY_ORDER.length : i;
+  };
+  const orderedComponents = [...components].sort((a, b) => orderRank(a.type ?? '') - orderRank(b.type ?? ''));
+
   const [selected, setSelected] = useState<Set<string>>(
     () => new Set(components.filter((c) => c.isActive && DEFAULT_SELECTED_TYPES.has(c.type ?? '')).map((c) => c.type as string)),
   );
@@ -497,7 +522,7 @@ function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeli
 
           <div className="flex w-full flex-col gap-7">
             <div className="h-px w-full bg-[#eaeaea]" />
-            {components.map((component) => (
+            {orderedComponents.map((component) => (
               <ArtifactRow
                 key={component.type ?? 'unknown'}
                 jobId={jobId}
