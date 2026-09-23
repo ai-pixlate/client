@@ -274,9 +274,21 @@ export function ProcessingStageLayout({
                   <p className="absolute top-7 left-6 whitespace-pre font-['Pretendard:Light'] text-[12px] tracking-[-0.04em] text-white/[58%]">
                     {visual.overlayTopLabel}
                   </p>
-                  <div className="absolute right-6 bottom-6 flex max-w-[360px] flex-col items-end gap-2 text-right">
-                    <p className="font-['Pretendard:Medium'] text-[13px] text-[#ff6a38]">{visual.overlayBottomTitle}</p>
-                    <p className="font-['Pretendard:Regular'] text-[12px] text-white/[58%]">
+                  {/* 9/23 — 흰색 description은 Figma처럼 항상 한 줄이다. 실측
+                      결과 컨테이너 자체가 좁아서 줄바꿈이 나던 게 아니라(우측
+                      GIF 영역 안에서 이 블록이 쓸 수 있는 폭은 여유가 있다)
+                      caption 문구 자체가 Figma 원본보다 길었던 게 원인이라,
+                      문구를 Figma 분량에 맞춰 짧게 정리하고 whitespace-nowrap
+                      으로 줄바꿈 자체를 막았다 — font-size를 줄이거나 <br>을
+                      넣지 않는다. w-max(콘텐츠 실제 폭만큼만)로 고정 max-w가
+                      불필요한 줄바꿈을 만들지 않게 하되, GIF 박스 좌측 끝을
+                      넘어가지 않도록 max-w-[calc(100%-48px)](좌우 6 inset
+                      상쇄)를 안전 상한으로만 둔다. */}
+                  <div className="absolute right-6 bottom-6 flex w-max max-w-[calc(100%-48px)] flex-col items-end gap-2 text-right">
+                    <p className="whitespace-nowrap font-['Pretendard:Medium'] text-[13px] text-[#ff6a38]">
+                      {visual.overlayBottomTitle}
+                    </p>
+                    <p className="whitespace-nowrap font-['Pretendard:Regular'] text-[12px] text-white/[58%]">
                       {visual.overlayBottomDescription}
                     </p>
                   </div>

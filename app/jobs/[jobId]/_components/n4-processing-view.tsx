@@ -48,6 +48,10 @@ const N4_HEADLINE = '번역과 배경 복원을 함께 진행하고 있습니다
 const N4_AUTO_ADVANCE_NOTICE = '완료되면 검수 화면으로 자동 이동합니다.';
 const N4_PAUSE_BUTTON_TITLE = '번역 중단 기능은 아직 제공되지 않습니다.';
 
+// 9/23 재조정 — 흰색 description은 Figma처럼 한 줄이어야 한다(processing-
+// stage-layout.tsx의 whitespace-nowrap 처리 참고). 이전 문구는 Figma 원본
+// 분량보다 길어 실측상 줄바꿈이 났다 — 뜻은 유지하되 분량만 Figma 수준으로
+// 줄였다(font-size를 줄이거나 컨테이너를 늘리는 방식으로 우회하지 않는다).
 const FIVE_STEP_META: {
   no: string;
   label: string;
@@ -59,31 +63,31 @@ const FIVE_STEP_META: {
     no: '01',
     label: '한글 지우고 배경 채우기',
     visualTitle: '원문 제거·배경 복원 중',
-    visualDescription: '원문을 지우고 주변 이미지와 자연스럽게 이어지도록 배경을 복원하고 있습니다.',
+    visualDescription: '원문을 지우고 주변 배경을 자연스럽게 복원하고 있습니다.',
   },
   {
     no: '02',
     label: '번역 · 용어 맞춤',
     visualTitle: '번역·용어 맞춤 중',
-    visualDescription: '확정된 문구를 번역하고 제품·브랜드 용어가 일관되도록 맞추고 있습니다.',
+    visualDescription: '번역문과 제품·브랜드 용어를 맞추고 있습니다.',
   },
   {
     no: '03',
     label: '규제 기준 확인',
     visualTitle: '규제 기준 확인 중',
-    visualDescription: '번역문이 대상 국가의 규제와 표현 기준에 맞는지 확인하고 있습니다.',
+    visualDescription: '번역문이 대상 국가의 규제 기준에 맞는지 확인합니다.',
   },
   {
     no: '04',
     label: '글자 수, 줄바꿈 조정',
     visualTitle: '문장 길이·줄바꿈 조정 중',
-    visualDescription: '원래 디자인에 자연스럽게 들어가도록 문장 길이와 줄바꿈을 조정하고 있습니다.',
+    visualDescription: '번역문을 원래 디자인 안에 맞게 조정하고 있습니다.',
   },
   {
     no: '05',
     label: '이미지 합성',
     visualTitle: '최종 이미지 합성 중',
-    visualDescription: '조정된 번역문을 원래 위치와 스타일에 맞춰 이미지에 적용하고 있습니다.',
+    visualDescription: '조정된 번역문을 원래 위치에 합성하고 있습니다.',
   },
 ];
 

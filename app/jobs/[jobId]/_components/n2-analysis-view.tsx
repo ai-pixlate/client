@@ -72,18 +72,22 @@ const FIVE_STEP_STATES_BY_COARSE_STAGE: Record<'ocr' | 'section' | 'verify' | 'd
 // coarse stage 값을 그대로 쓴다(steps에서 active를 다시 찾지 않는다) —
 // section/verify는 시각 항목이 2개씩 걸려 있어 그 둘을 포괄하는 문구
 // 하나로 쓴다.
+// 9/23 재조정 — 흰색 description은 Figma처럼 한 줄이어야 한다(processing-
+// stage-layout.tsx의 whitespace-nowrap 처리 참고). 이전 문구는 Figma 원본
+// 분량보다 길어 실측상 줄바꿈이 났다 — 뜻은 유지하되 분량만 Figma 수준으로
+// 줄였다(font-size를 줄이거나 컨테이너를 늘리는 방식으로 우회하지 않는다).
 const OVERLAY_CAPTION_BY_COARSE_STAGE: Record<'ocr' | 'section' | 'verify', { title: string; description: string }> = {
   ocr: {
     title: '텍스트 영역 인식 중',
-    description: '이미지 속 문구와 위치를 찾아 번역에 필요한 텍스트를 정리하고 있습니다.',
+    description: '이미지 속 텍스트와 위치를 인식하고 있습니다.',
   },
   section: {
     title: '콘텐츠 구조 분석 중',
-    description: '콘텐츠 영역을 나누고 각 텍스트의 역할을 파악해 상세페이지 구조를 정리하고 있습니다.',
+    description: '콘텐츠 영역과 텍스트 역할을 구분하고 있습니다.',
   },
   verify: {
     title: '번역 대상·적합성 확인 중',
-    description: '제품 라벨 등 번역 제외 대상을 확인하고 대상 국가의 규제와 현지 표현 적합성을 검토하고 있습니다.',
+    description: '번역 제외 대상과 현지 적합성을 확인하고 있습니다.',
   },
 };
 
