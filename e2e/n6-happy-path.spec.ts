@@ -50,19 +50,20 @@ test('render → deliverables → validation → export → download → save �
   expect(requests.some((r) => r.method === 'GET' && r.path === `/jobs/${MOCK_JOB_ID}/deliverables`)).toBe(true);
   expect(requests.some((r) => r.method === 'GET' && r.path === `/jobs/${MOCK_JOB_ID}/validation`)).toBe(true);
 
-  // 기본 선택: images/csv만 체크된 상태로 로드된다 (Figma 산출물 목록 기준)
+  // 기본 선택: images/HTML만 체크된 상태로 로드된다 (9/23 재정합 — 이전 images/
+  // content.csv에서 변경, n6-result-view.tsx DEFAULT_SELECTED_TYPES 참고)
   await expect(page.locator('#artifact-images')).toBeChecked();
-  await expect(page.locator('#artifact-csv')).toBeChecked();
-  await expect(page.locator('#artifact-html')).not.toBeChecked();
+  await expect(page.locator('#artifact-csv')).not.toBeChecked();
+  await expect(page.locator('#artifact-html')).toBeChecked();
   await expect(page.locator('#artifact-psd')).toBeDisabled();
   await expect(page.getByText('12월 제공 예정')).toBeVisible();
 
-  // ── HTML 선택/해제 ────────────────────────────────────────────
-  await page.locator('label[for="artifact-html"]').click();
-  await expect(page.locator('#artifact-html')).toBeChecked();
+  // ── content.csv 선택/해제 ────────────────────────────────────────
+  await page.locator('label[for="artifact-csv"]').click();
+  await expect(page.locator('#artifact-csv')).toBeChecked();
   await expect(page.getByText('선택된 산출물 3개')).toBeVisible();
-  await page.locator('label[for="artifact-html"]').click();
-  await expect(page.locator('#artifact-html')).not.toBeChecked();
+  await page.locator('label[for="artifact-csv"]').click();
+  await expect(page.locator('#artifact-csv')).not.toBeChecked();
   await expect(page.getByText('선택된 산출물 2개')).toBeVisible();
 
   // ── 개별 다운로드(행별, artifactType 쿼리) ─────────────────────────
@@ -84,7 +85,7 @@ test('render → deliverables → validation → export → download → save �
   const exportReq = requests.find((r) => r.method === 'POST' && r.path === `/jobs/${MOCK_JOB_ID}/export`);
   expect(exportReq).toBeDefined();
   const exportBody = JSON.parse(exportReq!.body ?? '{}');
-  expect(new Set(exportBody.components)).toEqual(new Set(['images', 'csv']));
+  expect(new Set(exportBody.components)).toEqual(new Set(['images', 'html']));
 
   // ── download URL 획득 (mock presigned, 실제 파일 생성 없음) ───────
   const downloadReq = requests.find(
