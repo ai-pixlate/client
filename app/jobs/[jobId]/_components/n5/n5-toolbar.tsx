@@ -121,7 +121,10 @@ export function ZoomControls({
   return (
     <div
       data-testid="n5-zoom-controls"
-      className="flex items-center gap-2 text-[12px] font-light tracking-[-0.02em] text-[#999]"
+      // 9/23 — n5-viewport.tsx가 이 컴포넌트를 pointer-events-none 바깥
+      // wrapper 안에서 쓴다(그 wrapper의 "빈" 영역이 캔버스 클릭을 가로채지
+      // 않게 하려는 목적). 실제 컨트롤이 있는 이 루트는 auto로 되돌린다.
+      className="pointer-events-auto flex items-center gap-2 text-[12px] font-light tracking-[-0.02em] text-[#999]"
     >
       <button
         type="button"
@@ -208,7 +211,7 @@ export function FitControls({
   onFitHeight: () => void;
 }) {
   return (
-    <div data-testid="n5-fit-controls" className="flex items-center gap-1">
+    <div data-testid="n5-fit-controls" className="pointer-events-auto flex items-center gap-1">
       <button
         type="button"
         data-testid="n5-fit-width"
@@ -303,14 +306,12 @@ function TrashIcon() {
 
 /**
  * Figma 686:7988 "Tool / Pointer" — 텍스트/block 선택 도구. 48×48, 항상
- * bg-white, rounded-[24px](=48px 박스에서 rounded-full과 동일한 완전
- * 원). 선택(active) 상태는 orange 배경이 아니라 "border만 orange로
- * 바뀌는" 것이 Figma가 실제로 보여준 값이다(686:8207 "Property 1=select"
- * — Selected tool은 흰 배경 유지, border/아이콘 색만 orange) — 요청 2·6이
- * 지적한 "단순 orange icon만 적용"이 아니라 컴포넌트 전체 상태(배경 유지 +
- * border 전환)를 그대로 따른다. 비활성 기본은 border-transparent(테두리
- * 없어 보임) — 이 상태의 border 색은 Figma에 명시된 값이 없어(이 인스턴스는
- * 항상 selected로만 캡처돼 있음) 중립적으로 투명 처리했다.
+ * bg-white. 9/23 재확인(686:8230 component set 전체, select/section/trash
+ * 3개 variant 대조) — 활성(selected) 상태만 rounded-full(원)+border-orange고,
+ * 비활성 상태는 rounded-[6px](각진 사각형)+border-[#eaeaea]다(686:8231
+ * "Property 1=section"의 비활성 Pointer가 실제로 이 값). 이전엔 비활성일 때도
+ * 항상 rounded-full+border-transparent라 "테두리만 없어진 원"으로 보였는데,
+ * Figma는 모양 자체(원↔사각)가 바뀌는 걸 보여준다.
  */
 function ToolPointerButton({ isActive, onClick }: { isActive: boolean; onClick: () => void }) {
   return (
@@ -321,8 +322,10 @@ function ToolPointerButton({ isActive, onClick }: { isActive: boolean; onClick: 
       aria-label="텍스트 선택"
       aria-pressed={isActive}
       onClick={onClick}
-      className={`flex size-12 shrink-0 items-center justify-center rounded-full border bg-white transition-colors ${
-        isActive ? 'border-[#ff6a38] text-[#ff6a38]' : 'border-transparent text-[#171717] hover:bg-[#f5f5f5]'
+      className={`flex size-12 shrink-0 items-center justify-center border bg-white transition-colors ${
+        isActive
+          ? 'rounded-full border-[#ff6a38] text-[#ff6a38]'
+          : 'rounded-[6px] border-[#eaeaea] text-[#171717] hover:bg-[#f5f5f5]'
       }`}
     >
       <PointerIcon />
@@ -336,14 +339,33 @@ function ToolPointerButton({ isActive, onClick }: { isActive: boolean; onClick: 
  * (rounded-bl/tl, rounded-br/tr) 라운드가 걸려 있는 걸 그대로 옮기는 대신,
  * 그룹 wrapper 하나에 overflow-hidden + rounded-[6px]를 줘서 같은 시각
  * 결과(바깥 4모서리만 6px, 가운데 접합부는 각짐)를 얻는다 — 두 버튼을
- * "따로 둥근 버튼"처럼 보이지 않게 하는 핵심이 이 wrapper다.
+ * "따로 둥근 버튼"처럼 보이지 않게 하는 핵심이 이 wrapper다. 이 그룹으로
+ * 묶인 버튼은 자기 자신에 rounded를 주지 않는다(래퍼의 clip이 전담).
  */
 function ConnectedToolGroup({ children }: { children: React.ReactNode }) {
   return <div className="flex shrink-0 items-stretch overflow-hidden rounded-[6px]">{children}</div>;
 }
 
-/** Figma 686:7990 — 48×48, bg-white, border(1px solid). 기본 #eaeaea, 선택 시 #ff6a38(Pointer와 같은 "배경 유지+border 전환" 규칙). */
-function SectionSelectButton({ isActive, onClick }: { isActive: boolean; onClick: () => void }) {
+/**
+ * Figma 686:7990 — 48×48, bg-white, border(1px solid). 기본 #eaeaea, 선택
+ * 시 rounded-full+#ff6a38(Pointer와 같은 "활성=원, 비활성=각진 사각" 규칙,
+ * 686:8231 "Property 1=section"의 활성 Section이 실제로 원이다).
+ *
+ * `joined`(686:8230 component set 재확인, 9/23) — 이 버튼이 Delete와 96px
+ * 짝으로 붙는 경우(activeTool==='text', ConnectedToolGroup 안)에만 true다.
+ * 이때는 자기 rounded를 비워 래퍼 clip에 맡긴다. activeTool==='section'이면
+ * Section 자신이 활성(원)이 되면서 Pointer/Delete 사이에서 떨어져 나오므로
+ * joined가 아니다(어차피 그 상태에서 이 버튼은 항상 active라 rounded-full).
+ */
+function SectionSelectButton({
+  isActive,
+  joined,
+  onClick,
+}: {
+  isActive: boolean;
+  joined: boolean;
+  onClick: () => void;
+}) {
   return (
     <button
       type="button"
@@ -352,8 +374,10 @@ function SectionSelectButton({ isActive, onClick }: { isActive: boolean; onClick
       aria-label="섹션 선택"
       aria-pressed={isActive}
       onClick={onClick}
-      className={`flex size-12 items-center justify-center border bg-white transition-colors ${
-        isActive ? 'border-[#ff6a38] text-[#ff6a38]' : 'border-[#eaeaea] text-[#171717] hover:bg-[#f5f5f5]'
+      className={`flex size-12 shrink-0 items-center justify-center border bg-white transition-colors ${
+        isActive
+          ? 'rounded-full border-[#ff6a38] text-[#ff6a38]'
+          : `${joined ? '' : 'rounded-[6px]'} border-[#eaeaea] text-[#171717] hover:bg-[#f5f5f5]`
       }`}
     >
       <SectionSelectIcon />
@@ -366,8 +390,14 @@ function SectionSelectButton({ isActive, onClick }: { isActive: boolean; onClick
  * handler/API가 없어(요청 6) disabled를 유지한다 — Figma가 이 인스턴스에서
  * 이미 이 muted 톤(#f5f5f5, border 없음)으로 보여주고 있어 "비활성처럼
  * 보이는 기본 상태"와 "실제 disabled"가 우연히 같은 톤으로 일치한다.
+ *
+ * `joined` — Section과 96px 짝으로 붙을 때(activeTool==='text')만 true,
+ * 그때는 rounded를 비워 ConnectedToolGroup 래퍼 clip에 맡긴다.
+ * activeTool==='section'이면 Section이 가운데서 활성화되며 Pointer/Delete가
+ * 서로 붙어있지 않게 되므로(686:8231) 이 버튼은 독립된 48×48
+ * rounded-[6px] 사각형이 된다.
  */
-function DeleteButton() {
+function DeleteButton({ joined }: { joined: boolean }) {
   return (
     <button
       type="button"
@@ -375,7 +405,9 @@ function DeleteButton() {
       title="삭제 기능은 아직 제공되지 않습니다."
       disabled
       aria-disabled="true"
-      className="flex size-12 cursor-not-allowed items-center justify-center bg-[#f5f5f5] text-[#999]"
+      className={`flex size-12 shrink-0 cursor-not-allowed items-center justify-center bg-[#f5f5f5] text-[#999] ${
+        joined ? '' : 'rounded-[6px]'
+      }`}
     >
       <TrashIcon />
     </button>
@@ -383,19 +415,25 @@ function DeleteButton() {
 }
 
 /**
- * Figma 686:8207 "Property 1=select" 인스턴스(686:8237로 N5 화면에
- * 배치) 전체를 그대로 옮긴 컴포넌트다 — 아이콘 3개를 스타일 없이 나열한
- * 것이 아니라, Figma 노드 트리와 1:1 대응하는 하위 컴포넌트로 구성했다:
+ * Figma 686:8230 — 단일 컴포넌트가 아니라 select/section/trash 3-variant
+ * component set이다(9/23 재확인). 이 앱은 activeTool: 'text'|'section'만
+ * 실제로 도달 가능하므로(delete는 API가 없어 항상 disabled, 실제 활성
+ * 상태로 전환되지 않는다) 그 두 variant만 실제 인터랙션으로 구현하되,
+ * Figma가 보여준 상태 모델(어떤 버튼이 붙는지/어디에 4px gap이 생기는지/
+ * 전체 width가 바뀌는지)은 그대로 따른다:
  *
- *   PlacementToolbar (686:8207, 148×48, gap-[4px])
- *   ├─ ToolPointerButton (686:7988, 48×48)
- *   └─ ConnectedToolGroup (686:7989 "After", 96×48)
- *      ├─ SectionSelectButton (686:7990, 48×48)
- *      └─ DeleteButton (686:7996, 48×48)
+ *   select(686:8207, activeTool==='text', 148×48)
+ *     Pointer(원,active) [4px] After그룹[Section+Delete 96px, 붙어있음]
  *
- * 실측(1920×1080, headless Chromium): 전체 148×48, Pointer↔After group
- * gap 4px, After group 96×48 — 전부 Figma 값과 일치를 확인했다(보고
- * 참고).
+ *   section(686:8231, activeTool==='section', 152×48)
+ *     Pointer(각진,비활성) [4px] Section(원,active) [4px] Delete(각진,비활성)
+ *     — Section이 가운데서 활성화되며 Pointer/Delete와 떨어지므로 셋 다
+ *       독립 버튼이 되고, 부모의 gap-1(4px)이 사이마다 그대로 적용돼
+ *       48×3 + 4×2 = 152가 된다(추가 wrapper 없이 <>Fragment</>로 형제로
+ *       풀어놓기만 하면 부모 gap이 자동으로 그 값을 만든다).
+ *
+ * 실측(1920×1080, headless Chromium, Playwright bounding rect) — text:
+ * 148×48, section: 152×48. 두 값 모두 Figma와 일치를 확인했다(보고 참고).
  */
 export function PlacementToolbar({
   activeTool,
@@ -406,13 +444,21 @@ export function PlacementToolbar({
   onSelectTextTool: () => void;
   onSelectSectionTool: () => void;
 }) {
+  const isTextActive = activeTool === 'text';
   return (
     <div data-testid="n5-placement-toolbar" className="flex items-center gap-1">
-      <ToolPointerButton isActive={activeTool === 'text'} onClick={onSelectTextTool} />
-      <ConnectedToolGroup>
-        <SectionSelectButton isActive={activeTool === 'section'} onClick={onSelectSectionTool} />
-        <DeleteButton />
-      </ConnectedToolGroup>
+      <ToolPointerButton isActive={isTextActive} onClick={onSelectTextTool} />
+      {isTextActive ? (
+        <ConnectedToolGroup>
+          <SectionSelectButton isActive={false} joined onClick={onSelectSectionTool} />
+          <DeleteButton joined />
+        </ConnectedToolGroup>
+      ) : (
+        <>
+          <SectionSelectButton isActive joined={false} onClick={onSelectSectionTool} />
+          <DeleteButton joined={false} />
+        </>
+      )}
     </div>
   );
 }

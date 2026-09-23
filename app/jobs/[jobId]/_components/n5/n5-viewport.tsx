@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import type { BlockViewModel, PreviewSectionViewModel, PreviewViewModel } from '@/lib/n5/adapter';
 import { getBlockDisplayRect } from '@/lib/n5/coordinates';
@@ -167,7 +167,15 @@ function BlockOverlay({
       <div
         data-testid={`n5-block-pin-${block.id}`}
         className="pointer-events-none absolute z-10"
-        style={{ left: rect.left - 10, top: rect.top - 10 }}
+        // 9/23 재확인 — rect.left/top은 preview.scale(소수)이 곱해진 값이라
+        // 그대로 쓰면 배지가 소수 px 위치에 놓인다. Playwright로 Pretendard
+        // leading-none 배지의 실제 glyph-vs-circle 중심 오차를 측정한 결과
+        // (숫자 1~9 전량, 소수/정수 offset 양쪽 모두) dx/dy가 0.01px 이내로
+        // 이미 사실상 완전히 중앙이었다 — 배지 자체의 flex 정렬은 깨져있지
+        // 않다. 다만 소수 px 위치는 브라우저마다 서브픽셀 렌더링 방식이 달라
+        // 미세한 흐림/치우침 인상을 줄 수 있어, 정수 px로 스냅한다(패딩/
+        // translate로 임의 보정한 값이 아니라 위치 자체를 반올림한 것).
+        style={{ left: Math.round(rect.left - 10), top: Math.round(rect.top - 10) }}
       >
         <BlockPinBadge index={index} isSelected={isSelected} />
       </div>
@@ -475,12 +483,43 @@ export function N5Viewport({
     canvasSizeRef.current = canvasSize;
   }, [canvasSize]);
 
-  // 최초 진입 시 가로 중앙 정렬을 시도했으나(F-CFM-13/14 e2e 실행 결과)
-  // 뷰포트가 좁고 canvas가 그보다 더 좁을 때 section 우상단 "제외하기"
-  // 버튼이 화면 우상단 고정 zoom/fit 컨트롤 영역과 겹쳐 클릭을 가로채는
-  // 회귀가 실측 확인됐다(e2e/n5-viewport.spec.ts F-CFM-14, 기본 1280×720
-  // 뷰포트). zoom/pan 조작 경로 자체는 이번 작업 범위 밖(회귀 금지 대상)
-  // 이라 안전하게 되돌렸다 — INITIAL_TRANSFORM(pan={0,0}) 그대로 유지한다.
+  // 9/23 재도입 — 최초 진입 시 section을 viewport 가용 가로 영역 기준으로
+  // 가운데 정렬한다(세로는 기존 top 정렬 INITIAL_TRANSFORM.y=0 그대로 유지,
+  // pan.x만 다룬다). 이전 시도가 겪은 회귀(좁은 뷰포트에서 우상단 zoom/fit
+  // 컨트롤의 "빈" 영역이 그 아래 section의 "제외하기" 버튼 클릭을 가로챔)는
+  // 이번엔 centering을 포기하는 대신, 그 컨트롤들의 바깥 absolute wrapper를
+  // pointer-events-none으로 바꾸고 실제 버튼(ZoomControls/FitControls 루트,
+  // n5-toolbar.tsx)만 pointer-events-auto로 다시 켜서 근본 원인(빈 영역이
+  // 클릭을 가로채는 것)을 없앴다 — 아래 JSX 참고.
+  //
+  // hasInteractedRef — 사용자가 pan/zoom/fit을 한 번이라도 직접 조작하면
+  // true로 바뀌고, 이후로는 resize가 나도(사이드바 폭 변화 등) 다시
+  // 가운데로 끌고 오지 않는다("초기 positioning O, 계속 강제 centering X").
+  const hasInteractedRef = useRef(false);
+
+  // DOM이 실제로 측정 가능한 시점(레이아웃 이후)에만 계산한다 — 대충 추정한
+  // 값으로 먼저 그렸다가 나중에 튀지 않도록 useLayoutEffect(페인트 전
+  // 동기 실행) + ResizeObserver(그 뒤에도 실제 렌더 크기가 바뀌면 재계산)를
+  // 함께 쓴다.
+  useLayoutEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+
+    function centerHorizontallyIfUntouched() {
+      if (hasInteractedRef.current) return;
+      const canvas = canvasSizeRef.current;
+      if (canvas.width <= 0) return;
+      const usable = computeUsableViewportSize(el!.clientWidth, el!.clientHeight, readPadding(el!));
+      const centered = computeCenteredPan(canvas, transformRef.current.zoom, usable);
+      setTransform((prev) => ({ ...prev, pan: { x: centered.x, y: prev.pan.y } }));
+    }
+
+    centerHorizontallyIfUntouched(); // 최초 1회 — 이미 레이아웃이 끝난 뒤라 바로 정확한 값을 쓴다
+
+    const resizeObserver = new ResizeObserver(() => centerHorizontallyIfUntouched());
+    resizeObserver.observe(el);
+    return () => resizeObserver.disconnect();
+  }, []);
 
   // ── Space 키 상태 추적 — 텍스트 입력창에 focus가 있으면 pan을 발동하지 않는다 ──
   useEffect(() => {
@@ -528,6 +567,7 @@ export function N5Viewport({
     function handleWheel(e: WheelEvent) {
       e.preventDefault();
       if (canvasSizeRef.current.width <= 0 && canvasSizeRef.current.height <= 0) return; // 빈 상태 — 조작 비활성화
+      hasInteractedRef.current = true; // 사용자가 직접 조작 — 이후 자동 중앙 정렬 중단
 
       if (e.ctrlKey || e.metaKey) {
         const rect = el!.getBoundingClientRect();
@@ -558,6 +598,7 @@ export function N5Viewport({
     if (!spaceHeldRef.current) return;
     if (canvasSizeRef.current.width <= 0 && canvasSizeRef.current.height <= 0) return; // 빈 상태 — pan 비활성화
     e.preventDefault();
+    hasInteractedRef.current = true; // 사용자가 직접 조작 — 이후 자동 중앙 정렬 중단
     e.currentTarget.setPointerCapture(e.pointerId);
     isPanningRef.current = true;
     setIsPanning(true);
@@ -592,6 +633,7 @@ export function N5Viewport({
   const handleZoomButton = useCallback((direction: 1 | -1) => {
     const el = viewportRef.current;
     if (!el) return;
+    hasInteractedRef.current = true; // 사용자가 직접 조작 — 이후 자동 중앙 정렬 중단
     const rect = el.getBoundingClientRect();
     const center: Point = { x: rect.width / 2, y: rect.height / 2 };
     const usable = computeUsableViewportSize(el.clientWidth, el.clientHeight, readPadding(el));
@@ -604,6 +646,7 @@ export function N5Viewport({
   const handleSetZoom = useCallback((nextZoom: number) => {
     const el = viewportRef.current;
     if (!el) return;
+    hasInteractedRef.current = true; // 사용자가 직접 조작 — 이후 자동 중앙 정렬 중단
     const rect = el.getBoundingClientRect();
     const center: Point = { x: rect.width / 2, y: rect.height / 2 };
     const usable = computeUsableViewportSize(el.clientWidth, el.clientHeight, readPadding(el));
@@ -616,6 +659,7 @@ export function N5Viewport({
   const handleFitWidth = useCallback(() => {
     const el = viewportRef.current;
     if (!el || canvasSize.width <= 0) return;
+    hasInteractedRef.current = true; // 사용자가 직접 조작 — 이후 자동 중앙 정렬 중단
     const usable = computeUsableViewportSize(el.clientWidth, el.clientHeight, readPadding(el));
     const zoom = computeFitWidthScale(usable, canvasSize);
     setTransform({ zoom, pan: computeCenteredPan(canvasSize, zoom, usable) });
@@ -624,6 +668,7 @@ export function N5Viewport({
   const handleFitHeight = useCallback(() => {
     const el = viewportRef.current;
     if (!el || canvasSize.height <= 0) return;
+    hasInteractedRef.current = true; // 사용자가 직접 조작 — 이후 자동 중앙 정렬 중단
     const usable = computeUsableViewportSize(el.clientWidth, el.clientHeight, readPadding(el));
     const zoom = computeFitHeightScale(usable, canvasSize);
     setTransform({ zoom, pan: computeCenteredPan(canvasSize, zoom, usable) });
@@ -648,7 +693,15 @@ export function N5Viewport({
         </div>
       ) : (
         <>
-          <div className="absolute top-5 right-5 z-10 flex items-center gap-2">
+          {/* 9/23 — 바깥 wrapper 자체는 pointer-events-none이다. ZoomControls/
+              FitControls 두 그룹 "사이"의 빈 gap-2 영역까지 이 div의 클릭
+              가능 영역이 돼 버리면(원래 기본값), 초기 가로 중앙 정렬을 켰을
+              때 그 빈 영역 아래 놓이는 section의 "제외하기" 버튼 클릭을
+              가로채는 회귀가 있었다(위 hasInteractedRef 주석 참고). 실제
+              버튼이 있는 두 컴포넌트 루트에만 pointer-events-auto를 다시
+              켜서(n5-toolbar.tsx), 빈 영역은 클릭이 아래 canvas로 그대로
+              통과하게 한다. */}
+          <div className="pointer-events-none absolute top-5 right-5 z-10 flex items-center gap-2">
             <ZoomControls
               zoom={transform.zoom}
               onZoomIn={() => handleZoomButton(1)}

@@ -192,7 +192,11 @@ function SourceField({ text }: { text: string }) {
 function EvidenceSection({ badges }: { badges: SignalBadge[] }) {
   const withReason = badges.filter((b) => b.reason);
   return (
-    <div className="mt-4 flex flex-col gap-2">
+    // 9/23 디테일 보정 — block 내부 그룹(번호/직접 수정하기/번역문/번역근거)이
+    // 서로 조금 더 조밀하게 묶이도록 이전 mt-4(16px)에서 4px 줄였다(mt-3,
+    // 12px). block과 block 사이(아래 BlockRow 목록의 gap)는 반대로 늘려
+    // 그룹 내부/그룹 간 간격 대비를 키운다.
+    <div className="mt-3 flex flex-col gap-2">
       <p className="text-[14px] tracking-[-0.01em] text-[#707070]">번역근거</p>
       <div className="rounded-[6px] border border-[#eaeaea] bg-white p-5">
         {withReason.length > 0 ? (
@@ -314,7 +318,7 @@ function TranslationEditor({ jobId, block }: { jobId: string; block: BlockViewMo
     // 라벨 자체가 없었다 — 새 인터랙션(클릭→editor 활성화)을 만들지
     // 않고, Figma가 보여준 그대로 "항상 보이는 설명 라벨 + 항상 편집
     // 가능한 박스" 구조로 복구했다. PATCH/revision 로직은 그대로다.
-    <div className="mt-4 flex flex-col gap-2">
+    <div className="mt-3 flex flex-col gap-1">
       <p className="text-[16px] tracking-[-0.03em] text-[#171717]">직접 수정하기</p>
       <div className="rounded-[6px] bg-[#f5f5f5] p-5">
         <p className="text-[12px] font-light tracking-[-0.02em] text-[#999]">번역문</p>
@@ -386,7 +390,7 @@ function TranslationEditor({ jobId, block }: { jobId: string; block: BlockViewMo
 /** isExcluded===true(role=product_label)인 block에서 쓴다. 영구히 읽기 전용이다. */
 function ReadOnlyTranslation({ text }: { text: string }) {
   return (
-    <div className="mt-4 rounded-[6px] border border-[#eaeaea] bg-white p-3">
+    <div className="mt-3 rounded-[6px] border border-[#eaeaea] bg-white p-3">
       <p className="text-[12px] font-light tracking-[-0.02em] text-[#999]">번역문 (읽기 전용)</p>
       <p className="mt-1 text-[16px] tracking-[-0.03em] text-[#171717]">{text || '—'}</p>
     </div>
@@ -631,7 +635,13 @@ export function N5Panel({
                   onSelect={() => onSelectSection(group.sectionId)}
                 />
               </div>
-              <ul className="flex flex-col gap-4">
+              {/* 9/23 디테일 보정 — block 카드 사이 간격을 이전 gap-4(16px)에서
+                  8px 늘려 gap-6(24px)으로 뒀다. block 내부(번호~번역근거)
+                  간격을 줄인 것과 대비해, block과 block 사이는 더 뚜렷하게
+                  분리되도록 한다(위 TranslationEditor/EvidenceSection
+                  mt-3 참고). border/divider를 새로 넣지 않고 spacing만으로
+                  구분한다. */}
+              <ul className="flex flex-col gap-6">
                 {/* 번호는 section-local index다(blockIndex + 1) — section마다
                     1부터 다시 시작한다. job 전체를 관통하는 전역 index나
                     DB id를 화면 번호로 쓰지 않는다(좌측 캔버스와 동일 규칙,

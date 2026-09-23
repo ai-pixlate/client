@@ -34,6 +34,15 @@ import { ZoomControls } from './n5/n5-toolbar';
 // validation(GET /jobs/{jobId}/validation) 조회는 계약대로 유지하지만,
 // Figma에 별도 검증 상세 카드가 없어 그 결과를 화면에 렌더하지 않는다 —
 // deliverables/render 완료 여부만 이 화면의 "완료" 판단에 쓴다.
+//
+// 9/23 Figma 정렬(node 643:5523 재확인): 나가기 버튼+StepNav를 본문 헤더 위에
+// 세로로 쌓던 구조를 n5-view.tsx와 같은 "떠 있는 좌측 rail" 패턴으로 바꿨다 —
+// Figma가 보여준 나가기 버튼(849:7259, x≈39/y≈39)과 헤더 텍스트(655:6107,
+// x≈139/y≈59)는 서로 다른 x축에서 독립적으로 배치되는데, 이전 구조는 버튼을
+// 헤더와 같은 세로 스택 안에 두어 헤더가 Figma보다 아래로 밀려 보였다. Final
+// Preview 안쪽 콘텐츠 폭(990px, N5와 동일 소스), 우측 export 컬럼의 scrollbar를
+// n5-panel.tsx와 같은 hover-reveal 패턴으로도 맞췄다 — 기능(render/export/
+// download/save 흐름)은 전혀 바꾸지 않았다.
 // ─────────────────────────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────────
@@ -192,7 +201,13 @@ function FinalPreview({ deliverables }: { deliverables: ApiDeliverable[] }) {
         ) : (
           <div
             data-testid="n6-preview-canvas"
-            className="mx-auto flex w-[792px] flex-col items-start border border-[#eaeaea] bg-white"
+            // 9/23 Figma 정렬 — Final Preview 컨테이너(643:5526, 1195폭) 안의 실제
+            // 콘텐츠는 990px(같은 소스 이미지를 쓰는 N5의 990px 컬럼과 동일 폭)이다.
+            // 이전엔 792px 고정값이라(어느 Figma 실측과도 안 맞는 값) 뷰포트가
+            // 1195보다 좁아지는 화면에서 콘텐츠가 상대적으로 더 크게(과하게 확대된
+            // 것처럼) 보였다 — 컨테이너 대비 비율(990/1195≈83%)로 반응형 폭을 주고
+            // Figma 실측값을 상한으로 둔다.
+            className="mx-auto flex w-[83%] max-w-[990px] flex-col items-start border border-[#eaeaea] bg-white"
             style={{ transform: `scale(${zoom})`, transformOrigin: 'top center' }}
           >
             {deliverables.map((dlv, i) => (
@@ -369,7 +384,14 @@ function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeli
   };
 
   return (
-    <div data-testid="n6-export-panel" className="flex h-full w-[456px] shrink-0 flex-col gap-8 overflow-y-auto pr-1">
+    <div
+      data-testid="n6-export-panel"
+      // 9/23 Figma 정렬 — Figma는 우측 컬럼 전체를 감싸는 상시 노출 outer
+      // scrollbar 구조가 아니다(1920×1080에서는 컨텐츠가 한 화면에 다 들어간다).
+      // n5-panel.tsx와 같은 hover-reveal thin scrollbar로 맞춘다 — 실제로 넘칠
+      // 때만(좁은 뷰포트) 얇은 thumb이 hover 시에만 보인다.
+      className="flex h-full w-[456px] shrink-0 flex-col gap-8 overflow-y-auto pr-1 [scrollbar-width:thin] [scrollbar-color:transparent_transparent] hover:[scrollbar-color:#eaeaea_transparent] [&::-webkit-scrollbar]:w-[3px] [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-[2px] [&::-webkit-scrollbar-thumb]:bg-transparent hover:[&::-webkit-scrollbar-thumb]:bg-[#eaeaea]"
+    >
       <CompletionBanner />
 
       <div className="flex w-full flex-col gap-5">
@@ -543,7 +565,9 @@ export function N6ResultView({ jobId }: { jobId: string }) {
     const components = deliverablesQuery.data?.components ?? [];
 
     body = (
-      <div className="flex min-h-0 flex-1 gap-6 px-8 pb-8">
+      // 가로/세로 padding은 이제 상위 rail 옆 flex-col 컨테이너(px-8 pb-8 역할을
+      // pr/pl/pb로 대체)가 준다 — 여기서 또 주면 이중 padding이 된다.
+      <div className="flex min-h-0 flex-1 gap-6">
         <FinalPreview deliverables={deliverables} />
         <ExportPanel jobId={jobId} components={components} />
       </div>
@@ -552,28 +576,37 @@ export function N6ResultView({ jobId }: { jobId: string }) {
 
   return (
     <div className="flex h-full w-full bg-white">
-      <StepNav currentStep="N6" />
+      {/* 좌측 rail — 나가기 버튼 + StepNav. 9/23 Figma 정렬: node 849:7259(나가기)는
+          x≈39,y≈39,40×40로 StepNav(585:3392)와 별개의 떠 있는 요소이고, N5(n5-view.tsx)가
+          이미 쓰는 rail 패턴(ml-9 + 44px 컬럼 + 버튼 절대 중앙 배치)과 정확히 같은 값이다 —
+          같은 패턴을 그대로 재사용한다. 이전 구조는 나가기 버튼을 헤더 줄 위에 mb-6로
+          쌓아, 헤더 텍스트가 Figma보다 아래로(버튼 높이+여백만큼) 밀려 보였다. */}
+      <div className="relative ml-9 h-full w-[44px] shrink-0">
+        <Link
+          href="/"
+          aria-label="보관함으로 나가기"
+          className="absolute top-10 left-1/2 z-20 flex size-10 -translate-x-1/2 shrink-0 items-center justify-center rounded-md border border-[#eaeaea] bg-white text-[#171717] transition-colors hover:bg-gray-50"
+        >
+          {/* n5-view.tsx와 같은 실측 asset 좌표(가운데 8×8, strokeWidth 1.25) —
+              화면마다 다른 X 아이콘을 새로 그리지 않고 그대로 재사용한다. */}
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M4 4L12 12M12 4L4 12" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </Link>
+        <div className="absolute inset-0 pt-[100px] pb-6">
+          <StepNav currentStep="N6" />
+        </div>
+      </div>
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        {/* 헤더 — Figma(643:5523, node 849:7259 "보관함으로 나가기")는 N1·N5와
-            동일한 닫기(X) 아이콘 + 제목/설명 조합이다. */}
-        <div className="shrink-0 px-8 pt-8 pb-4">
-          <Link
-            href="/"
-            className="mb-6 flex size-10 shrink-0 items-center justify-center rounded-md border border-[#eaeaea] bg-white text-[#171717] transition-colors hover:bg-gray-50"
-            aria-label="보관함으로 나가기"
-          >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <path d="M2 2L14 14M14 2L2 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-            </svg>
-          </Link>
-
-          <div className="flex items-center gap-4">
-            <h1 className="text-[20px] font-semibold tracking-[-0.02em] text-[#171717]">저장 및 내보내기</h1>
-            <p className="text-[14px] tracking-[-0.01em] text-[#707070]">
-              최종 결과물을 확인하고 내려받거나 보관함에 저장합니다.
-            </p>
-          </div>
+      {/* 본문 — 헤더 텍스트(655:6107)와 Final Preview(643:5526)가 Figma에서 같은
+          x(≈139)에서 시작한다. rail(ml-9 36px + 44px폭 = 80px) 만큼을 상쇄하는
+          pl은 N5(n5-view.tsx)와 같은 공식을 재사용한다. */}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 pt-10 pr-[clamp(45px,3.125vw,60px)] pb-8 pl-[clamp(0px,calc(6.25vw_-_80px),40px)]">
+        <div className="flex shrink-0 items-center gap-4">
+          <h1 className="text-[20px] font-semibold tracking-[-0.02em] text-[#171717]">저장 및 내보내기</h1>
+          <p className="text-[14px] tracking-[-0.01em] text-[#707070]">
+            최종 결과물을 확인하고 내려받거나 보관함에 저장합니다.
+          </p>
         </div>
 
         {body}
