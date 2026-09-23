@@ -39,6 +39,26 @@ async function readTransform(page: Page) {
   return { zoom: Number(zoom), panX: Number(panX), panY: Number(panY) };
 }
 
+/**
+ * 특정 testid 요소가 n5-viewport(overflow:hidden 클리핑 컨테이너)의 실제
+ * 보이는 영역 안에 완전히 들어와 있는지를 DOM bounding rect로 직접 판정한다.
+ * Playwright의 toBeInViewport()는 브라우저 뷰포트 기준이라(조상의 CSS
+ * overflow:hidden 클리핑을 반영하지 않는다) 여기서는 쓰지 않는다 —
+ * n5-viewport.tsx의 selectionAutoMove effect가 쓰는 것과 같은
+ * "usable 영역 안에 완전히 들어오는지" 판정을 e2e에서도 동일하게 재현한다.
+ */
+async function isFullyWithinViewport(page: Page, testId: string): Promise<boolean> {
+  return page.evaluate((tid) => {
+    const viewport = document.querySelector('[data-testid="n5-viewport"]');
+    const el = document.querySelector(`[data-testid="${tid}"]`);
+    if (!viewport || !el) return false;
+    const v = viewport.getBoundingClientRect();
+    const e = el.getBoundingClientRect();
+    const EPS = 1;
+    return e.left >= v.left - EPS && e.top >= v.top - EPS && e.right <= v.right + EPS && e.bottom <= v.bottom + EPS;
+  }, testId);
+}
+
 test.beforeEach(async ({ page }) => {
   await reachN5(page);
 });
@@ -153,6 +173,179 @@ test.describe('F-CFM-13 — 좌우 selection 연동 + 자동 스크롤', () => {
 
     // 블록 자체는 선택되지 않는다 — section만 선택된 상태
     await expect(page.locator('[data-testid^="n5-block-row-"][aria-pressed="true"]')).toHaveCount(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────
+// F-CFM-13 양방향 계약(PRD v3.4.2 수용기준 2·3) — 우→좌 자동 이동 명시 검증.
+// 이전엔 우측 interaction이 selectedBlockId/selectedSectionId(공유 SSOT)를
+// 정상적으로 갱신했지만, 좌측 N5Viewport가 그 변화를 highlight 표시에만
+// 쓰고 pan을 옮기는 코드가 아예 없었다 — 위 "F-CFM-13 — 좌우 selection 연동"
+// describe 블록은 좌→우(패널 자동 스크롤)와, 이미 fit-height로 화면 안에
+// 들어온 block을 좌측에서 클릭하는 경우(pan 불변)만 다뤄 이 결손을 드러내지
+// 않았다. 여기서는 의도적으로 fit-height를 적용하지 않고(초기 진입 상태
+// 그대로) section 505(9109/9110, 캔버스 맨 아래)처럼 실제로 화면 밖에 있는
+// block을 우측에서 선택해, 좌측이 실제로 이동하는지를 정면으로 검증한다.
+// ─────────────────────────────────────────────────────────────────
+test.describe('F-CFM-13 양방향 계약 — 우→좌 자동 이동', () => {
+  test('A. 좌측 block 클릭 → 우측 card visible + highlight + editor 포커스 가능', async ({ page }) => {
+    await page.getByTestId('n5-fit-height').click();
+    await page.getByTestId('n5-block-overlay-9101').click({ force: true });
+
+    await expect(page.getByTestId('n5-block-row-9101')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('n5-block-row-9101')).toBeInViewport();
+
+    const editor = page.getByTestId('n5-block-editor-9101');
+    await editor.click();
+    await expect(editor).toBeFocused();
+  });
+
+  test('B. 우측 "직접 수정하기" editor 클릭(9110, 화면 밖) → selectedBlockId 변경 → 좌측이 그 block 위치로 이동 + pin highlight', async ({
+    page,
+  }) => {
+    const before = await readTransform(page);
+    // fit-height를 적용하지 않은 초기 진입 상태 — section 505(9110)는
+    // 캔버스 맨 아래라 top-aligned 기본 pan으로는 실제로 화면 밖이다.
+    expect(await isFullyWithinViewport(page, 'n5-block-overlay-9110')).toBe(false);
+
+    await page.getByTestId('n5-block-editor-9110').click();
+
+    await expect(page.getByTestId('n5-block-row-9110')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('n5-block-overlay-9110')).toHaveAttribute('aria-pressed', 'true');
+    expect(await isFullyWithinViewport(page, 'n5-block-overlay-9110')).toBe(true);
+
+    const after = await readTransform(page);
+    expect(after).not.toEqual(before); // 실제로 pan이 이동했다
+    expect(after.zoom).toBe(before.zoom); // zoom은 건드리지 않는다(pan만 이동)
+  });
+
+  test('C. 우측에서 다른 section의 block 선택 → 좌측이 그 section까지 이동', async ({ page }) => {
+    await page.getByTestId('n5-block-row-9101').click(); // section 501(화면 상단 근처)
+    const afterFirst = await readTransform(page);
+
+    await page.getByTestId('n5-block-row-9110').click(); // section 505(캔버스 맨 아래)로 이동
+    expect(await isFullyWithinViewport(page, 'n5-block-overlay-9110')).toBe(true);
+    const afterSecond = await readTransform(page);
+    expect(afterSecond.panY).not.toBe(afterFirst.panY); // 실제로 세로 이동이 있었다
+  });
+
+  test('D. textarea에 여러 글자 입력 → 첫 선택 시 한 번만 이동, keystroke마다 재이동하지 않는다', async ({
+    page,
+  }) => {
+    await page.getByTestId('n5-block-row-9110').click(); // 최초 선택 — 이 시점에 1회 이동
+    expect(await isFullyWithinViewport(page, 'n5-block-overlay-9110')).toBe(true);
+    const afterSelect = await readTransform(page);
+
+    await page.getByTestId('n5-block-editor-9110').pressSequentially('Hello world', { delay: 30 });
+
+    const afterTyping = await readTransform(page);
+    expect(afterTyping).toEqual(afterSelect); // 타이핑(같은 block) 중에는 pan이 전혀 바뀌지 않는다
+  });
+
+  test('E. PATCH 성공/재조회 후에도 동일 block selection과 pan 위치를 유지한다(초기 위치로 튀지 않음)', async ({
+    page,
+  }) => {
+    const initial = await readTransform(page);
+
+    await page.getByTestId('n5-block-row-9104').click();
+    const afterSelect = await readTransform(page);
+
+    const editor = page.getByTestId('n5-block-editor-9104');
+    await editor.fill('Patch keeps selection.');
+    await page.getByTestId('n5-block-save-9104').click();
+
+    // 재렌더(mock 2 poll * 2s) 완료 대기 — blocks/preview가 invalidate되어
+    // reference가 바뀌는 시점.
+    await expect(page.getByText('재렌더링 중…')).toHaveCount(0, { timeout: 10_000 });
+
+    await expect(page.getByTestId('n5-block-row-9104')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('n5-block-overlay-9104')).toHaveAttribute('aria-pressed', 'true');
+
+    const afterRerender = await readTransform(page);
+    expect(afterRerender).toEqual(afterSelect); // PATCH/재조회 전후로 pan이 전혀 바뀌지 않는다
+    if (afterSelect.panX !== initial.panX || afterSelect.panY !== initial.panY) {
+      // 선택 시 실제로 이동이 있었던 경우에만 의미 있는 회귀 체크 —
+      // 재조회 때문에 그 이동분이 초기 위치(0,0)로 되돌아가지 않는다.
+      expect(afterRerender).not.toEqual(initial);
+    }
+  });
+
+  test('F. zoom 상태에서도 우→좌 이동 좌표가 정상이다', async ({ page }) => {
+    await page.getByTestId('n5-zoom-value').fill('150');
+    await page.getByTestId('n5-zoom-value').press('Enter');
+    await expect(page.getByTestId('n5-zoom-value')).toHaveValue('150');
+
+    await page.getByTestId('n5-block-row-9110').click();
+
+    const transform = await readTransform(page);
+    expect(transform.zoom).toBeCloseTo(1.5, 5);
+    expect(await isFullyWithinViewport(page, 'n5-block-overlay-9110')).toBe(true);
+  });
+
+  test('G. 같은 block을 다시 클릭하면(selection 값은 그대로) 사용자가 수동 pan으로 화면 밖으로 보낸 뒤에도 다시 이동한다', async ({
+    page,
+  }) => {
+    await page.getByTestId('n5-block-row-9110').click(); // 최초 선택 — 화면 안으로 이동
+    expect(await isFullyWithinViewport(page, 'n5-block-overlay-9110')).toBe(true);
+
+    // row 클릭이 Playwright 클릭 좌표(row 중심)상 내부 textarea를 그대로
+    // focus시킨다 — 실제 사용자가 이후 canvas로 마우스를 옮겨 Space+drag를
+    // 시작하기 전에 자연히 focus가 벗어나는 것과 같은 상태를 만들기 위해
+    // 명시적으로 blur한다(그렇지 않으면 Space 키가 isTypingTarget 가드에
+    // 막혀 textarea에 스페이스 문자만 입력되고 pan이 전혀 시작되지 않는다).
+    await page.evaluate(() => (document.activeElement as HTMLElement)?.blur());
+
+    // 사용자가 Space+drag로 수동 pan해서 9110을 다시 화면 밖으로 보낸다 —
+    // selectedBlockId는 여전히 9110이다(바뀌지 않았다). 9110은 canvas 맨
+    // 아래쪽 section에 있어서, 방금 auto-reveal로 중앙 정렬된 뒤 pan.y는
+    // 이미 clampPan의 최소값(캔버스 하단 경계) 근처다 — 위로 드래그(pan.y를
+    // 더 감소)하면 clamp에 막혀 사실상 움직이지 않는다. 화면 밖으로 밀어내려면
+    // 아래로 드래그(pan.y 증가)해서 block을 뷰포트 아래로 내려보내야 한다.
+    const viewportBox = await page.getByTestId('n5-viewport').boundingBox();
+    if (!viewportBox) throw new Error('viewport bounding box를 찾지 못했습니다');
+    const cx = viewportBox.x + viewportBox.width / 2;
+    const cy = viewportBox.y + viewportBox.height / 2;
+    await page.keyboard.down('Space');
+    await page.mouse.move(cx, cy);
+    await page.mouse.down();
+    await page.mouse.move(cx, cy + 600, { steps: 10 });
+    await page.mouse.up();
+    await page.keyboard.up('Space');
+
+    expect(await isFullyWithinViewport(page, 'n5-block-overlay-9110')).toBe(false); // 수동 pan으로 화면 밖으로 나갔다
+
+    // 같은 block(9110) row를 다시 클릭한다 — selectedBlockId 값 자체는 바뀌지
+    // 않지만(이미 9110이었다), 사용자가 다시 명시적으로 이 위치를 보여달라고
+    // 요청한 것이므로 좌측이 다시 그 위치로 이동해야 한다(F-CFM-13).
+    await page.getByTestId('n5-block-row-9110').click();
+
+    expect(await isFullyWithinViewport(page, 'n5-block-overlay-9110')).toBe(true);
+  });
+
+  test('H. block A editor에 focus 후 여러 글자 입력해도 keystroke마다 재이동하지 않는다', async ({ page }) => {
+    await page.getByTestId('n5-block-editor-9110').click(); // focus로 최초 선택+이동
+    expect(await isFullyWithinViewport(page, 'n5-block-overlay-9110')).toBe(true);
+    const afterFocus = await readTransform(page);
+
+    await page.getByTestId('n5-block-editor-9110').pressSequentially('Another edit here', { delay: 30 });
+
+    const afterTyping = await readTransform(page);
+    expect(afterTyping).toEqual(afterFocus); // 같은 block에서 타이핑만 하는 동안은 pan이 바뀌지 않는다
+  });
+
+  test('I. 같은 block이 선택된 상태에서 PATCH/재조회가 발생해도 불필요한 재이동이 없다', async ({ page }) => {
+    await page.getByTestId('n5-block-row-9104').click();
+    const afterSelect = await readTransform(page);
+
+    const editor = page.getByTestId('n5-block-editor-9104');
+    await editor.fill('No spurious reveal after patch.');
+    await page.getByTestId('n5-block-save-9104').click();
+    await expect(page.getByText('재렌더링 중…')).toHaveCount(0, { timeout: 10_000 });
+
+    // PATCH/재조회로 blocks reference가 바뀌어도(같은 block이 계속 선택된
+    // 상태) revealRequestSeq는 그대로라 pan이 다시 계산되지 않는다.
+    const afterRerender = await readTransform(page);
+    expect(afterRerender).toEqual(afterSelect);
   });
 });
 

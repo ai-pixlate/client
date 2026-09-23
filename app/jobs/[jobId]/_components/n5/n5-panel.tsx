@@ -223,8 +223,24 @@ function EvidenceSection({ badges }: { badges: SignalBadge[] }) {
  * 로컬 draft는 block.revision이 "이 draft가 마지막으로 동기화된 시점"과 다를
  * 때만 서버값으로 동기화한다 — 사용자가 편집 중(dirty)이면 절대 덮어쓰지
  * 않는다(미저장 입력을 조용히 버리지 않는다).
+ *
+ * F-CFM-13(9/24) — `onSelect`는 BlockRow가 이미 갖고 있는 그 콜백을 그대로
+ * 받는다(onSelectBlock(block) 호출, 새 SSOT를 만들지 않는다). card 클릭/
+ * textarea 클릭은 이미 이 div 전체의 onClick 버블링으로 선택되지만,
+ * 키보드(Tab)로 textarea에 바로 focus가 들어오는 경로는 클릭 이벤트가 없어
+ * 선택이 갱신되지 않았다 — textarea의 onFocus에도 같은 onSelect를 연결해
+ * "card 클릭 / 직접 수정하기 클릭 / textarea focus" 세 경로 모두 공용
+ * selection을 갱신하게 한다.
  */
-function TranslationEditor({ jobId, block }: { jobId: string; block: BlockViewModel }) {
+function TranslationEditor({
+  jobId,
+  block,
+  onSelect,
+}: {
+  jobId: string;
+  block: BlockViewModel;
+  onSelect: () => void;
+}) {
   const queryClient = useQueryClient();
   const patchMutation = usePatchN5BlockMutation(jobId);
 
@@ -337,6 +353,7 @@ function TranslationEditor({ jobId, block }: { jobId: string; block: BlockViewMo
           data-testid={`n5-block-editor-${block.id}`}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
+          onFocus={onSelect}
           rows={3}
           className="mt-1 w-full resize-none bg-transparent text-[16px] tracking-[-0.03em] text-[#171717] outline-none"
         />
@@ -458,7 +475,7 @@ function BlockRow({
         ) : (
           <>
             {block.editable ? (
-              <TranslationEditor jobId={jobId} block={block} />
+              <TranslationEditor jobId={jobId} block={block} onSelect={onSelect} />
             ) : (
               <ReadOnlyTranslation text={block.translatedText} />
             )}

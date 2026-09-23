@@ -29,8 +29,19 @@ import { N5Panel } from './n5-panel';
 // 하나가 정본으로 소유하고, N5Viewport(좌)와 N5Panel(우) 둘 다 이 값을 prop으로만
 // 받는다 — 각자 별도 selection state를 두지 않는다. 좌→우 방향(선택 시 우측
 // 자동 스크롤)은 N5Panel 내부에서 ref+scrollIntoView로 처리하고, 우→좌 방향은
-// "표시만" 한다(자동 pan/scroll 없음) — 그래서 zoom/pan은 selection 변경으로
-// 전혀 건드리지 않는다.
+// N5Viewport의 selectionAutoMove effect가 pan을 옮겨 해당 block/section을
+// 화면 안으로 들어오게 한다.
+//
+// revealRequestSeq(9/24 edge case 보정): selectedBlockId/selectedSectionId는
+// selection 값 자체의 SSOT일 뿐, "지금 이 위치를 다시 보여달라"는 요청까지는
+// 표현하지 못한다 — 예를 들어 이미 선택된 block을 사용자가 우측에서 다시
+// 클릭해도 selection 값은 안 바뀐다. 그런데 그 사이 사용자가 좌측을 수동
+// pan해서 그 block을 화면 밖으로 보냈다면, 같은 row를 다시 클릭했을 때도
+// 좌측이 다시 이동해야 한다(F-CFM-13). 그래서 selection 갱신과 별개로,
+// "우측에서 위치 이동을 요구하는 상호작용"(row/editor 클릭, textarea
+// focus)이 일어날 때마다 이 숫자를 무조건 1 증가시킨다 — selection의
+// 정본이 아니라 일회성 navigation 신호일 뿐이라 N5Panel에는 넘기지 않고
+// N5Viewport에만 전달한다.
 // ─────────────────────────────────────────────────────────────────
 
 function N5Loaded({
@@ -54,15 +65,20 @@ function N5Loaded({
   const [viewMode, setViewMode] = useState<N5ViewMode>('translated');
   const [selectedBlockId, setSelectedBlockId] = useState<number | null>(null);
   const [selectedSectionId, setSelectedSectionId] = useState<number | null>(null);
+  // selection 값과 무관하게 "다시 보여달라"는 요청 자체를 매번 새 값으로
+  // 알리기 위한 일회성 navigation 토큰(위 F-CFM-13 주석 참고).
+  const [revealRequestSeq, setRevealRequestSeq] = useState(0);
 
   function handleSelectBlock(block: BlockViewModel) {
     setSelectedBlockId(block.id);
     setSelectedSectionId(block.sectionId);
+    setRevealRequestSeq((seq) => seq + 1);
   }
 
   function handleSelectSection(sectionId: number) {
     setSelectedSectionId(sectionId);
     setSelectedBlockId(null);
+    setRevealRequestSeq((seq) => seq + 1);
   }
 
   return (
@@ -117,6 +133,7 @@ function N5Loaded({
           viewMode={viewMode}
           selectedBlockId={selectedBlockId}
           selectedSectionId={selectedSectionId}
+          revealRequestSeq={revealRequestSeq}
           onSelectBlock={handleSelectBlock}
           onSelectSection={handleSelectSection}
         />

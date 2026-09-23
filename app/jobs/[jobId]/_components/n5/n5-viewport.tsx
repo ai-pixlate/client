@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import type { BlockViewModel, PreviewSectionViewModel, PreviewViewModel } from '@/lib/n5/adapter';
-import { getBlockDisplayRect } from '@/lib/n5/coordinates';
+import { getBlockDisplayRect, type DisplayRect } from '@/lib/n5/coordinates';
 import {
   ZOOM_BUTTON_STEP,
   computeWheelZoomFactor,
@@ -59,9 +59,22 @@ import { ZoomControls, FitControls, PlacementToolbar } from './n5-toolbar';
 // 선택은 해제). block hitbox는 stopPropagation으로 이 section 클릭과 분리한다
 // (선택·제외 조작이 서로 충돌하지 않게 — CLAUDE.md 클릭 영역 분리 원칙).
 //
-// 우측→좌측 방향은 "표시만" 한다(자동 pan/scroll 없음) — 그래서 zoom/pan은
-// selection 변경으로 전혀 건드리지 않는다. 좌측→우측 자동 스크롤은
-// n5-panel.tsx가 담당한다.
+// F-CFM-13 양방향 이동(PRD v3.4.2 수용기준 2·3, 9/24 반영) — 이전엔 우측→좌측
+// 방향이 "표시만"(자동 pan 없음)이었다. selectedBlockId/selectedSectionId는
+// 이미 N5View가 소유한 하나의 공유 상태이고, 우측(n5-panel.tsx BlockRow의
+// card 클릭/textarea 포커스)에서 이 상태가 바뀌어도 이 컴포넌트는 그 값을
+// highlight 표시(BlockOverlay/SectionSelectedTag의 isSelected)에만 쓰고
+// pan은 전혀 움직이지 않았다 — 좌→우(패널 자동 스크롤, n5-panel.tsx)만
+// 구현돼 있고 반대 방향이 미완성이었다(정확한 원인은 아래 selectionAutoMove
+// effect 주석 참고). 이제 selectedBlockId(우선)/selectedSectionId가 가리키는
+// block/section의 canvas-space rect를 계산해 이미 화면에 충분히 보이면
+// 그대로 두고, 화면 밖이면 그 rect가 보이는 위치로 pan만 옮긴다(zoom은
+// 그대로). 텍스트 입력 중이나 PATCH/rerender로 blocks가 재조회될 때는
+// 재계산하지 않지만, 이미 선택된 같은 block/section을 사용자가 다시
+// 클릭했을 때는(값 자체는 안 바뀌어도) 다시 계산한다 — revealRequestSeq
+// (n5-view.tsx 소유, 아래 selectionAutoMove effect 주석 참고)가 그 구분을
+// 담당한다. 좌측→우측 자동 스크롤은 여전히 n5-panel.tsx가 담당한다(이
+// 파일은 손대지 않았다).
 // ─────────────────────────────────────────────────────────────────
 
 interface CanvasSlice {
@@ -351,6 +364,7 @@ export function N5Viewport({
   viewMode,
   selectedBlockId,
   selectedSectionId,
+  revealRequestSeq,
   onSelectBlock,
   onSelectSection,
 }: {
@@ -361,6 +375,13 @@ export function N5Viewport({
   /** F-CFM-13 — 정본은 N5View(상위)가 소유한다. 이 컴포넌트는 prop/콜백만 받는다. */
   selectedBlockId: number | null;
   selectedSectionId: number | null;
+  /**
+   * selection "값"이 아니라 "지금 이 위치를 다시 보여달라"는 일회성 요청
+   * 횟수다(n5-view.tsx 참고) — 같은 block/section을 다시 선택해도 값 자체는
+   * 안 바뀌지만 이 숫자는 매번 증가하므로, 아래 selectionAutoMove effect는
+   * 이 값을 기준으로 "재실행해야 하는지"를 판단한다.
+   */
+  revealRequestSeq: number;
   onSelectBlock: (block: BlockViewModel) => void;
   onSelectSection: (sectionId: number) => void;
 }) {
@@ -463,6 +484,22 @@ export function N5Viewport({
     return map;
   }, [slices, blocksBySection]);
 
+  // F-CFM-13 — block bbox는 section-local 좌표라(getBlockDisplayRect의
+  // displayTop=0 그대로) canvas 전체 기준 위치를 구하려면 그 block이 속한
+  // slice보다 앞서 쌓인 slice들의 height 합(cumulative Y)을 더해야 한다.
+  // slices는 이미 sectionOrder 오름차순이고 `flex-col items-start`로 위→아래
+  // 단순 document flow로 쌓이므로(각 slice의 x는 항상 0), Y축 offset만
+  // 계산하면 된다 — BlockOverlay(CSS 렌더용, displayTop=0)와는 다른 값이다.
+  const sliceOffsetYById = useMemo(() => {
+    const map = new Map<number, number>();
+    let cursor = 0;
+    for (const slice of slices) {
+      map.set(slice.sectionId, cursor);
+      cursor += slice.height;
+    }
+    return map;
+  }, [slices]);
+
   // canvas(원본, zoom과 무관한) 크기 — fit 계산의 기준값. 매 렌더 다시 측정하지 않는다.
   const canvasSize = useMemo<Size>(
     () => ({
@@ -520,6 +557,100 @@ export function N5Viewport({
     resizeObserver.observe(el);
     return () => resizeObserver.disconnect();
   }, []);
+
+  // F-CFM-13 우→좌 자동 이동(9/24) — 지금까지 이 effect가 없었던 게 정확한
+  // 원인이다: selectedBlockId/selectedSectionId는 이미 N5View가 소유한 공유
+  // state이고 우측(n5-panel.tsx)에서도 정상적으로 바뀌는데, 이 컴포넌트는
+  // 그 값을 BlockOverlay/SectionSelectedTag의 isSelected(단순 표시)에만
+  // 쓸 뿐 pan을 옮기는 코드 자체가 없었다 — "표시만 한다"는 이전 설계
+  // 결정을 그대로 구현해 둔 것이었지, 버그로 방치된 게 아니다. PRD
+  // F-CFM-13이 양방향을 Must로 요구해 이번에 추가한다.
+  //
+  // lastHandledRevealSeqRef(9/24 edge case 보정) — 원래는 selectedBlockId/
+  // selectedSectionId "값이 실제로 바뀐 시점"에만 반응하도록 값 자체를 key로
+  // 썼었다. 그런데 그 방식은 "이미 선택된 같은 block/section을 사용자가
+  // 우측에서 다시 클릭"하는 경우를 처리하지 못한다 — selection 값이 그대로면
+  // key도 그대로라 effect가 조용히 skip돼, 그 사이 사용자가 좌측을 수동
+  // pan으로 화면 밖으로 보냈어도 다시 끌어오지 못한다(F-CFM-13 재현 e2e
+  // "G" 테스트로 확인). 대신 selection 값과 별개로 매 위치-이동 요청마다
+  // 증가하는 revealRequestSeq(n5-view.tsx 소유)를 key로 쓴다 — 이러면
+  // "같은 block 재클릭"도 매번 새 seq를 받아 effect가 다시 실행된다.
+  // block 내부 TranslationEditor의 draft/revision/textarea 값이나 blocks
+  // 배열 reference(PATCH 후 invalidate로 바뀜)는 revealRequestSeq를 전혀
+  // 건드리지 않으므로, 같은 block을 계속 편집(타이핑)하거나 PATCH/rerender로
+  // blocks가 재조회돼도 이 effect는 실행되지만 seq가 같아 즉시 반환한다 —
+  // pan을 다시 계산하지 않는다(요청 5·6).
+  const lastHandledRevealSeqRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    if (selectedBlockId == null && selectedSectionId == null) {
+      lastHandledRevealSeqRef.current = null;
+      return;
+    }
+
+    if (lastHandledRevealSeqRef.current === revealRequestSeq) return; // 이미 처리한 요청이다
+    lastHandledRevealSeqRef.current = revealRequestSeq;
+
+    // block 선택이 section 선택보다 우선한다(PRD 3 — "section 위치보다 block
+    // bbox가 우선"). block에 bbox가 없으면(비정상 데이터) section으로
+    // fallback하지 않는다 — 그 block 자체가 위치를 특정할 수 없다는 뜻이라
+    // 조용히 아무것도 하지 않는다(임의로 다른 위치로 보내지 않는다).
+    let targetRect: DisplayRect | null = null;
+    if (selectedBlockId != null) {
+      const block = blocks.find((b) => b.id === selectedBlockId);
+      if (block?.bbox) {
+        const offsetY = sliceOffsetYById.get(block.sectionId) ?? 0;
+        const local = getBlockDisplayRect(block.bbox, 0, preview.scale);
+        targetRect = { left: local.left, top: offsetY + local.top, width: local.width, height: local.height };
+      }
+    } else if (selectedSectionId != null) {
+      const slice = slices.find((s) => s.sectionId === selectedSectionId);
+      if (slice) {
+        targetRect = { left: 0, top: sliceOffsetYById.get(selectedSectionId) ?? 0, width: slice.width, height: slice.height };
+      }
+    }
+    if (!targetRect) return;
+
+    const usable = computeUsableViewportSize(el.clientWidth, el.clientHeight, readPadding(el));
+    const { zoom, pan } = transformRef.current;
+
+    // canvas-space rect를 현재 pan/zoom으로 화면(뷰포트) 좌표로 변환한다.
+    const screenLeft = pan.x + targetRect.left * zoom;
+    const screenTop = pan.y + targetRect.top * zoom;
+    const screenRight = screenLeft + targetRect.width * zoom;
+    const screenBottom = screenTop + targetRect.height * zoom;
+
+    // 이미 충분히 보이면 이동하지 않는다(요청 4) — margin 없이 usable
+    // 영역에 완전히 들어가 있는지만 본다(부동소수 오차만 허용). fit-height
+    // 등으로 이미 전체 canvas가 화면에 들어와 있는 상태에서 block/section을
+    // 눌러도 pan/zoom이 그대로 유지돼야 하는 기존 계약(e2e "zoom/pan
+    // 불변")을 그대로 지킨다 — margin을 주면 "화면 안인데도 이동"하는
+    // 경우가 생겨 그 계약을 깬다.
+    const EPSILON = 0.5;
+    const alreadyVisible =
+      screenLeft >= -EPSILON &&
+      screenTop >= -EPSILON &&
+      screenRight <= usable.width + EPSILON &&
+      screenBottom <= usable.height + EPSILON;
+    if (alreadyVisible) return;
+
+    // 화면 밖이면 뷰포트 중앙으로 옮긴다("완전 정중앙 강제"가 아니라 화면
+    // 밖일 때만의 fallback이다, 요청 4) — zoom은 건드리지 않고 pan만 다시
+    // 계산한다.
+    const targetCenterX = targetRect.left + targetRect.width / 2;
+    const targetCenterY = targetRect.top + targetRect.height / 2;
+    const nextPan: Point = {
+      x: usable.width / 2 - targetCenterX * zoom,
+      y: usable.height / 2 - targetCenterY * zoom,
+    };
+    // 이 이동 자체를 "사용자가 pan을 직접 조작한 것"과 동일하게 취급한다 —
+    // 그러지 않으면 이후 창 리사이즈에서 초기 가로 중앙 정렬(위 effect)이
+    // 지금 막 옮긴 선택 위치를 되돌려버린다.
+    hasInteractedRef.current = true;
+    setTransform((prev) => ({ ...prev, pan: clampPan(nextPan, canvasSizeRef.current, prev.zoom, usable) }));
+  }, [selectedBlockId, selectedSectionId, revealRequestSeq, blocks, slices, sliceOffsetYById, preview.scale]);
 
   // ── Space 키 상태 추적 — 텍스트 입력창에 focus가 있으면 pan을 발동하지 않는다 ──
   useEffect(() => {
