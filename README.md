@@ -37,9 +37,18 @@ http://localhost:3000 에서 확인합니다.
 
 ## 환경 변수
 
-현재 이 스파이크 단계에서는 필요한 환경 변수가 없습니다 (API·외부 서비스 미연동, 모두 mock).
-실제 API가 붙으면 `.env.example`에 필요한 키를 추가하고 여기 표로 정리합니다.
-Secret은 절대 Git에 커밋하지 않습니다 (`.env`, `.env.local`은 `.gitignore` 처리됨).
+```bash
+cp .env.example .env.local
+```
+
+후 필요에 따라 값을 조정합니다.
+
+| 변수 | 값 | 설명 |
+|---|---|---|
+| `NEXT_PUBLIC_API_MOCKING` | `enabled` / 미설정(또는 그 외 값) | `enabled`면 MSW(Mock Service Worker)를 사용합니다. 미설정 또는 그 외 값이면 실제 backend를 사용합니다(`NODE_ENV`와는 무관합니다). |
+| `NEXT_PUBLIC_DEV_SELLER_EMAIL` | 이메일 문자열 | 실백엔드 개발 세션 로그인용 이메일입니다. 미설정 시 코드 기본값을 사용합니다. |
+
+Secret(JWT, access token, password 등)은 절대 Git에 커밋하지 않습니다 (`.env`, `.env.local`은 `.gitignore` 처리됨).
 
 ## 명령어
 
@@ -51,6 +60,7 @@ Secret은 절대 Git에 커밋하지 않습니다 (`.env`, `.env.local`은 `.git
 | `npm run typecheck` | 타입 검사 (`tsc --noEmit`) |
 | `npm run verify:coords` | **좌표 변환 자동 검증** (브라우저 불필요) |
 | `npm run verify:n5-adapter` | N5 Adapter(OpenAPI DTO → ViewModel) 자동 검증 (브라우저 불필요) |
+| `npm run verify:msw-flag` | `isApiMockingEnabled()`(MSW on/off SSOT)가 `NEXT_PUBLIC_API_MOCKING` 값 조합에서 `NODE_ENV`와 무관하게 정확히 동작하는지 자동 검증 (브라우저 불필요) |
 | `npm run generate:openapi-types` | 최신 OpenAPI 계약(`ai-pixlate.github.io/server/openapi.yaml`)에서 타입 재생성 → `lib/api/generated/openapi.d.ts` (직접 수정 금지, 재실행으로만 갱신) |
 | `npm run make:ruler` | 스파이크용 눈금 테스트 이미지 재생성 |
 | `npm run make:n5-section-fixtures` | N5 실제 계약(v3.4.2, 섹션별 원문/렌더 이미지) mock fixture 이미지 재생성 |
