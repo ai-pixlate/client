@@ -130,60 +130,156 @@ test('이미지 추가 생성 카드 → N1(/jobs/new)', async ({ page }) => {
   await expect(page).toHaveURL(/\/jobs\/new$/);
 });
 
-test('Figma 1920×1080 위치·크기(제목/필터/grid/카드)', async ({ page }) => {
-  const box = async (locator: import('@playwright/test').Locator) => (await locator.boundingBox())!;
+type Box = { x: number; y: number; width: number; height: number };
+const box = async (locator: import('@playwright/test').Locator): Promise<Box> => (await locator.boundingBox())!;
+/** 글자 폭이 렌더러마다 소수점 단위로 달라지는 값은 ±1px 안에서 비교한다. */
+const near = (actual: number, expected: number) => expect(Math.abs(actual - expected)).toBeLessThanOrEqual(1);
 
+test('Figma 719:7428 — 1920×1080 위치·크기(제목/필터/action/grid/카드 내부)', async ({ page }) => {
+  // 제목 영역(753:6374): 제목 32 Bold 높이 38, gap 12, 설명 14 Regular 높이 17
   const title = await box(page.getByRole('heading', { name: '보관함' }));
-  expect(title.x).toBe(120);
-  expect(title.y).toBe(80);
-  expect(title.height).toBe(38);
+  expect([title.x, title.y, title.height]).toEqual([120, 80, 38]);
   const desc = await box(page.getByText('저장한 결과물과 진행 중인 작업을 한곳에서 관리합니다.'));
-  expect(desc.x).toBe(120);
-  expect(desc.y).toBe(130);
+  expect([desc.x, desc.y, desc.height]).toEqual([120, 130, 17]);
 
+  // back Icon Button(721:7743) 40×40, Arrow Left glyph 16
   const back = await box(page.getByRole('button', { name: '뒤로 가기' }));
   expect([back.x, back.y, back.width, back.height]).toEqual([40, 40, 40, 40]);
-  const arrow = await box(page.getByRole('button', { name: '뒤로 가기' }).locator('svg'));
+  const arrow = await box(page.getByRole('button', { name: '뒤로 가기' }).locator('span').first());
   expect([arrow.width, arrow.height]).toEqual([16, 16]);
 
-  // 우측 action group(전체선택 / 다운로드 / 삭제) gap 12, 다운로드 Tertiary/SM 12px
+  // 필터1(1069:11738): y187 높이 39, 검색 404 · 국가 124 · 정렬 124, gap 16
+  const search = await box(page.getByTestId('library-search'));
+  const country = await box(page.getByTestId('library-country-filter'));
+  const sort = await box(page.getByTestId('library-sort'));
+  expect([search.x, search.y, search.width, search.height]).toEqual([120, 187, 404, 39]);
+  expect([country.x, country.width, country.height]).toEqual([540, 124, 39]);
+  expect([sort.x, sort.width, sort.height]).toEqual([680, 124, 39]);
+
+  // 우측 action(Frame 153): 전체선택 · 다운로드(Tertiary/SM 81×30) · 삭제(Danger/XS 45×24), gap 12, 우측 끝 1801
   const selectAllLabel = await box(page.getByText('전체선택', { exact: true }));
   const download = await box(page.getByTestId('library-download'));
   const del = await box(page.getByTestId('library-delete'));
-  expect(Math.round(download.x - (selectAllLabel.x + selectAllLabel.width))).toBe(12);
-  expect(Math.round(del.x - (download.x + download.width))).toBe(12);
-  expect(Math.round(del.x + del.width)).toBe(120 + 1681);
+  near(download.width, 81);
+  expect(download.height).toBe(30);
+  near(del.width, 45);
+  expect(del.height).toBe(24);
+  near(download.x - (selectAllLabel.x + selectAllLabel.width), 12);
+  near(del.x - (download.x + download.width), 12);
+  near(del.x + del.width, 1801);
   await expect(page.getByTestId('library-download')).toHaveCSS('font-size', '12px');
 
-  const search = await box(page.getByTestId('library-search'));
-  expect(search.x).toBe(120);
-  expect(search.y).toBe(187);
-  expect(search.width).toBe(404);
-
+  // 카드 grid(721:7647): y250, 폭 1681, 4열 400, column gap 27, row gap 24
   const grid = await box(page.getByTestId('library-grid'));
-  expect(grid.x).toBe(120);
-  expect(grid.y).toBe(250);
-  expect(grid.width).toBe(1681);
-
-  // 최신순 첫 줄: 9003, 9002, 9001, 9004 — 4열, column gap 27
+  expect([grid.x, grid.y, grid.width]).toEqual([120, 250, 1681]);
   const first = await box(card(page, 9003));
   const fourth = await box(card(page, 9004));
-  expect(first.width).toBe(400);
-  expect(first.height).toBe(280);
-  expect(first.x).toBe(120);
-  expect(fourth.x).toBe(120 + 3 * (400 + 27));
-  expect(fourth.y).toBe(250);
-
-  // 추가 생성 카드는 두 번째 줄 첫 칸 — row gap 24
+  expect([first.x, first.y, first.width, first.height]).toEqual([120, 250, 400, 280]);
+  expect([fourth.x, fourth.y]).toEqual([120 + 3 * (400 + 27), 250]);
   const add = await box(page.getByTestId('library-add-card'));
-  expect(add.x).toBe(120);
-  expect(add.y).toBe(250 + 280 + 24);
-
+  expect([add.x, add.y, add.width, add.height]).toEqual([120, 250 + 280 + 24, 400, 280]);
   const addBtn = await box(page.getByTestId('library-add-card-link'));
-  expect(addBtn.width).toBe(107);
-  expect(addBtn.height).toBe(37);
+  expect([addBtn.width, addBtn.height]).toEqual([107, 37]);
 
-  const thumb = await box(page.getByTestId('library-card-thumbnail-placeholder-9003'));
-  expect(thumb.width).toBe(374);
-  expect(thumb.height).toBe(192);
+  // 카드 내부: 상단 row y+13, Slot y+49 374×192, placeholder 좌우 4px(366), 하단 row y+253 높이 14
+  const version = await box(page.getByTestId('library-card-version-9003'));
+  expect([version.x, version.y, version.width, version.height]).toEqual([120 + 13 + 374 - 24, 250 + 13, 24, 24]);
+  const placeholder = await box(page.getByTestId('library-card-thumbnail-placeholder-9003'));
+  expect([placeholder.x, placeholder.y, placeholder.width, placeholder.height]).toEqual([120 + 13 + 4, 250 + 49, 366, 192]);
+  const footer = await box(page.getByTestId('library-card-date-9003'));
+  expect([footer.y, footer.height]).toEqual([250 + 253, 14]);
+});
+
+for (const [width, height] of [
+  [1920, 1080],
+  [1600, 900],
+  [1536, 864],
+] as const) {
+  test(`${width}×${height} — 가로 넘침 없음, 4열 전체·우측 action이 viewport 안`, async ({ page }) => {
+    await page.setViewportSize({ width, height });
+    await expect(card(page, 9004)).toBeVisible();
+
+    const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
+    expect(scrollWidth).toBeLessThanOrEqual(width);
+
+    // 첫 줄 4장이 서로 다른 열에 있고 모두 viewport 안에 들어온다
+    const row = await Promise.all([9003, 9002, 9001, 9004].map((id) => box(card(page, id))));
+    expect(new Set(row.map((b) => b.y)).size).toBe(1);
+    for (let i = 1; i < row.length; i += 1) expect(row[i].x).toBeGreaterThan(row[i - 1].x + row[i - 1].width);
+    for (const b of row) expect(b.x + b.width).toBeLessThanOrEqual(width);
+
+    for (const id of ['library-delete', 'library-download', 'library-select-all']) {
+      const b = await box(page.getByTestId(id));
+      expect(b.x + b.width).toBeLessThanOrEqual(width);
+    }
+
+    // pagination도 가로로 viewport 안, 중앙 정렬
+    const pag = await box(page.getByTestId('library-pagination'));
+    expect(pag.x).toBeGreaterThanOrEqual(0);
+    expect(pag.x + pag.width).toBeLessThanOrEqual(width);
+    near(pag.x + pag.width / 2, width / 2);
+
+    // 카드 내부가 카드 밖으로 넘치지 않는다
+    const overflowing = await page.evaluate(() =>
+      [...document.querySelectorAll('[data-testid="library-grid"] > *')].filter((el) => el.scrollWidth > el.clientWidth).length,
+    );
+    expect(overflowing).toBe(0);
+  });
+}
+
+test('긴 상품명은 카드 안에서 말줄임되고 다른 버전 버튼을 밀어내지 않는다', async ({ page }) => {
+  await page.setViewportSize({ width: 1536, height: 864 });
+  const name = card(page, 9003).locator('p[title]');
+  // 표시 검증 전용 — 렌더된 텍스트만 길게 바꿔 레이아웃을 확인한다(데이터는 바꾸지 않는다)
+  await name.evaluate((el) => {
+    el.textContent = '[케데헌 한정기획] 마스크팩 5매 8종 (+1매 추가 증정) 아주 긴 상품명 테스트 문자열';
+  });
+  const truncated = await name.evaluate((el) => el.scrollWidth > el.clientWidth);
+  expect(truncated).toBe(true);
+  const c = await box(card(page, 9003));
+  const v = await box(page.getByTestId('library-card-version-9003'));
+  expect(v.width).toBe(24);
+  expect(v.x + v.width).toBeLessThanOrEqual(c.x + c.width - 13);
+});
+
+// ─────────────────────────────────────────────────────────────────
+// Pagination — Figma Frame 477(832:6472) visual shell. /library에 page·total 계약이 없어
+// 모든 control은 disabled이고 실제 페이지 이동은 검증하지 않는다.
+// ─────────────────────────────────────────────────────────────────
+
+test('pagination visual shell — ← 1 2 3 … 7 →, 1번 선택 모습, 모든 control disabled, 흐린 비활성 표현', async ({ page }) => {
+  const pagination = page.getByTestId('library-pagination');
+  await expect(pagination).toBeVisible();
+
+  const controls = ['library-page-prev', 'library-page-1', 'library-page-2', 'library-page-3', 'library-page-7', 'library-page-next'];
+  for (const id of controls) {
+    await expect(page.getByTestId(id)).toBeVisible();
+    await expect(page.getByTestId(id)).toBeDisabled();
+  }
+  await expect(page.getByTestId('library-page-more')).toBeVisible();
+  await expect(page.getByRole('button', { name: '이전 페이지' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '다음 페이지' })).toBeDisabled();
+
+  // Figma 선택 모습: 1번만 #171717 배경
+  await expect(page.getByTestId('library-page-1')).toHaveCSS('background-color', 'rgb(23, 23, 23)');
+  await expect(page.getByTestId('library-page-1')).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByTestId('library-page-2')).toHaveCSS('background-color', 'rgb(255, 255, 255)');
+
+  // 다운로드·삭제 disabled와 같은 opacity-40, 안내 문구는 없다
+  await expect(pagination).toHaveCSS('opacity', '0.4');
+  await expect(page.getByText('Unavailable')).toHaveCount(0);
+
+  // disabled라 눌러도 카드 목록이 바뀌지 않는다
+  const before = await cardOrder(page);
+  for (const id of controls) await page.getByTestId(id).click({ force: true });
+  expect(await cardOrder(page)).toEqual(before);
+});
+
+test('pagination — 1920×1080에서 Figma 위치(하단 60, 가로 중앙)와 크기', async ({ page }) => {
+  const pag = await box(page.getByTestId('library-pagination'));
+  expect([pag.x, pag.y, pag.width, pag.height]).toEqual([838, 992, 244, 28]);
+  const one = await box(page.getByTestId('library-page-1'));
+  const two = await box(page.getByTestId('library-page-2'));
+  expect([one.width, one.height]).toEqual([28, 28]);
+  expect(two.x - one.x).toBe(36); // 28 + gap 8
 });

@@ -3,16 +3,18 @@ import Link from 'next/link';
 import type { LibraryCardViewModel } from '@/lib/library/adapter';
 import { formatSavedDate } from '@/lib/library/view';
 
-import { CompactCheckbox, PlusGlyph12, PlusIcon16 } from './library-controls';
+import { CompactCheckbox, PlusGlyph12, PlusGlyph16 } from './library-controls';
 
-// M1 보관함 카드 — Figma 719:7428 카드 노드(400×280, white, border #EAEAEA, radius 6,
-// padding 12, 내부 gap 12, shadow 없음).
+// M1 보관함 카드 — Figma 719:7428 "card" 인스턴스.
+//   frame: white, border #EAEAEA, radius 6, padding 12, 세로 Auto Layout gap 12, 높이 280(Fixed)
+//   폭은 grid 칸을 채운다(1920에서 400) — 내부 요소도 고정 폭 없이 부모를 따른다.
+//   상단 row(24): Checkbox/Compact 20 + gap 8 + 상품명(14 Medium, -0.42) ↔ 다른 버전 만들기(Circle/XXS 24)
+//   Slot: 남은 높이를 채우고(1920에서 374×192) 그 안 placeholder는 좌우 4px 들인 #F5F5F5
+//   하단 row(14): 날짜·상태(12 Light, -0.48) ↔ 국가(12 Regular, -0.24)·언어(12 Light, -0.48)
 //
-// 표시 필드는 Figma에 있는 것만 둔다: 상품명 / 썸네일 / 저장일 / 상태 / 국가 / 언어.
-// specType(규격)은 PRD F-LST-02 표시 항목이지만 Figma 카드에 위치가 없어 ViewModel에만
-// 유지하고 화면에 임의로 추가하지 않는다.
-//
-// 카드 자체 클릭(F-LST-05 결과물 확인·수정)은 상세 route/계약이 없어 연결하지 않는다.
+// 표시 필드는 Figma에 있는 것만 둔다. specType(규격)은 PRD F-LST-02 표시 항목이지만 Figma
+// 카드에 위치가 없어 ViewModel에만 유지한다. 카드 자체 클릭(F-LST-05)은 상세 route/계약이 없어
+// 연결하지 않는다.
 
 /** GET /library는 job(is_saved=true) 투영만 돌려준다 — 현재 계약에서 카드 = 완료 결과물. */
 const COMPLETED_STATUS_LABEL = '완료';
@@ -39,26 +41,28 @@ export function LibraryCard({
   return (
     <article
       data-testid={`library-card-${card.jobId}`}
-      className="flex h-[280px] w-[400px] flex-col gap-3 rounded-[6px] border border-[#eaeaea] bg-white p-3"
+      className="flex h-[280px] w-full min-w-0 flex-col gap-3 rounded-[6px] border border-[#eaeaea] bg-white p-3"
     >
-      <div className="flex h-6 items-center gap-2">
-        <CompactCheckbox
-          id={`library-card-select-${card.jobId}`}
-          checked={selected}
-          onChange={onToggleSelect}
-          label={`${productName} 선택`}
-          testId={`library-card-select-${card.jobId}`}
-        />
-        {/* 긴 상품명은 말줄임하되 title로 전문을 확인할 수 있게 한다. */}
-        <p
-          title={productName}
-          className="min-w-0 flex-1 truncate text-[14px] font-medium tracking-[-0.42px] text-[#171717]"
-        >
-          {productName}
-        </p>
-        {/* F-VER-01 "다른 버전 만들기" 진입점 — Circle/XXS/Secondary(24×24, glyph 12px).
-            계약 미확정 동안에는 동작을 붙이지 않고 aria-disabled로만 알린다(가짜 생성 금지,
-            시각 스타일은 Figma 그대로 유지). */}
+      <div className="flex w-full items-center justify-between gap-2">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <CompactCheckbox
+            id={`library-card-select-${card.jobId}`}
+            checked={selected}
+            onChange={onToggleSelect}
+            label={`${productName} 선택`}
+            testId={`library-card-select-${card.jobId}`}
+          />
+          {/* Figma 텍스트는 한 줄(whitespace-nowrap)이다. 카드 폭을 넘는 상품명은 말줄임하고
+              title로 전문을 확인할 수 있게 한다 — 우측 버튼이 밀려나지 않게 한다. */}
+          <p
+            title={productName}
+            className="min-w-0 truncate text-[14px] leading-[17px] font-medium tracking-[-0.42px] text-[#171717]"
+          >
+            {productName}
+          </p>
+        </div>
+        {/* F-VER-01 "다른 버전 만들기" — Icon Button Circle/XXS/Secondary(24, border #EAEAEA,
+            Plus 12 glyph). 계약 미확정 동안에는 aria-disabled로만 알린다(가짜 생성 금지). */}
         <button
           type="button"
           aria-label={`${productName} 다른 버전 만들기`}
@@ -71,34 +75,37 @@ export function LibraryCard({
         </button>
       </div>
 
-      <div className="h-[192px] w-full shrink-0 overflow-hidden">
+      <div className="relative min-h-0 w-full flex-1 overflow-hidden">
         {card.thumbnailUrl ? (
-          // presigned URL(만료 5분)을 그대로 쓴다 — next/image 최적화 경유 시 원본 URL이
-          // 서버에서 다시 요청되므로 만료 URL을 일반 img로 직접 렌더한다.
+          // presigned URL(만료 5분)을 그대로 쓴다 — next/image 최적화 경유 시 서버가 원본을 다시
+          // 요청하므로 일반 img로 직접 렌더한다.
           // eslint-disable-next-line @next/next/no-img-element
           <img
             src={card.thumbnailUrl}
             alt={`${productName} 결과물`}
             data-testid={`library-card-thumbnail-${card.jobId}`}
-            className="size-full object-contain"
+            className="absolute top-0 left-1 h-full w-[calc(100%-8px)] object-contain"
           />
         ) : (
-          <div data-testid={`library-card-thumbnail-placeholder-${card.jobId}`} className="size-full bg-[#f5f5f5]" />
+          <div
+            data-testid={`library-card-thumbnail-placeholder-${card.jobId}`}
+            className="absolute inset-y-0 right-1 left-1 bg-[#f5f5f5]"
+          />
         )}
       </div>
 
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
+      <div className="flex w-full items-center justify-between gap-2 text-[12px] leading-[normal] whitespace-nowrap">
+        <div className="flex items-center gap-2 font-light tracking-[-0.48px]">
           {savedDate && (
-            <span data-testid={`library-card-date-${card.jobId}`} className="text-[12px] font-light text-[#707070]">
+            <span data-testid={`library-card-date-${card.jobId}`} className="text-[#707070]">
               {savedDate}
             </span>
           )}
-          <span className="text-[12px] text-[#999]">{COMPLETED_STATUS_LABEL}</span>
+          <span className="text-[#999]">{COMPLETED_STATUS_LABEL}</span>
         </div>
-        <div data-testid={`library-card-locale-${card.jobId}`} className="flex items-center gap-1">
-          {countryName && <span className="text-[12px] text-[#171717]">{countryName}</span>}
-          {languageName && <span className="text-[12px] font-light text-[#171717]">{languageName}</span>}
+        <div data-testid={`library-card-locale-${card.jobId}`} className="flex min-w-0 items-center gap-1 text-[#171717]">
+          {countryName && <span className="tracking-[-0.24px]">{countryName}</span>}
+          {languageName && <span className="font-light tracking-[-0.48px]">{languageName}</span>}
         </div>
       </div>
     </article>
@@ -106,35 +113,38 @@ export function LibraryCard({
 }
 
 /**
- * F-LST-07 "이미지 추가 생성하기" 카드 — Figma 719:7428 grid 마지막 칸(400×280, radius 8).
- * 구성은 N1 업로드 빈 타일(40px Circle + plus 16, 16px Medium 제목, 12px 보조문구,
- * 검정 CTA)과 같은 컴포넌트다.
+ * F-LST-07 "이미지 추가 생성하기" — Figma FileUploader(925:7308).
+ *   frame: white, border #EAEAEA, radius 8, px 24 / py 32, 높이 280, 내용 중앙
+ *   내부 세로 gap 20: Icon Button Circle 40(Plus 16) / 제목(16 Medium, -0.48)·보조(12 Regular, -0.12) gap 8 /
+ *   Button Primary MD 107×37(px 20, label px 8, 14 Medium, -0.42)
  *
- * N1(/jobs/new)은 brandId 쿼리가 있어야 제출할 수 있는데, M1에서 넘길 brandId 계약이
- * 없어 쿼리 없이 연결한다(임의 brandId를 만들지 않는다).
+ * N1(/jobs/new)은 brandId 쿼리가 있어야 제출할 수 있는데, M1에서 넘길 brandId 계약이 없어
+ * 쿼리 없이 연결한다(임의 brandId를 만들지 않는다).
  */
 export function LibraryAddCard() {
   return (
     <div
       data-testid="library-add-card"
-      className="flex h-[280px] w-[400px] flex-col items-center justify-center gap-5 rounded-[8px] border border-[#eaeaea] bg-white"
+      className="flex h-[280px] w-full min-w-0 flex-col items-center justify-center rounded-[8px] border border-[#eaeaea] bg-white px-6 py-8"
     >
-      <div className="flex size-10 items-center justify-center rounded-full border border-[#eaeaea] bg-white">
-        <PlusIcon16 />
+      <div className="flex w-full flex-col items-center justify-center gap-5">
+        <div className="flex size-10 items-center justify-center rounded-full border border-[#eaeaea] bg-white">
+          <PlusGlyph16 />
+        </div>
+        <div className="flex flex-col items-center gap-2 leading-[normal] whitespace-nowrap">
+          <p className="text-[16px] font-medium tracking-[-0.48px] text-[#171717]">이미지 추가 생성하기</p>
+          <p className="text-[12px] tracking-[-0.12px] text-[#707070]">생성하러 가기</p>
+        </div>
+        <Link
+          href="/jobs/new"
+          data-testid="library-add-card-link"
+          className="flex h-[37px] w-[107px] items-center justify-center rounded-[6px] bg-[#171717] px-5 py-2.5 hover:opacity-90"
+        >
+          <span className="px-2 text-[14px] leading-[17px] font-medium tracking-[-0.42px] whitespace-nowrap text-white">
+            이미지 생성
+          </span>
+        </Link>
       </div>
-      <div className="flex flex-col items-center gap-2 text-center">
-        <p className="text-[16px] font-medium tracking-[-0.03em] whitespace-nowrap text-[#171717]">이미지 추가 생성하기</p>
-        <p className="text-[12px] tracking-[-0.01em] whitespace-nowrap text-[#707070]">생성하러 가기</p>
-      </div>
-      <Link
-        href="/jobs/new"
-        data-testid="library-add-card-link"
-        // Figma 버튼 크기(107×37)를 그대로 고정한다 — padding만으로는 글자 폭·줄 높이 차이로
-        // 101×41이 되어 실측과 어긋났다.
-        className="inline-flex h-[37px] w-[107px] items-center justify-center rounded-[6px] bg-[#171717] text-[14px] font-medium tracking-[-0.03em] whitespace-nowrap text-white hover:opacity-90"
-      >
-        이미지 생성
-      </Link>
     </div>
   );
 }
