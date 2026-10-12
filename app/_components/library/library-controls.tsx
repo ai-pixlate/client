@@ -6,9 +6,15 @@
 // public/library/icons/에 저장해 쓰고, glyph 박스 안 Group inset·bleed 비율도 Figma 그대로 둔다
 // ("Geometry is size-specific, not container-resized").
 
+/** 선택 상태 stroke — Checkbox/Compact와 선택된 카드가 같은 값을 쓴다(primary #FF6A38 / border #EAEAEA). */
+export const SELECTED_BORDER_CLASS = 'border-[#ff6a38]';
+export const UNSELECTED_BORDER_CLASS = 'border-[#eaeaea]';
+
 /**
- * Checkbox / Compact(1063:5156) 인스턴스 — 20×20 frame 안에 18×18 visual(white, border #EAEAEA,
- * radius 4). checked 스타일은 Figma Checkbox(28:77, N6와 동일): white + orange border + check.
+ * Checkbox / Compact(1063:5156) 인스턴스 — 20×20 frame 안에 18×18 visual(white, radius 4).
+ *   Unchecked(1063:5143): border #EAEAEA
+ *   Checked(1063:5146):   border #FF6A38 + Card/Action/Check 16 glyph(visual 좌상단 0,0 기준 — Figma inside
+ *                         stroke라 CSS border 안쪽 기준으로는 −1px)
  */
 export function CompactCheckbox({
   id,
@@ -36,21 +42,31 @@ export function CompactCheckbox({
         className="peer absolute inset-0 size-5 cursor-pointer opacity-0"
       />
       <span
-        className={`pointer-events-none flex size-[18px] items-center justify-center rounded-[4px] border peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-[#ff6a38] ${
-          checked ? 'border-[#ff6a38] bg-white' : 'border-[#eaeaea] bg-white'
+        data-checkbox-visual=""
+        className={`pointer-events-none relative block size-[18px] overflow-hidden rounded-[4px] border bg-white peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-[#ff6a38] ${
+          checked ? SELECTED_BORDER_CLASS : UNSELECTED_BORDER_CLASS
         }`}
       >
-        {checked && (
-          <svg width="10" height="8" viewBox="0 0 10 8" fill="none" aria-hidden="true">
-            <path d="M1 4.2 3.5 6.7 9 1.2" stroke="#ff6a38" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        )}
+        {checked && <CheckGlyph16 />}
       </span>
     </span>
   );
 }
 
 /* eslint-disable @next/next/no-img-element -- 고정 크기 장식 SVG glyph라 next/image 최적화가 필요 없다 */
+
+/** Card/Action/Check · Size=16 (53:1166) — Checkbox/Compact Checked 안에서만 쓴다. */
+function CheckGlyph16() {
+  return (
+    <span aria-hidden="true" data-testid="checkbox-check-glyph" className="absolute -top-px -left-px block size-4 overflow-hidden">
+      <span className="absolute inset-[30%_22.5%]">
+        <span className="absolute inset-[-9.77%_-7.1%]">
+          <img alt="" src="/library/icons/check-16-primary.svg" className="block size-full max-w-none" />
+        </span>
+      </span>
+    </span>
+  );
+}
 
 /** Card/Navigation/Arrow Left · Size=16 (53:971) */
 export function ArrowLeftGlyph16() {

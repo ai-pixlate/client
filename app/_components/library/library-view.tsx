@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
 import { toLibraryCardViewModels } from '@/lib/library/adapter';
@@ -18,6 +18,7 @@ import { useLibraryQuery, useMasterCountriesQuery, useMasterLanguagesQuery } fro
 
 import { LibraryAddCard, LibraryCard } from './library-card';
 import { ArrowLeftGlyph16, ChevronDownGlyph14, CompactCheckbox, SearchGlyph14 } from './library-controls';
+import { LibraryDownloadModal } from './library-download-modal';
 import { LibraryPagination } from './library-pagination';
 
 // ─────────────────────────────────────────────────────────────────
@@ -69,6 +70,16 @@ export default function LibraryView() {
   // 임시 정책(PM 확인 전): 전체선택의 대상은 지금 보이는 카드다. PRD에 전체선택 범위
   // (전체 library vs 필터 결과) 명세가 없다 — 확정되면 이 부분만 바꾼다.
   const allSelected = isAllSelected(selected, visibleIds);
+  const hasVisibleSelection = visibleIds.some((id) => selected.has(id));
+
+  // 다운로드 모달 — 선택이 1건 이상이면 상단 다운로드로 연다. 닫아도 카드 선택은 유지하고
+  // 포커스는 다운로드 버튼으로 돌려준다.
+  const [downloadOpen, setDownloadOpen] = useState(false);
+  const downloadButtonRef = useRef<HTMLButtonElement>(null);
+  const closeDownload = useCallback(() => {
+    setDownloadOpen(false);
+    downloadButtonRef.current?.focus();
+  }, []);
 
   // master 응답 전·실패·미등록 코드는 code 그대로 보여준다(빈칸 금지).
   const countryLabel = (code: string | null) => (code == null ? null : getCodeLabel(code, countryNames));
@@ -163,10 +174,14 @@ export default function LibraryView() {
             </div>
             {/* Button Tertiary/SM(57:1605): px 12 + label container px 8(좌우 합 20), 12 Regular −0.24 →
                 81×30. Button Danger/XS(57:1704): border #E5484D(inside), px 10 + label px 2,
-                12 Regular −0.24 → 45×24. 다운로드(F-LST-06)·삭제(F-LST-04): API 계약 확정 후 활성화. */}
+                12 Regular −0.24 → 45×24. 다운로드(F-LST-06)는 선택이 있으면 모달을 연다(실제 파일
+                다운로드는 계약 대기). 삭제(F-LST-04): API 계약 확정 후 활성화. */}
             <button
+              ref={downloadButtonRef}
               type="button"
-              disabled
+              disabled={!hasVisibleSelection}
+              onClick={() => setDownloadOpen(true)}
+              aria-haspopup="dialog"
               data-testid="library-download"
               className="flex items-center justify-center rounded-[4px] bg-white px-5 py-2 text-[12px] leading-[normal] tracking-[-0.24px] whitespace-nowrap text-[#171717] disabled:cursor-not-allowed disabled:opacity-40"
             >
@@ -212,6 +227,8 @@ export default function LibraryView() {
       <div className="mt-auto flex justify-center pt-10 pb-[60px]">
         <LibraryPagination />
       </div>
+
+      {downloadOpen && <LibraryDownloadModal onClose={closeDownload} />}
     </main>
   );
 }

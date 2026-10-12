@@ -88,7 +88,7 @@ test('국가 필터 옵션은 실제 카드의 국가만, 표시 이름으로', 
   await expect(page.getByTestId('library-country-filter').locator('option')).toHaveText(['국가', '미국', '일본', '아랍에미리트']);
 });
 
-test('개별·복수 선택, 전체선택/해제 — 다운로드·삭제는 선택과 무관하게 비활성(API 계약 확정 전)', async ({ page }) => {
+test('개별·복수 선택, 전체선택/해제 — 다운로드는 선택 1건 이상이면 활성, 삭제는 계약 확정 전까지 비활성', async ({ page }) => {
   const download = page.getByTestId('library-download');
   const del = page.getByTestId('library-delete');
   await expect(download).toBeDisabled();
@@ -96,8 +96,7 @@ test('개별·복수 선택, 전체선택/해제 — 다운로드·삭제는 선
 
   await page.getByTestId('library-card-select-9001').check();
   await expect(page.getByTestId('library-card-select-9001')).toBeChecked();
-  // 카드를 선택해도 다운로드·삭제는 비활성 그대로다
-  await expect(download).toBeDisabled();
+  await expect(download).toBeEnabled();
   await expect(del).toBeDisabled();
 
   await page.getByTestId('library-card-select-9002').check();
@@ -109,13 +108,14 @@ test('개별·복수 선택, 전체선택/해제 — 다운로드·삭제는 선
   for (const id of [9001, 9002, 9003, 9004]) {
     await expect(page.getByTestId(`library-card-select-${id}`)).toBeChecked();
   }
-  await expect(download).toBeDisabled();
+  await expect(download).toBeEnabled();
   await expect(del).toBeDisabled();
 
   await page.getByTestId('library-select-all').uncheck();
   for (const id of [9001, 9002, 9003, 9004]) {
     await expect(page.getByTestId(`library-card-select-${id}`)).not.toBeChecked();
   }
+  await expect(download).toBeDisabled();
 });
 
 test('다른 버전 만들기 버튼은 접근성 이름을 갖고, 계약 확정 전에는 aria-disabled', async ({ page }) => {
@@ -282,4 +282,180 @@ test('pagination — 1920×1080에서 Figma 위치(하단 60, 가로 중앙)와 
   const two = await box(page.getByTestId('library-page-2'));
   expect([one.width, one.height]).toEqual([28, 28]);
   expect(two.x - one.x).toBe(36); // 28 + gap 8
+});
+
+// ─────────────────────────────────────────────────────────────────
+// 선택 visual — Checkbox/Compact Checked(1063:5146) + 선택된 카드 stroke(1056:9759)
+// ─────────────────────────────────────────────────────────────────
+
+const ORANGE = 'rgb(255, 106, 56)';
+const GRAY = 'rgb(234, 234, 234)';
+const checkboxVisual = (page: import('@playwright/test').Page, testId: string) =>
+  page.getByTestId(testId).locator('xpath=following-sibling::span[1]');
+
+test('카드 선택 시 checkbox와 카드 border가 #FF6A38, check glyph 표시 — 해제하면 #EAEAEA로 복귀', async ({ page }) => {
+  const visual = checkboxVisual(page, 'library-card-select-9003');
+  await expect(visual).toHaveCSS('border-top-color', GRAY);
+  await expect(card(page, 9003)).toHaveCSS('border-top-color', GRAY);
+  await expect(visual.getByTestId('checkbox-check-glyph')).toHaveCount(0);
+
+  await page.getByTestId('library-card-select-9003').check();
+  await expect(visual).toHaveCSS('border-top-color', ORANGE);
+  await expect(visual.getByTestId('checkbox-check-glyph')).toBeVisible();
+  const glyph = await box(visual.getByTestId('checkbox-check-glyph'));
+  expect([glyph.width, glyph.height]).toEqual([16, 16]);
+  await expect(card(page, 9003)).toHaveCSS('border-top-color', ORANGE);
+  await expect(card(page, 9002)).toHaveCSS('border-top-color', GRAY);
+
+  await page.getByTestId('library-card-select-9003').uncheck();
+  await expect(visual).toHaveCSS('border-top-color', GRAY);
+  await expect(card(page, 9003)).toHaveCSS('border-top-color', GRAY);
+});
+
+test('전체선택 시 전체선택 checkbox와 대상 카드 전부 #FF6A38', async ({ page }) => {
+  await page.getByTestId('library-select-all').check();
+  await expect(checkboxVisual(page, 'library-select-all')).toHaveCSS('border-top-color', ORANGE);
+  await expect(checkboxVisual(page, 'library-select-all').getByTestId('checkbox-check-glyph')).toBeVisible();
+  for (const id of [9001, 9002, 9003, 9004]) {
+    await expect(card(page, id)).toHaveCSS('border-top-color', ORANGE);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────
+// 다운로드 모달 — Figma 1056:9744 / Modal 1069:11251. 묶음 다운로드 계약이 없어 모달 열고 닫기와
+// 산출물 체크 선택까지만 검증한다(Footer 다운로드·개별 다운로드는 disabled).
+// ─────────────────────────────────────────────────────────────────
+
+test('다운로드 모달 — 열기, dim, 크기, 문구, 산출물 4행과 초기 선택, 토글, 취소/Escape 닫기, 선택 유지', async ({ page }) => {
+  const download = page.getByTestId('library-download');
+  await expect(download).toBeDisabled();
+  await page.getByTestId('library-card-select-9003').check();
+  await expect(download).toBeEnabled();
+
+  await download.click();
+  const modal = page.getByRole('dialog', { name: '해당 작업을 다운로드할까요?' });
+  await expect(modal).toBeVisible();
+  await expect(page.getByTestId('library-download-dim')).toHaveCSS('background-color', 'rgba(23, 23, 23, 0.4)');
+  const m = await box(modal);
+  expect([m.width, m.height]).toEqual([420, 505]);
+  await expect(modal.getByText('선택된 산출물을 다운로드 합니다.')).toBeVisible();
+
+  const rows = [
+    ['images', 'images/', true],
+    ['html', 'HTML', true],
+    ['csv', 'content.csv', false],
+    ['psd', 'PSD', false],
+  ] as const;
+  for (const [key, name, initiallyChecked] of rows) {
+    await expect(page.getByTestId(`library-download-row-${key}`)).toContainText(name);
+    const input = page.getByTestId(`library-download-output-${key}`);
+    if (initiallyChecked) await expect(input).toBeChecked();
+    else await expect(input).not.toBeChecked();
+    await expect(page.getByTestId(`library-download-single-${key}`)).toBeDisabled();
+  }
+  await expect(page.getByTestId('library-download-confirm')).toBeDisabled();
+
+  // 산출물 체크는 FE local state로 토글된다
+  await page.getByTestId('library-download-output-csv').check();
+  await expect(page.getByTestId('library-download-output-csv')).toBeChecked();
+  await expect(checkboxVisual(page, 'library-download-output-csv')).toHaveCSS('border-top-color', ORANGE);
+  await page.getByTestId('library-download-output-images').uncheck();
+  await expect(page.getByTestId('library-download-output-images')).not.toBeChecked();
+
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1920);
+
+  // 취소 → 닫힘, 카드 선택 유지
+  await page.getByTestId('library-download-cancel').click();
+  await expect(modal).toHaveCount(0);
+  await expect(page.getByTestId('library-card-select-9003')).toBeChecked();
+  await expect(card(page, 9003)).toHaveCSS('border-top-color', ORANGE);
+
+  // Escape → 닫힘
+  await download.click();
+  await expect(modal).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(modal).toHaveCount(0);
+  await expect(page.getByTestId('library-card-select-9003')).toBeChecked();
+});
+
+test('다운로드 모달 — 1920은 Figma 위치(750, 287), 1600에서도 중앙이고 viewport 안', async ({ page }) => {
+  await page.getByTestId('library-card-select-9003').check();
+  await page.getByTestId('library-download').click();
+  const m1920 = await box(page.getByTestId('library-download-modal'));
+  near(m1920.x, 750);
+  near(m1920.y, 287);
+
+  await page.setViewportSize({ width: 1600, height: 900 });
+  const m = await box(page.getByTestId('library-download-modal'));
+  near(m.x + m.width / 2, 800);
+  near(m.y + m.height / 2, 450);
+  expect(m.y).toBeGreaterThanOrEqual(0);
+  expect(m.y + m.height).toBeLessThanOrEqual(900);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1600);
+});
+
+test('다운로드 모달 접근성 — dialog 의미, 이름·설명, 열릴 때 포커스, Tab/Shift+Tab trap, 닫힌 뒤 포커스 복귀', async ({ page }) => {
+  await page.getByTestId('library-card-select-9003').check();
+  const download = page.getByTestId('library-download');
+  await download.click();
+
+  const dialog = page.getByRole('dialog', { name: '해당 작업을 다운로드할까요?' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toHaveAttribute('aria-modal', 'true');
+  await expect(dialog).toHaveAccessibleDescription('선택된 산출물을 다운로드 합니다.');
+
+  const focusInsideDialog = () =>
+    page.evaluate(() => {
+      const d = document.querySelector('[role="dialog"]');
+      return !!d && d.contains(document.activeElement);
+    });
+  expect(await focusInsideDialog()).toBe(true);
+
+  // 활성 control(체크 4개 + 취소)을 넘어서 여러 번 Tab/Shift+Tab 해도 배경으로 빠지지 않는다
+  for (let i = 0; i < 8; i += 1) {
+    await page.keyboard.press('Tab');
+    expect(await focusInsideDialog()).toBe(true);
+  }
+  for (let i = 0; i < 8; i += 1) {
+    await page.keyboard.press('Shift+Tab');
+    expect(await focusInsideDialog()).toBe(true);
+  }
+
+  // Escape → 닫힘 → 상단 다운로드로 포커스 복귀
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await expect(download).toBeFocused();
+
+  // 취소 → 닫힘 → 상단 다운로드로 포커스 복귀
+  await download.click();
+  await expect(dialog).toBeVisible();
+  await page.getByTestId('library-download-cancel').click();
+  await expect(dialog).toHaveCount(0);
+  await expect(download).toBeFocused();
+});
+
+test('다운로드 모달 — 열린 동안 배경 스크롤 잠금, 닫으면 원래 overflow 복구, dim 클릭으로는 닫히지 않음', async ({ page }) => {
+  // 1600×900은 내용이 viewport보다 길어 실제로 세로 스크롤이 생긴다
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.getByTestId('library-card-select-9003').check();
+  const before = await page.evaluate(() => document.body.style.overflow);
+
+  await page.getByTestId('library-download').click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  expect(await page.evaluate(() => document.body.style.overflow)).toBe('hidden');
+  const scrollBefore = await page.evaluate(() => window.scrollY);
+  await page.mouse.move(100, 800);
+  await page.mouse.wheel(0, 600);
+  await page.waitForTimeout(200);
+  expect(await page.evaluate(() => window.scrollY)).toBe(scrollBefore);
+
+  // dim(모달 바깥) 클릭 — Figma에 닫기 동작이 없어 그대로 열려 있다
+  await page.mouse.click(40, 450);
+  await expect(page.getByRole('dialog')).toBeVisible();
+
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  expect(await page.evaluate(() => document.body.style.overflow)).toBe(before);
+  await page.mouse.wheel(0, 600);
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(scrollBefore);
 });

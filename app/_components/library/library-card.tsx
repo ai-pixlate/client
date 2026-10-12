@@ -3,10 +3,10 @@ import Link from 'next/link';
 import type { LibraryCardViewModel } from '@/lib/library/adapter';
 import { formatSavedDate } from '@/lib/library/view';
 
-import { CompactCheckbox, PlusGlyph12, PlusGlyph16 } from './library-controls';
+import { CompactCheckbox, PlusGlyph12, PlusGlyph16, SELECTED_BORDER_CLASS, UNSELECTED_BORDER_CLASS } from './library-controls';
 
 // M1 보관함 카드 — Figma 719:7428 "card" 인스턴스.
-//   frame: white, border #EAEAEA, radius 6, padding 12, 세로 Auto Layout gap 12, 높이 280(Fixed)
+//   frame: white, border #EAEAEA(선택 시 #FF6A38 — 1056:9759), radius 6, padding 12, 세로 Auto Layout gap 12, 높이 280(Fixed)
 //   폭은 grid 칸을 채운다(1920에서 400) — 내부 요소도 고정 폭 없이 부모를 따른다.
 //   상단 row(24): Checkbox/Compact 20 + gap 8 + 상품명(14 Medium, -0.42) ↔ 다른 버전 만들기(Circle/XXS 24)
 //   Slot: 남은 높이를 채우고(1920에서 374×192) 그 안 placeholder는 좌우 4px 들인 #F5F5F5
@@ -41,7 +41,7 @@ export function LibraryCard({
   return (
     <article
       data-testid={`library-card-${card.jobId}`}
-      className="flex h-[280px] w-full min-w-0 flex-col gap-3 rounded-[6px] border border-[#eaeaea] bg-white p-3"
+      className={`flex h-[280px] w-full min-w-0 flex-col gap-3 rounded-[6px] border bg-white p-3 ${selected ? SELECTED_BORDER_CLASS : UNSELECTED_BORDER_CLASS}`}
     >
       <div className="flex w-full items-center justify-between gap-2">
         <div className="flex min-w-0 flex-1 items-center gap-2">
