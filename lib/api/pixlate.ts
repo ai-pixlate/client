@@ -14,6 +14,7 @@ import type {
   ApiLibraryCard,
   ApiExportArtifactType,
 } from '@/lib/api/n6-schema';
+import type { ApiCountry, ApiLanguage } from '@/lib/api/master-schema';
 
 // ─────────────────────────────────────────────
 // 공통 fetch 헬퍼
@@ -313,4 +314,21 @@ export function saveJob(jobId: string, payload?: ApiSaveRequest): Promise<ApiLib
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload ?? {}),
   });
+}
+
+/** M1 보관함 카드 목록 (API-LIB-01). job(is_saved=true) 투영 — 페이지네이션 파라미터 없음. */
+export function getLibrary(): Promise<ApiLibraryCard[]> {
+  return apiFetch<ApiLibraryCard[]>('/library');
+}
+
+// ─────────────────────────────────────────────
+// Master — 국가/언어 기준 목록 (API-MST-01/02). 코드값 → 표시 이름의 정본이다.
+// ─────────────────────────────────────────────
+
+export function getMasterCountries(): Promise<ApiCountry[]> {
+  return apiFetch<ApiCountry[]>('/master/countries');
+}
+
+export function getMasterLanguages(): Promise<ApiLanguage[]> {
+  return apiFetch<ApiLanguage[]>('/master/languages');
 }
