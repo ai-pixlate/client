@@ -10,6 +10,7 @@
 import {
   areAllSectionsExcluded,
   buildAcknowledgedWarnings,
+  deriveFitStatus,
   getInvalidStateWarnings,
   getPreviewContainerWidth,
   getRerenderTaskId,
@@ -126,6 +127,23 @@ console.log('\n[4] toAutoAdjustViewModel — API는 camelCase(fontScale/lineBrea
 
   const noop = toAutoAdjustViewModel({ fontScale: 1, lineBreakApplied: false });
   check('fontScale===1 && !lineBreakApplied -> applied:false', noop.applied === false);
+}
+
+console.log('\n[4-1] deriveFitStatus — 자리 맞춤 3값(F-CFM-05), overflow가 최우선');
+{
+  const adjusted = { fontScale: 0.85, lineBreakApplied: true };
+  const noop = { fontScale: 1, lineBreakApplied: false };
+
+  check('A. overflow:false + 조정 없음(null) -> fit', deriveFitStatus({ overflow: false, autoAdjust: null }) === 'fit');
+  check('A. overflow:false + 조정 없음(1/false) -> fit', deriveFitStatus({ overflow: false, autoAdjust: noop }) === 'fit');
+  check('B. overflow:false + 조정 있음 -> adjusted', deriveFitStatus({ overflow: false, autoAdjust: adjusted }) === 'adjusted');
+  check(
+    'B. overflow:false + lineBreakApplied만 -> adjusted',
+    deriveFitStatus({ overflow: false, autoAdjust: { fontScale: 1, lineBreakApplied: true } }) === 'adjusted',
+  );
+  check('C. overflow:true + 조정 없음 -> overflow', deriveFitStatus({ overflow: true, autoAdjust: null }) === 'overflow');
+  check('D. overflow:true + 조정 있음 -> overflow(최우선)', deriveFitStatus({ overflow: true, autoAdjust: adjusted }) === 'overflow');
+  check('overflow 필드 없음(optional) -> overflow로 보지 않는다', deriveFitStatus({ autoAdjust: null }) === 'fit');
 }
 
 console.log('\n[5] toSignalBadges — admin 전용 필드 없이도 undefined signals는 빈 배열');
