@@ -1,11 +1,15 @@
 'use client';
 
-import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
 import { useCreateJobMutation, useAnalyzeJobMutation } from '@/lib/queries/pixlate';
 import type { ImageType } from '@/lib/api/types';
 import { StepNav } from '../[jobId]/_components/step-nav';
+
+import { CertificationUploadButton, CertificationUploadModal } from './_components/certification-upload';
+import { ChevronDownGlyph14, SearchGlyph14 } from './_components/n1-glyphs';
+import { INITIAL_SIZE_SELECTION, SizeSelector, type SizeSelection } from './_components/size-selector';
 
 // ─────────────────────────────────────────────────────────────────
 // UI용 임시 상수 — 실제 백엔드 연결 시 API 데이터로 교체할 것
@@ -149,15 +153,6 @@ function ChevronDownIcon() {
   );
 }
 
-function SearchIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-      <circle cx="6" cy="6" r="4.5" stroke="#707070" strokeWidth="1.3" />
-      <path d="M12 12L9.5 9.5" stroke="#707070" strokeWidth="1.3" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 function PlusIcon({ size = 24 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -193,7 +188,7 @@ function ChevronRightIcon() {
 
 function FieldLabel({ children, required }: { children: React.ReactNode; required?: boolean }) {
   return (
-    <p className={`text-[16px] tracking-[-0.03em] ${required ? 'text-[#171717]' : 'text-[#707070]'}`}>
+    <p className={`text-[16px] leading-[19px] tracking-[-0.03em] ${required ? 'text-[#171717]' : 'text-[#707070]'}`}>
       {children}
       {required && <span className="ml-1 text-[#ff6a38]">*</span>}
     </p>
@@ -405,6 +400,20 @@ function NewJobPageInner() {
   // ── 나가기 확인 ─────────────────────────────────────────────────
   const [showExitConfirm, setShowExitConfirm] = useState(false);
 
+  // ── 사이즈 선택 (Figma 사이즈선택 1093:10288) ────────────────────
+  // FE 화면 상태 — 제출 계약(specType 9월 original 고정, 커스텀 W/H 필드 없음)에는 아직 반영하지 않는다.
+  const [sizeSelection, setSizeSelection] = useState<SizeSelection>(INITIAL_SIZE_SELECTION);
+
+  // ── 인증 마크 업로드 (Figma 1089:10035 / 1084:4119) ─────────────────
+  // 업로드 계약이 없어 등록한 파일은 이 N1 session의 FE 상태로만 든다(서버 전송·업로드 완료 흉내 없음).
+  const [certificationFile, setCertificationFile] = useState<File | null>(null);
+  const [certificationModalOpen, setCertificationModalOpen] = useState(false);
+  const certificationButtonRef = useRef<HTMLButtonElement>(null);
+  const closeCertificationModal = useCallback(() => {
+    setCertificationModalOpen(false);
+    certificationButtonRef.current?.focus();
+  }, []);
+
   // ── 카테고리 선택 모달 (Figma 381:6293) ─────────────────────────
   const [categoryModalOpen, setCategoryModalOpen] = useState(false);
   const selectedCategoryLabel = displayCategory ? findCategoryLabel(CATEGORY_TREE, displayCategory) : null;
@@ -609,9 +618,10 @@ function NewJobPageInner() {
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {/* 헤더 — X 버튼이 좌측 rail로 옮겨가면서, 여기는 이제 제목/설명 행만
             남는다(N1 Figma 재정합 1단계). */}
-        <div className="shrink-0 px-10 pt-10 pb-6">
+        {/* Figma(525:3023): 헤더 x140 y60(좌측 rail 80 + 60), 국가/언어 행 y108, 본문 y162. */}
+        <div className="shrink-0 px-[60px] pt-[60px] pb-[15px]">
           <div className="flex items-center gap-4">
-            <h1 className="text-[20px] font-semibold tracking-[-0.02em] text-[#171717]">이미지 입력</h1>
+            <h1 className="text-[20px] leading-[24px] font-semibold tracking-[-0.02em] text-[#171717]">이미지 입력</h1>
             <p className="text-[14px] tracking-[-0.01em] text-[#707070]">
               번역할 원본 이미지를 등록하고 작업 조건을 설정합니다.
             </p>
@@ -629,7 +639,7 @@ function NewJobPageInner() {
                 <select
                   value={targetCountry}
                   onChange={(e) => setTargetCountry(e.target.value)}
-                  className="w-full appearance-none rounded-[6px] border border-[#eaeaea] bg-white px-[14px] py-[10px] text-[14px] tracking-[-0.01em] text-[#707070] outline-none focus:border-[#ff6a38]"
+                  className="w-full appearance-none rounded-[6px] border border-[#eaeaea] bg-white px-[14px] py-[10px] text-[14px] leading-[17px] tracking-[-0.01em] text-[#707070] outline-none focus:border-[#ff6a38]"
                 >
                   <option value="">선택하세요</option>
                   {COUNTRY_OPTIONS.map((o) => (
@@ -662,7 +672,7 @@ function NewJobPageInner() {
                 <select
                   value={targetLanguage}
                   onChange={(e) => setTargetLanguage(e.target.value)}
-                  className="w-full appearance-none rounded-[6px] border border-[#eaeaea] bg-white px-[14px] py-[10px] text-[14px] tracking-[-0.01em] text-[#707070] outline-none focus:border-[#ff6a38]"
+                  className="w-full appearance-none rounded-[6px] border border-[#eaeaea] bg-white px-[14px] py-[10px] text-[14px] leading-[17px] tracking-[-0.01em] text-[#707070] outline-none focus:border-[#ff6a38]"
                 >
                   <option value="">선택하세요</option>
                   {LANGUAGE_OPTIONS.map((o) => (
@@ -677,9 +687,10 @@ function NewJobPageInner() {
           </div>
         </div>
 
-        {/* 본문: 좌 FileUploader + 우 필드 패널. 아래 pb는 Figma 실측
-            (패널 bottom 932, 다음 버튼 top 965 → 33px)을 그대로 쓴다. */}
-        <div className="flex min-h-0 flex-1 gap-6 px-10 pb-[33px]">
+        {/* 본문: 좌 FileUploader + 우 열(필드 패널 + 하단 action). Figma(525:3023) 실측:
+            uploader x140 y162 → bottom 1000, 우측 열 x1344(폭 516) y162 → action bottom 1010,
+            두 열 사이 20. 아래 pb 70 = 1080 − 1010, uploader는 그보다 10 위에서 끝난다. */}
+        <div className="flex min-h-0 flex-1 gap-5 px-[60px] pb-[70px]">
           {/* 좌측 — 업로드 영역 */}
           <div
             data-testid="n1-image-dropzone"
@@ -695,7 +706,7 @@ function NewJobPageInner() {
             // 확인). 안쪽 스크롤 wrapper(overflow-auto)가 실제 스크롤을
             // 담당하고, 이 div는 그 스크롤 영역이 자기 폭보다 좁아지는
             // 걸 허용만 하면 된다.
-            className={`flex min-w-0 flex-1 flex-col items-center justify-center gap-10 rounded-[8px] border transition-colors ${
+            className={`mb-[10px] flex min-w-0 flex-1 flex-col items-center justify-center gap-10 rounded-[8px] border transition-colors ${
               isDragOver ? 'border-[#ff6a38] bg-[#faf3ed]' : 'border-[#eaeaea] bg-white'
             }`}
           >
@@ -845,26 +856,18 @@ function NewJobPageInner() {
             />
           </div>
 
-          {/* 우측 — 필드 패널 */}
-          {/* 우측 필드 패널 — Figma(643:5942) 폭 516px. get_metadata로 4개
-              블록(상품명~규제분류 묶음/토글/결과물규격/핵심키워드)의 실제
-              y좌표를 각각 다시 쟀다: 643:5913 bottom=305 → 673:7820
-              top=359.67(gap 54.67), 673:7820 bottom=401.67 → 643:5914
-              top=456.33(gap 54.66), 643:5914 bottom=616.33 → 643:5924
-              top=671(gap 54.67) — 네 간격이 모두 54.6~54.7px로 사실상
-              같은 값이라 gap-[55px] 하나로도 Figma 실측과 맞는다(블록마다
-              다른 값을 억지로 만들지 않았다 — 실제로 같다).
-              패널 자체 높이(770)는 Figma의 1080 프레임 기준이라, 그보다
-              낮은 실제 브라우저 창에서는 자연 높이(~757)가 남는 공간을
-              넘어설 수 있다 — 이전엔 고정 height 없이 그대로 뒀더니
-              부모 flex-1 row가 패널을 눌러 압축했고, 핵심 키워드가 패널
-              테두리 밖으로 그대로 흘러나와 다음 버튼과 겹쳤다(1440×800
-              실측 재현). overflow-y-auto를 다시 두되, 이번엔 "필요 이상
-              공간을 만들어 생기는" 스크롤이 아니라 "실제 콘텐츠가 진짜
-              가용 공간보다 클 때만" 나오는 안전장치다 — 평소 뷰포트에서는
-              나타나지 않는다. */}
-          <div className="flex min-h-0 w-[516px] shrink-0 flex-col gap-[55px] overflow-y-auto rounded-[8px] border border-[#eaeaea] p-5">
-            <div className="flex flex-col gap-3">
+          {/* 우측 열 — 필드 패널(세로 스크롤) + 하단 action. Figma(643:5942) 패널: 516 폭, border #EAEAEA,
+              radius 8, padding 20, section 간 gap 60. 1080 높이에서 패널은 열 높이(848) − action(45) −
+              간격(82) = 721이 되고, 내용(약 872)이 더 길면 패널 안에서만 스크롤된다. action(1089:10035)은
+              패널 밖에 고정되어 스크롤되지 않는다. */}
+          <div className="flex min-h-0 w-[516px] shrink-0 flex-col gap-[82px]">
+            <div
+              data-testid="n1-field-panel"
+              // 스크롤은 그대로 두고 scrollbar 모양만 숨긴다(Figma에 scrollbar 디자인 없음) — 기존
+              // globals.css의 n3-scroll-hidden(scrollbar-width:none + ::-webkit-scrollbar display:none) 재사용.
+              className="n3-scroll-hidden flex min-h-0 flex-1 flex-col gap-[60px] overflow-y-auto rounded-[8px] border border-[#eaeaea] p-5"
+            >
+            <div className="flex flex-col gap-4 pt-2">
               <div className="flex flex-col gap-1">
                 <FieldLabel required>상품명</FieldLabel>
                 <input
@@ -872,7 +875,7 @@ function NewJobPageInner() {
                   value={productName}
                   onChange={(e) => setProductName(e.target.value)}
                   placeholder="상품 이름을 입력해주세요"
-                  className="w-full rounded-[6px] border border-[#eaeaea] px-4 py-2.5 text-[14px] tracking-[-0.01em] text-[#171717] outline-none placeholder:text-[#707070] focus:border-[#ff6a38]"
+                  className="w-full rounded-[6px] border border-[#eaeaea] px-4 py-2.5 text-[14px] leading-[17px] tracking-[-0.01em] text-[#171717] outline-none placeholder:text-[#707070] focus:border-[#ff6a38]"
                 />
               </div>
 
@@ -883,7 +886,7 @@ function NewJobPageInner() {
                   value={productCode}
                   onChange={(e) => setProductCode(e.target.value)}
                   placeholder="상품 코드를 입력해주세요"
-                  className="w-full rounded-[6px] border border-[#eaeaea] px-4 py-2.5 text-[14px] tracking-[-0.01em] text-[#171717] outline-none placeholder:text-[#707070] focus:border-[#ff6a38]"
+                  className="w-full rounded-[6px] border border-[#eaeaea] px-4 py-2.5 text-[14px] leading-[17px] tracking-[-0.01em] text-[#171717] outline-none placeholder:text-[#707070] focus:border-[#ff6a38]"
                 />
               </div>
 
@@ -891,7 +894,8 @@ function NewJobPageInner() {
                   버튼(w-108) 두 요소가 한 행에 나란히 있다. 버튼을 누르면
                   카테고리 선택 모달(381:6293)이 뜬다 — 실제 값 변경은 모달의
                   leaf 클릭으로만 일어나고, 이 표시 필드 자체는 읽기 전용이다. */}
-              <div className="flex flex-col gap-1">
+              {/* Figma(643:5822) 카테고리 행은 폭 447 고정(입력 323 + gap 16 + 버튼 108). */}
+              <div className="flex max-w-[447px] flex-col gap-1">
                 <FieldLabel>카테고리</FieldLabel>
                 <div className="flex items-center gap-4">
                   <div className="flex h-[39px] flex-1 items-center justify-between rounded-[6px] border border-[#eaeaea] bg-white px-[14px] py-[10px]">
@@ -902,7 +906,7 @@ function NewJobPageInner() {
                     >
                       {selectedCategoryLabel ?? '검색 하기'}
                     </span>
-                    <SearchIcon />
+                    <SearchGlyph14 />
                   </div>
                   {/* h-[37px]를 고정한 채 py-2.5(=line-height 21px과 합쳐 41px)를
                       그대로 두면 실제 필요한 높이(41px)가 선언한 높이(37px)를
@@ -927,7 +931,7 @@ function NewJobPageInner() {
                   <select
                     value={regulatoryClass}
                     onChange={(e) => setRegulatoryClass(e.target.value)}
-                    className="w-full appearance-none rounded-[6px] border border-[#eaeaea] bg-white px-[14px] py-[10px] text-[14px] tracking-[-0.01em] text-[#707070] outline-none focus:border-[#ff6a38]"
+                    className="w-full appearance-none rounded-[6px] border border-[#eaeaea] bg-white px-[14px] py-[10px] text-[14px] leading-[17px] tracking-[-0.01em] text-[#707070] outline-none focus:border-[#ff6a38]"
                   >
                     <option value="">선택</option>
                     {REGULATORY_CLASS_OPTIONS.map((o) => (
@@ -935,7 +939,7 @@ function NewJobPageInner() {
                     ))}
                   </select>
                   <div className="pointer-events-none absolute top-1/2 right-3.5 -translate-y-1/2">
-                    <ChevronDownIcon />
+                    <ChevronDownGlyph14 />
                   </div>
                 </div>
               </div>
@@ -945,10 +949,9 @@ function NewJobPageInner() {
                 없다(12월 예정, imageType='multi_section' 고정 — 기존 결정
                 유지). Figma는 이 토글을 필수(*) 입력으로 보여주는데 아직
                 실제로 값을 바꿀 수 없는 상태라 디자인과 현재 계약이 충돌한다
-                — 그대로 숨기지 않고, "출력 규격"의 나머지 옵션과 같은 방식
-                (보여주되 비활성)으로 처리하고 보고에 남긴다. */}
-            <div className="flex flex-col gap-2">
-              <div className="flex items-center gap-2">
+                — 그대로 숨기지 않고 보여주되 비활성으로 처리한다. */}
+            <div className="flex flex-col">
+              <div className="flex h-7 items-center gap-2">
                 <p className="text-[18px] font-medium tracking-[-0.03em] text-[#171717]">
                   이미지 안에 여러 내용이 이어져 있나요?
                 </p>
@@ -965,41 +968,24 @@ function NewJobPageInner() {
               </div>
               {/* Figma(673:7819)는 이 helper text를 라벨/토글과 같은 좌측
                   기준선에 맞춘다 — 혼자 text-center로 떠 있던 것을 고쳤다. */}
-              <p className="text-left text-[12px] font-light tracking-[-0.04em] text-[#707070]">
+              <p className="text-left text-[12px] leading-[14px] font-light tracking-[-0.04em] text-[#707070]">
                 이미지 유형에 따라 분석 방식이 달라집니다.
               </p>
             </div>
 
-            {/* 결과물 규격 — Figma 기본값은 "사이트 맞춤" 탭이 활성이지만, 9월
-                MVP는 원본 규격만 실제로 지원한다(기존 결정 유지, lib/api/types.ts
-                SpecType 주석 참고). 디자인과 계약이 다시 충돌해 Figma의 활성
-                탭을 그대로 베끼지 않고, 실제로 쓸 수 있는 "원본 사이즈"를
-                활성으로 두고 나머지 두 탭은 비활성으로 보여준다. */}
-            <div className="flex flex-col gap-4">
-              {/* Figma(925:2573-2575) — 이 라벨의 asterisk만 18px Medium이다
-                  (다른 라벨의 asterisk는 16px 상속). FieldLabel 공용
-                  컴포넌트의 기본 16px 상속 asterisk와 다르므로 이 자리만
-                  직접 마크업한다. */}
-              <div className="flex items-center gap-2">
-                <p className="text-[16px] tracking-[-0.03em] text-[#171717]">결과물 규격</p>
-                <span className="text-[18px] font-medium tracking-[-0.03em] text-[#ff6a38]">*</span>
+            {/* 사이즈 선택(643:5914) — 라벨 → SizeSelector gap 20 */}
+            <div className="flex flex-col gap-5">
+              <div className="flex items-start gap-2 leading-[normal] whitespace-nowrap">
+                <p className="text-[16px] leading-[19px] tracking-[-0.48px] text-[#171717]">사이즈 선택</p>
+                <span className="text-[18px] leading-[21px] font-medium tracking-[-0.54px] text-[#ff6a38]">*</span>
               </div>
-              <div className="flex h-8 w-full items-center">
-                <div className="flex-1 border-b border-[#eaeaea] pb-2 text-center">
-                  <span className="text-[16px] tracking-[-0.03em] text-[#171717]">원본 사이즈</span>
-                </div>
-                <div className="flex-1 cursor-not-allowed pb-2 text-center" title="준비 중입니다.">
-                  <span className="text-[16px] tracking-[-0.03em] text-[#999]">사이트 맞춤</span>
-                </div>
-                <div className="flex-1 cursor-not-allowed pb-2 text-center" title="준비 중입니다.">
-                  <span className="text-[16px] tracking-[-0.03em] text-[#999]">커스텀</span>
-                </div>
-              </div>
-              <p className="text-[12px] font-light tracking-[-0.04em] text-[#999]">업로드된 이미지의 원본 크기를 유지합니다.</p>
+              <SizeSelector value={sizeSelection} onChange={setSizeSelection} />
             </div>
 
-            <div className="flex flex-col gap-1">
+            {/* 핵심 키워드(643:5924) — 제목 → 입력 그룹 gap 8, 입력 → helper gap 4, 아래 padding 40. */}
+            <div className="flex flex-col gap-2 pb-10">
               <FieldLabel>핵심 키워드</FieldLabel>
+              <div className="flex flex-col gap-1">
               <div className="flex gap-2">
                 <input
                   type="text"
@@ -1007,7 +993,7 @@ function NewJobPageInner() {
                   onChange={(e) => setKeywordInput(e.target.value)}
                   onKeyDown={handleKeywordKeyDown}
                   placeholder="키워드를 입력해주세요."
-                  className="flex-1 rounded-[6px] border border-[#eaeaea] px-4 py-2.5 text-[14px] tracking-[-0.01em] text-[#171717] outline-none placeholder:text-[#707070] focus:border-[#ff6a38]"
+                  className="flex-1 rounded-[6px] border border-[#eaeaea] px-4 py-2.5 text-[14px] leading-[17px] tracking-[-0.01em] text-[#171717] outline-none placeholder:text-[#707070] focus:border-[#ff6a38]"
                 />
                 <button
                   type="button"
@@ -1017,9 +1003,10 @@ function NewJobPageInner() {
                   추가
                 </button>
               </div>
-              <p className="text-[12px] font-light tracking-[-0.04em] text-[#707070]">
+              <p className="text-[12px] leading-[14px] font-light tracking-[-0.04em] text-[#707070]">
                 번역 중 강조할 표현을 태그로 추가합니다.
               </p>
+              </div>
               {keywords.length > 0 && (
                 <div className="mt-1 flex flex-wrap gap-1.5">
                   {keywords.map((kw) => (
@@ -1041,27 +1028,45 @@ function NewJobPageInner() {
                 </div>
               )}
             </div>
+            </div>
+
+            {/* 하단 action(1089:10035) — 인증 마크 업로드(Secondary/LG + Info) · 다음(Primary 148), gap 8 */}
+            <div className="relative flex shrink-0 items-center justify-end gap-2">
+              {submitError && (
+                <p className="absolute right-0 bottom-full mb-2 max-w-full text-right text-sm text-red-500">
+                  {submitError instanceof Error ? submitError.message : '오류가 발생했습니다. 다시 시도해 주세요.'}
+                </p>
+              )}
+              <CertificationUploadButton
+                registered={certificationFile !== null}
+                onOpen={() => setCertificationModalOpen(true)}
+                buttonRef={certificationButtonRef}
+              />
+              <button
+                type="button"
+                onClick={handleSubmit}
+                disabled={!isValid || isSubmitting}
+                title={!isValid ? '필수 항목을 모두 입력해 주세요.' : undefined}
+                className="flex h-[45px] w-[148px] shrink-0 items-center justify-center rounded-[6px] bg-[#171717] px-8 text-[14px] leading-[17px] font-medium tracking-[-0.42px] text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {isSubmitting ? '생성 중...' : '다음'}
+              </button>
+            </div>
           </div>
         </div>
-
-        {/* 하단 — 에러 메시지 + 다음 버튼 (Figma는 버튼만 우하단에 둔다) */}
-        <div className="flex shrink-0 items-center justify-end gap-4 px-10 pb-10">
-          {submitError && (
-            <p className="flex-1 text-sm text-red-500">
-              {submitError instanceof Error ? submitError.message : '오류가 발생했습니다. 다시 시도해 주세요.'}
-            </p>
-          )}
-          <button
-            type="button"
-            onClick={handleSubmit}
-            disabled={!isValid || isSubmitting}
-            title={!isValid ? '필수 항목을 모두 입력해 주세요.' : undefined}
-            className="w-[148px] shrink-0 rounded-[6px] bg-[#171717] px-8 py-3.5 text-[14px] font-medium tracking-[-0.03em] text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {isSubmitting ? '생성 중...' : '다음'}
-          </button>
-        </div>
       </div>
+
+      {/* 인증 마크 업로드 모달 (Figma 1084:4119) */}
+      {certificationModalOpen && (
+        <CertificationUploadModal
+          initialFile={certificationFile}
+          onClose={closeCertificationModal}
+          onRegister={(file) => {
+            setCertificationFile(file);
+            closeCertificationModal();
+          }}
+        />
+      )}
 
       {/* 카테고리 선택 모달 (Figma 381:6293) */}
       {categoryModalOpen && (
