@@ -94,30 +94,42 @@ export function TooltipTail({ className }: { className: string }) {
   );
 }
 
-/**
- * Card/Action/Trash · Size=14 — 인증 마크 카드 삭제 버튼(1170:8460). 같은 glyph를 N5 toolbar(686:7996)가
- * 20px slot으로 쓰고 있어 그 path geometry를 그대로 14px로 그린다. 색은 버튼 글자색(currentColor)을 따른다.
- */
+/** Card/Action/Trash · Size=14 (53:1200) — 인증 마크 카드 삭제 버튼(1170:13142). 14px 전용 optical geometry, stroke white. */
 export function TrashGlyph14() {
   return (
-    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 20 20" fill="none" className="block shrink-0">
-      <path
-        d="M4.5 6H15.5M8 3.5H12M6 6L6.7 16H13.3L14 6M8.5 8.5V13.5M11.5 8.5V13.5"
-        stroke="currentColor"
-        strokeWidth="1.25"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
+    <span aria-hidden="true" data-testid="n1-trash-glyph" className="relative block size-[14px] shrink-0 overflow-hidden">
+      <span className="absolute inset-[17.5%_22.5%_20%_22.5%]">
+        <span className="absolute inset-[-4.29%_-4.87%]">
+          <img alt="" src="/n1/icons/trash-14.svg" className="block size-full max-w-none" />
+        </span>
+      </span>
+    </span>
   );
 }
 
-/** Card/Action/Plus · Size=16 — compact FileUploader(1170:8460)의 40×40 원형 icon. N1 좌측 compact uploader와 같은 geometry. */
+/** Card/Action/Plus · Size=16 (53:1132) — compact FileUploader(1170:8715)의 40×40 원형 icon. */
 export function PlusGlyph16() {
   return (
-    <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" className="block shrink-0">
-      <path d="M12 4V20M4 12H20" stroke="#171717" strokeWidth="1.5" strokeLinecap="round" />
-    </svg>
+    <span aria-hidden="true" className="relative block size-4 shrink-0 overflow-hidden">
+      <span className="absolute inset-[20%]">
+        <span className="absolute inset-[-6.51%]">
+          <img alt="" src="/n1/icons/plus-16.svg" className="block size-full max-w-none" />
+        </span>
+      </span>
+    </span>
+  );
+}
+
+/** Card/Action/Check · Size=16 (53:1166) — Checkbox/Compact Checked(1063:5146) 안의 orange check. */
+export function CheckGlyph16() {
+  return (
+    <span aria-hidden="true" className="relative block size-4 shrink-0 overflow-hidden">
+      <span className="absolute inset-[30%_22.5%]">
+        <span className="absolute inset-[-9.77%_-7.1%]">
+          <img alt="" src="/n1/icons/check-16.svg" className="block size-full max-w-none" />
+        </span>
+      </span>
+    </span>
   );
 }
 

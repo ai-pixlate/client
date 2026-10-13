@@ -75,6 +75,9 @@ test('N1에서 N5 검수 화면까지 기본 작업 흐름을 완료한다', asy
   // 표시된다. 업로드 성공 확인은 해당 파일의 썸네일 img(alt=파일명)로 한다.
   await expect(page.locator('img[alt="e2e-test.png"]')).toBeVisible();
 
+  // ── N1: 책임 한계 동의(PRD F-ACC-04 필수) ──────────────────
+  await page.getByRole('checkbox', { name: /결과물에 쓰는 인증·시험 결과/ }).check();
+
   // ── N1: 제출 ──────────────────────────────────────────────
   await page.getByRole('button', { name: '다음' }).click();
   await expect(page).toHaveURL(new RegExp(`/jobs/${MOCK_JOB_ID}$`));

@@ -14,6 +14,8 @@ const ORANGE = 'rgb(255, 106, 56)';
 
 type Box = { x: number; y: number; width: number; height: number };
 const box = async (locator: Locator): Promise<Box> => (await locator.boundingBox())!;
+/** optical glyph처럼 소수 px geometry는 layout 단위(1/64px) 반올림 오차 안에서 비교한다. */
+const expectNear = (actual: number, expected: number) => expect(Math.abs(actual - expected)).toBeLessThan(0.05);
 
 test.use({ viewport: { width: 1920, height: 1080 } });
 
@@ -99,15 +101,119 @@ test.describe('우측 입력 패널 — Figma 643:5942 위치·크기와 세로 
     expect(await box(panel)).toEqual({ x: 1344, y: 162, width: 516, height: 721 });
   });
 
-  test('section 간격 — 상품정보 field 16, 큰 section 60, 사이즈 라벨 → selector 20', async ({ page }) => {
+  test('section 간격 — 상품정보 field 16, 큰 section 52, 사이즈 라벨 → selector 4 (초기 scrollTop 0)', async ({ page }) => {
     const top = async (l: Locator) => (await box(l)).y;
-    // Figma: 상품명 라벨 y191, 상품코드 269, 카테고리 347(16 간격 + label 19 + 4 + input 39), 토글 547, 사이즈 라벨 649, selector 690
+    expect(await page.getByTestId('n1-field-panel').evaluate((el) => el.scrollTop)).toBe(0);
+    // Figma(1170:7876): 상품명 라벨 y191, 상품코드 269, 카테고리 347, 규제 분류 425 → select 끝 487,
+    // gap 52 → 토글 행 539(문구는 h28 행 안 py4 → 542.5, track 543), 사이즈 라벨 633, selector 658
     expect(await top(page.locator('p').filter({ hasText: /^상품명\*?$/ }))).toBe(191);
     expect(await top(page.getByText('상품코드', { exact: true }))).toBe(269);
     expect(await top(page.locator('p').filter({ hasText: /^카테고리\*?$/ }))).toBe(347);
-    expect(await top(page.getByText('이미지 안에 여러 내용이 이어져 있나요?'))).toBeGreaterThanOrEqual(547);
-    expect(await top(page.getByText('사이즈 선택', { exact: true }))).toBe(649);
-    expect(await top(page.getByTestId('n1-size-selector'))).toBe(690);
+    expect(await top(page.locator('p').filter({ hasText: /^규제 분류\*?$/ }))).toBe(425);
+    expect(await top(page.getByText('이미지 안에 여러 내용이 이어져 있나요?'))).toBe(542.5);
+    expect(await top(page.getByTestId('n1-image-continuity-switch'))).toBe(543);
+    expect(await top(page.getByText('사이즈 선택', { exact: true }))).toBe(633);
+    expect(await top(page.getByTestId('n1-size-selector'))).toBe(658);
+    // 카테고리 표시 필드 placeholder — Figma 문구 "검색하기"
+    await expect(page.getByText('검색하기', { exact: true })).toBeVisible();
+  });
+
+  test('이미지 연속 토글 — Toggle/Switch Off·Disabled(223:1172) track, 문구 → track gap 10', async ({ page }) => {
+    const sw = page.getByTestId('n1-image-continuity-switch');
+    await expect(sw).toHaveAttribute('aria-disabled', 'true');
+    await expect(sw).toHaveAttribute('aria-checked', 'false');
+    await expect(sw).toHaveCSS('background-color', 'rgb(243, 243, 243)');
+    await expect(sw).toHaveCSS('opacity', '1');
+    await expect(sw.locator('div')).toHaveCSS('background-color', 'rgb(209, 209, 209)');
+    const s = await box(sw);
+    expect([s.width, s.height]).toEqual([36, 20]);
+    const q = await box(page.getByText('이미지 안에 여러 내용이 이어져 있나요?'));
+    expect(s.x - (q.x + q.width)).toBe(10);
+  });
+});
+
+test.describe('1920×1080 초기 화면 geometry — Figma 525:3023', () => {
+  test('진행 rail · uploader · 책임 동의 · action', async ({ page }) => {
+    // 진행단계(608:1440) (36,150) 44×860
+    expect(await box(page.getByRole('navigation', { name: '작업 진행 단계' }))).toEqual({ x: 36, y: 150, width: 44, height: 860 });
+
+    // FileUploader(536:4281) (140,162) 1184×838 — 72 원형 icon(Plus 24) · gap 20 · 문구 · gap 20 · 파일 선택 45 · gap 20 · helper
+    const drop = page.getByTestId('n1-image-dropzone');
+    expect(await box(drop)).toEqual({ x: 140, y: 162, width: 1184, height: 838 });
+    const circle = await box(drop.locator('.rounded-full').first());
+    expect([circle.y, circle.width, circle.height]).toEqual([462.5, 72, 72]);
+    const plus = await box(drop.locator('img[src="/n1/icons/plus-24.svg"]'));
+    expectNear(plus.width, 16.15);
+    expectNear(plus.height, 16.15);
+    const title = await box(drop.getByText('파일을 이곳에 놓아주세요.'));
+    expect(title.y - (circle.y + circle.height)).toBe(20);
+    const pick = await box(drop.locator('label[for="image-upload"]'));
+    expect(pick.height).toBe(45);
+    const helper = drop.getByText('여러 파일을 한 번에 업로드할 수 있습니다.', { exact: true });
+    await expect(helper).toHaveCSS('color', 'rgb(153, 153, 153)');
+    expect((await box(helper)).y - (pick.y + pick.height)).toBe(20);
+
+    // 책임 동의(1170:6002) (1344,913) 480×28 — 패널 아래 30, action 위 24
+    const consent = await box(page.getByTestId('n1-consent'));
+    expect([consent.x, consent.y, consent.height]).toEqual([1344, 913, 28]);
+    expect(Math.abs(consent.width - 480)).toBeLessThanOrEqual(1);
+    expect((await box(page.getByRole('button', { name: '다음' }))).y - (consent.y + consent.height)).toBe(24);
+  });
+});
+
+test.describe('책임 한계 동의 — Figma 1170:6002, PRD F-ACC-04 필수', () => {
+  const LINE_1 = '결과물에 쓰는 인증·시험 결과, 광고 문구, 인증 로고의 사용 권한과 그 책임이 사용자에게 있으며,';
+  const LINE_2 = '규제·현지 검사 결과는 참고용 권고이며, 올린 이미지와 문구가 외부 AI 서비스로 전송됨을 확인했습니다.';
+
+  test('정확한 두 줄 문구, 초기 미동의, Checkbox/Compact Unchecked·Checked 표현', async ({ page }) => {
+    const consent = page.getByTestId('n1-consent');
+    const checkbox = page.getByRole('checkbox', { name: `${LINE_1} ${LINE_2}` });
+    await expect(checkbox).toBeVisible();
+    await expect(consent.getByText(LINE_1, { exact: true })).toBeVisible();
+    await expect(consent.getByText(LINE_2, { exact: true })).toBeVisible();
+    const l1 = await box(consent.getByText(LINE_1, { exact: true }));
+    const l2 = await box(consent.getByText(LINE_2, { exact: true }));
+    expect(l2.y - l1.y).toBe(14);
+    await expect(consent.getByText(LINE_1, { exact: true })).toHaveCSS('font-size', '12px');
+    await expect(consent.getByText(LINE_1, { exact: true })).toHaveCSS('font-weight', '300');
+    await expect(consent.getByText(LINE_1, { exact: true })).toHaveCSS('color', 'rgb(112, 112, 112)');
+
+    await expect(checkbox).not.toBeChecked();
+    const visual = checkbox.locator('xpath=following-sibling::span[1]');
+    expect([(await box(visual)).width, (await box(visual)).height]).toEqual([18, 18]);
+    await expect(visual).toHaveCSS('border-top-color', 'rgb(234, 234, 234)');
+    await expect(visual).toHaveCSS('border-top-left-radius', '4px');
+    await expect(visual.locator('img')).toHaveCount(0);
+
+    // 문구를 눌러도 토글 — 체크되면 orange border + Check 16
+    await consent.getByText(LINE_2, { exact: true }).click();
+    await expect(checkbox).toBeChecked();
+    await expect(visual).toHaveCSS('border-top-color', ORANGE);
+    await expect(visual.locator('img')).toHaveAttribute('src', '/n1/icons/check-16.svg');
+    await page.keyboard.press('Space');
+    await expect(checkbox).not.toBeChecked();
+  });
+
+  test('미동의면 다른 필수값을 모두 채워도 다음 비활성, 동의하면 활성, 동의 해제 시 다시 비활성', async ({ page }) => {
+    const next = page.getByRole('button', { name: '다음' });
+    const checkbox = page.getByTestId('n1-consent-checkbox');
+    await expect(next).toBeDisabled();
+
+    // 동의만으로는 활성되지 않는다 — 다른 필수값 validation 유지
+    await checkbox.check();
+    await expect(next).toBeDisabled();
+    await checkbox.uncheck();
+
+    await page.getByPlaceholder('상품 이름을 입력해주세요').fill('동의 확인');
+    await fillRequiredExceptCategory(page, { consent: false });
+    await pickCategory(page);
+    await expect(next).toBeDisabled();
+
+    await checkbox.check();
+    await expect(next).toBeEnabled();
+
+    await checkbox.uncheck();
+    await expect(next).toBeDisabled();
   });
 });
 
@@ -118,9 +224,16 @@ test.describe('SizeSelector — 「사이즈 변경」 잠금(계약 전까지 �
     const original = page.getByTestId('n1-size-tab-original');
     const resize = page.getByTestId('n1-size-tab-resize');
 
-    // 원본유지(472×32) — 탭만
+    // 원본유지(1093:10279) — 탭(32) + gap 8 + 설명(14)
+    const ORIGINAL_DESCRIPTION = '원본 크기와 배치를 유지하고 글자만 번역해요. 규격을 바꿀 필요가 없을 때 선택하세요.';
     await expect(selector(page)).toHaveAttribute('data-variant', 'original');
-    expect((await box(selector(page))).height).toBe(32);
+    expect((await box(selector(page))).height).toBe(54);
+    const description = page.getByTestId('n1-size-description');
+    await expect(description).toHaveText(ORIGINAL_DESCRIPTION);
+    await expect(description).toHaveCSS('font-size', '12px');
+    await expect(description).toHaveCSS('font-weight', '300');
+    await expect(description).toHaveCSS('color', 'rgb(112, 112, 112)');
+    expect((await box(description)).y - ((await box(original)).y + 32)).toBe(8);
     await expect(original).toHaveAttribute('aria-selected', 'true');
     await expect(original).toHaveCSS('color', 'rgb(23, 23, 23)');
     const underline = page.getByTestId('n1-size-tab-original-underline');
@@ -153,7 +266,8 @@ test.describe('SizeSelector — 「사이즈 변경」 잠금(계약 전까지 �
     await page.keyboard.press('Tab');
     await expect(resize).not.toBeFocused();
     await expect(page.getByPlaceholder('키워드를 입력해주세요.')).toBeFocused();
-    expect((await box(selector(page))).height).toBe(32);
+    expect((await box(selector(page))).height).toBe(54);
+    await expect(page.getByTestId('n1-size-description')).toHaveText(ORIGINAL_DESCRIPTION);
   });
 
   test('제출 spec은 여전히 spec_original', async ({ page }) => {
@@ -171,7 +285,7 @@ test.describe('SizeSelector — 「사이즈 변경」 잠금(계약 전까지 �
 });
 
 test.describe('인증 마크 업로드 버튼·tooltip — 원본 유지에서는 disabled, 같은 두 줄 tooltip', () => {
-  const LINES = ['사이즈 변경을 고르면 인증 마크를 올릴 수 있어요.', '인증 및 시험 정보의 적용 가능 여부는 사용자가 최종 확인해야 합니다.'];
+  const LINES = ['- 사이즈 변경을 고르면 인증 마크를 올릴 수 있어요.', '- 인증 및 시험 정보의 적용 가능 여부는 사용자가 최종 확인해야 합니다.'];
 
   const expectTooltipText = async (tooltip: Locator) => {
     await expect(tooltip.locator('p')).toHaveText(LINES);
@@ -203,8 +317,17 @@ test.describe('인증 마크 업로드 버튼·tooltip — 원본 유지에서�
     await page.getByTestId('n1-certification-info').hover({ force: true });
     await expect(tooltip).toBeVisible();
     await expectTooltipText(tooltip);
+    // Tooltip(1090:10048) (1568,891) 193×82 — 버튼 기준 오른쪽 끝 +57, 아래 끝은 버튼 위 끝 +8. 두 문구 모두 2행(28).
     const t = await box(tooltip);
     expect([t.width, t.height]).toEqual([193, 82]);
+    expect(t.x + t.width - (b.x + b.width)).toBe(57);
+    expect(t.y + t.height - b.y).toBe(8);
+    for (const height of await tooltip.locator('p').evaluateAll((ps) => ps.map((p) => p.getBoundingClientRect().height))) {
+      expect(height).toBe(28);
+    }
+    // 꼬리 Group 11 — tooltip 안 (96,81)(border 포함 좌표)에서 bleed만큼 바깥
+    const tail = await box(tooltip.locator('img[src="/n1/icons/tooltip-tail.svg"]'));
+    expect([Math.round((tail.x - t.x) * 10) / 10, tail.y - t.y]).toEqual([95.5, 81]);
     await page.mouse.move(10, 10);
 
     // 클릭해도 모달이 열리지 않는다
@@ -221,6 +344,8 @@ test.describe('인증 마크 업로드 버튼·tooltip — 원본 유지에서�
 
     await page.getByPlaceholder('키워드를 입력해주세요.').focus();
     await page.keyboard.press('Tab'); // 추가
+    await page.keyboard.press('Tab'); // 책임 동의 checkbox
+    await expect(page.getByTestId('n1-consent-checkbox')).toBeFocused();
     await page.keyboard.press('Tab'); // 인증 trigger(disabled 버튼 대신 wrapper가 포커스를 받는다)
     await expect(trigger).toBeFocused();
     await expect(tooltip).toBeVisible();
@@ -289,6 +414,11 @@ test.describe('인증 마크 업로드 모달 — Figma 1170:8460 복수 업로�
     const circle = dropzone.locator('span.rounded-full');
     const cb = await box(circle);
     expect([cb.x - drop.x, cb.width, cb.height]).toEqual([1 + 24, 40, 40]);
+    // Card/Action/Plus Size=16 optical glyph — 16 박스(원 안 가운데) 안 inset 20% − bleed 6.51% → 10.85×10.85
+    const plus = await box(circle.locator('img[src="/n1/icons/plus-16.svg"]'));
+    expectNear(plus.width, 10.85);
+    expectNear(plus.height, 10.85);
+    expectNear(plus.x - cb.x, 12 + 2.575);
     const dropTitle = dialog.getByText('파일을 이곳에 놓아주세요.');
     const dt = await box(dropTitle);
     expect(dt.x - (cb.x + cb.width)).toBe(12);
@@ -303,6 +433,15 @@ test.describe('인증 마크 업로드 모달 — Figma 1170:8460 복수 업로�
     const listSection = dialog.getByRole('region', { name: '등록된 인증 마크' });
     const ls = await box(listSection);
     expect([ls.x - m.x, ls.y - m.y, ls.width, ls.height]).toEqual([40, 263, 640, 193]);
+    // 제목(1170:13156) 18 Medium −0.54, 제목 → 목록 gap 12(카드는 영역 위에서 33)
+    const listTitle = listSection.getByRole('heading', { name: '등록된 인증 마크' });
+    await expect(listTitle).toHaveCSS('font-size', '18px');
+    await expect(listTitle).toHaveCSS('font-weight', '500');
+    await expect(listTitle).toHaveCSS('letter-spacing', '-0.54px');
+    expect((await box(page.getByTestId('n1-certification-list'))).y - ls.y).toBe(33);
+    // Footer(1170:8500) — 취소 · 완료
+    await expect(page.getByTestId('n1-certification-cancel')).toHaveText('취소');
+    await expect(page.getByTestId('n1-certification-register')).toHaveText('완료');
     await expect(dialog.getByText('업로드 전에 확인해 주세요')).toBeVisible();
     for (const line of [
       '사용 권한이 있는 인증 마크만 올려 주세요.',
@@ -386,7 +525,8 @@ test.describe('인증 마크 업로드 모달 — Figma 1170:8460 복수 업로�
     await input.setInputFiles({ name: 'mark.webp', mimeType: 'image/webp', buffer: Buffer.from('RIFF') });
     await expect(names).toHaveCount(5);
 
-    // 파일 카드 — 310×80, border #EAEAEA, radius 8, 썸네일 60×60, 파일명 12 Light #707070, 검정 삭제 버튼
+    // 파일 카드(1170:13142) — 310×80, border #EAEAEA, radius 8, 썸네일 60×60(bg #F5F5F5, radius 0),
+    // 파일명 12 Light #707070, 검정 삭제 버튼
     const item = page.getByTestId('n1-certification-item').first();
     const ib = await box(item);
     expect([ib.width, ib.height]).toEqual([310, 80]);
@@ -394,11 +534,13 @@ test.describe('인증 마크 업로드 모달 — Figma 1170:8460 복수 업로�
     await expect(item).toHaveCSS('border-top-left-radius', '8px');
     await expect(item).toHaveCSS('padding-left', '12px');
     await expect(item).toHaveCSS('padding-right', '12px');
-    const thumb = item.locator('img');
+    const thumb = item.getByTestId('n1-certification-thumbnail');
     const tb = await box(thumb);
     expect([tb.x - ib.x, tb.width, tb.height]).toEqual([13, 60, 60]); // border 1 + padding 12
     expect((await box(names.first())).x - (tb.x + tb.width)).toBe(12);
     await expect(thumb).toHaveAttribute('src', /^blob:/);
+    await expect(thumb).toHaveCSS('background-color', 'rgb(245, 245, 245)');
+    await expect(thumb).toHaveCSS('border-top-left-radius', '0px');
     await expect(names.first()).toHaveCSS('font-size', '12px');
     await expect(names.first()).toHaveCSS('font-weight', '300');
     await expect(names.first()).toHaveCSS('color', 'rgb(112, 112, 112)');
@@ -414,11 +556,21 @@ test.describe('인증 마크 업로드 모달 — Figma 1170:8460 복수 업로�
     ]) {
       await expect(remove).toHaveCSS(prop, value);
     }
-    await expect(remove.locator('span')).toHaveCSS('font-size', '12px');
-    await expect(remove.locator('span')).toHaveCSS('font-weight', '400');
-    const icon = await box(remove.locator('svg'));
+    const removeLabel = remove.getByText('삭제', { exact: true });
+    await expect(removeLabel).toHaveCSS('font-size', '12px');
+    await expect(removeLabel).toHaveCSS('font-weight', '400');
+    // Card/Action/Trash Size=14(53:1200) — 14 전용 optical geometry. Group inset 17.5% 22.5% 20% 22.5%,
+    // bleed −4.29% −4.87% → 8.45×9.5 SVG가 14 박스의 (2.775, 2.075)에 놓인다(20px path 축소가 아님).
+    const glyph = remove.getByTestId('n1-trash-glyph');
+    const icon = await box(glyph);
     expect([icon.width, icon.height]).toEqual([14, 14]);
-    expect((await box(remove.locator('span'))).x - (icon.x + icon.width)).toBe(4);
+    const trash = remove.locator('img[src="/n1/icons/trash-14.svg"]');
+    const tr = await box(trash);
+    expectNear(tr.width, 8.45);
+    expectNear(tr.height, 9.5);
+    expectNear(tr.x - icon.x, 2.775);
+    expectNear(tr.y - icon.y, 2.075);
+    expect((await box(removeLabel)).x - (icon.x + icon.width)).toBe(4);
 
     // 목록이 많아도 영역(193) 안에서만 스크롤 — 모달 높이는 그대로
     const list = page.getByTestId('n1-certification-list');
@@ -435,7 +587,7 @@ test.describe('인증 마크 업로드 모달 — Figma 1170:8460 복수 업로�
     await expect(names).toHaveText(['mark-b.png', 'mark-d.jpeg', 'mark-e.png']);
   });
 
-  test('등록하기 → 완료 상태, 취소·닫기·Escape는 등록 목록을 지우지 않고 다시 열면 전체 목록 유지', async ({ page }) => {
+  test('모달 완료 → 완료 상태, 취소·닫기·Escape는 등록 목록을 지우지 않고 다시 열면 전체 목록 유지', async ({ page }) => {
     const button = page.getByTestId('n1-certification-button');
     const names = page.getByTestId('n1-certification-file-name');
     const input = page.getByTestId('n1-certification-input');
@@ -496,7 +648,7 @@ test.describe('인증 마크 업로드 모달 — Figma 1170:8460 복수 업로�
     await expect(button).toHaveAttribute('data-state', 'registered');
     await expect(button).toBeFocused();
 
-    // 추가 후 등록하기 → 세 개 모두 유지
+    // 추가 후 완료 → 세 개 모두 유지
     await openCertificationModalAsUnlocked(page);
     await input.setInputFiles(jpgFile('mark-c.jpeg'));
     await page.getByTestId('n1-certification-register').click();
@@ -533,12 +685,13 @@ test.describe('카테고리 필수 — PRD F-SRC-04 ① 미선택 시 진행 불
   });
 });
 
-/** 상품명·카테고리를 뺀 필수값 — 국가·언어·규제 분류·이미지 1장. */
-async function fillRequiredExceptCategory(page: Page) {
+/** 상품명·카테고리를 뺀 필수값 — 국가·언어·규제 분류·이미지 1장·책임 동의(consent: false면 동의는 건너뛴다). */
+async function fillRequiredExceptCategory(page: Page, { consent = true }: { consent?: boolean } = {}) {
   await page.locator('select').nth(0).selectOption('US');
   await page.locator('select').nth(1).selectOption('en');
   await page.locator('select').nth(2).selectOption('cosmetics');
   await page.locator('#image-upload').setInputFiles(pngFile('source.png'));
+  if (consent) await page.getByTestId('n1-consent-checkbox').check();
 }
 
 async function pickCategory(page: Page) {

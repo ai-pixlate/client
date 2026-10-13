@@ -39,6 +39,7 @@ async function reachN4(page: Page): Promise<void> {
     mimeType: 'image/png',
     buffer: Buffer.from(TINY_PNG_BASE64, 'base64'),
   });
+  await page.getByRole('checkbox', { name: /결과물에 쓰는 인증·시험 결과/ }).check(); // 책임 한계 동의(F-ACC-04)
   await page.getByRole('button', { name: '다음' }).click();
   await page.waitForURL(new RegExp(`/jobs/${MOCK_JOB_ID}$`));
   await page.getByRole('button', { name: '번역 시작' }).waitFor({ state: 'visible', timeout: 10_000 });

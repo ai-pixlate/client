@@ -50,6 +50,7 @@ export async function reachN5(page: Page): Promise<void> {
   // 표시된다. 업로드 성공 확인은 해당 파일의 썸네일 img(alt=파일명)로 한다.
   await expect(page.locator('img[alt="e2e-test.png"]')).toBeVisible();
 
+  await page.getByRole('checkbox', { name: /결과물에 쓰는 인증·시험 결과/ }).check(); // 책임 한계 동의(F-ACC-04)
   await page.getByRole('button', { name: '다음' }).click();
   await expect(page).toHaveURL(new RegExp(`/jobs/${MOCK_JOB_ID}$`));
 

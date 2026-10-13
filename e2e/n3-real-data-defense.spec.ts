@@ -107,6 +107,7 @@ async function reachN3(page: Page): Promise<void> {
   });
   await expect(page.locator('img[alt="e2e-test.png"]')).toBeVisible();
 
+  await page.getByRole('checkbox', { name: /결과물에 쓰는 인증·시험 결과/ }).check(); // 책임 한계 동의(F-ACC-04)
   await page.getByRole('button', { name: '다음' }).click();
   await expect(page).toHaveURL(new RegExp(`/jobs/${MOCK_JOB_ID}$`));
 

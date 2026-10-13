@@ -1,9 +1,10 @@
 import { ChevronDownGlyph14, RadioGlyph18 } from './n1-glyphs';
 
 // N1 사이즈 선택 — Figma component set "사이즈선택"(1093:10288)의 3 variant를 하나의 상태로 그린다.
-//   Property 1=원본유지   (1093:10279) 472×32  — Tabs만
-//   Property 1=커스텀     (1093:10290) 472×140 — Tabs / Radio(커스텀) / W·H Number Input(48)
-//   Property 1=판매처 맞춤 (1093:10289) 472×189 — Tabs / Radio(판매처 맞춤) / 판매처 Select + helper / Tag
+// 모든 variant는 Tabs 아래 gap 8로 탭별 설명(12 Light #707070, 가운데 정렬)이 붙는다.
+//   Property 1=원본유지   (1093:10279) — Tabs + 설명
+//   Property 1=커스텀     (1093:10290) — Tabs + 설명 / Radio(판매처 맞춤 · 커스텀) / W·H Number Input(48)
+//   Property 1=판매처 맞춤 (1093:10289) — Tabs + 설명 / Radio(판매처 맞춤 · 커스텀) / 판매처 Select + helper / Tag
 // 선택된 variant만 렌더한다(숨긴 UI가 높이를 차지하지 않는다). 커스텀 값과 판매처 값은 별도 필드라
 // 서로 덮어쓰지 않고, 탭·radio를 오가도 각자 유지된다.
 //
@@ -43,6 +44,12 @@ const CHANNEL_PRESETS = [
   },
 ] as const;
 
+/** 탭 아래 설명(1162:5337 · 1170:5994) — Figma 문구 그대로. */
+const SIZE_TAB_DESCRIPTION: Record<SizeTab, string> = {
+  original: '원본 크기와 배치를 유지하고 글자만 번역해요. 규격을 바꿀 필요가 없을 때 선택하세요.',
+  resize: '사이트 규격에 맞게 이미지를 다시 구성해요. 크기와 배치가 원본과 달라져요.',
+};
+
 export const INITIAL_SIZE_SELECTION: SizeSelection = {
   // 현재 제출 계약(original 고정)과 같은 "원본 유지"에서 시작한다.
   tab: 'original',
@@ -69,24 +76,34 @@ export function SizeSelector({
 
   return (
     <div data-testid="n1-size-selector" data-variant={value.tab === 'original' ? 'original' : value.resizeMode} className="flex w-full flex-col gap-4 bg-white">
-      <div role="tablist" aria-label="사이즈 선택" className="flex w-full items-center">
-        <SizeTabButton label="원본 유지" selected={value.tab === 'original'} onSelect={() => set({ tab: 'original' })} testId="n1-size-tab-original" />
-        <SizeTabButton
-          label="사이즈 변경"
-          selected={value.tab === 'resize'}
-          disabled={resizeLocked}
-          onSelect={() => {
-            if (!resizeLocked) set({ tab: 'resize' });
-          }}
-          testId="n1-size-tab-resize"
-        />
+      <div className="flex w-full flex-col items-center gap-2">
+        <div role="tablist" aria-label="사이즈 선택" className="flex w-full items-center">
+          <SizeTabButton label="원본 유지" selected={value.tab === 'original'} onSelect={() => set({ tab: 'original' })} testId="n1-size-tab-original" />
+          <SizeTabButton
+            label="사이즈 변경"
+            selected={value.tab === 'resize'}
+            disabled={resizeLocked}
+            onSelect={() => {
+              if (!resizeLocked) set({ tab: 'resize' });
+            }}
+            testId="n1-size-tab-resize"
+          />
+        </div>
+        <p data-testid="n1-size-description" className="text-center text-[12px] leading-[14px] font-light tracking-[-0.48px] whitespace-nowrap text-[#707070]">
+          {SIZE_TAB_DESCRIPTION[value.tab]}
+        </p>
       </div>
 
       {value.tab === 'resize' && (
-        <div className="flex w-full flex-col gap-4">
-          <div role="radiogroup" aria-label="사이즈 변경 방식" className="flex items-center px-2">
-            <SizeRadio label="커스텀" name="n1-resize-mode" checked={value.resizeMode === 'custom'} onSelect={() => set({ resizeMode: 'custom' })} testId="n1-resize-custom" />
-            <SizeRadio label="판매처 맞춤" name="n1-resize-mode" checked={value.resizeMode === 'channel'} onSelect={() => set({ resizeMode: 'channel' })} testId="n1-resize-channel" />
+        <div className="flex w-full flex-col gap-3">
+          {/* Radio 행(1170:7058) — 판매처 맞춤 · 커스텀 순서, 각 radio가 절반 폭을 차지한다. */}
+          <div role="radiogroup" aria-label="사이즈 변경 방식" className="flex w-full items-start">
+            <div className="flex min-w-0 flex-1 items-center">
+              <SizeRadio label="판매처 맞춤" name="n1-resize-mode" checked={value.resizeMode === 'channel'} onSelect={() => set({ resizeMode: 'channel' })} testId="n1-resize-channel" />
+            </div>
+            <div className="flex min-w-0 flex-1 items-center">
+              <SizeRadio label="커스텀" name="n1-resize-mode" checked={value.resizeMode === 'custom'} onSelect={() => set({ resizeMode: 'custom' })} testId="n1-resize-custom" />
+            </div>
           </div>
 
           {value.resizeMode === 'custom' ? (

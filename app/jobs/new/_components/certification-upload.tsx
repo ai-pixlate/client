@@ -31,10 +31,10 @@ const toMark = (file: File): CertificationMark => {
   return { id: `cert_${markSeq}`, file };
 };
 
-/** PRD F-SRC-08 tooltip — 버튼 상태(활성/비활성)와 관계없이 같은 두 줄. */
+/** PRD F-SRC-08 tooltip(1090:10048) — 버튼 상태(활성/비활성)와 관계없이 같은 두 줄. "- " 머리표까지 Figma 문구 그대로. */
 export const CERTIFICATION_TOOLTIP_LINES = [
-  '사이즈 변경을 고르면 인증 마크를 올릴 수 있어요.',
-  '인증 및 시험 정보의 적용 가능 여부는 사용자가 최종 확인해야 합니다.',
+  '- 사이즈 변경을 고르면 인증 마크를 올릴 수 있어요.',
+  '- 인증 및 시험 정보의 적용 가능 여부는 사용자가 최종 확인해야 합니다.',
 ] as const;
 
 /**
@@ -118,21 +118,22 @@ export function CertificationUploadButton({
         </span>
       </button>
 
-      {/* Tooltip(525:3023) 193×82 — border 1 + padding 10 + 두 줄 문구(각 2행, 12/14) + 줄 간 4. 버튼 위, 꼬리가
-          Info 중심(버튼 오른쪽 끝에서 24 + 10)을 가리킨다. */}
+      {/* Tooltip(1090:10048) (1568,891) 193×82 — border 1 + padding 10 + 두 줄 문구(각 2행, 12/14) + 줄 간 4.
+          버튼(1509,965) 기준: 오른쪽 끝이 버튼 오른쪽 끝에서 57 바깥, 아래 끝이 버튼 위 끝보다 8 아래(버튼과 겹친다).
+          꼬리 Group 11은 tooltip 안 (95,80) — Info 중심을 가리킨다. 한글은 어절 단위로 줄바꿈(Figma 줄바꿈과 같게). */}
       <div
         id="n1-certification-tooltip"
         role="tooltip"
         hidden={!showTooltip}
         data-testid="n1-certification-tooltip"
-        className="absolute -right-[62px] bottom-full z-30 w-[193px] rounded-[8px] border border-[#ff6a38] bg-white p-[10px]"
+        className="absolute -right-[57px] bottom-[calc(100%-8px)] z-30 w-[193px] rounded-[8px] border border-[#ff6a38] bg-white p-[10px]"
       >
-        <div className="flex flex-col gap-1 text-[12px] leading-[14px] font-light tracking-[-0.48px] text-[#ff6a38]">
+        <div className="flex flex-col gap-1 text-[12px] leading-[14px] font-light tracking-[-0.48px] break-keep text-[#ff6a38]">
           {CERTIFICATION_TOOLTIP_LINES.map((line) => (
             <p key={line}>{line}</p>
           ))}
         </div>
-        <TooltipTail className="absolute top-full left-1/2 -translate-x-1/2 -translate-y-[2px]" />
+        <TooltipTail className="absolute top-[80px] left-[95px]" />
       </div>
     </div>
   );
@@ -146,7 +147,7 @@ const FOCUSABLE_SELECTOR = 'button:not([disabled]), input:not([disabled]), [href
  * Dim rgba(23,23,23,0.4). 닫기: 우상단 32×32(Close 16) · 취소 · Escape. backdrop 클릭 닫기는 두지 않는다.
  *
  * 복수 등록(PRD F-SRC-08): 새로 고른 파일은 목록 뒤에 붙고(교체 아님), 카드마다 개별 삭제한다. 모달 안의
- * 편집은 등록하기를 눌러야 반영되고, 취소·닫기·Escape는 편집만 버린다 — 이미 등록한 목록은 그대로다.
+ * 편집은 완료를 눌러야 반영되고, 취소·닫기·Escape는 편집만 버린다 — 이미 등록한 목록은 그대로다.
  */
 export function CertificationUploadModal({
   initialMarks,
@@ -212,7 +213,7 @@ export function CertificationUploadModal({
     dialogRef.current?.focus();
   };
 
-  // 목록을 모두 지운 경우에도 등록하기로 "등록 해제"를 반영할 수 있어야 한다 — 둘 다 비었을 때만 막는다.
+  // 목록을 모두 지운 경우에도 완료로 "등록 해제"를 반영할 수 있어야 한다 — 둘 다 비었을 때만 막는다.
   const canRegister = pendingMarks.length > 0 || initialMarks.length > 0;
 
   return (
@@ -287,9 +288,10 @@ export function CertificationUploadModal({
           />
         </div>
 
-        {/* 등록된 인증 마크 — 영역 높이는 고정(193)이고 목록이 많아지면 이 안에서만 세로 스크롤한다. */}
-        <section aria-labelledby="n1-certification-list-title" className="flex h-[193px] w-full flex-col gap-[6px]">
-          <h3 id="n1-certification-list-title" className="text-[16px] leading-[19px] font-medium tracking-[-0.48px] text-[#171717]">
+        {/* 등록된 인증 마크(1170:13157) — 제목 18 Medium, 제목 → 목록 gap 12. 영역 높이는 고정(193)이고 목록이
+            많아지면 이 안에서만 세로 스크롤한다. */}
+        <section aria-labelledby="n1-certification-list-title" className="flex h-[193px] w-full flex-col gap-3">
+          <h3 id="n1-certification-list-title" className="text-[18px] leading-[21px] font-medium tracking-[-0.54px] text-[#171717]">
             등록된 인증 마크
           </h3>
           <ul data-testid="n1-certification-list" className="n3-scroll-hidden grid min-h-0 flex-1 auto-rows-[80px] grid-cols-2 content-start gap-x-5 gap-y-2 overflow-y-auto">
@@ -343,7 +345,7 @@ export function CertificationUploadModal({
             data-testid="n1-certification-register"
             className="flex h-full min-w-0 flex-1 items-center justify-center rounded-[6px] bg-[#171717] px-8 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            <span className="px-3 text-[14px] leading-[17px] font-medium tracking-[-0.42px] whitespace-nowrap text-white">등록하기</span>
+            <span className="px-3 text-[14px] leading-[17px] font-medium tracking-[-0.42px] whitespace-nowrap text-white">완료</span>
           </button>
         </div>
 
@@ -362,7 +364,7 @@ export function CertificationUploadModal({
 }
 
 /**
- * 파일 카드 썸네일 60×60 — 로컬 File을 blob URL로 미리 본다. URL은 이 img가 붙어 있는 동안만 살리고
+ * 파일 카드 썸네일 60×60(1170:13130) — bg #F5F5F5, radius 없음. 로컬 File을 blob URL로 미리 본다. URL은 이 img가 붙어 있는 동안만 살리고
  * 떨어질 때 revoke한다(React 19 ref cleanup).
  */
 function MarkThumbnail({ file }: { file: File }) {
@@ -376,5 +378,5 @@ function MarkThumbnail({ file }: { file: File }) {
     [file],
   );
   // eslint-disable-next-line @next/next/no-img-element -- 로컬 blob: objectURL이라 next/image 최적화 대상이 아니다
-  return <img ref={attachPreview} alt="" className="size-[60px] shrink-0 rounded-[4px] object-contain" />;
+  return <img ref={attachPreview} alt="" data-testid="n1-certification-thumbnail" className="size-[60px] shrink-0 bg-[#f5f5f5] object-contain" />;
 }

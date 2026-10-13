@@ -8,7 +8,7 @@ import type { ImageType } from '@/lib/api/types';
 import { StepNav } from '../[jobId]/_components/step-nav';
 
 import { CertificationUploadButton, CertificationUploadModal, type CertificationMark } from './_components/certification-upload';
-import { ChevronDownGlyph14, SearchGlyph14 } from './_components/n1-glyphs';
+import { CheckGlyph16, ChevronDownGlyph14, PlusGlyph16, PlusGlyph24, SearchGlyph14 } from './_components/n1-glyphs';
 import { INITIAL_SIZE_SELECTION, SizeSelector, type SizeSelection } from './_components/size-selector';
 
 // ─────────────────────────────────────────────────────────────────
@@ -148,24 +148,9 @@ interface LocalImage {
 
 // ─────────────────────────────────────────────────────────────────
 // 공용 아이콘 — Figma glyph는 7일 만료 원격 asset이라 커밋 코드에 하드링크하지
-// 않는다(N5 X 아이콘과 같은 방식). 최소한의 inline SVG만 쓴다.
+// 않는다(N5 X 아이콘과 같은 방식). Figma optical glyph가 있는 자리는
+// _components/n1-glyphs(로컬 저장 SVG)를 쓰고, 여기엔 그 외 최소 inline SVG만 둔다.
 // ─────────────────────────────────────────────────────────────────
-
-function ChevronDownIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-      <path d="M3.5 5.5L7 9L10.5 5.5" stroke="#707070" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function PlusIcon({ size = 24 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d="M12 4V20M4 12H20" stroke="#171717" strokeWidth="1.5" strokeLinecap="round" />
-    </svg>
-  );
-}
 
 // Figma(929:7386 "Icon Button" Circle/XXS/Secondary) 실측: Glyph는 12px
 // 아이콘 박스 안에서 inset-1/4(사방 25%=3px)만큼 들여 그려진다 — 즉 실제
@@ -403,6 +388,11 @@ function NewJobPageInner() {
 
   const [isDragOver, setIsDragOver] = useState(false);
 
+  // ── 책임 한계 동의 (Figma 1170:6002, PRD F-ACC-04 필수) ─────────────
+  // 초기 미동의. 동의 기록 계약(POST /consents → consentId를 job에 연결)은 API v3.4.2에 있지만 FE client·mock이
+  // 아직 없어 이 값은 화면 validation에만 쓴다 — 서버 기록·consentId 연결은 별도 작업(가짜 consentId를 만들지 않는다).
+  const [consentAgreed, setConsentAgreed] = useState(false);
+
   // ── 나가기 확인 ─────────────────────────────────────────────────
   const [showExitConfirm, setShowExitConfirm] = useState(false);
 
@@ -526,7 +516,7 @@ function NewJobPageInner() {
   // keywords는 전부 optional). N1 폼은 productName/targetCountry/
   // targetLanguage/regulatoryClass/displayCategory(카테고리)/이미지 1장 이상을
   // 화면 자체 필수값으로 쓴다 — 카테고리는 PRD F-SRC-04(① 미선택 시 진행 불가)
-  // 기준 필수다. productCode/keywords는 선택값이다.
+  // 기준 필수다. productCode/keywords는 선택값이다. 책임 한계 동의도 PRD F-ACC-04 기준 필수다.
   const isValid =
     !!brandId &&
     !!productName &&
@@ -534,7 +524,8 @@ function NewJobPageInner() {
     !!targetLanguage &&
     !!displayCategory &&
     !!regulatoryClass &&
-    images.length > 0;
+    images.length > 0 &&
+    consentAgreed;
 
   // ── 제출 ────────────────────────────────────────────────────────
   //
@@ -604,7 +595,8 @@ function NewJobPageInner() {
           "항상 지켜야 할 최소 상단 여백"으로 고정하고, 그 아래 남는 공간을
           모두 StepNav에 준다 — 뷰포트가 얼마나 짧아지든 1번 step은 X
           버튼보다 항상 아래에서 시작한다(공식이 아니라 고정 오프셋 + 남는
-          공간 채우기라 음수가 될 수 없다). */}
+          공간 채우기라 음수가 될 수 없다). 고정 오프셋 값은 Figma 그대로
+          위 150 · 아래 70(1080 − 1010)이라 1920×1080에서 StepNav는 y150~1010. */}
       <div className="relative ml-9 h-full w-[44px] shrink-0">
         <button
           type="button"
@@ -619,7 +611,7 @@ function NewJobPageInner() {
             <path d="M4 4L12 12M12 4L4 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
           </svg>
         </button>
-        <div className="absolute inset-0 pt-[100px] pb-6">
+        <div data-testid="n1-step-rail" className="absolute inset-0 pt-[150px] pb-[70px]">
           <StepNav currentStep="N1" />
         </div>
       </div>
@@ -656,7 +648,7 @@ function NewJobPageInner() {
                   ))}
                 </select>
                 <div className="pointer-events-none absolute top-1/2 right-3.5 -translate-y-1/2">
-                  <ChevronDownIcon />
+                  <ChevronDownGlyph14 />
                 </div>
               </div>
             </div>
@@ -689,7 +681,7 @@ function NewJobPageInner() {
                   ))}
                 </select>
                 <div className="pointer-events-none absolute top-1/2 right-3.5 -translate-y-1/2">
-                  <ChevronDownIcon />
+                  <ChevronDownGlyph14 />
                 </div>
               </div>
             </div>
@@ -720,28 +712,29 @@ function NewJobPageInner() {
             }`}
           >
             {images.length === 0 ? (
-              <div className="flex flex-col items-center gap-10 px-6">
+              // FileUploader Dropzone(536:4281) — [72 원형 icon(Plus 24) · 문구(18/14, gap 8) · 파일 선택(45)] gap 20,
+              // 그 묶음과 helper(12 Light #999) 사이도 gap 20. 책임 문구는 하단 책임 동의 checkbox(1170:6002)로 옮겨졌다.
+              <div className="flex flex-col items-center gap-5 px-6">
                 <div className="flex flex-col items-center gap-5">
                   <div className="flex size-[72px] items-center justify-center rounded-full border border-[#eaeaea] bg-white">
-                    <PlusIcon />
+                    <PlusGlyph24 />
                   </div>
                   <div className="flex flex-col items-center gap-2 text-center">
-                    <p className="text-[18px] font-medium tracking-[-0.03em] whitespace-nowrap text-[#171717]">
+                    <p className="text-[18px] leading-[21px] font-medium tracking-[-0.54px] whitespace-nowrap text-[#171717]">
                       파일을 이곳에 놓아주세요.
                     </p>
-                    <p className="text-[14px] tracking-[-0.01em] whitespace-nowrap text-[#707070]">또는 클릭해서 선택 · JPG, PNG</p>
+                    <p className="text-[14px] leading-[17px] tracking-[-0.14px] whitespace-nowrap text-[#707070]">또는 클릭해서 선택 · JPG, PNG</p>
                   </div>
+                  {/* Button Primary/LG — px 32 + label container px 12, py 14 → 45 높이 */}
                   <label
                     htmlFor="image-upload"
-                    className="cursor-pointer rounded-[6px] bg-[#171717] px-8 py-3.5 text-[14px] font-medium tracking-[-0.03em] whitespace-nowrap text-white"
+                    className="cursor-pointer rounded-[6px] bg-[#171717] px-11 py-3.5 text-[14px] leading-[17px] font-medium tracking-[-0.42px] whitespace-nowrap text-white"
                   >
                     파일 선택
                   </label>
                 </div>
-                <p className="max-w-xl text-center text-[12px] font-light tracking-[-0.04em] text-[#999]">
-                  최대 1GB · 여러 파일을 한 번에 업로드할 수 있습니다.
-                  <br />
-                  인증·시험 정보의 적용 가능 여부를 사용자가 최종 확인해야 하며 문제 발생 시 플랫폼이 책임지지 않습니다.
+                <p className="text-center text-[12px] leading-[14px] font-light tracking-[-0.48px] whitespace-nowrap text-[#999]">
+                  여러 파일을 한 번에 업로드할 수 있습니다.
                 </p>
               </div>
             ) : (
@@ -832,7 +825,7 @@ function NewJobPageInner() {
 
                   <div className="flex aspect-[244/320] w-full max-w-[244px] flex-col items-center justify-center gap-5 rounded-[8px] border border-[#eaeaea] bg-white px-6 py-8">
                     <div className="flex size-10 items-center justify-center rounded-full border border-[#eaeaea] bg-white">
-                      <PlusIcon size={16} />
+                      <PlusGlyph16 />
                     </div>
                     <div className="flex flex-col items-center gap-2 text-center">
                       <p className="text-[16px] font-medium tracking-[-0.03em] whitespace-nowrap text-[#171717]">
@@ -865,16 +858,16 @@ function NewJobPageInner() {
             />
           </div>
 
-          {/* 우측 열 — 필드 패널(세로 스크롤) + 하단 action. Figma(643:5942) 패널: 516 폭, border #EAEAEA,
-              radius 8, padding 20, section 간 gap 60. 1080 높이에서 패널은 열 높이(848) − action(45) −
-              간격(82) = 721이 되고, 내용(약 872)이 더 길면 패널 안에서만 스크롤된다. action(1089:10035)은
-              패널 밖에 고정되어 스크롤되지 않는다. */}
-          <div className="flex min-h-0 w-[516px] shrink-0 flex-col gap-[82px]">
+          {/* 우측 열 — 필드 패널(세로 스크롤) + 책임 동의 + 하단 action. Figma(1170:7876) 패널: 516 폭,
+              border #EAEAEA, radius 8, padding 20, section 간 gap 52. 1080 높이에서 패널은 열 높이(848) −
+              [간격 30 + 책임 동의(1170:6002) 28 + 간격 24 + action 45] = 721이 되고, 내용이 더 길면 패널 안에서만
+              스크롤된다. 책임 동의와 action(1089:10035)은 패널 밖에 고정되어 스크롤되지 않는다. */}
+          <div className="flex min-h-0 w-[516px] shrink-0 flex-col">
             <div
               data-testid="n1-field-panel"
               // 스크롤은 그대로 두고 scrollbar 모양만 숨긴다(Figma에 scrollbar 디자인 없음) — 기존
               // globals.css의 n3-scroll-hidden(scrollbar-width:none + ::-webkit-scrollbar display:none) 재사용.
-              className="n3-scroll-hidden flex min-h-0 flex-1 flex-col gap-[60px] overflow-y-auto rounded-[8px] border border-[#eaeaea] p-5"
+              className="n3-scroll-hidden flex min-h-0 flex-1 flex-col gap-[52px] overflow-y-auto rounded-[8px] border border-[#eaeaea] p-5"
             >
             <div className="flex flex-col gap-4 pt-2">
               <div className="flex flex-col gap-1">
@@ -913,7 +906,7 @@ function NewJobPageInner() {
                         selectedCategoryLabel ? 'text-[#171717]' : 'text-[#707070]'
                       }`}
                     >
-                      {selectedCategoryLabel ?? '검색 하기'}
+                      {selectedCategoryLabel ?? '검색하기'}
                     </span>
                     <SearchGlyph14 />
                   </div>
@@ -958,22 +951,28 @@ function NewJobPageInner() {
                 없다(12월 예정, imageType='multi_section' 고정 — 기존 결정
                 유지). Figma는 이 토글을 필수(*) 입력으로 보여주는데 아직
                 실제로 값을 바꿀 수 없는 상태라 디자인과 현재 계약이 충돌한다
-                — 그대로 숨기지 않고 보여주되 비활성으로 처리한다. */}
+                — 그대로 숨기지 않고 보여주되 비활성으로 처리한다.
+                Figma(1170:7810): [Toggle/Switch h28 — 문구 18 Medium · gap 10 · Track 36×20] · gap 8 · * (위 정렬).
+                Track은 실제 상태(꺼짐·비활성)에 맞는 Toggle/Switch Off·Disabled(223:1172) — #F3F3F3 · knob #D1D1D1. */}
             <div className="flex flex-col">
-              <div className="flex h-7 items-center gap-2">
-                <p className="text-[18px] font-medium tracking-[-0.03em] text-[#171717]">
-                  이미지 안에 여러 내용이 이어져 있나요?
-                </p>
-                <div
-                  role="switch"
-                  aria-checked={false}
-                  aria-disabled="true"
-                  title="9월 MVP는 다중 섹션 이미지 유형만 지원합니다."
-                  className="flex h-5 w-9 shrink-0 cursor-not-allowed items-center rounded-full border border-[#eaeaea] bg-[#f5f5f5] p-0.5 opacity-60"
-                >
-                  <div className="size-4 rounded-full bg-white shadow-sm" />
+              <div className="flex items-start gap-2">
+                <div className="flex h-7 items-center gap-[10px] py-1">
+                  <p className="text-[18px] leading-[21px] font-medium tracking-[-0.54px] text-[#171717]">
+                    이미지 안에 여러 내용이 이어져 있나요?
+                  </p>
+                  <div
+                    role="switch"
+                    aria-checked={false}
+                    aria-disabled="true"
+                    aria-label="이미지 안에 여러 내용이 이어져 있나요?"
+                    title="9월 MVP는 다중 섹션 이미지 유형만 지원합니다."
+                    data-testid="n1-image-continuity-switch"
+                    className="relative h-5 w-9 shrink-0 cursor-not-allowed rounded-full bg-[#f3f3f3]"
+                  >
+                    <div className="absolute top-0.5 left-0.5 size-4 rounded-full bg-[#d1d1d1]" />
+                  </div>
                 </div>
-                <span className="text-[18px] font-medium tracking-[-0.03em] text-[#ff6a38]">*</span>
+                <span className="text-[18px] leading-[21px] font-medium tracking-[-0.54px] text-[#ff6a38]">*</span>
               </div>
               {/* Figma(673:7819)는 이 helper text를 라벨/토글과 같은 좌측
                   기준선에 맞춘다 — 혼자 text-center로 떠 있던 것을 고쳤다. */}
@@ -982,8 +981,8 @@ function NewJobPageInner() {
               </p>
             </div>
 
-            {/* 사이즈 선택(643:5914) — 라벨 → SizeSelector gap 20 */}
-            <div className="flex flex-col gap-5">
+            {/* 사이즈 선택(1170:7814) — 라벨 → SizeSelector gap 4 */}
+            <div className="flex flex-col gap-1">
               <div className="flex items-start gap-2 leading-[normal] whitespace-nowrap">
                 <p className="text-[16px] leading-[19px] tracking-[-0.48px] text-[#171717]">사이즈 선택</p>
                 <span className="text-[18px] leading-[21px] font-medium tracking-[-0.54px] text-[#ff6a38]">*</span>
@@ -1039,10 +1038,42 @@ function NewJobPageInner() {
             </div>
             </div>
 
-            {/* 하단 action(1089:10035) — 인증 마크 업로드(Secondary/LG + Info) · 다음(Primary 148), gap 8 */}
-            <div className="relative flex shrink-0 items-center justify-end gap-2">
+            {/* 책임 동의(1170:6002) — 패널 아래 30, (1344,913) 480×28. Checkbox/Compact 20(18 visual) · gap 8 ·
+                두 줄 문구(12 Light #707070). 문구 전체가 label이라 어디를 눌러도 토글된다. */}
+            <label data-testid="n1-consent" className="mt-[30px] flex h-7 w-fit shrink-0 cursor-pointer items-center gap-2">
+              <span className="relative size-5 shrink-0">
+                <input
+                  type="checkbox"
+                  checked={consentAgreed}
+                  onChange={(e) => setConsentAgreed(e.target.checked)}
+                  data-testid="n1-consent-checkbox"
+                  className="peer absolute inset-0 m-0 size-full cursor-pointer opacity-0"
+                />
+                {/* Checkbox/Compact: Unchecked white · border #EAEAEA / Checked border #FF6A38 + Check 16 — radius 4 */}
+                <span
+                  aria-hidden="true"
+                  className={`pointer-events-none absolute top-1/2 left-1/2 size-[18px] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-[4px] border bg-white peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-[#ff6a38] ${
+                    consentAgreed ? 'border-[#ff6a38]' : 'border-[#eaeaea]'
+                  }`}
+                >
+                  {consentAgreed && (
+                    <span className="absolute top-0 left-0">
+                      <CheckGlyph16 />
+                    </span>
+                  )}
+                </span>
+              </span>
+              <span className="text-[12px] leading-[14px] font-light tracking-[-0.48px] whitespace-nowrap text-[#707070]">
+                <span className="block">결과물에 쓰는 인증·시험 결과, 광고 문구, 인증 로고의 사용 권한과 그 책임이 사용자에게 있으며,</span>{' '}
+                <span className="block">규제·현지 검사 결과는 참고용 권고이며, 올린 이미지와 문구가 외부 AI 서비스로 전송됨을 확인했습니다.</span>
+              </span>
+            </label>
+
+            {/* 하단 action(1089:10035) — 동의 아래 24. 인증 마크 업로드(Secondary/LG + Info) · 다음(Primary 148), gap 8 */}
+            <div className="relative mt-6 flex shrink-0 items-center justify-end gap-2">
+              {/* 제출 오류는 action 아래 여백(70)에 둔다 — 위쪽은 책임 동의 문구라 겹치면 안 된다. */}
               {submitError && (
-                <p className="absolute right-0 bottom-full mb-2 max-w-full text-right text-sm text-red-500">
+                <p className="absolute top-full right-0 mt-2 max-w-full text-right text-sm text-red-500">
                   {submitError instanceof Error ? submitError.message : '오류가 발생했습니다. 다시 시도해 주세요.'}
                 </p>
               )}
