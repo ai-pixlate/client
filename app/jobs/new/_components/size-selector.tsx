@@ -10,6 +10,9 @@ import { ChevronDownGlyph14, RadioGlyph18 } from './n1-glyphs';
 // 계약: SpecType은 "9월은 original 고정"이고 JobCreate/JobPatch에 커스텀 W/H 필드가 없다. 판매처 등급
 // (Premium A+ 등)·치수도 계약에 없다. 따라서 이 선택은 FE 화면 상태이며 제출 payload(specId)에는
 // 반영하지 않는다 — 계약이 정해지면 page.tsx의 handleSubmit에서 연결한다.
+//
+// 잠금(PR 리뷰): 고른 값이 제출 때 말없이 버려지지 않도록, 계약이 생길 때까지 「사이즈 변경」 탭은
+// 노출만 하고 disabled로 둔다(resizeLocked). 커스텀·판매처 맞춤 UI는 지우지 않고 잠금만 풀면 다시 쓴다.
 
 export type SizeTab = 'original' | 'resize';
 export type ResizeMode = 'custom' | 'channel';
@@ -51,7 +54,16 @@ export const INITIAL_SIZE_SELECTION: SizeSelection = {
   channelTier: 'basic-a-plus',
 };
 
-export function SizeSelector({ value, onChange }: { value: SizeSelection; onChange: (next: SizeSelection) => void }) {
+export function SizeSelector({
+  value,
+  onChange,
+  resizeLocked,
+}: {
+  value: SizeSelection;
+  onChange: (next: SizeSelection) => void;
+  /** true면 「사이즈 변경」 탭에 들어갈 수 없다(원본 유지 고정). */
+  resizeLocked: boolean;
+}) {
   const set = (patch: Partial<SizeSelection>) => onChange({ ...value, ...patch });
   const channel = CHANNEL_PRESETS.find((c) => c.value === value.channel) ?? CHANNEL_PRESETS[0];
 
@@ -59,7 +71,15 @@ export function SizeSelector({ value, onChange }: { value: SizeSelection; onChan
     <div data-testid="n1-size-selector" data-variant={value.tab === 'original' ? 'original' : value.resizeMode} className="flex w-full flex-col gap-4 bg-white">
       <div role="tablist" aria-label="사이즈 선택" className="flex w-full items-center">
         <SizeTabButton label="원본 유지" selected={value.tab === 'original'} onSelect={() => set({ tab: 'original' })} testId="n1-size-tab-original" />
-        <SizeTabButton label="사이즈 변경" selected={value.tab === 'resize'} onSelect={() => set({ tab: 'resize' })} testId="n1-size-tab-resize" />
+        <SizeTabButton
+          label="사이즈 변경"
+          selected={value.tab === 'resize'}
+          disabled={resizeLocked}
+          onSelect={() => {
+            if (!resizeLocked) set({ tab: 'resize' });
+          }}
+          testId="n1-size-tab-resize"
+        />
       </div>
 
       {value.tab === 'resize' && (
@@ -126,15 +146,28 @@ export function SizeSelector({ value, onChange }: { value: SizeSelection; onChan
 }
 
 /** Tabs(28:94) — h32, 16 Regular −0.48. 선택: #171717 + 아래 orange 2px(폭 56), 비선택: #707070. */
-function SizeTabButton({ label, selected, onSelect, testId }: { label: string; selected: boolean; onSelect: () => void; testId: string }) {
+function SizeTabButton({
+  label,
+  selected,
+  disabled = false,
+  onSelect,
+  testId,
+}: {
+  label: string;
+  selected: boolean;
+  disabled?: boolean;
+  onSelect: () => void;
+  testId: string;
+}) {
   return (
     <button
       type="button"
       role="tab"
       aria-selected={selected}
+      disabled={disabled}
       onClick={onSelect}
       data-testid={testId}
-      className={`relative h-8 min-w-0 flex-1 pb-[3px] text-center text-[16px] leading-[19px] tracking-[-0.48px] ${selected ? 'text-[#171717]' : 'text-[#707070]'}`}
+      className={`relative h-8 min-w-0 flex-1 pb-[3px] text-center text-[16px] leading-[19px] tracking-[-0.48px] disabled:cursor-not-allowed ${selected ? 'text-[#171717]' : 'text-[#707070]'}`}
     >
       {label}
       {selected && <span data-testid={`${testId}-underline`} aria-hidden="true" className="absolute bottom-0 left-1/2 h-[2px] w-14 -translate-x-1/2 bg-[#ff6a38]" />}

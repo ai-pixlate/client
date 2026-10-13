@@ -2,10 +2,11 @@ import { test, expect, type Locator, type Page } from '@playwright/test';
 
 // ─────────────────────────────────────────────────────────────────
 // N1 이미지 정보 입력 — Figma 525:3023(우측 패널·SizeSelector·하단 action·tooltip),
-// 1094:11283(인증 마크 업로드 모달). MSW mock 기준.
+// 1170:8460(인증 마크 복수 업로드 모달). MSW mock 기준.
 //
 // 사이즈 선택과 인증 마크 파일은 계약(specType 9월 original 고정, 커스텀 W/H·인증 업로드 필드 없음)이
-// 없어 FE 화면 상태까지만 검증한다 — 제출 payload나 서버 업로드는 검증 대상이 아니다.
+// 없어 FE 화면 상태까지만 검증한다. 계약이 없는 동안 「사이즈 변경」은 잠겨 있고(PR 리뷰), 그래서 인증 마크
+// 버튼(PRD F-SRC-08: 사이즈 변경일 때만 활성)도 항상 disabled다.
 // ─────────────────────────────────────────────────────────────────
 
 const MOCK_BRAND_ID = 'brand_mock_001';
@@ -37,8 +38,7 @@ test.describe('우측 입력 패널 — Figma 643:5942 위치·크기와 세로 
     await expect(panel).toHaveCSS('overflow-y', 'auto');
     await expect(panel).toHaveCSS('border-top-left-radius', '8px');
 
-    // 사이즈 변경(커스텀)으로 내용이 길어진 상태에서도 키워드까지 스크롤로 접근 가능
-    await page.getByTestId('n1-size-tab-resize').click();
+    // 원본 유지 상태에서도 내용이 패널보다 길어 키워드까지 스크롤로 접근한다
     const { scrollHeight, clientHeight } = await panel.evaluate((el) => ({ scrollHeight: el.scrollHeight, clientHeight: el.clientHeight }));
     expect(scrollHeight).toBeGreaterThan(clientHeight);
 
@@ -61,7 +61,6 @@ test.describe('우측 입력 패널 — Figma 643:5942 위치·크기와 세로 
 
   test('scrollbar는 보이지 않지만 wheel·keyboard 스크롤은 그대로 — 폭 516·action 위치 유지', async ({ page }) => {
     const panel = page.getByTestId('n1-field-panel');
-    await page.getByTestId('n1-size-tab-resize').click(); // 내용을 길게 만든다
 
     // scrollbar 모양만 숨김: overflow는 auto 그대로, scrollbar가 폭을 차지하지 않는다(좌우 border 1px씩만)
     await expect(panel).toHaveCSS('overflow-y', 'auto');
@@ -79,14 +78,18 @@ test.describe('우측 입력 패널 — Figma 643:5942 위치·크기와 세로 
     await page.mouse.wheel(0, 400);
     await expect.poll(() => panel.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
 
-    // 맨 위로 돌린 뒤 keyboard(Tab)로 핵심 키워드까지 이동하면 패널이 따라 스크롤된다
+    // 맨 위로 돌린 뒤 패널 빈 곳을 누르고 keyboard(PageDown)로 스크롤된다
     await panel.evaluate((el) => el.scrollTo(0, 0));
     const keyword = page.getByPlaceholder('키워드를 입력해주세요.');
-    await page.getByTestId('n1-size-height').focus();
+    await page.mouse.click(p.x + p.width - 12, p.y + 120);
+    await page.keyboard.press('PageDown');
+    await expect.poll(() => panel.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+
+    // 원본 유지 탭 → (잠긴 사이즈 변경 탭은 Tab 순서에서 빠진다) → 키워드 입력
+    await page.getByTestId('n1-size-tab-original').focus();
     await page.keyboard.press('Tab');
     await expect(keyword).toBeFocused();
     await expect(keyword).toBeInViewport();
-    expect(await panel.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
 
     // 끝까지 내려도 키워드 접근 가능, action과 패널 크기는 그대로
     await panel.evaluate((el) => el.scrollTo(0, el.scrollHeight));
@@ -101,117 +104,205 @@ test.describe('우측 입력 패널 — Figma 643:5942 위치·크기와 세로 
     // Figma: 상품명 라벨 y191, 상품코드 269, 카테고리 347(16 간격 + label 19 + 4 + input 39), 토글 547, 사이즈 라벨 649, selector 690
     expect(await top(page.locator('p').filter({ hasText: /^상품명\*?$/ }))).toBe(191);
     expect(await top(page.getByText('상품코드', { exact: true }))).toBe(269);
-    expect(await top(page.getByText('카테고리', { exact: true }))).toBe(347);
+    expect(await top(page.locator('p').filter({ hasText: /^카테고리\*?$/ }))).toBe(347);
     expect(await top(page.getByText('이미지 안에 여러 내용이 이어져 있나요?'))).toBeGreaterThanOrEqual(547);
     expect(await top(page.getByText('사이즈 선택', { exact: true }))).toBe(649);
     expect(await top(page.getByTestId('n1-size-selector'))).toBe(690);
   });
 });
 
-test.describe('SizeSelector — Figma component set 사이즈선택(원본유지/커스텀/판매처 맞춤)', () => {
+test.describe('SizeSelector — 「사이즈 변경」 잠금(계약 전까지 원본 유지 고정)', () => {
   const selector = (page: Page) => page.getByTestId('n1-size-selector');
 
-  test('원본 유지 ↔ 사이즈 변경, 커스텀 ↔ 판매처 맞춤 — 선택된 variant만 렌더되고 높이가 Figma와 같다', async ({ page }) => {
+  test('초기 원본 유지, 사이즈 변경 탭은 노출되지만 disabled — 클릭·키보드로 진입 불가', async ({ page }) => {
+    const original = page.getByTestId('n1-size-tab-original');
+    const resize = page.getByTestId('n1-size-tab-resize');
+
     // 원본유지(472×32) — 탭만
     await expect(selector(page)).toHaveAttribute('data-variant', 'original');
     expect((await box(selector(page))).height).toBe(32);
-    await expect(page.getByTestId('n1-size-tab-original')).toHaveAttribute('aria-selected', 'true');
-    await expect(page.getByTestId('n1-size-tab-original')).toHaveCSS('color', 'rgb(23, 23, 23)');
-    await expect(page.getByTestId('n1-size-tab-resize')).toHaveCSS('color', 'rgb(112, 112, 112)');
+    await expect(original).toHaveAttribute('aria-selected', 'true');
+    await expect(original).toHaveCSS('color', 'rgb(23, 23, 23)');
     const underline = page.getByTestId('n1-size-tab-original-underline');
     await expect(underline).toHaveCSS('background-color', ORANGE);
     expect([(await box(underline)).width, (await box(underline)).height]).toEqual([56, 2]);
-    await expect(page.getByTestId('n1-resize-custom')).toHaveCount(0);
 
-    // 사이즈 변경 → 커스텀(472×140)
-    await page.getByTestId('n1-size-tab-resize').click();
-    await expect(selector(page)).toHaveAttribute('data-variant', 'custom');
-    expect((await box(selector(page))).height).toBe(140);
-    await expect(page.getByTestId('n1-size-tab-original-underline')).toHaveCount(0);
-    await expect(page.getByTestId('n1-size-tab-resize-underline')).toBeVisible();
-    await expect(page.getByTestId('n1-resize-custom')).toBeChecked();
-    await expect(page.getByTestId('n1-size-width')).toBeVisible();
-    expect((await box(page.getByTestId('n1-size-width').locator('xpath=..'))).height).toBe(48);
-    await expect(page.getByTestId('n1-size-channel')).toHaveCount(0);
+    // 사이즈 변경 탭은 그대로 보이지만 잠겨 있다
+    await expect(resize).toBeVisible();
+    await expect(resize).toHaveText('사이즈 변경');
+    await expect(resize).toBeDisabled();
+    await expect(resize).toHaveAttribute('aria-selected', 'false');
+    // Tabs에는 Disabled variant가 없다 — Inactive(#707070) 그대로, opacity 감소 없이 cursor만 바뀐다
+    await expect(resize).toHaveCSS('color', 'rgb(112, 112, 112)');
+    await expect(resize).toHaveCSS('opacity', '1');
+    await expect(resize).toHaveCSS('cursor', 'not-allowed');
 
-    await page.getByTestId('n1-size-width').fill('800');
-    await page.getByTestId('n1-size-height').fill('1200');
-
-    // 판매처 맞춤(472×189) — dropdown · helper · tag, 커스텀 W/H UI는 사라진다
-    await page.getByTestId('n1-resize-channel').check();
-    await expect(selector(page)).toHaveAttribute('data-variant', 'channel');
-    expect((await box(selector(page))).height).toBe(189);
-    await expect(page.getByTestId('n1-size-width')).toHaveCount(0);
-    await expect(page.getByTestId('n1-size-channel')).toHaveValue('amazon');
-    await expect(selector(page).getByText('베이직(기본 등록) : 최소 500px(짧은 변 기준) ~ 최대 10,000px(긴 변 기준)')).toBeVisible();
-    await expect(page.getByTestId('n1-size-tier-basic-a-plus')).toHaveAttribute('aria-pressed', 'true');
-    await expect(page.getByTestId('n1-size-tier-basic-a-plus')).toHaveCSS('border-top-color', ORANGE);
-    await page.getByTestId('n1-size-tier-premium-a-plus').click();
-    await expect(page.getByTestId('n1-size-tier-premium-a-plus')).toHaveAttribute('aria-pressed', 'true');
-    await expect(page.getByTestId('n1-size-tier-basic-a-plus')).toHaveAttribute('aria-pressed', 'false');
-
-    // 커스텀으로 돌아가면 입력했던 W/H가 그대로(판매처 값과 서로 덮어쓰지 않는다)
-    await page.getByTestId('n1-resize-custom').check();
-    await expect(page.getByTestId('n1-size-width')).toHaveValue('800');
-    await expect(page.getByTestId('n1-size-height')).toHaveValue('1200');
-    await page.getByTestId('n1-resize-channel').check();
-    await expect(page.getByTestId('n1-size-tier-premium-a-plus')).toHaveAttribute('aria-pressed', 'true');
-
-    // 원본 유지로 돌아가면 탭만 남는다
-    await page.getByTestId('n1-size-tab-original').click();
+    // 클릭(강제 포함)해도 진입하지 않는다
+    await resize.click({ force: true });
     await expect(selector(page)).toHaveAttribute('data-variant', 'original');
-    expect((await box(selector(page))).height).toBe(32);
+    await expect(original).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByTestId('n1-resize-custom')).toHaveCount(0);
     await expect(page.getByTestId('n1-size-channel')).toHaveCount(0);
+
+    // 키보드: 원본 유지 탭에서 Tab하면 잠긴 탭을 건너뛴다, Enter·Space·방향키로도 바뀌지 않는다
+    await original.focus();
+    for (const key of ['ArrowRight', 'Enter', 'Space']) {
+      await page.keyboard.press(key);
+      await expect(selector(page)).toHaveAttribute('data-variant', 'original');
+    }
+    await page.keyboard.press('Tab');
+    await expect(resize).not.toBeFocused();
+    await expect(page.getByPlaceholder('키워드를 입력해주세요.')).toBeFocused();
+    expect((await box(selector(page))).height).toBe(32);
+  });
+
+  test('제출 spec은 여전히 spec_original', async ({ page }) => {
+    let body: Record<string, unknown> | null = null;
+    page.on('request', (req) => {
+      if (req.method() === 'POST' && /\/jobs$/.test(new URL(req.url()).pathname)) body = req.postDataJSON();
+    });
+    await page.getByPlaceholder('상품 이름을 입력해주세요').fill('사이즈 확인');
+    await fillRequiredExceptCategory(page);
+    await pickCategory(page);
+    await page.getByRole('button', { name: '다음' }).click();
+    await expect.poll(() => body).not.toBeNull();
+    expect(body!.specId).toBe('spec_original');
   });
 });
 
-test.describe('인증 마크 업로드 tooltip — Figma 1090:10048', () => {
-  const TEXT = /인증 및 시험 정보의 적용 가능 여부는\s*사용자가 최종 확인해야 합니다\./;
+test.describe('인증 마크 업로드 버튼·tooltip — 원본 유지에서는 disabled, 같은 두 줄 tooltip', () => {
+  const LINES = ['사이즈 변경을 고르면 인증 마크를 올릴 수 있어요.', '인증 및 시험 정보의 적용 가능 여부는 사용자가 최종 확인해야 합니다.'];
 
-  test('Info hover 시 정확한 문구, 위치 (1577,915) 186×50 — hover 해제 시 닫힘', async ({ page }) => {
+  const expectTooltipText = async (tooltip: Locator) => {
+    await expect(tooltip.locator('p')).toHaveText(LINES);
+  };
+
+  test('원본 유지 → disabled, 버튼 위 어디를 hover해도 tooltip, 해제 시 닫힘, 클릭해도 모달 없음', async ({ page }) => {
+    const button = page.getByTestId('n1-certification-button');
     const tooltip = page.getByTestId('n1-certification-tooltip');
+    await expect(button).toBeDisabled();
+    await expect(button).toHaveText('인증 마크 업로드 하기');
+    // Button Secondary/LG Disabled — bg #F5F5F5, text #171717, opacity 1
+    await expect(button).toHaveCSS('background-color', 'rgb(245, 245, 245)');
+    await expect(button).toHaveCSS('opacity', '1');
+    await expect(button.locator('span').first()).toHaveCSS('color', 'rgb(23, 23, 23)');
+    await expect(page.getByTestId('n1-certification-info')).toBeVisible();
     await expect(tooltip).toBeHidden();
-    await page.getByTestId('n1-certification-info').hover();
+
+    // disabled 버튼의 왼쪽 끝·가운데·오른쪽 끝(Info) 어디든
+    const b = await box(button);
+    for (const x of [b.x + 4, b.x + b.width / 2, b.x + b.width - 34]) {
+      await page.mouse.move(x, b.y + b.height / 2);
+      await expect(tooltip).toBeVisible();
+      await expectTooltipText(tooltip);
+      await page.mouse.move(10, 10);
+      await expect(tooltip).toBeHidden();
+    }
+
+    // Info hover — 같은 tooltip
+    await page.getByTestId('n1-certification-info').hover({ force: true });
     await expect(tooltip).toBeVisible();
-    await expect(tooltip).toHaveText(TEXT);
-    expect(await box(tooltip)).toEqual({ x: 1577, y: 915, width: 186, height: 50 });
+    await expectTooltipText(tooltip);
+    const t = await box(tooltip);
+    expect([t.width, t.height]).toEqual([193, 82]);
     await page.mouse.move(10, 10);
-    await expect(tooltip).toBeHidden();
+
+    // 클릭해도 모달이 열리지 않는다
+    await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2);
+    await expect(page.getByRole('dialog')).toHaveCount(0);
   });
 
-  test('키보드 포커스로도 열리고 blur 시 닫힘, 버튼에 aria-describedby로 연결', async ({ page }) => {
+  test('키보드 focus로도 같은 tooltip, blur 시 닫힘 — aria-describedby 연결', async ({ page }) => {
     const button = page.getByTestId('n1-certification-button');
-    await expect(button).toHaveAccessibleDescription(TEXT);
+    const trigger = page.getByTestId('n1-certification-trigger');
+    const tooltip = page.getByTestId('n1-certification-tooltip');
+    await expect(button).toHaveAccessibleDescription(LINES.join(' '));
+    await expect(trigger).toHaveAttribute('aria-describedby', 'n1-certification-tooltip');
+
     await page.getByPlaceholder('키워드를 입력해주세요.').focus();
-    // 키워드 입력 → 추가 → 인증 마크 업로드 버튼 순으로 Tab
+    await page.keyboard.press('Tab'); // 추가
+    await page.keyboard.press('Tab'); // 인증 trigger(disabled 버튼 대신 wrapper가 포커스를 받는다)
+    await expect(trigger).toBeFocused();
+    await expect(tooltip).toBeVisible();
+    await expectTooltipText(tooltip);
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('dialog')).toHaveCount(0);
     await page.keyboard.press('Tab');
-    await page.keyboard.press('Tab');
-    await expect(button).toBeFocused();
-    await expect(page.getByTestId('n1-certification-tooltip')).toBeVisible();
-    await page.keyboard.press('Tab');
-    await expect(page.getByTestId('n1-certification-tooltip')).toBeHidden();
+    await expect(tooltip).toBeHidden();
   });
 });
 
-test.describe('인증 마크 업로드 모달 — Figma 1084:4119', () => {
-  test('열기, dim, 크기·위치, 문구, uploader, 버튼, 닫기 버튼 / Escape / 취소, focus trap·복귀, scroll lock, dim 클릭 무시', async ({ page }) => {
+/**
+ * 「사이즈 변경」 잠금 때문에 인증 버튼은 지금 항상 disabled라 화면에서 모달을 열 수 없다. 모달 기능 자체는
+ * 계약이 생겨 잠금이 풀린 상태를 가정하고 검증한다 — production 코드에 테스트용 경로를 두지 않고, 버튼의 DOM
+ * disabled 속성을 떼고(포커스 복귀 확인용) React가 그 버튼에 붙인 onClick을 직접 호출한다.
+ */
+async function openCertificationModalAsUnlocked(page: Page) {
+  await page.getByTestId('n1-certification-button').evaluate((el) => {
+    el.removeAttribute('disabled');
+    const key = Object.keys(el).find((k) => k.startsWith('__reactProps$'));
+    if (!key) throw new Error('React props not found on certification button');
+    (el as unknown as Record<string, { onClick: () => void }>)[key].onClick();
+  });
+  await expect(page.getByRole('dialog', { name: '인증 마크 업로드' })).toBeVisible();
+}
+
+const svgFile = (name: string) => ({ name, mimeType: 'image/svg+xml', buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="#f00"/></svg>') });
+const jpgFile = (name: string) => ({ name, mimeType: 'image/jpeg', buffer: Buffer.from([0xff, 0xd8, 0xff, 0xd9]) });
+
+test.describe('인증 마크 업로드 모달 — Figma 1170:8460 복수 업로드', () => {
+  test('크기·위치, compact uploader, 등록 목록 영역, 문구, 버튼, 닫기 / Escape / 취소, focus trap·복귀, scroll lock, dim 클릭 무시', async ({ page }) => {
     const button = page.getByTestId('n1-certification-button');
-    await button.click();
+    await openCertificationModalAsUnlocked(page);
     const dialog = page.getByRole('dialog', { name: '인증 마크 업로드' });
-    await expect(dialog).toBeVisible();
     await expect(dialog).toHaveAttribute('aria-modal', 'true');
     await expect(dialog).toHaveAccessibleDescription('선택 사항입니다. 올리지 않아도 다음 단계로 진행할 수 있습니다.');
     await expect(page.getByTestId('n1-certification-dim')).toHaveCSS('background-color', 'rgba(23, 23, 23, 0.4)');
 
     const m = await box(dialog);
-    expect([m.width, m.height]).toEqual([720, 697]);
+    expect([m.width, m.height]).toEqual([720, 696]);
     expect(Math.abs(m.x - 600)).toBeLessThanOrEqual(1);
-    expect(Math.abs(m.y - 191)).toBeLessThanOrEqual(1);
+    expect(Math.abs(m.y - 191.5)).toBeLessThanOrEqual(1);
     const drop = await box(page.getByTestId('n1-certification-dropzone'));
-    expect([drop.width, drop.height]).toEqual([640, 350]);
+    expect([drop.x - m.x, drop.y - m.y, drop.width, drop.height]).toEqual([40, 119, 640, 112]);
     await expect(dialog.getByText('파일을 이곳에 놓아주세요.')).toBeVisible();
     await expect(dialog.getByText('또는 클릭해서 선택 SVG·PNG·JPG')).toBeVisible();
-    await expect(dialog.getByRole('button', { name: '파일 선택' })).toBeVisible();
+    // compact uploader 내부 — padding 24/32, [40×40 원형 icon · gap 12 · 문구(gap 8)] … [파일 선택 107×37]
+    const dropzone = page.getByTestId('n1-certification-dropzone');
+    for (const [prop, value] of [
+      ['padding-left', '24px'],
+      ['padding-right', '24px'],
+      ['padding-top', '32px'],
+      ['padding-bottom', '32px'],
+      ['border-top-color', 'rgb(234, 234, 234)'],
+      ['border-top-left-radius', '8px'],
+      ['justify-content', 'space-between'],
+    ]) {
+      await expect(dropzone).toHaveCSS(prop, value);
+    }
+    const pick = dialog.getByRole('button', { name: '파일 선택' });
+    const pb = await box(pick);
+    expect([pb.width, pb.height]).toEqual([107, 37]);
+    expect(pb.x + pb.width).toBe(drop.x + drop.width - 1 - 24);
+    await expect(pick).toHaveCSS('background-color', 'rgb(23, 23, 23)');
+    await expect(pick).toHaveCSS('border-top-left-radius', '6px');
+    const circle = dropzone.locator('span.rounded-full');
+    const cb = await box(circle);
+    expect([cb.x - drop.x, cb.width, cb.height]).toEqual([1 + 24, 40, 40]);
+    const dropTitle = dialog.getByText('파일을 이곳에 놓아주세요.');
+    const dt = await box(dropTitle);
+    expect(dt.x - (cb.x + cb.width)).toBe(12);
+    await expect(dropTitle).toHaveCSS('font-size', '18px');
+    await expect(dropTitle).toHaveCSS('font-weight', '500');
+    await expect(dropTitle).toHaveCSS('color', 'rgb(23, 23, 23)');
+    const dropSub = dialog.getByText('또는 클릭해서 선택 SVG·PNG·JPG');
+    expect((await box(dropSub)).y - (dt.y + dt.height)).toBe(8);
+    await expect(dropSub).toHaveCSS('font-size', '14px');
+    await expect(dropSub).toHaveCSS('font-weight', '400');
+    await expect(dropSub).toHaveCSS('color', 'rgb(112, 112, 112)');
+    const listSection = dialog.getByRole('region', { name: '등록된 인증 마크' });
+    const ls = await box(listSection);
+    expect([ls.x - m.x, ls.y - m.y, ls.width, ls.height]).toEqual([40, 263, 640, 193]);
     await expect(dialog.getByText('업로드 전에 확인해 주세요')).toBeVisible();
     for (const line of [
       '사용 권한이 있는 인증 마크만 올려 주세요.',
@@ -226,8 +317,14 @@ test.describe('인증 마크 업로드 모달 — Figma 1084:4119', () => {
     expect(register.height).toBe(56);
     expect(Math.round(register.x - (cancel.x + cancel.width))).toBe(13);
     expect(Math.round(register.x + register.width - cancel.x)).toBe(640);
+    expect(Math.round(m.y + m.height - (cancel.y + cancel.height))).toBe(40);
     const close = await box(page.getByRole('button', { name: '닫기' }));
-    expect([close.width, close.height]).toEqual([32, 32]);
+    expect([close.x - m.x, close.y - m.y, close.width, close.height]).toEqual([648, 40, 32, 32]);
+    // 안내 영역 (40,488) 640×80 · Footer (40,600) 640×56
+    const notice = await box(dialog.getByText('업로드 전에 확인해 주세요').locator('xpath=..'));
+    expect([notice.x - m.x, notice.y - m.y, notice.width, notice.height]).toEqual([40, 488, 640, 80]);
+    const footer = await box(page.getByTestId('n1-certification-cancel').locator('xpath=..'));
+    expect([footer.x - m.x, footer.y - m.y, footer.width, footer.height]).toEqual([40, 600, 640, 56]);
 
     // 열릴 때 포커스는 모달 안, Tab/Shift+Tab이 밖으로 새지 않는다
     const inside = () => page.evaluate(() => !!document.querySelector('[role="dialog"]')?.contains(document.activeElement));
@@ -253,106 +350,201 @@ test.describe('인증 마크 업로드 모달 — Figma 1084:4119', () => {
     expect(await page.evaluate(() => document.body.style.overflow)).toBe('');
 
     // Escape → 닫힘, 포커스 복귀
-    await button.click();
-    await expect(dialog).toBeVisible();
+    await openCertificationModalAsUnlocked(page);
     await page.keyboard.press('Escape');
     await expect(dialog).toHaveCount(0);
     await expect(button).toBeFocused();
 
     // 취소 → 닫힘, 포커스 복귀
-    await button.click();
+    await openCertificationModalAsUnlocked(page);
     await page.getByTestId('n1-certification-cancel').click();
     await expect(dialog).toHaveCount(0);
     await expect(button).toBeFocused();
   });
 
-  test('파일 선택 → 등록하기 → 완료 상태(Figma 925:2529 Tag/Selectable Selected), 취소·닫기·Escape는 완료로 바꾸지 않음', async ({ page }) => {
+  test('SVG·PNG·JPG·JPEG 복수 선택 → 목록 뒤에 추가(교체 아님), 파일 카드, 개별 삭제, 미지원 형식 차단', async ({ page }) => {
+    await openCertificationModalAsUnlocked(page);
+    const input = page.getByTestId('n1-certification-input');
+    const names = page.getByTestId('n1-certification-file-name');
+    const register = page.getByTestId('n1-certification-register');
+    await expect(input).toHaveAttribute('multiple', '');
+    await expect(names).toHaveCount(0);
+    await expect(register).toBeDisabled();
+
+    // 한 번에 여러 개
+    await input.setInputFiles([svgFile('mark-a.svg'), pngFile('mark-b.png')]);
+    await expect(names).toHaveText(['mark-a.svg', 'mark-b.png']);
+
+    // 새로 고르면 뒤에 붙는다 — 기존 파일은 그대로
+    await input.setInputFiles([jpgFile('mark-c.jpg'), jpgFile('mark-d.jpeg')]);
+    await expect(names).toHaveText(['mark-a.svg', 'mark-b.png', 'mark-c.jpg', 'mark-d.jpeg']);
+    await expect(register).toBeEnabled();
+
+    // 미지원 형식은 목록에 들어가지 않는다(섞여 있어도 허용 형식만)
+    await input.setInputFiles([{ name: 'mark.gif', mimeType: 'image/gif', buffer: Buffer.from('GIF89a') }, pngFile('mark-e.png')]);
+    await expect(names).toHaveText(['mark-a.svg', 'mark-b.png', 'mark-c.jpg', 'mark-d.jpeg', 'mark-e.png']);
+    await input.setInputFiles({ name: 'mark.webp', mimeType: 'image/webp', buffer: Buffer.from('RIFF') });
+    await expect(names).toHaveCount(5);
+
+    // 파일 카드 — 310×80, border #EAEAEA, radius 8, 썸네일 60×60, 파일명 12 Light #707070, 검정 삭제 버튼
+    const item = page.getByTestId('n1-certification-item').first();
+    const ib = await box(item);
+    expect([ib.width, ib.height]).toEqual([310, 80]);
+    await expect(item).toHaveCSS('border-top-color', 'rgb(234, 234, 234)');
+    await expect(item).toHaveCSS('border-top-left-radius', '8px');
+    await expect(item).toHaveCSS('padding-left', '12px');
+    await expect(item).toHaveCSS('padding-right', '12px');
+    const thumb = item.locator('img');
+    const tb = await box(thumb);
+    expect([tb.x - ib.x, tb.width, tb.height]).toEqual([13, 60, 60]); // border 1 + padding 12
+    expect((await box(names.first())).x - (tb.x + tb.width)).toBe(12);
+    await expect(thumb).toHaveAttribute('src', /^blob:/);
+    await expect(names.first()).toHaveCSS('font-size', '12px');
+    await expect(names.first()).toHaveCSS('font-weight', '300');
+    await expect(names.first()).toHaveCSS('color', 'rgb(112, 112, 112)');
+    const remove = item.getByRole('button', { name: 'mark-a.svg 삭제' });
+    await expect(remove).toHaveText('삭제');
+    await expect(remove).toHaveCSS('background-color', 'rgb(23, 23, 23)');
+    for (const [prop, value] of [
+      ['padding-left', '12px'],
+      ['padding-right', '12px'],
+      ['padding-top', '8px'],
+      ['padding-bottom', '8px'],
+      ['border-top-left-radius', '4px'],
+    ]) {
+      await expect(remove).toHaveCSS(prop, value);
+    }
+    await expect(remove.locator('span')).toHaveCSS('font-size', '12px');
+    await expect(remove.locator('span')).toHaveCSS('font-weight', '400');
+    const icon = await box(remove.locator('svg'));
+    expect([icon.width, icon.height]).toEqual([14, 14]);
+    expect((await box(remove.locator('span'))).x - (icon.x + icon.width)).toBe(4);
+
+    // 목록이 많아도 영역(193) 안에서만 스크롤 — 모달 높이는 그대로
+    const list = page.getByTestId('n1-certification-list');
+    const { scrollHeight, clientHeight } = await list.evaluate((el) => ({ scrollHeight: el.scrollHeight, clientHeight: el.clientHeight }));
+    expect(scrollHeight).toBeGreaterThan(clientHeight);
+    await expect(list).toHaveCSS('overflow-y', 'auto');
+    expect((await box(page.getByRole('dialog'))).height).toBe(696);
+
+    // 개별 삭제 — 해당 파일만 사라지고 나머지는 순서대로 남는다, 포커스는 모달 안
+    await page.getByRole('button', { name: 'mark-c.jpg 삭제' }).click();
+    await expect(names).toHaveText(['mark-a.svg', 'mark-b.png', 'mark-d.jpeg', 'mark-e.png']);
+    expect(await page.evaluate(() => !!document.querySelector('[role="dialog"]')?.contains(document.activeElement))).toBe(true);
+    await page.getByRole('button', { name: 'mark-a.svg 삭제' }).click();
+    await expect(names).toHaveText(['mark-b.png', 'mark-d.jpeg', 'mark-e.png']);
+  });
+
+  test('등록하기 → 완료 상태, 취소·닫기·Escape는 등록 목록을 지우지 않고 다시 열면 전체 목록 유지', async ({ page }) => {
     const button = page.getByTestId('n1-certification-button');
-    const info = page.getByTestId('n1-certification-info');
-    const tooltip = page.getByTestId('n1-certification-tooltip');
+    const names = page.getByTestId('n1-certification-file-name');
+    const input = page.getByTestId('n1-certification-input');
 
-    // 업로드 전: Secondary 버튼 + Info + tooltip
-    await expect(button).toHaveText('인증 마크 업로드 하기');
-    await expect(button).toHaveAttribute('data-state', 'default');
-    await expect(button).toHaveCSS('border-top-color', 'rgb(234, 234, 234)');
-    await expect(info).toBeVisible();
-    await info.hover();
-    await expect(tooltip).toBeVisible();
-    await page.mouse.move(10, 10);
-    await expect(tooltip).toBeHidden();
-
-    // 파일을 고르기 전에는 등록 불가
-    await button.click();
-    await expect(page.getByTestId('n1-certification-register')).toBeDisabled();
-
-    // 파일을 골라도 취소하면 완료가 아니다
-    await page.getByTestId('n1-certification-input').setInputFiles(pngFile('mark-a.png'));
-    await expect(page.getByTestId('n1-certification-file-name')).toHaveText('mark-a.png');
+    // 파일을 골라도 취소하면 등록되지 않는다
+    await openCertificationModalAsUnlocked(page);
+    await input.setInputFiles(pngFile('mark-a.png'));
     await page.getByTestId('n1-certification-cancel').click();
     await expect(button).toHaveAttribute('data-state', 'default');
 
-    // 닫기 X와 Escape도 완료가 아니다
-    await button.click();
-    await page.getByTestId('n1-certification-input').setInputFiles(pngFile('mark-a.png'));
-    await page.getByRole('button', { name: '닫기' }).click();
-    await expect(button).toHaveAttribute('data-state', 'default');
-    await button.click();
-    await page.getByTestId('n1-certification-input').setInputFiles(pngFile('mark-a.png'));
-    await page.keyboard.press('Escape');
-    await expect(button).toHaveAttribute('data-state', 'default');
-
-    // 허용 형식이 아니면 선택되지 않는다
-    await button.click();
-    await page.getByTestId('n1-certification-input').setInputFiles({ name: 'mark.gif', mimeType: 'image/gif', buffer: Buffer.from('GIF89a') });
-    await expect(page.getByTestId('n1-certification-file-name')).toHaveCount(0);
-    await expect(page.getByTestId('n1-certification-register')).toBeDisabled();
-
-    // 등록하기 → 모달 닫힘 → 완료 상태
-    await page.getByTestId('n1-certification-input').setInputFiles(pngFile('mark-b.png'));
+    // 두 개 등록
+    await openCertificationModalAsUnlocked(page);
+    await expect(names).toHaveCount(0);
+    await input.setInputFiles([pngFile('mark-a.png'), svgFile('mark-b.svg')]);
     await page.getByTestId('n1-certification-register').click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
     await expect(button).toHaveAttribute('data-state', 'registered');
     await expect(button).toHaveText('인증 마크 업로드 완료');
     const done = await box(button);
     expect([done.width, done.height]).toEqual([170, 45]);
-    await expect(button).toHaveCSS('border-top-color', ORANGE);
-    await expect(button.locator('span')).toHaveCSS('color', ORANGE);
-    await expect(button).toHaveCSS('background-color', 'rgb(255, 255, 255)');
+    await expect(page.getByTestId('n1-certification-info')).toHaveCount(0);
+    // 원본 유지 상태라 완료 Tag도 disabled — 목록은 지우지 않는다. Tag/Selectable Disabled 표현
+    await expect(button).toBeDisabled();
+    await expect(button).toHaveCSS('background-color', 'rgb(245, 245, 245)');
+    await expect(button).toHaveCSS('border-top-color', 'rgb(234, 234, 234)');
     await expect(button).toHaveCSS('border-top-left-radius', '6px');
-    await expect(info).toHaveCount(0);
-    await expect(tooltip).toHaveCount(0);
+    await expect(button).toHaveCSS('opacity', '1');
+    await expect(button.locator('span')).toHaveCSS('color', 'rgb(153, 153, 153)');
+    await expect(button.locator('span')).toHaveCSS('font-size', '14px');
+    await expect(button.locator('span')).toHaveCSS('font-weight', '500');
 
     // action row: 완료 170 + gap 8 + 다음 148 = 326, 오른쪽 끝 1860(Figma 1094:10967 x1534)
     const next = await box(page.getByRole('button', { name: '다음' }));
-    expect([next.width, next.height]).toEqual([148, 45]);
     expect(next.x - (done.x + done.width)).toBe(8);
     expect(done.x).toBe(1534);
-    expect(next.x + next.width - done.x).toBe(326);
     expect(done.y).toBe(965);
 
-    // 완료 상태를 다시 누르면 모달이 열리고 등록한 파일이 보인다. 취소·Escape로 닫아도 완료 유지
-    await button.click();
-    await expect(page.getByRole('dialog', { name: '인증 마크 업로드' })).toBeVisible();
-    await expect(page.getByTestId('n1-certification-file-name')).toHaveText('mark-b.png');
+    // 다시 열면 전체 목록. 추가 후 취소 → 추가분만 버려진다
+    await openCertificationModalAsUnlocked(page);
+    await expect(names).toHaveText(['mark-a.png', 'mark-b.svg']);
+    await input.setInputFiles(jpgFile('mark-c.jpg'));
+    await expect(names).toHaveText(['mark-a.png', 'mark-b.svg', 'mark-c.jpg']);
     await page.getByTestId('n1-certification-cancel').click();
     await expect(button).toHaveAttribute('data-state', 'registered');
     await expect(button).toBeFocused();
-    await button.click();
+
+    // 삭제 후 닫기 X → 삭제도 반영되지 않는다
+    await openCertificationModalAsUnlocked(page);
+    await expect(names).toHaveText(['mark-a.png', 'mark-b.svg']);
+    await page.getByRole('button', { name: 'mark-a.png 삭제' }).click();
+    await page.getByRole('button', { name: '닫기' }).click();
+    await expect(button).toBeFocused();
+
+    // Escape도 마찬가지
+    await openCertificationModalAsUnlocked(page);
+    await expect(names).toHaveText(['mark-a.png', 'mark-b.svg']);
     await page.keyboard.press('Escape');
     await expect(button).toHaveAttribute('data-state', 'registered');
     await expect(button).toBeFocused();
 
-    // 키보드로도 완료 상태 버튼을 열 수 있다
-    await page.keyboard.press('Enter');
-    await expect(page.getByRole('dialog', { name: '인증 마크 업로드' })).toBeVisible();
+    // 추가 후 등록하기 → 세 개 모두 유지
+    await openCertificationModalAsUnlocked(page);
+    await input.setInputFiles(jpgFile('mark-c.jpeg'));
+    await page.getByTestId('n1-certification-register').click();
+    await openCertificationModalAsUnlocked(page);
+    await expect(names).toHaveText(['mark-a.png', 'mark-b.svg', 'mark-c.jpeg']);
     await page.keyboard.press('Escape');
 
     // 다른 입력으로 재렌더돼도 같은 N1 session 안에서 유지
     await page.getByPlaceholder('상품 이름을 입력해주세요').fill('재렌더 확인');
-    await page.getByTestId('n1-size-tab-resize').click();
     await expect(button).toHaveAttribute('data-state', 'registered');
   });
 });
+
+test.describe('카테고리 필수 — PRD F-SRC-04 ① 미선택 시 진행 불가', () => {
+  test('라벨 *(orange), 다른 필수값을 다 채워도 카테고리가 없으면 다음 비활성, 선택하면 활성', async ({ page }) => {
+    const label = page.locator('p').filter({ hasText: /^카테고리\*$/ });
+    await expect(label).toBeVisible();
+    await expect(label.locator('span')).toHaveText('*');
+    await expect(label.locator('span')).toHaveCSS('color', ORANGE);
+
+    const next = page.getByRole('button', { name: '다음' });
+    await expect(next).toBeDisabled();
+    await page.getByPlaceholder('상품 이름을 입력해주세요').fill('카테고리 확인');
+    await fillRequiredExceptCategory(page);
+    await expect(next).toBeDisabled();
+
+    await pickCategory(page);
+    await expect(page.getByText('바디/헤어', { exact: true })).toBeVisible();
+    await expect(next).toBeEnabled();
+
+    // 다른 필수값이 빠지면 카테고리가 있어도 다시 비활성 — 기존 validation 유지
+    await page.getByPlaceholder('상품 이름을 입력해주세요').fill('');
+    await expect(next).toBeDisabled();
+  });
+});
+
+/** 상품명·카테고리를 뺀 필수값 — 국가·언어·규제 분류·이미지 1장. */
+async function fillRequiredExceptCategory(page: Page) {
+  await page.locator('select').nth(0).selectOption('US');
+  await page.locator('select').nth(1).selectOption('en');
+  await page.locator('select').nth(2).selectOption('cosmetics');
+  await page.locator('#image-upload').setInputFiles(pngFile('source.png'));
+}
+
+async function pickCategory(page: Page) {
+  await page.getByRole('button', { name: '선택하기' }).click();
+  await page.getByRole('dialog', { name: '카테고리 선택' }).getByRole('button', { name: '바디/헤어' }).click();
+}
 
 test('1920×1080 가로 넘침 없음', async ({ page }) => {
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1920);

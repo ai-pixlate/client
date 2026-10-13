@@ -7,7 +7,7 @@ import { useCreateJobMutation, useAnalyzeJobMutation } from '@/lib/queries/pixla
 import type { ImageType } from '@/lib/api/types';
 import { StepNav } from '../[jobId]/_components/step-nav';
 
-import { CertificationUploadButton, CertificationUploadModal } from './_components/certification-upload';
+import { CertificationUploadButton, CertificationUploadModal, type CertificationMark } from './_components/certification-upload';
 import { ChevronDownGlyph14, SearchGlyph14 } from './_components/n1-glyphs';
 import { INITIAL_SIZE_SELECTION, SizeSelector, type SizeSelection } from './_components/size-selector';
 
@@ -46,6 +46,12 @@ const LANGUAGE_OPTIONS = [
 const COUNTRY_RECOMMENDED_LANGUAGE: Partial<Record<string, string>> = {
   US: 'en',
 };
+
+/**
+ * 「사이즈 변경」 잠금 — 커스텀 W/H·판매처 규격 제출 계약이 없어(specId는 'spec_original' 고정) 고른 값이
+ * 말없이 버려지지 않도록 원본 유지만 고를 수 있게 한다. 계약이 생기면 false로 풀고 handleSubmit의 specId를 연결한다.
+ */
+const RESIZE_LOCKED = true;
 
 // TODO: 백엔드 규제 분류 목록 API 연결 시 교체
 const REGULATORY_CLASS_OPTIONS = [
@@ -402,11 +408,14 @@ function NewJobPageInner() {
 
   // ── 사이즈 선택 (Figma 사이즈선택 1093:10288) ────────────────────
   // FE 화면 상태 — 제출 계약(specType 9월 original 고정, 커스텀 W/H 필드 없음)에는 아직 반영하지 않는다.
+  // 계약이 없는 동안 「사이즈 변경」은 잠근다 — RESIZE_LOCKED 참고.
   const [sizeSelection, setSizeSelection] = useState<SizeSelection>(INITIAL_SIZE_SELECTION);
 
-  // ── 인증 마크 업로드 (Figma 1089:10035 / 1084:4119) ─────────────────
+  // ── 인증 마크 업로드 (Figma 1089:10035 / 1170:8460) ─────────────────
   // 업로드 계약이 없어 등록한 파일은 이 N1 session의 FE 상태로만 든다(서버 전송·업로드 완료 흉내 없음).
-  const [certificationFile, setCertificationFile] = useState<File | null>(null);
+  // 복수 등록(PRD F-SRC-08). 버튼은 「사이즈 변경」일 때만 활성이고, 원본 유지로 돌아가도 목록은 지우지 않는다.
+  const [certificationMarks, setCertificationMarks] = useState<CertificationMark[]>([]);
+  const certificationEnabled = sizeSelection.tab === 'resize';
   const [certificationModalOpen, setCertificationModalOpen] = useState(false);
   const certificationButtonRef = useRef<HTMLButtonElement>(null);
   const closeCertificationModal = useCallback(() => {
@@ -515,15 +524,15 @@ function NewJobPageInner() {
 
   // 실제 OpenAPI JobCreate는 brandId만 required다(categoryId/productCode/
   // keywords는 전부 optional). N1 폼은 productName/targetCountry/
-  // targetLanguage/regulatoryClass/이미지 1장 이상만 화면 자체 필수값으로
-  // 좁혀서 쓴다(기존 결정 유지) — displayCategory(카테고리)는 그 목록에
-  // 없었으므로 여기서 제거한다. productCode/keywords는 애초에 isValid에
-  // 없었다(이미 선택값으로 처리돼 있었다).
+  // targetLanguage/regulatoryClass/displayCategory(카테고리)/이미지 1장 이상을
+  // 화면 자체 필수값으로 쓴다 — 카테고리는 PRD F-SRC-04(① 미선택 시 진행 불가)
+  // 기준 필수다. productCode/keywords는 선택값이다.
   const isValid =
     !!brandId &&
     !!productName &&
     !!targetCountry &&
     !!targetLanguage &&
+    !!displayCategory &&
     !!regulatoryClass &&
     images.length > 0;
 
@@ -896,7 +905,7 @@ function NewJobPageInner() {
                   leaf 클릭으로만 일어나고, 이 표시 필드 자체는 읽기 전용이다. */}
               {/* Figma(643:5822) 카테고리 행은 폭 447 고정(입력 323 + gap 16 + 버튼 108). */}
               <div className="flex max-w-[447px] flex-col gap-1">
-                <FieldLabel>카테고리</FieldLabel>
+                <FieldLabel required>카테고리</FieldLabel>
                 <div className="flex items-center gap-4">
                   <div className="flex h-[39px] flex-1 items-center justify-between rounded-[6px] border border-[#eaeaea] bg-white px-[14px] py-[10px]">
                     <span
@@ -979,7 +988,7 @@ function NewJobPageInner() {
                 <p className="text-[16px] leading-[19px] tracking-[-0.48px] text-[#171717]">사이즈 선택</p>
                 <span className="text-[18px] leading-[21px] font-medium tracking-[-0.54px] text-[#ff6a38]">*</span>
               </div>
-              <SizeSelector value={sizeSelection} onChange={setSizeSelection} />
+              <SizeSelector value={sizeSelection} onChange={setSizeSelection} resizeLocked={RESIZE_LOCKED} />
             </div>
 
             {/* 핵심 키워드(643:5924) — 제목 → 입력 그룹 gap 8, 입력 → helper gap 4, 아래 padding 40. */}
@@ -1038,7 +1047,8 @@ function NewJobPageInner() {
                 </p>
               )}
               <CertificationUploadButton
-                registered={certificationFile !== null}
+                registered={certificationMarks.length > 0}
+                disabled={!certificationEnabled}
                 onOpen={() => setCertificationModalOpen(true)}
                 buttonRef={certificationButtonRef}
               />
@@ -1056,13 +1066,13 @@ function NewJobPageInner() {
         </div>
       </div>
 
-      {/* 인증 마크 업로드 모달 (Figma 1084:4119) */}
+      {/* 인증 마크 업로드 모달 (Figma 1170:8460) */}
       {certificationModalOpen && (
         <CertificationUploadModal
-          initialFile={certificationFile}
+          initialMarks={certificationMarks}
           onClose={closeCertificationModal}
-          onRegister={(file) => {
-            setCertificationFile(file);
+          onRegister={(marks) => {
+            setCertificationMarks(marks);
             closeCertificationModal();
           }}
         />
