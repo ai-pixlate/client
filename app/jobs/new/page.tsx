@@ -1,15 +1,17 @@
 'use client';
 
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
 import { useCreateJobMutation, useAnalyzeJobMutation } from '@/lib/queries/pixlate';
 import type { ImageType } from '@/lib/api/types';
 import { StepNav } from '../[jobId]/_components/step-nav';
 
+import { CategorySelectorModal } from './_components/category-selector';
 import { CertificationUploadButton, CertificationUploadModal, type CertificationMark } from './_components/certification-upload';
 import { CheckGlyph16, ChevronDownGlyph14, PlusGlyph16, PlusGlyph24, SearchGlyph14 } from './_components/n1-glyphs';
 import { INITIAL_SIZE_SELECTION, SizeSelector, type SizeSelection } from './_components/size-selector';
+import { findCategoryPath } from './_data/seller-display-categories';
 
 // ─────────────────────────────────────────────────────────────────
 // UI용 임시 상수 — 실제 백엔드 연결 시 API 데이터로 교체할 것
@@ -63,78 +65,6 @@ const REGULATORY_CLASS_OPTIONS = [
 ];
 
 // ─────────────────────────────────────────────────────────────────
-// 카테고리 계층 — Figma 카테고리 선택 모달(381:6293)이 실제로 보여준 값만
-// 그대로 옮긴다. "화장품/향수 → 스킨케어 → 스킨/토너 → {토너,에센스 토너,패드}"
-// 경로만 4단계 전부(세분류까지) 문서화돼 있다. 나머지 형제 항목(바디/헤어,
-// 건강식품, 선케어, 팩/마스크, 클렌징, 에센스/세럼, 크림/젤/밤, 미스트)은
-// Figma에 라벨만 보이고 그 하위 트리는 어디에도 없다 — 임의로 하위 항목을
-// 지어내지 않는다. children이 없는 노드는 그 자체가 선택 가능한 leaf다
-// (더 드릴다운할 데이터가 없으므로 클릭 즉시 선택으로 처리한다).
-// TODO: 백엔드 카테고리 목록 API 연결 시 교체.
-// ─────────────────────────────────────────────────────────────────
-
-interface CategoryNode {
-  value: string;
-  label: string;
-  children?: CategoryNode[];
-}
-
-const CATEGORY_TREE: CategoryNode[] = [
-  {
-    value: 'cosmetics_perfume',
-    label: '화장품/향수',
-    children: [
-      {
-        value: 'skincare',
-        label: '스킨케어',
-        children: [
-          {
-            value: 'toner_type',
-            label: '스킨/토너',
-            children: [
-              { value: 'toner', label: '토너' },
-              { value: 'essence_toner', label: '에센스 토너' },
-              { value: 'pad', label: '패드' },
-            ],
-          },
-          { value: 'essence_serum', label: '에센스/세럼' },
-          { value: 'cream_gel_balm', label: '크림/젤/밤' },
-          { value: 'mist', label: '미스트' },
-        ],
-      },
-      { value: 'suncare', label: '선케어' },
-      { value: 'pack_mask', label: '팩/마스크' },
-      { value: 'cleansing', label: '클렌징' },
-    ],
-  },
-  { value: 'body_hair', label: '바디/헤어' },
-  { value: 'health_food', label: '건강식품' },
-];
-
-function findCategoryLabel(nodes: CategoryNode[], value: string): string | null {
-  for (const node of nodes) {
-    if (node.value === value) return node.label;
-    if (node.children) {
-      const found = findCategoryLabel(node.children, value);
-      if (found) return found;
-    }
-  }
-  return null;
-}
-
-function findCategoryPath(nodes: CategoryNode[], value: string, path: CategoryNode[] = []): CategoryNode[] | null {
-  for (const node of nodes) {
-    const nextPath = [...path, node];
-    if (node.value === value) return nextPath;
-    if (node.children) {
-      const found = findCategoryPath(node.children, value, nextPath);
-      if (found) return found;
-    }
-  }
-  return null;
-}
-
-// ─────────────────────────────────────────────────────────────────
 // 로컬 이미지 항목 타입 (업로드 이전 브라우저 상태)
 // ─────────────────────────────────────────────────────────────────
 
@@ -165,14 +95,6 @@ function CloseIcon({ size = 12 }: { size?: number }) {
   );
 }
 
-function ChevronRightIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-      <path d="M5.5 3.5L9 7L5.5 10.5" stroke="#999" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
 // ─────────────────────────────────────────────────────────────────
 // 필드 레이블 — Figma 기준(필수: text-[#171717] + orange *, 선택: text-[#707070])
 // ─────────────────────────────────────────────────────────────────
@@ -183,158 +105,6 @@ function FieldLabel({ children, required }: { children: React.ReactNode; require
       {children}
       {required && <span className="ml-1 text-[#ff6a38]">*</span>}
     </p>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────
-// 카테고리 선택 모달 (Figma 381:6293 "카테고리 선택")
-//
-// Figma 프레임 자체엔 backdrop 딤(어둡게 가리기)·제목/설명·확인/닫기 버튼이
-// 보이지 않는다 — 흰 카드(drop-shadow) + 검색 입력 + 4단 목록뿐이다. 그
-// 카드를 그대로 옮기고, "확인" 버튼 대신 leaf(더 하위 데이터가 없는 노드)를
-// 클릭하면 즉시 선택·닫힘으로 처리했다 — Figma에 없는 버튼을 임의로 만들지
-// 않기 위한 최소 보완이다. backdrop은 화면을 어둡게 가리진 않되(Figma에
-// 없음), 바깥 영역 클릭 시 닫히는 투명 캐처로는 둔다.
-// ─────────────────────────────────────────────────────────────────
-
-function CategoryColumn({
-  heading,
-  items,
-  selectedValue,
-  onSelect,
-  showChevron,
-}: {
-  heading: string;
-  items: CategoryNode[];
-  selectedValue: string | null;
-  onSelect: (node: CategoryNode) => void;
-  showChevron: boolean;
-}) {
-  return (
-    <div className="flex w-[277px] shrink-0 flex-col items-start">
-      <div className="flex w-full items-center px-4 py-2">
-        <p className="text-[12px] font-light tracking-[-0.04em] text-[#999]">{heading}</p>
-      </div>
-      {items.length === 0 && <p className="px-4 py-[18px] text-[12px] text-[#999]">검색 결과가 없습니다.</p>}
-      {items.map((item) => {
-        const isSelected = item.value === selectedValue;
-        return (
-          <button
-            key={item.value}
-            type="button"
-            onClick={() => onSelect(item)}
-            aria-pressed={isSelected}
-            className={`flex w-full items-center justify-between px-4 py-[18px] text-left text-[14px] tracking-[-0.01em] transition-colors ${
-              isSelected ? 'bg-[#f5f5f5] text-[#ff6a38]' : 'text-[#707070] hover:bg-gray-50'
-            }`}
-          >
-            <span>{item.label}</span>
-            {showChevron && item.children && <ChevronRightIcon />}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function CategoryModal({
-  currentValue,
-  onClose,
-  onSelect,
-}: {
-  currentValue: string;
-  onClose: () => void;
-  onSelect: (value: string) => void;
-}) {
-  const initialPath = useMemo(() => findCategoryPath(CATEGORY_TREE, currentValue) ?? [], [currentValue]);
-  const [selectedL1, setSelectedL1] = useState<CategoryNode | null>(initialPath[0] ?? null);
-  const [selectedL2, setSelectedL2] = useState<CategoryNode | null>(initialPath[1] ?? null);
-  const [selectedL3, setSelectedL3] = useState<CategoryNode | null>(initialPath[2] ?? null);
-  const [search, setSearch] = useState('');
-
-  const commit = (node: CategoryNode) => {
-    onSelect(node.value);
-    onClose();
-  };
-
-  const query = search.trim().toLowerCase();
-  const filterItems = (nodes: CategoryNode[]) =>
-    query ? nodes.filter((n) => n.label.toLowerCase().includes(query)) : nodes;
-
-  return (
-    <div className="fixed inset-0 z-50" onClick={onClose} role="presentation">
-      <div
-        role="dialog"
-        aria-label="카테고리 선택"
-        onClick={(e) => e.stopPropagation()}
-        className="absolute top-1/2 left-1/2 flex w-[1203px] max-w-[calc(100vw-48px)] -translate-x-1/2 -translate-y-1/2 flex-col items-start gap-3 rounded-[5px] bg-white px-7 py-5 drop-shadow-[2px_2px_12px_rgba(0,0,0,0.06)]"
-      >
-        {/* 다른 모든 텍스트 입력(상품명/상품코드/핵심키워드 등)과 같은 focus
-            처리(Design Direction §8: "Focus에서 Orange Accent")를 그대로
-            재사용한다 — 이 검색 입력만 border를 감싼 div에 올려두고
-            focus 스타일을 빠뜨렸던 것을 다른 input들과 같은 패턴(직접
-            border+focus:border-[#ff6a38])으로 맞췄다. */}
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="카테고리명 검색"
-          className="w-[150px] rounded-[6px] border border-[#eaeaea] bg-white px-4 py-2.5 text-[14px] text-[#707070] outline-none placeholder:text-[#707070] focus:border-[#ff6a38]"
-        />
-
-        <div className="flex w-full items-stretch gap-1.5 overflow-x-auto">
-          <CategoryColumn
-            heading="대분류"
-            items={filterItems(CATEGORY_TREE)}
-            selectedValue={selectedL1?.value ?? null}
-            showChevron
-            onSelect={(node) => {
-              if (node.children) {
-                setSelectedL1(node);
-                setSelectedL2(null);
-                setSelectedL3(null);
-              } else {
-                commit(node);
-              }
-            }}
-          />
-          <div className="w-px shrink-0 self-stretch bg-[#eaeaea]" />
-          <CategoryColumn
-            heading="중분류"
-            items={filterItems(selectedL1?.children ?? [])}
-            selectedValue={selectedL2?.value ?? null}
-            showChevron
-            onSelect={(node) => {
-              if (node.children) {
-                setSelectedL2(node);
-                setSelectedL3(null);
-              } else {
-                commit(node);
-              }
-            }}
-          />
-          <div className="w-px shrink-0 self-stretch bg-[#eaeaea]" />
-          <CategoryColumn
-            heading="소분류"
-            items={filterItems(selectedL2?.children ?? [])}
-            selectedValue={selectedL3?.value ?? null}
-            showChevron
-            onSelect={(node) => {
-              if (node.children) setSelectedL3(node);
-              else commit(node);
-            }}
-          />
-          <div className="w-px shrink-0 self-stretch bg-[#eaeaea]" />
-          <CategoryColumn
-            heading="세분류"
-            items={filterItems(selectedL3?.children ?? [])}
-            selectedValue={null}
-            showChevron={false}
-            onSelect={(node) => commit(node)}
-          />
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -413,9 +183,16 @@ function NewJobPageInner() {
     certificationButtonRef.current?.focus();
   }, []);
 
-  // ── 카테고리 선택 모달 (Figma 381:6293) ─────────────────────────
+  // ── 카테고리 선택 (Figma 1094:11176) ────────────────────────────
+  // displayCategory는 셀러 표시용 트리의 경로 값(_data/seller-display-categories)이다. 표시 필드에는 기존처럼
+  // 최종 선택 항목 이름만 보인다. 서버 categoryId 연결은 category master 연동 전까지 하지 않는다.
   const [categoryModalOpen, setCategoryModalOpen] = useState(false);
-  const selectedCategoryLabel = displayCategory ? findCategoryLabel(CATEGORY_TREE, displayCategory) : null;
+  const categoryButtonRef = useRef<HTMLButtonElement>(null);
+  const closeCategoryModal = useCallback(() => {
+    setCategoryModalOpen(false);
+    categoryButtonRef.current?.focus();
+  }, []);
+  const selectedCategoryLabel = findCategoryPath(displayCategory)?.at(-1)?.label ?? null;
 
   // ── 키워드 ──────────────────────────────────────────────────────
 
@@ -516,7 +293,8 @@ function NewJobPageInner() {
   // keywords는 전부 optional). N1 폼은 productName/targetCountry/
   // targetLanguage/regulatoryClass/displayCategory(카테고리)/이미지 1장 이상을
   // 화면 자체 필수값으로 쓴다 — 카테고리는 PRD F-SRC-04(① 미선택 시 진행 불가)
-  // 기준 필수다. productCode/keywords는 선택값이다. 책임 한계 동의도 PRD F-ACC-04 기준 필수다.
+  // 기준 필수다(화면에서 최종 항목을 골랐는지만 본다 — 서버 categoryId 연결 전). productCode/keywords는 선택값이다.
+  // 책임 한계 동의도 PRD F-ACC-04 기준 필수다.
   const isValid =
     !!brandId &&
     !!productName &&
@@ -554,7 +332,9 @@ function NewJobPageInner() {
         targetLanguage,
         regulatoryClass,
         specId: 'spec_original',
-        displayCategory: displayCategory || undefined,
+        // 카테고리: 계약 필드는 서버 categoryId(int64)다. 화면의 displayCategory는 셀러 표시용 경로라 categoryId가
+        // 아니고, JobCreate에도 없는 필드라 보내지 않는다. GET /master/categories FE 연결 후 server categoryId를
+        // 매핑해 보낸다 — 그 전까지 categoryId는 생략(JobCreate에서 optional, analyze 게이트는 productName만 검증).
         keywords,
         sourceImages,
       });
@@ -918,6 +698,7 @@ function NewJobPageInner() {
                       flex items-center justify-center로 항상 정중앙에 오게
                       고쳤다. */}
                   <button
+                    ref={categoryButtonRef}
                     type="button"
                     onClick={() => setCategoryModalOpen(true)}
                     className="flex h-[37px] w-[108px] shrink-0 items-center justify-center rounded-[6px] border border-[#eaeaea] bg-white px-5 py-2.5 text-[14px] font-medium tracking-[-0.03em] text-[#171717] hover:bg-gray-50"
@@ -1109,12 +890,15 @@ function NewJobPageInner() {
         />
       )}
 
-      {/* 카테고리 선택 모달 (Figma 381:6293) */}
+      {/* 카테고리 선택 (Figma 1094:10968 · Category Input / Specimen 1094:11176) */}
       {categoryModalOpen && (
-        <CategoryModal
+        <CategorySelectorModal
           currentValue={displayCategory}
-          onClose={() => setCategoryModalOpen(false)}
-          onSelect={(value) => setDisplayCategory(value)}
+          onClose={closeCategoryModal}
+          onConfirm={(value) => {
+            setDisplayCategory(value);
+            closeCategoryModal();
+          }}
         />
       )}
 

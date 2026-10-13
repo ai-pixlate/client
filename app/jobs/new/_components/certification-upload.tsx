@@ -294,7 +294,14 @@ export function CertificationUploadModal({
           <h3 id="n1-certification-list-title" className="text-[18px] leading-[21px] font-medium tracking-[-0.54px] text-[#171717]">
             등록된 인증 마크
           </h3>
-          <ul data-testid="n1-certification-list" className="n3-scroll-hidden grid min-h-0 flex-1 auto-rows-[80px] grid-cols-2 content-start gap-x-5 gap-y-2 overflow-y-auto">
+          {/* 목록 viewport(160 = 193 − 제목 21 − gap 12)만 세로 스크롤. 인증파일 리스트(1170:13029) odd/even처럼
+              카드 310×80을 한 행에 두 장(x 0 · 330, 열 간격 20)씩 놓는다. 키보드로도 스크롤하도록 포커스를 받는다. */}
+          <ul
+            data-testid="n1-certification-list"
+            aria-labelledby="n1-certification-list-title"
+            tabIndex={0}
+            className="n3-scroll-hidden grid min-h-0 flex-1 auto-rows-[80px] grid-cols-2 content-start gap-x-5 gap-y-2 overflow-y-auto overscroll-contain rounded-[8px] outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ff6a38]"
+          >
             {pendingMarks.map((mark) => (
               <li
                 key={mark.id}

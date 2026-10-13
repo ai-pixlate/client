@@ -44,6 +44,32 @@ export function PlusGlyph24() {
   );
 }
 
+/** Card/Navigation/Close · Size=20 (53:1077) — 카테고리 선택(1094:11176) 우상단 닫기. */
+export function CloseGlyph20() {
+  return (
+    <span aria-hidden="true" className="relative block size-5 shrink-0 overflow-hidden">
+      <span className="absolute inset-1/4">
+        <span className="absolute inset-[-7.5%]">
+          <img alt="" src="/n1/icons/close-20.svg" className="block size-full max-w-none" />
+        </span>
+      </span>
+    </span>
+  );
+}
+
+/** Card/Navigation/Chevron right · Size=14 (53:1018) — 하위 단계가 있는 카테고리 row. */
+export function ChevronRightGlyph14() {
+  return (
+    <span aria-hidden="true" className="relative block size-[14px] shrink-0 overflow-hidden">
+      <span className="absolute inset-[22.5%_35%_22.5%_37.5%]">
+        <span className="absolute inset-[-6.49%_-12.99%]">
+          <img alt="" src="/n1/icons/chevron-right-14.svg" className="block size-full max-w-none" />
+        </span>
+      </span>
+    </span>
+  );
+}
+
 /** Card/Action/Search · Size=14 (53:1180) */
 export function SearchGlyph14() {
   return (

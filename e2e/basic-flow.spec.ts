@@ -2,9 +2,11 @@ import { test, expect, type Page, type Locator } from '@playwright/test';
 
 import { MOCK_BRAND_ID, MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 
+import { pickCategory } from './helpers/pick-category';
+
 // N1 combobox 순서(Figma 525:3023 재정합 후): 국가 → 언어 → 규제 분류
 // (카테고리는 더 이상 combobox가 아니다 — 검색 표시 필드 + "선택하기"
-// 버튼→카테고리 선택 모달(381:6293)로 바뀌었다). 각 select의 첫 번째
+// 버튼→카테고리 선택(1094:11176)으로 바뀌었다). 각 select의 첫 번째
 // 유효한(placeholder 다음) option을 선택하므로 순서 자체는 영향 없다.
 async function selectFirstValidOption(page: Page, index: number) {
   const select = page.getByRole('combobox').nth(index);
@@ -58,10 +60,8 @@ test('N1에서 N5 검수 화면까지 기본 작업 흐름을 완료한다', asy
   await selectFirstValidOption(page, 0); // 국가
   await selectFirstValidOption(page, 1); // 언어
 
-  // 카테고리 — "선택하기" → 모달(381:6293)에서 하위 데이터가 없는 최상위
-  // 항목("바디/헤어")을 눌러 즉시 선택·닫힘 처리한다.
-  await page.getByRole('button', { name: '선택하기' }).click();
-  await page.getByRole('dialog', { name: '카테고리 선택' }).getByRole('button', { name: '바디/헤어' }).click();
+  // 카테고리 — "선택하기" → 카테고리 선택(1094:11176)에서 「스킨케어 > 스킨/토너」 → 확인.
+  await pickCategory(page);
 
   await selectFirstValidOption(page, 2); // 규제 분류(인덱스가 3→2로 당겨졌다)
 

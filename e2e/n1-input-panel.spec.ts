@@ -1,5 +1,9 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
 
+import { categoryPathValue, findCategoryPath, SELLER_DISPLAY_CATEGORIES } from '@/app/jobs/new/_data/seller-display-categories';
+
+import { pickCategory } from './helpers/pick-category';
+
 // ─────────────────────────────────────────────────────────────────
 // N1 이미지 정보 입력 — Figma 525:3023(우측 패널·SizeSelector·하단 action·tooltip),
 // 1170:8460(인증 마크 복수 업로드 모달). MSW mock 기준.
@@ -676,12 +680,273 @@ test.describe('카테고리 필수 — PRD F-SRC-04 ① 미선택 시 진행 불
     await expect(next).toBeDisabled();
 
     await pickCategory(page);
-    await expect(page.getByText('바디/헤어', { exact: true })).toBeVisible();
+    // 표시 필드에는 기존처럼 최종 선택 항목 이름만(경로 breadcrumb 없음)
+    await expect(page.getByText('스킨/토너', { exact: true })).toBeVisible();
     await expect(next).toBeEnabled();
 
     // 다른 필수값이 빠지면 카테고리가 있어도 다시 비활성 — 기존 validation 유지
     await page.getByPlaceholder('상품 이름을 입력해주세요').fill('');
     await expect(next).toBeDisabled();
+  });
+});
+
+test.describe('카테고리 선택 — Figma 1094:11176, 셀러 표시용 트리(Excel)', () => {
+  const L1 = ['스킨케어', '마스크팩', '클렌징', '선케어', '메이크업', '뷰티소품', '더모코스메틱', '네일', '헤어케어', '바디케어', '향수/디퓨저'];
+  const SKINCARE_L2 = ['스킨/토너', '에센스/세럼/앰플', '크림', '로션', '미스트/오일', '스킨케어세트', '스킨케어 디바이스'];
+
+  test('데이터 — Excel 트리 그대로: 대분류 11 · 중분류 59 · 최종 선택 가능 166, 경로 값 왕복', () => {
+    const l2 = SELLER_DISPLAY_CATEGORIES.flatMap((a) => a.children ?? []);
+    const finals = l2.flatMap((b) => (b.children ? b.children.map((c) => [b, c]) : [[b]]));
+    expect(SELLER_DISPLAY_CATEGORIES.map((a) => a.label)).toEqual(L1);
+    expect(l2).toHaveLength(59);
+    expect(finals).toHaveLength(166);
+    // 같은 이름(크림 > 크림)도 경로로 구분되어 왕복된다
+    const value = categoryPathValue(findCategoryPath('스킨케어 > 크림 > 크림')!);
+    expect(value).toBe('스킨케어 > 크림 > 크림');
+    expect(findCategoryPath('스킨케어 > 없는항목')).toBeNull();
+  });
+
+  const open = async (page: Page) => {
+    await page.getByRole('button', { name: '선택하기' }).click();
+    const modal = page.getByRole('dialog', { name: '카테고리 선택' });
+    await expect(modal).toBeVisible();
+    return modal;
+  };
+  const column = (modal: Locator, depth: number) => modal.getByTestId('n1-category-column').nth(depth);
+  const rowsOf = (modal: Locator, depth: number) => column(modal, depth).getByRole('listitem');
+  const row = (modal: Locator, depth: number, label: string) => column(modal, depth).getByRole('button', { name: label, exact: true });
+
+  test('geometry — 1192×468 (364,332), 3 column 359·351, heading 30, row 53, 닫기 20, 확인 80×37', async ({ page }) => {
+    const modal = await open(page);
+    expect(await box(modal)).toEqual({ x: 364, y: 332, width: 1192, height: 468 });
+    await expect(modal).toHaveCSS('border-top-left-radius', '5px');
+    await expect(modal).toHaveCSS('padding-top', '32px');
+    await expect(modal).toHaveCSS('background-color', 'rgb(255, 255, 255)');
+    for (const [i, x] of [396, 780.33, 1164.67].entries()) {
+      const c = await box(column(modal, i));
+      expect(Math.abs(c.x - x)).toBeLessThan(0.05);
+      expect(Math.abs(c.width - 359.33)).toBeLessThan(0.05);
+      expect([c.y, c.height]).toEqual([364, 351]);
+    }
+    await expect(column(modal, 0).getByText('대분류', { exact: true })).toHaveCSS('color', 'rgb(153, 153, 153)');
+    await expect(column(modal, 1).getByText('중분류', { exact: true })).toBeVisible();
+    await expect(column(modal, 2).getByText('소분류', { exact: true })).toBeVisible();
+    const first = await box(row(modal, 0, '스킨케어'));
+    expect([first.y, first.height]).toEqual([364 + 30, 53]);
+    await expect(row(modal, 0, '스킨케어')).toHaveCSS('color', 'rgb(112, 112, 112)');
+    await expect(row(modal, 0, '스킨케어').locator('img[src="/n1/icons/chevron-right-14.svg"]')).toHaveCount(1);
+    const close = await box(modal.getByRole('button', { name: '닫기' }));
+    expect([close.x, Math.round(close.y * 10) / 10, close.width, close.height]).toEqual([1512, 356.8, 20, 20]);
+    const confirm = modal.getByRole('button', { name: '확인' });
+    const cb = await box(confirm);
+    expect([cb.y, cb.height]).toEqual([731, 37]);
+    expect(Math.abs(cb.width - 80)).toBeLessThanOrEqual(1);
+    expect(cb.x + cb.width).toBe(364 + 1192 - 32);
+  });
+
+  test('대분류 11종 → 스킨케어 중분류 → 크림의 소분류, 선택 표현과 하위 reset', async ({ page }) => {
+    const modal = await open(page);
+    await expect(rowsOf(modal, 0)).toHaveText(L1);
+    await expect(rowsOf(modal, 1)).toHaveCount(0);
+    await expect(rowsOf(modal, 2)).toHaveCount(0);
+    await expect(modal.getByRole('button', { name: '확인' })).toBeDisabled();
+
+    await row(modal, 0, '스킨케어').click();
+    await expect(row(modal, 0, '스킨케어')).toHaveAttribute('aria-pressed', 'true');
+    await expect(row(modal, 0, '스킨케어')).toHaveCSS('background-color', 'rgb(245, 245, 245)');
+    await expect(row(modal, 0, '스킨케어')).toHaveCSS('color', ORANGE);
+    await expect(rowsOf(modal, 1)).toHaveText(SKINCARE_L2);
+    // 하위 단계가 있는 중분류에만 chevron
+    await expect(row(modal, 1, '크림').locator('img')).toHaveCount(1);
+    await expect(row(modal, 1, '스킨/토너').locator('img')).toHaveCount(0);
+
+    await row(modal, 1, '크림').click();
+    await expect(rowsOf(modal, 2)).toHaveText(['크림', '아이크림']);
+    // 소분류가 있는 중분류는 소분류를 골라야 확인 가능
+    await expect(modal.getByRole('button', { name: '확인' })).toBeDisabled();
+    await row(modal, 2, '아이크림').click();
+    await expect(row(modal, 2, '아이크림')).toHaveAttribute('aria-pressed', 'true');
+    await expect(modal.getByRole('button', { name: '확인' })).toBeEnabled();
+
+    // 중분류를 바꾸면 소분류 선택 reset
+    await row(modal, 1, '로션').click();
+    await expect(rowsOf(modal, 2)).toHaveText(['로션', '올인원']);
+    await expect(column(modal, 2).locator('[aria-pressed="true"]')).toHaveCount(0);
+    await expect(modal.getByRole('button', { name: '확인' })).toBeDisabled();
+
+    // 대분류를 바꾸면 중·소분류 선택 reset
+    await row(modal, 1, '크림').click();
+    await row(modal, 2, '아이크림').click();
+    await row(modal, 0, '마스크팩').click();
+    await expect(rowsOf(modal, 1)).toHaveText(['시트팩', '패드', '페이셜팩', '코팩', '패치']);
+    await expect(column(modal, 1).locator('[aria-pressed="true"]')).toHaveCount(0);
+    await expect(rowsOf(modal, 2)).toHaveCount(0);
+    await expect(modal.getByRole('button', { name: '확인' })).toBeDisabled();
+  });
+
+  test('스킨케어 > 크림 > 아이크림 확인 → 반영, 소분류 없는 스킨/토너도 최종 선택, X·Escape는 기존 값 유지', async ({ page }) => {
+    const field = page.getByText(/^(검색하기|아이크림|스킨\/토너)$/);
+    await expect(field).toHaveText('검색하기');
+
+    await pickCategory(page, ['스킨케어', '크림', '아이크림']);
+    await expect(page.getByRole('dialog', { name: '카테고리 선택' })).toHaveCount(0);
+    await expect(field).toHaveText('아이크림');
+    await expect(page.getByRole('button', { name: '선택하기' })).toBeFocused();
+
+    // 다시 열면 적용된 경로가 펼쳐져 있다
+    let modal = await open(page);
+    await expect(row(modal, 0, '스킨케어')).toHaveAttribute('aria-pressed', 'true');
+    await expect(row(modal, 1, '크림')).toHaveAttribute('aria-pressed', 'true');
+    await expect(row(modal, 2, '아이크림')).toHaveAttribute('aria-pressed', 'true');
+
+    // 임시로 바꾸고 X → 취소, 기존 적용값 유지
+    await row(modal, 1, '스킨/토너').click();
+    await modal.getByRole('button', { name: '닫기' }).click();
+    await expect(modal).toHaveCount(0);
+    await expect(field).toHaveText('아이크림');
+
+    // Escape도 취소
+    modal = await open(page);
+    await row(modal, 0, '선케어').click();
+    await row(modal, 1, '선크림').click();
+    await page.keyboard.press('Escape');
+    await expect(modal).toHaveCount(0);
+    await expect(field).toHaveText('아이크림');
+
+    // 소분류 없는 중분류 자체가 최종 선택
+    await pickCategory(page, ['스킨케어', '스킨/토너']);
+    await expect(field).toHaveText('스킨/토너');
+  });
+
+  test('column 목록만 세로 스크롤 — heading 고정, modal 높이 유지, wheel·keyboard로 마지막 항목 접근', async ({ page }) => {
+    const modal = await open(page);
+    const list = column(modal, 0).getByTestId('n1-category-list');
+    await expect(list).toHaveCSS('overflow-y', 'auto');
+    const { clientHeight, scrollHeight } = await list.evaluate((el) => ({ clientHeight: el.clientHeight, scrollHeight: el.scrollHeight }));
+    expect(clientHeight).toBe(351 - 30);
+    expect(scrollHeight).toBe(11 * 53);
+    const heading = await box(column(modal, 0).getByText('대분류', { exact: true }));
+
+    const l = await box(list);
+    await page.mouse.move(l.x + l.width / 2, l.y + l.height / 2);
+    await page.mouse.wheel(0, 300);
+    await expect.poll(() => list.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+    expect(await box(column(modal, 0).getByText('대분류', { exact: true }))).toEqual(heading);
+    expect((await box(modal)).height).toBe(468);
+    await expect(row(modal, 0, '향수/디퓨저')).toBeInViewport();
+
+    // keyboard — Tab으로 마지막 항목까지 가면 목록이 따라 스크롤되고 Enter로 선택된다
+    await list.evaluate((el) => el.scrollTo(0, 0));
+    await row(modal, 0, '바디케어').focus();
+    await page.keyboard.press('Tab');
+    await expect(row(modal, 0, '향수/디퓨저')).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(rowsOf(modal, 1)).toHaveText(['향수', '미니/고체향수', '홈프래그런스']);
+
+    // 중분류도 넘치면 같은 방식(메이크업 > 베이스메이크업 소분류 10개)
+    await row(modal, 0, '메이크업').click();
+    await row(modal, 1, '베이스메이크업').click();
+    const sub = column(modal, 2).getByTestId('n1-category-list');
+    expect(await sub.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+    await row(modal, 2, 'BB/CC').scrollIntoViewIfNeeded();
+    await row(modal, 2, 'BB/CC').click();
+    await expect(modal.getByRole('button', { name: '확인' })).toBeEnabled();
+  });
+});
+
+test.describe('카테고리 제출 계약 — 표시 경로 ≠ server categoryId', () => {
+  test('카테고리를 골라도 POST /jobs에 표시 경로·이름을 categoryId(또는 다른 필드)로 싣지 않는다 — master 연결 전 categoryId 생략', async ({ page }) => {
+    let body: Record<string, unknown> | null = null;
+    page.on('request', (req) => {
+      if (req.method() === 'POST' && /\/jobs$/.test(new URL(req.url()).pathname)) body = req.postDataJSON();
+    });
+    await page.getByPlaceholder('상품 이름을 입력해주세요').fill('카테고리 계약 확인');
+    await fillRequiredExceptCategory(page);
+    await pickCategory(page, ['스킨케어', '크림', '아이크림']);
+    await expect(page.getByText('아이크림', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '다음' }).click();
+    await expect.poll(() => body).not.toBeNull();
+
+    // GET /master/categories가 FE에 없어 server categoryId를 만들 수 없다 — 가짜 id 없이 생략한다
+    expect(body).not.toHaveProperty('categoryId');
+    // 셀러 표시용 경로·이름은 서버 계약 필드가 아니다(JobCreate에 displayCategory 없음)
+    expect(body).not.toHaveProperty('displayCategory');
+    const serialized = JSON.stringify(body);
+    expect(serialized).not.toContain('스킨케어');
+    expect(serialized).not.toContain('아이크림');
+    // 기존 제출 계약은 그대로
+    expect(body!.specId).toBe('spec_original');
+    expect(body!.productName).toBe('카테고리 계약 확인');
+  });
+});
+
+test.describe('인증 마크 목록 스크롤 — 1170:13157 안에서만', () => {
+  test('5개 이상 등록 시 160 viewport만 스크롤, 2열 배치, 제목·uploader·footer·modal 고정, 삭제 후 reflow', async ({ page }) => {
+    await openCertificationModalAsUnlocked(page);
+    const dialog = page.getByRole('dialog', { name: '인증 마크 업로드' });
+    const input = page.getByTestId('n1-certification-input');
+    const names = ['m1.png', 'm2.png', 'm3.svg', 'm4.jpg', 'm5.png', 'm6.png', 'm7.png'];
+    await input.setInputFiles(names.map((n) => (n.endsWith('.svg') ? svgFile(n) : n.endsWith('.jpg') ? jpgFile(n) : pngFile(n))));
+    await expect(page.getByTestId('n1-certification-file-name')).toHaveText(names);
+
+    const list = page.getByTestId('n1-certification-list');
+    const m = await box(dialog);
+    const ls = await box(list);
+    expect([ls.x - m.x, ls.y - m.y, ls.width]).toEqual([40, 263 + 33, 640]);
+    const { clientHeight, scrollHeight } = await list.evaluate((el) => ({ clientHeight: el.clientHeight, scrollHeight: el.scrollHeight }));
+    expect(clientHeight).toBe(160);
+    expect(scrollHeight).toBeGreaterThan(clientHeight);
+    await expect(list).toHaveCSS('overflow-y', 'auto');
+
+    // 2열 — 1·2 / 3·4 / 5·6 / 7, 카드 310×80, 두 번째 열 x 330, 행 간격은 기존 8
+    const items = page.getByTestId('n1-certification-item');
+    const cards = await Promise.all(names.map((_, i) => box(items.nth(i))));
+    for (const [i, c] of cards.entries()) {
+      expect([c.width, c.height]).toEqual([310, 80]);
+      expect(c.x - ls.x).toBe(i % 2 === 0 ? 0 : 330);
+      expect(c.y - ls.y).toBe(Math.floor(i / 2) * (80 + 8));
+    }
+
+    const fixed = async () => ({
+      title: await box(dialog.getByRole('heading', { name: '등록된 인증 마크' })),
+      uploader: await box(page.getByTestId('n1-certification-dropzone')),
+      notice: await box(dialog.getByText('업로드 전에 확인해 주세요')),
+      cancel: await box(page.getByTestId('n1-certification-cancel')),
+      modal: await box(dialog),
+    });
+    const before = await fixed();
+    expect(before.modal.height).toBe(696);
+    expect(before.notice.y - m.y).toBe(488);
+    expect(before.cancel.y - m.y).toBe(600);
+
+    // wheel
+    await page.mouse.move(ls.x + ls.width / 2, ls.y + 40);
+    await page.mouse.wheel(0, 120);
+    await expect.poll(() => list.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+    expect(await fixed()).toEqual(before);
+
+    // keyboard — 목록에 포커스 후 End로 끝까지, 5번째 이후 카드 접근
+    await list.evaluate((el) => el.scrollTo(0, 0));
+    await list.focus();
+    await page.keyboard.press('End');
+    await expect.poll(() => list.evaluate((el) => el.scrollTop + el.clientHeight >= el.scrollHeight - 1)).toBe(true);
+    await expect(items.nth(4)).toBeInViewport();
+    await expect(items.nth(6)).toBeInViewport();
+    expect(await fixed()).toEqual(before);
+
+    // 5번째 카드 삭제 → 앞에서부터 다시 2열 reflow, 순서 유지
+    await page.getByRole('button', { name: 'm5.png 삭제' }).click();
+    const rest = ['m1.png', 'm2.png', 'm3.svg', 'm4.jpg', 'm6.png', 'm7.png'];
+    await expect(page.getByTestId('n1-certification-file-name')).toHaveText(rest);
+    const ls2 = await box(list);
+    await list.evaluate((el) => el.scrollTo(0, 0));
+    for (const [i] of rest.entries()) {
+      const c = await box(items.nth(i));
+      expect(c.x - ls2.x).toBe(i % 2 === 0 ? 0 : 330);
+      expect(c.y - ls2.y).toBe(Math.floor(i / 2) * 88);
+    }
+    expect(await list.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+    expect((await box(dialog)).height).toBe(696);
   });
 });
 
@@ -692,11 +957,6 @@ async function fillRequiredExceptCategory(page: Page, { consent = true }: { cons
   await page.locator('select').nth(2).selectOption('cosmetics');
   await page.locator('#image-upload').setInputFiles(pngFile('source.png'));
   if (consent) await page.getByTestId('n1-consent-checkbox').check();
-}
-
-async function pickCategory(page: Page) {
-  await page.getByRole('button', { name: '선택하기' }).click();
-  await page.getByRole('dialog', { name: '카테고리 선택' }).getByRole('button', { name: '바디/헤어' }).click();
 }
 
 test('1920×1080 가로 넘침 없음', async ({ page }) => {
