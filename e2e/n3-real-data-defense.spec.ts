@@ -2,6 +2,8 @@ import { test, expect, type Locator, type Page } from '@playwright/test';
 
 import { MOCK_BRAND_ID, MOCK_JOB_ID, mockSectionsResponse } from '@/lib/mock-api/fixtures';
 
+import { pickCategory } from './helpers/pick-category';
+
 /** dnd-kit PointerSensor(activationConstraint distance:4)를 넘기는 최소 drag. */
 async function dragBetweenZones(page: Page, source: Locator, targetZone: Locator) {
   const sourceBox = await source.boundingBox();
@@ -95,8 +97,7 @@ async function reachN3(page: Page): Promise<void> {
   await selectFirstValidOption(page, 0); // 국가
   await selectFirstValidOption(page, 1); // 언어
 
-  await page.getByRole('button', { name: '선택하기' }).click();
-  await page.getByRole('dialog', { name: '카테고리 선택' }).getByRole('button', { name: '바디/헤어' }).click();
+  await pickCategory(page);
 
   await selectFirstValidOption(page, 2); // 규제 분류
 
@@ -107,6 +108,7 @@ async function reachN3(page: Page): Promise<void> {
   });
   await expect(page.locator('img[alt="e2e-test.png"]')).toBeVisible();
 
+  await page.getByRole('checkbox', { name: /결과물에 쓰는 인증·시험 결과/ }).check(); // 책임 한계 동의(F-ACC-04)
   await page.getByRole('button', { name: '다음' }).click();
   await expect(page).toHaveURL(new RegExp(`/jobs/${MOCK_JOB_ID}$`));
 
