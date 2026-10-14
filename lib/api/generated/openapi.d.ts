@@ -523,7 +523,10 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** 원본 순서 재정렬 🟢9월 */
+        /**
+         * 원본 순서 재정렬 🟢9월
+         * @description `order` = 작업의 현재 원본 이미지 id 전체를 정확히 한 번씩 담은 배열(앞이 1번). 검증에 실패하면 순서를 전혀 바꾸지 않는다. `order` 누락·타입 오류·중복·현재 이미지 일부 누락 → 400 VALIDATION_ERROR. 작업 미존재·미소유, 이미지 id 미존재·다른 작업 소속 → 404 NOT_FOUND. 통과하면 한 트랜잭션에서 1..N 으로 다시 매기고 재정렬된 SourceImage 배열을 반환한다.
+         */
         patch: operations["sourceImageReorder"];
         trace?: never;
     };
@@ -860,7 +863,7 @@ export interface paths {
         put?: never;
         /**
          * 산출물 묶음 생성 (export.zip) 🟢9월
-         * @description content.csv(formula injection 방어) + manifest(서버 보관·미배포) + zip. 🟢9월.
+         * @description content.csv(formula injection 방어) + zip. 🟢9월. (manifest(서버 보관·미배포)는 1.0.0 범위에서 제외 — 2026-10-14 범위 변경 승인, 이후 릴리즈에서 규격과 함께 추가) 1.0.0: 만들 수 있는 구성요소 = csv(content.csv)·images. html·psd 는 이번 릴리즈 범위 밖 → 요청에 있으면 아무것도 만들지 않고 400 VALIDATION_ERROR(error.details.unsupported). csv·images와 html·psd가 섞여 있어도 전체 400이고 산출물을 만들지 않는다. 둘 이상 고르면 하나의 zip 으로 묶어 artifactType=zip 을 반환하고, 하나만 고르면 그 구성요소(csv·images)를 반환한다.
          */
         post: operations["exportCreate"];
         delete?: never;
@@ -1220,7 +1223,7 @@ export interface components {
         /** @enum {string} */
         SectionBucket: "include" | "exclude";
         /** @enum {string} */
-        ExclusionReason: "auto_regulatory" | "auto_channel" | "auto_local_irrelevant" | "user_manual" | "restored_by_user";
+        ExclusionReason: "auto_regulatory" | "auto_channel" | "auto_local" | "auto_local_failed" | "user_manual" | "restored_by_user";
         /** @enum {string} */
         ExcludedStage: "N3" | "N5";
         /** @enum {string} */
@@ -1458,11 +1461,13 @@ export interface components {
             targetCountry?: string | null;
             regulatoryClass?: components["schemas"]["RegulatoryClass"] | null;
             targetLanguage?: string | null;
-            specType?: components["schemas"]["SpecType"] | null;
+            /** @description null 불가(400 VALIDATION_ERROR) — 생략하면 기존 값 유지. 1.0.0 은 original 만 사용(2026-10-14 결정) */
+            specType?: components["schemas"]["SpecType"];
             /** Format: int64 */
             channelSpecId?: number | null;
             /** Format: int64 */
             categoryId?: number | null;
+            /** @description 보내면 전체 교체. null 불가 */
             keywords?: string[];
             imageType?: components["schemas"]["ImageContinuity"] | null;
             /**
@@ -1607,7 +1612,7 @@ export interface components {
             excludedStage?: components["schemas"]["ExcludedStage"] | null;
             inpaintStatus?: components["schemas"]["InpaintStatus"] | null;
             warningBadge?: components["schemas"]["WarningBadge"] | null;
-            /** @description 판정 목록 (정렬 불변식 regulated→policy→irrelevant). 제외 버킷만 전체 노출. */
+            /** @description 판정 목록 (정렬 불변식 regulated→policy→irrelevant→needs_fix→conditional, 같은 값은 id 순). 제외 버킷만 전체 노출 — 목록(sectionList)의 포함 섹션은 빈 배열, 상세(SEC-02)는 판정 근거 전체. */
             verdicts?: components["schemas"]["SectionVerdict"][];
             signals?: components["schemas"]["ReviewSignal"][];
         };
@@ -1712,7 +1717,7 @@ export interface components {
                 signals?: components["schemas"]["ReviewSignal"][];
             }[];
         };
-        /** @description acknowledgedWarnings는 개수가 아니라 식별자. 서버 미해결 경고 집합과 다르면 409 INVALID_STATE. */
+        /** @description acknowledgedWarnings는 개수가 아니라 식별자. 필수 확인 대상 = 포함(include) 섹션 블록의 translation_failed. 서버는 받은 목록 중 필수 확인 대상만 골라 서버의 미해결 필수 경고 집합과 비교하고, 다르면 409 INVALID_STATE (error.details.warnings = 서버 집합). 그 밖의 코드(width_overflow 등)·제외 섹션 블록은 보내도 무시한다 — 화면 신호 전부를 보내도 된다. 넘침 경고는 표시만 하고 확정을 막지 않는다(2026-10-14 결정). */
         ConfirmRequest: {
             acknowledgedWarnings?: {
                 /** Format: int64 */
@@ -1755,6 +1760,7 @@ export interface components {
                 /** @enum {string} */
                 status?: "generated" | "partial" | "failed" | "pending";
                 isGenerated?: boolean;
+                /** @description 1.0.0 은 html·psd 를 만들지 않으므로 false */
                 isActive?: boolean;
                 failedCount?: number;
                 /** @enum {string|null} */
@@ -2381,7 +2387,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 같은 키 재요청은 첫 응답 재전송(Redis 24h · 중복 생성 방지) */
+                /** @description 같은 키 재요청은 첫 응답 재전송(Redis 24h · 중복 생성 방지). 키 범위 = 판매자 + 작업 생성 API + 키(다른 판매자의 같은 키와 섞이지 않음). 완료된 같은 키는 요청 본문이 달라도 최초 응답(201 Job)을 재전송 — 다른 작업을 만들려면 새 키를 쓴다. 키 없는 요청도 허용(멱등 보장 없음). 같은 키 동시 요청에서도 작업은 하나만 생성. 같은 키가 처리 중이거나 결과가 확정되지 않았으면 409 DUPLICATE. 키를 받은 요청에서 저장소(Redis)를 쓸 수 없으면 503 SERVICE_UNAVAILABLE(작업을 만들지 않음). 결과를 모르는 응답(5xx)을 받았으면 새 키로 자동 재시도하지 않는다(중복 위험). 중복 방지는 기록이 유지되는 동안(24시간)만 보장한다(2026-10-14 결정). */
                 "Idempotency-Key"?: string;
             };
             path?: never;
@@ -2403,6 +2409,15 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            /** @description brandId 미존재·미소유(존재 은닉) — 작업을 만들지 않는다 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             409: components["responses"]["Conflict"];
         };
     };
@@ -2661,6 +2676,7 @@ export interface operations {
                     "application/json": components["schemas"]["SourceImage"][];
                 };
             };
+            400: components["responses"]["BadRequest"];
             404: components["responses"]["NotFound"];
         };
     };
@@ -3076,6 +3092,7 @@ export interface operations {
                     "application/json": components["schemas"]["ExportResponse"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             404: components["responses"]["NotFound"];
         };
     };

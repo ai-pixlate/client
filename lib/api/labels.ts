@@ -22,15 +22,16 @@ export const BLOCK_ROLE_LABELS: Record<BlockRole, string> = {
 };
 
 /**
- * 자동 제외 사유 3종은 N3 배지 기본 문구(VERDICT_BADGE_LABELS)에 "(자동)"만
+ * 규제·채널 제외 사유는 N3 배지 기본 문구(VERDICT_BADGE_LABELS)에 "(자동)"만
  * 붙여 재사용한다 — 같은 의미의 문구가 이 파일과 lib/n3/verdict.ts 양쪽에서
- * 따로 바뀌는 것을 막기 위함이다. 사용자 직접 조작 2종은 배지 개념이 아니라
+ * 따로 바뀌는 것을 막기 위함이다. 현지 제외·판정 실패와 사용자 직접 조작은 배지와 구분해
  * 이 파일에서 직접 관리한다.
  */
 export const EXCLUSION_REASON_LABELS: Record<ExclusionReasonCode, string> = {
   auto_regulatory: `${VERDICT_BADGE_LABELS.regulatory}(자동)`,
   auto_channel: `${VERDICT_BADGE_LABELS.channel_policy}(자동)`,
-  auto_local_irrelevant: `${VERDICT_BADGE_LABELS.local_irrelevant}(자동)`,
+  auto_local: '현지 제외(자동)',
+  auto_local_failed: '현지 판정 실패',
   user_manual: '직접 제외',
   restored_by_user: '직접 되살림',
 };
