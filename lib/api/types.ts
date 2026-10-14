@@ -99,56 +99,9 @@ export type SpecType = string;
 // GET /jobs/:jobId/tasks(ApiJobTaskStatus, lib/api/job-schema.ts)로 대체하며
 // 제거했다 — 호출부(page.tsx N2View/N4ProcessingView)가 모두 옮겨갔다.
 
-// ─────────────────────────────────────────────
-// N1 — job 생성 관련
-// ─────────────────────────────────────────────
-
-export interface SourceImageMeta {
-  fileId: string;
-  order: number;
-  imageType: ImageType;
-}
-
-export interface CreateJobRequest {
-  /**
-   * TODO(draft-first 전환): 실제 OpenAPI `JobCreate.brandId`는
-   * required `number`(int64)다. 지금 이 필드는 mock 전용 문자열
-   * ID(`brand_mock_001` 등)를 그대로 실어 나르는 FE 임시 타입이라
-   * string이다 — 실제 브랜드 API가 붙으면 number로 바꿔야 한다.
-   * 또한 실제 계약은 `POST /jobs(brandId)` → `PATCH /jobs/{jobId}`(N1
-   * 값) → `analyze` 3단계 draft-first 흐름이지만, 이 타입/N1 화면은
-   * 지금 모든 N1 값을 한 번에 담아 단일 `POST /jobs`로 보내는 구조다.
-   * 브랜드를 선택해 `/jobs/new?brandId=...`로 진입시키는 상위 화면도
-   * 아직 없다(현재는 URL 쿼리 파라미터가 유일한 진입 경로). 이 셋 모두
-   * 오늘 범위가 아니라 전환하지 않았다 — 별도 작업으로 다룬다.
-   */
-  brandId: string;
-  /**
-   * 실제 OpenAPI(JobCreate/Job)와 필드명이 같다(productName/productCode) —
-   * 스키마 자체는 둘 다 optional이지만(analyze 게이트에서 productName 필수
-   * 검증), N1 폼은 이미 productName을 필수로 받으므로 이 요청 타입에서는
-   * required로 좁힌다(targetCountry 등 다른 필드와 같은 방식).
-   */
-  productName: string;
-  productCode?: string;
-  sourceImages: SourceImageMeta[];
-  targetCountry: string;
-  targetLanguage: string;
-  /** TODO: 허용 분류값 목록 백엔드 확정 필요 */
-  regulatoryClass: string;
-  specId: string;
-  /**
-   * 실제 OpenAPI `JobCreate.categoryId`도 optional이다(`required`엔
-   * brandId만 있다) — N1 폼에서도 필수로 좁히지 않는다. productCode와
-   * 같은 방식으로 비어 있으면 payload에서 아예 뺀다.
-   */
-  displayCategory?: string;
-  keywords: string[];
-}
-
-export interface CreateJobResponse {
-  jobId: string;
-}
+// N1 job 생성 요청/응답 타입(CreateJobRequest/CreateJobResponse/SourceImageMeta)은
+// draft-first 전환과 실제 원본 업로드 연결로 제거했다 — N1은 generated JobPatch/
+// SourceImageUploadResult(lib/api/job-schema.ts)를 직접 쓴다.
 
 // ─────────────────────────────────────────────
 // N3 — 섹션 확인

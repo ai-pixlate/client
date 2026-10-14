@@ -5,6 +5,10 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   createJob,
   analyzeJob,
+  uploadSourceImages,
+  deleteSourceImage,
+  reorderSourceImages,
+  patchJob,
   getSections,
   updateSectionBucket,
   proceedSections,
@@ -23,7 +27,7 @@ import {
   getExportDownloadByType,
   saveJob,
 } from '@/lib/api/pixlate';
-import type { CreateJobRequest } from '@/lib/api/types';
+import type { ApiJobPatch } from '@/lib/api/job-schema';
 import type { ApiBlockPatch, ApiConfirmRequest, ApiJobTaskStatus, ApiTextBlock } from '@/lib/api/n5-schema';
 import type { ApiExportRequest, ApiExportArtifactType } from '@/lib/api/n6-schema';
 import type { ApiSection, ApiSectionBucket, ApiSectionList, ApiSectionPatch } from '@/lib/api/n3-schema';
@@ -67,7 +71,36 @@ export const pixlateKeys = {
 
 export function useCreateJobMutation() {
   return useMutation({
-    mutationFn: (payload: CreateJobRequest) => createJob(payload),
+    mutationFn: ({ brandId, idempotencyKey }: { brandId: string; idempotencyKey?: string }) =>
+      createJob(brandId, { idempotencyKey }),
+  });
+}
+
+// N1 원본 업로드·삭제·재정렬과 N1 값 세팅도 createJob 이후에야 jobId를 알 수 있어
+// useAnalyzeJobMutation처럼 mutate 시점에 jobId를 받는다.
+
+export function useUploadSourceImagesMutation() {
+  return useMutation({
+    mutationFn: ({ jobId, files }: { jobId: string; files: File[] }) => uploadSourceImages(jobId, files),
+  });
+}
+
+export function useDeleteSourceImageMutation() {
+  return useMutation({
+    mutationFn: ({ jobId, sourceImageId }: { jobId: string; sourceImageId: number }) =>
+      deleteSourceImage(jobId, sourceImageId),
+  });
+}
+
+export function useReorderSourceImagesMutation() {
+  return useMutation({
+    mutationFn: ({ jobId, order }: { jobId: string; order: number[] }) => reorderSourceImages(jobId, order),
+  });
+}
+
+export function usePatchJobMutation() {
+  return useMutation({
+    mutationFn: ({ jobId, payload }: { jobId: string; payload: ApiJobPatch }) => patchJob(jobId, payload),
   });
 }
 

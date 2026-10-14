@@ -29,7 +29,7 @@ test('mock enabled — /jobs/{jobId} document navigation은 헤더 없이 페이
   page.on('request', (req) => requests.push(req));
 
   // 1. document navigation으로 직접 진입 (N1을 거치지 않는다 — mock 기본
-  // job(job_mock_001)은 이미 analyzing/N2 상태로 시작한다).
+  // job(MOCK_JOB_ID)은 이미 analyzing/N2 상태로 시작한다).
   const navResponse = await page.goto(`/jobs/${MOCK_JOB_ID}`);
 
   // 2. 페이지 요청은 200

@@ -5,7 +5,7 @@
  * lib/mock-api/fixtures.ts(구 /review·/preview 계약, v3.4.1 FE 메모 기준)는 건드리지
  * 않는다 — e2e/n5-viewport.spec.ts와 stress job이 여전히 그 계약을 참조한다. N5 화면은
  * 이제 이 파일의 실제 계약(v3.4.2) 데이터를 쓴다. jobId route slug는 기존과 같은
- * MOCK_JOB_ID('job_mock_001')를 재사용한다 — job 목록/상태 polling 등 다른 N-단계와
+ * MOCK_JOB_ID('1')를 재사용한다 — job 목록/상태 polling 등 다른 N-단계와
  * 같은 job으로 이어지는 흐름을 유지하기 위함이다.
  *
  * 이미지 파일: scripts/make-n5-section-fixture-images.mjs(npm run make:n5-section-fixtures)로

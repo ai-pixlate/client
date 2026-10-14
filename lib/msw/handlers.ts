@@ -14,7 +14,7 @@ import {
 } from '@/lib/mock-api/fixtures';
 import { mockN5Job, mockN5Blocks, mockN5PreviewSections, buildMockN5Preview } from '@/lib/mock-api/n5-fixtures';
 import type { ApiJob, ApiJobAsyncTaskItem, ApiTextBlock } from '@/lib/api/n5-schema';
-import type { ApiAcceptedTask } from '@/lib/api/job-schema';
+import type { ApiAcceptedTask, ApiJobPatch, ApiSourceImageUploadResult } from '@/lib/api/job-schema';
 import type {
   ApiExcludedStage,
   ApiExclusionReason,
@@ -414,6 +414,40 @@ function badRequest(message: string) {
   return HttpResponse.json({ code: 'INVALID_REQUEST', message }, { status: 400 });
 }
 
+/** 실제 공통 Error 계약 형태({ error: { code, message, retryable, traceId } }) — N1 draft-first handler용 */
+function contractError(status: number, code: string, message: string) {
+  return HttpResponse.json({ error: { code, message, retryable: false, traceId: 'mock-trace' } }, { status });
+}
+
+// ─────────────────────────────────────────────
+// N1 draft-first mock 상태 (POST /jobs → source-images → PATCH /jobs/:jobId → reorder → analyze)
+//
+// jobState(N2~N6 진행 상태)와 분리한다 — jobState의 리셋 기준값은 위 설명대로 N2다.
+// 이 상태는 N1 화면 안에서만 쓰이며, GET /jobs/:jobId/source-images는 N3 fixture를
+// 그대로 돌려준다(N3 섹션이 fixture sourceImageId를 참조하기 때문).
+// ─────────────────────────────────────────────
+
+/** 이 이름을 포함한 파일은 첫 업로드만 실패한다 — 개별 재시도 E2E 재현용(mock 전용 규칙) */
+export const MOCK_UPLOAD_FAIL_ONCE_MARKER = '__fail_once__';
+
+interface MockN1Draft {
+  patch: ApiJobPatch;
+  sourceImages: ApiSourceImage[];
+  nextSourceImageId: number;
+  failedOnce: Set<string>;
+}
+
+let n1Draft: MockN1Draft | null = null;
+
+/** 계약: JPG·PNG만 허용 (그 외는 파일별 UNSUPPORTED_FORMAT 실패) */
+function isAcceptedSourceImage(file: File): boolean {
+  return file.type === 'image/png' || file.type === 'image/jpeg';
+}
+
+function sortedDraftImages(draft: MockN1Draft): ApiSourceImage[] {
+  return [...draft.sourceImages].sort((a, b) => (a.uploadOrder ?? 0) - (b.uploadOrder ?? 0));
+}
+
 // ─────────────────────────────────────────────
 // handlers
 // ─────────────────────────────────────────────
@@ -428,44 +462,131 @@ export const handlers = [
   }),
 
   // ──────────────────────────────────────────
-  // N1 — job 생성. 경로는 실제 OpenAPI(POST /jobs)로 맞췄다 — mock 전용
-  // /api 프리픽스를 쓰지 않는다(오늘 경로 정리, 이전엔 /api/jobs였다).
-  //
-  // Mock에서는 항상 MOCK_JOB_ID를 반환합니다.
-  // 실제 백엔드는 별도 job ID를 생성합니다. 실제 계약(JobCreate)은 brandId만
-  // 받는 draft-first 흐름(POST /jobs → PATCH로 N1값 세팅 → analyze)이지만,
-  // N1 화면 자체를 이 흐름으로 다시 만드는 건 오늘 범위 밖이라 기존 한 번에
-  // 받는 payload/검증은 그대로 둔다 — 대신 job 진행 상태(jobState)만
-  // 리셋해서, 이후 analyze/tasks polling이 실제로 이어지게 한다.
-  //
-  // productName/productCode(오늘 계약 보정): 실제 JobCreate/Job 스키마의
-  // productName은 이 엔드포인트 자체에서는 optional이고 analyze 게이트에서
-  // 필수로 걸린다 — 하지만 이 mock은 targetCountry/targetLanguage처럼
-  // "N1 폼이 이미 필수로 받는 값"을 이 시점에 함께 검증하는 기존 패턴을
-  // 그대로 따른다(다른 필드와 다른 규칙을 새로 만들지 않는다). productCode는
-  // 실제 계약대로 선택값이라 없어도 통과시키고 null로 저장한다.
+  // N1 — draft 생성 (API-JOB-02). 실제 계약(JobCreate)대로 brandId만 받고
+  // 201 Job(status=draft, currentStep=N1)을 돌려준다. 식별자는 Job.id(number)다.
+  // Mock에서는 항상 id=1(MOCK_JOB_ID '1')이며, 같은 Idempotency-Key 재요청도 같은 job을 준다.
   // ──────────────────────────────────────────
   http.post('/jobs', async ({ request }) => {
-    const body = await request.json() as Record<string, unknown>;
-
-    if (!body.brandId) return badRequest('brandId가 필요합니다');
-    if (!body.productName) return badRequest('productName이 필요합니다');
-    if (!body.targetCountry) return badRequest('targetCountry가 필요합니다');
-    if (!body.targetLanguage) return badRequest('targetLanguage가 필요합니다');
-    if (!Array.isArray(body.sourceImages) || body.sourceImages.length === 0) {
-      return badRequest('sourceImages가 1개 이상 필요합니다');
-    }
+    const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+    if (!body?.brandId) return contractError(400, 'VALIDATION_ERROR', 'brandId가 필요합니다');
 
     // 새 job 생성 시 이전 브라우저 테스트에서 진행됐던 mock 상태를 다시 시작
     // (리셋 기준값이 N2인 이유는 위 jobState 선언부 주석 참고)
     resetJobState();
+    n1Draft = { patch: {}, sourceImages: [], nextSourceImageId: 101, failedOnce: new Set() };
+
+    const draft: ApiJob = {
+      ...jobState,
+      id: Number(MOCK_JOB_ID),
+      status: 'draft',
+      currentStep: 'N1',
+      userFacingStatus: 'draft',
+      productName: null,
+      productCode: null,
+    };
+    return HttpResponse.json(draft, { status: 201 });
+  }),
+
+  // ──────────────────────────────────────────
+  // N1 — 원본 업로드 (API-SRC-02, multipart `files`). 파일별 성공/실패를 results[]에
+  // 담고, 한 파일이 실패해도 나머지는 적재한다. sourceImages는 현재 job 원본 전체다.
+  // ──────────────────────────────────────────
+  http.post('/jobs/:jobId/source-images', async ({ params, request }) => {
+    const jobId = params.jobId as string;
+    if (jobId !== MOCK_JOB_ID || !n1Draft) return contractError(404, 'NOT_FOUND', `Job '${jobId}' not found`);
+    const draft = n1Draft;
+
+    const form = await request.formData();
+    const files = form.getAll('files').filter((v): v is File => typeof v !== 'string');
+    if (files.length === 0) return contractError(400, 'VALIDATION_ERROR', 'files가 필요합니다');
+
+    const results: NonNullable<ApiSourceImageUploadResult['results']> = files.map((file) => {
+      if (!isAcceptedSourceImage(file)) {
+        return { fileName: file.name, ok: false, sourceImageId: null, errorCode: 'UNSUPPORTED_FORMAT' };
+      }
+      if (file.name.includes(MOCK_UPLOAD_FAIL_ONCE_MARKER) && !draft.failedOnce.has(file.name)) {
+        draft.failedOnce.add(file.name);
+        return { fileName: file.name, ok: false, sourceImageId: null, errorCode: 'INTERNAL_ERROR' };
+      }
+      const id = draft.nextSourceImageId++;
+      const uploadOrder = draft.sourceImages.reduce((max, img) => Math.max(max, img.uploadOrder ?? 0), 0) + 1;
+      draft.sourceImages.push({
+        id,
+        uploadOrder,
+        imageType: 'detail',
+        fileUrl: `/mock/n1/source-${id}.png`,
+        width: 860,
+        height: 1200,
+        createdAt: new Date().toISOString(),
+      });
+      return { fileName: file.name, ok: true, sourceImageId: id, errorCode: null };
+    });
+
+    const response: ApiSourceImageUploadResult = { results, sourceImages: sortedDraftImages(draft) };
+    return HttpResponse.json(response);
+  }),
+
+  // N1 — 원본 순서 재정렬 (API-SRC-03). order는 현재 원본 sourceImageId 전체여야 한다.
+  http.patch('/jobs/:jobId/source-images/reorder', async ({ params, request }) => {
+    const jobId = params.jobId as string;
+    if (jobId !== MOCK_JOB_ID || !n1Draft) return contractError(404, 'NOT_FOUND', `Job '${jobId}' not found`);
+    const draft = n1Draft;
+    const { order } = await request.json() as { order?: unknown };
+    const ids = draft.sourceImages.map((img) => img.id);
+    if (
+      !Array.isArray(order) ||
+      order.length !== ids.length ||
+      new Set(order).size !== order.length ||
+      !order.every((id) => ids.includes(id as number))
+    ) {
+      return contractError(400, 'VALIDATION_ERROR', 'order는 현재 원본 sourceImageId 전체여야 합니다');
+    }
+    draft.sourceImages = draft.sourceImages.map((img) => ({ ...img, uploadOrder: order.indexOf(img.id) + 1 }));
+    return HttpResponse.json(sortedDraftImages(draft));
+  }),
+
+  // N1 — 원본 삭제 (API-SRC-04, 204)
+  http.delete('/jobs/:jobId/source-images/:sourceImageId', ({ params }) => {
+    const jobId = params.jobId as string;
+    if (jobId !== MOCK_JOB_ID || !n1Draft) return contractError(404, 'NOT_FOUND', `Job '${jobId}' not found`);
+    const sourceImageId = Number(params.sourceImageId);
+    const before = n1Draft.sourceImages.length;
+    n1Draft.sourceImages = n1Draft.sourceImages.filter((img) => img.id !== sourceImageId);
+    if (n1Draft.sourceImages.length === before) return contractError(404, 'NOT_FOUND', `Source image '${sourceImageId}' not found`);
+    return new HttpResponse(null, { status: 204 });
+  }),
+
+  // ──────────────────────────────────────────
+  // N1 — 입력값 세팅 (PATCH /jobs/:jobId, JobPatch 부분 갱신). draft 단계에서만 허용.
+  // productName/productCode는 N5 헤더가 읽으므로 jobState에도 반영한다.
+  // ──────────────────────────────────────────
+  http.patch('/jobs/:jobId', async ({ params, request }) => {
+    const jobId = params.jobId as string;
+    if (jobId !== MOCK_JOB_ID) return contractError(404, 'NOT_FOUND', `Job '${jobId}' not found`);
+    if (!n1Draft) return contractError(409, 'INVALID_STATE', 'draft 단계에서만 수정할 수 있습니다');
+    const patch = await request.json() as ApiJobPatch;
+    n1Draft.patch = { ...n1Draft.patch, ...patch };
     jobState = {
       ...jobState,
-      productName: body.productName as string,
-      productCode: (body.productCode as string | undefined) ?? null,
+      productName: n1Draft.patch.productName ?? null,
+      productCode: n1Draft.patch.productCode ?? null,
     };
-
-    return HttpResponse.json({ jobId: MOCK_JOB_ID }, { status: 201 });
+    const { productName, productCode, targetCountry, regulatoryClass, targetLanguage, specType, keywords, imageType } = n1Draft.patch;
+    const response: ApiJob = {
+      ...jobState,
+      status: 'draft',
+      currentStep: 'N1',
+      userFacingStatus: 'draft',
+      productName: productName ?? null,
+      productCode: productCode ?? null,
+      targetCountry: targetCountry ?? null,
+      regulatoryClass: regulatoryClass ?? null,
+      targetLanguage: targetLanguage ?? null,
+      specType: specType ?? undefined,
+      keywords: keywords ?? [],
+      imageType: imageType ?? null,
+    };
+    return HttpResponse.json(response);
   }),
 
   // ──────────────────────────────────────────
@@ -478,6 +599,11 @@ export const handlers = [
   http.post('/jobs/:jobId/analyze', ({ params }) => {
     const jobId = params.jobId as string;
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
+    // 실제 analyze 게이트: draft · 원본 존재 · product_name
+    if (!n1Draft) return contractError(409, 'INVALID_STATE', 'draft 작업이 아닙니다');
+    if (n1Draft.sourceImages.length === 0) return contractError(400, 'VALIDATION_ERROR', '원본 이미지가 필요합니다');
+    if (!n1Draft.patch.productName) return contractError(400, 'VALIDATION_ERROR', 'productName이 필요합니다');
+    n1Draft = null;
 
     jobState = { ...jobState, currentStep: 'N2', userFacingStatus: 'analyzing', status: 'processing' };
     jobProcessingPollCount = 0;
