@@ -183,6 +183,15 @@ function ChevronRightIcon() {
   );
 }
 
+/**
+ * POST /jobs Idempotency-Key. OpenAPI상 권장(optional) 헤더라 만들 수 없으면 키 없이 생성한다.
+ * crypto.randomUUID는 secure context(HTTPS·localhost)에서만 존재한다 — 일반 HTTP 호스트·LAN IP에서는
+ * undefined라 그대로 호출하면 작업 생성 자체가 막힌다.
+ */
+function createIdempotencyKey(): string | null {
+  return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : null;
+}
+
 // ─────────────────────────────────────────────────────────────────
 // 필드 레이블 — Figma 기준(필수: text-[#171717] + orange *, 선택: text-[#707070])
 // ─────────────────────────────────────────────────────────────────
@@ -492,8 +501,8 @@ function NewJobPageInner() {
     try {
       let jobId = draftJobId;
       if (!jobId) {
-        idempotencyKeyRef.current ??= crypto.randomUUID();
-        ({ jobId } = await createMutation.mutateAsync({ brandId, idempotencyKey: idempotencyKeyRef.current }));
+        idempotencyKeyRef.current ??= createIdempotencyKey();
+        ({ jobId } = await createMutation.mutateAsync({ brandId, idempotencyKey: idempotencyKeyRef.current ?? undefined }));
         setDraftJobId(jobId);
       }
 

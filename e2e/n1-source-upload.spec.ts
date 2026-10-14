@@ -57,12 +57,13 @@ async function recordApiCalls(page: Page): Promise<ApiCall[]> {
       __n1RecordResponse: (uid: string, status: number, response: unknown) => Promise<void>;
     };
     const originalFetch = window.fetch.bind(window);
+    let seq = 0;
     window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       const headers = new Headers(init?.headers);
       // 앱의 API 호출(프록시 식별 헤더가 붙은 요청)만 기록한다 — RSC/페이지 요청은 제외
       if (!headers.has('x-pixlate-api-proxy')) return originalFetch(input, init);
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-      const uid = crypto.randomUUID();
+      const uid = `${Date.now()}-${seq++}`;
       let form: unknown[] | null = null;
       if (init?.body instanceof FormData) {
         form = [];
@@ -196,6 +197,25 @@ test.describe('N1 실제 원본 업로드 — draft-first', () => {
 
     expect(lastServerOrder(calls)).toEqual(['a.png', 'b.png']);
     expect(JSON.stringify(calls)).not.toContain('mock_file_');
+  });
+
+  test('crypto.randomUUID가 없는 환경(일반 HTTP·LAN IP 등 non-secure context)에서도 Idempotency-Key 없이 작업 생성이 진행된다', async ({ page }) => {
+    await page.addInitScript(() => {
+      // secure context가 아닌 브라우저처럼 randomUUID를 없앤다
+      Object.defineProperty(Crypto.prototype, 'randomUUID', { value: undefined, configurable: true });
+    });
+    const calls = await recordApiCalls(page);
+    await page.goto(`/jobs/new?brandId=${MOCK_BRAND_ID}`);
+    expect(await page.evaluate(() => typeof crypto.randomUUID)).toBe('undefined');
+    await fillRequired(page);
+    await addFiles(page, [png('a.png', 1)]);
+
+    await page.getByRole('button', { name: '다음' }).click();
+    await expect(page).toHaveURL(new RegExp(`/jobs/${MOCK_JOB_ID}$`));
+    await expect.poll(() => summarize(calls).includes(`POST ${JOB_PATH}/analyze`)).toBe(true);
+    expect(summarize(calls)).toEqual(['POST /jobs', `POST ${UPLOAD_PATH}`, `PATCH ${JOB_PATH}`, `POST ${JOB_PATH}/analyze`]);
+    expect(calls[0].headers).not.toHaveProperty('idempotency-key');
+    expect(JSON.parse(calls[0].body!)).toEqual({ brandId: MOCK_BRAND_ID });
   });
 
   test('일부 실패: analyze 없이 N1 유지 → 실패 파일만 같은 draft에 재시도 → 순서 맞춘 뒤 analyze', async ({ page }) => {
