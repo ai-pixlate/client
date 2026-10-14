@@ -24,3 +24,12 @@ export type ApiJobStatus = components['schemas']['JobStatus'];
 
 /** 비동기 트리거(analyze/sections proceed 등) 202 공용 응답 */
 export type ApiAcceptedTask = components['schemas']['AcceptedTask'];
+
+/** N1 입력값 세팅/수정 (PATCH /jobs/{jobId}, draft-first) */
+export type ApiJobPatch = components['schemas']['JobPatch'];
+
+/** N1 셀러 선택 규제 분류 (job.regulatory_class) */
+export type ApiRegulatoryClass = components['schemas']['RegulatoryClass'];
+
+/** 원본 업로드 결과 — 파일별 성공/실패 + 현재 원본 목록 (POST /jobs/{jobId}/source-images) */
+export type ApiSourceImageUploadResult = components['schemas']['SourceImageUploadResult'];

@@ -1,10 +1,12 @@
 'use client';
 
-import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
-import { useCreateJobMutation, useAnalyzeJobMutation } from '@/lib/queries/pixlate';
-import type { ImageType } from '@/lib/api/types';
+import { useCreateJobMutation, useAnalyzeJobMutation, usePatchJobMutation } from '@/lib/queries/pixlate';
+import type { ApiRegulatoryClass } from '@/lib/api/job-schema';
+import { SourceImageUploadStatus } from './_components/source-image-upload-status';
+import { useSourceImageUploads } from './_lib/use-source-image-uploads';
 import { StepNav } from '../[jobId]/_components/step-nav';
 
 // ─────────────────────────────────────────────────────────────────
@@ -43,14 +45,20 @@ const COUNTRY_RECOMMENDED_LANGUAGE: Partial<Record<string, string>> = {
   US: 'en',
 };
 
-// TODO: 백엔드 규제 분류 목록 API 연결 시 교체
-const REGULATORY_CLASS_OPTIONS = [
-  { value: 'cosmetics', label: '화장품' },
-  { value: 'food', label: '식품' },
-  { value: 'health_supplement', label: '건강기능식품' },
-  { value: 'medical_device', label: '의료기기' },
-  { value: 'general', label: '일반 상품' },
+// 규제 분류 — 미국 MVP 4종. 값은 OpenAPI RegulatoryClass enum 그대로다.
+// TODO: GET /master/regulatory-classes 연결 시 교체
+const REGULATORY_CLASS_OPTIONS: { value: ApiRegulatoryClass; label: string }[] = [
+  { value: 'cosmetic', label: '화장품' },
+  { value: 'otc', label: 'OTC 의약품' },
+  { value: 'combination', label: '화장품+OTC 복합' },
+  { value: 'unknown', label: '잘 모름' },
 ];
+
+/** 선택값별 검사 기준 안내 (helper text) */
+const REGULATORY_CLASS_HELPER: Partial<Record<ApiRegulatoryClass, string>> = {
+  unknown: '잘 모름을 선택하면 화장품 기준으로 검사됩니다.',
+  combination: '복합 제품은 현재 OTC 기준으로 검사됩니다.',
+};
 
 // ─────────────────────────────────────────────────────────────────
 // 카테고리 계층 — Figma 카테고리 선택 모달(381:6293)이 실제로 보여준 값만
@@ -125,18 +133,6 @@ function findCategoryPath(nodes: CategoryNode[], value: string, path: CategoryNo
 }
 
 // ─────────────────────────────────────────────────────────────────
-// 로컬 이미지 항목 타입 (업로드 이전 브라우저 상태)
-// ─────────────────────────────────────────────────────────────────
-
-interface LocalImage {
-  localId: string;
-  file: File;
-  /** Figma(925:2529) 썸네일 미리보기용 — addFiles에서 생성하고, 제거/언마운트
-   * 시 revoke한다(메모리 누수 방지). */
-  previewUrl: string;
-}
-
-// ─────────────────────────────────────────────────────────────────
 // 공용 아이콘 — Figma glyph는 7일 만료 원격 asset이라 커밋 코드에 하드링크하지
 // 않는다(N5 X 아이콘과 같은 방식). 최소한의 inline SVG만 쓴다.
 // ─────────────────────────────────────────────────────────────────
@@ -185,6 +181,15 @@ function ChevronRightIcon() {
       <path d="M5.5 3.5L9 7L5.5 10.5" stroke="#999" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
+}
+
+/**
+ * POST /jobs Idempotency-Key. OpenAPI상 권장(optional) 헤더라 만들 수 없으면 키 없이 생성한다.
+ * crypto.randomUUID는 secure context(HTTPS·localhost)에서만 존재한다 — 일반 HTTP 호스트·LAN IP에서는
+ * undefined라 그대로 호출하면 작업 생성 자체가 막힌다.
+ */
+function createIdempotencyKey(): string | null {
+  return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : null;
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -380,23 +385,24 @@ function NewJobPageInner() {
 
   const router = useRouter();
   const createMutation = useCreateJobMutation();
+  const patchMutation = usePatchJobMutation();
   const analyzeMutation = useAnalyzeJobMutation();
 
   // ── 폼 상태 ─────────────────────────────────────────────────────
   const [targetCountry, setTargetCountry] = useState('');
   const [targetLanguage, setTargetLanguage] = useState('');
-  const [regulatoryClass, setRegulatoryClass] = useState('');
+  const [regulatoryClass, setRegulatoryClass] = useState<ApiRegulatoryClass | ''>('');
   const [displayCategory, setDisplayCategory] = useState('');
   const [keywords, setKeywords] = useState<string[]>([]);
   const [keywordInput, setKeywordInput] = useState('');
-  const [images, setImages] = useState<LocalImage[]>([]);
+  // 원본 이미지 — 파일별 업로드 상태(idle/uploading/done/failed)와 서버 sourceImageId는 hook이 소유한다.
+  const { images, notice: uploadNotice, isBusy: isUploadBusy, hasFailed: hasUploadFailed, addFiles, reorderImages, removeImage, uploadPending, retryImage, syncServerOrder } =
+    useSourceImageUploads();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // productName/productCode — Figma(525:3023)에서 새로 보이는 입력 필드이자
-  // 실제 OpenAPI(JobCreate/Job) 필드명 그대로(CLAUDE.md: productName 필수,
-  // productCode 선택). CreateJobRequest/POST /jobs 페이로드에 실어 보낸다
-  // (이번 계약 보정 반영). productCode는 빈 문자열이면 아예 보내지 않는다
-  // (trim 후 빈 값이면 undefined → JSON.stringify가 키 자체를 제거).
+  // 실제 OpenAPI(JobPatch/Job) 필드명 그대로(CLAUDE.md: productName 필수,
+  // productCode 선택). PATCH /jobs/{jobId}로 보낸다.
   const [productName, setProductName] = useState('');
   const [productCode, setProductCode] = useState('');
 
@@ -431,16 +437,6 @@ function NewJobPageInner() {
 
   // ── 이미지 업로드 ────────────────────────────────────────────────
 
-  const addFiles = (files: File[]) => {
-    if (files.length === 0) return;
-    const newItems: LocalImage[] = files.map((file, i) => ({
-      localId: `local_${Date.now()}_${i}`,
-      file,
-      previewUrl: URL.createObjectURL(file),
-    }));
-    setImages((prev) => [...prev, ...newItems]);
-  };
-
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     addFiles(Array.from(e.target.files ?? []));
     // 같은 파일 재선택 허용을 위해 input 초기화
@@ -458,28 +454,6 @@ function NewJobPageInner() {
     addFiles(Array.from(e.dataTransfer.files ?? []));
   };
 
-  const removeImage = (localId: string) => {
-    setImages((prev) => {
-      const removed = prev.find((img) => img.localId === localId);
-      if (removed) URL.revokeObjectURL(removed.previewUrl);
-      return prev.filter((img) => img.localId !== localId);
-    });
-  };
-
-  // 언마운트 시 남아있는 미리보기 objectURL을 모두 해제한다(메모리 누수 방지).
-  // images를 직접 deps에 넣지 않고 ref로 최신값을 들고 있다가 언마운트
-  // 시점에만 실행 — 매 렌더마다 cleanup이 재실행되는 걸 막는다. ref는
-  // effect 안에서만 갱신한다(render 중 ref.current 쓰기 금지 — react-hooks 규칙).
-  const imagesRef = useRef(images);
-  useEffect(() => {
-    imagesRef.current = images;
-  }, [images]);
-  useEffect(() => {
-    return () => {
-      imagesRef.current.forEach((img) => URL.revokeObjectURL(img.previewUrl));
-    };
-  }, []);
-
   // 썸네일 드래그 순서 변경(Figma 925:2529) — up/down 버튼은 이 Figma
   // 썸네일 카드에 없다(X 삭제만 있음), 드래그로 대체한다. 내부 재정렬
   // 드래그와 OS 파일 드래그(업로드)를 dataTransfer로 구분해야 하므로,
@@ -488,19 +462,6 @@ function NewJobPageInner() {
   // 막는다 — OS 파일 드래그는 그대로 버블시켜 기존 handleDrop이 처리한다.
   const [draggingLocalId, setDraggingLocalId] = useState<string | null>(null);
   const [dragOverLocalId, setDragOverLocalId] = useState<string | null>(null);
-
-  const reorderImages = (fromLocalId: string, toLocalId: string) => {
-    if (fromLocalId === toLocalId) return;
-    setImages((prev) => {
-      const fromIdx = prev.findIndex((img) => img.localId === fromLocalId);
-      const toIdx = prev.findIndex((img) => img.localId === toLocalId);
-      if (fromIdx < 0 || toIdx < 0) return prev;
-      const next = [...prev];
-      const [moved] = next.splice(fromIdx, 1);
-      next.splice(toIdx, 0, moved);
-      return next;
-    });
-  };
 
   // ── 유효성 검사 ──────────────────────────────────────────────────
 
@@ -517,47 +478,66 @@ function NewJobPageInner() {
     !!targetLanguage &&
     !!regulatoryClass &&
     images.length > 0;
+  const regulatoryClassHelper = regulatoryClass ? REGULATORY_CLASS_HELPER[regulatoryClass] : undefined;
 
   // ── 제출 ────────────────────────────────────────────────────────
   //
-  // 오늘(N1→N6 happy path): 생성과 분석 시작을 분리한다(CLAUDE.md 원칙 —
-  // 작업 생성만으로 분석이 자동 시작된다고 가정하지 않는다). createJob이
-  // 성공한 jobId로 analyzeJob을 이어 호출한 뒤에만 N2로 이동한다. 이 폼이
-  // 한 번에 보내는 입력값 payload 자체(실제 draft-first 다단계 계약과 다름)는
-  // 오늘 범위가 아니라 그대로 뒀다.
+  // draft-first (OpenAPI jobCreate): POST /jobs(brandId) → 원본 업로드 → PATCH
+  // /jobs/{jobId}(N1 값) → (서버 순서가 화면과 다르면) reorder → analyze → N2.
+  // 생성만으로 분석이 시작되지 않으며, 모든 파일이 업로드 완료되기 전에는
+  // PATCH/analyze를 호출하지 않는다. 한 번 만든 draft는 재제출·개별 재시도에서
+  // 계속 쓴다(PRD F-SRC-01 — 실패했다고 새 job을 만들지 않는다).
+
+  const [draftJobId, setDraftJobId] = useState<string | null>(null);
+  // POST /jobs 네트워크 중복 방지용. 같은 draft 생성 시도(성공 전 재요청)에서만 재사용한다.
+  const idempotencyKeyRef = useRef<string | null>(null);
+  const [submitError, setSubmitError] = useState<unknown>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleSubmit = async () => {
-    if (!isValid) return;
-
-    // 9월 MVP: 입력 유형 선택 UI는 12월 예정 — imageType은 'multi_section' 고정
-    const sourceImages = images.map((_img, i) => ({
-      fileId: `mock_file_${String(i + 1).padStart(3, '0')}`,
-      order: i + 1,
-      imageType: 'multi_section' as ImageType,
-    }));
-
+    if (!isValid || isSubmitting || isUploadBusy) return;
+    setSubmitError(null);
+    setIsSubmitting(true);
     try {
-      const created = await createMutation.mutateAsync({
-        brandId,
-        productName,
-        productCode: productCode.trim() || undefined,
-        targetCountry,
-        targetLanguage,
-        regulatoryClass,
-        specId: 'spec_original',
-        displayCategory: displayCategory || undefined,
-        keywords,
-        sourceImages,
+      let jobId = draftJobId;
+      if (!jobId) {
+        idempotencyKeyRef.current ??= createIdempotencyKey();
+        ({ jobId } = await createMutation.mutateAsync({ brandId, idempotencyKey: idempotencyKeyRef.current ?? undefined }));
+        setDraftJobId(jobId);
+      }
+
+      // 실패한 파일이 남아 있으면 N1에 머문다 — 카드의 「다시 시도」 또는 삭제 후 다시 진행한다.
+      const allUploaded = await uploadPending(jobId);
+      if (!allUploaded) return;
+
+      await patchMutation.mutateAsync({
+        jobId,
+        payload: {
+          productName,
+          productCode: productCode.trim() || null,
+          targetCountry,
+          targetLanguage,
+          regulatoryClass: regulatoryClass || null,
+          // 9월 MVP: 결과물 규격은 원본 사이즈만, 이미지 유형은 다중 섹션만 지원한다(화면도 그 외 선택지를 비활성화).
+          specType: 'original',
+          imageType: 'multi_section',
+          // categoryId/consentId/channelSpecId: 실제 값(category master·consent 연동)이 아직 없어 보내지 않는다.
+          keywords,
+        },
       });
-      await analyzeMutation.mutateAsync(created.jobId);
-      router.push(`/jobs/${created.jobId}`);
-    } catch {
-      // createMutation/analyzeMutation의 isError·error가 그대로 하단 안내에 반영된다.
+      await syncServerOrder(jobId);
+      await analyzeMutation.mutateAsync(jobId);
+      router.push(`/jobs/${jobId}`);
+    } catch (error) {
+      setSubmitError(error);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
-  const submitError = createMutation.error ?? analyzeMutation.error;
-  const isSubmitting = createMutation.isPending || analyzeMutation.isPending;
+  const handleRetryUpload = (localId: string) => {
+    if (draftJobId) void retryImage(draftJobId, localId);
+  };
 
   // 추천 태그는 targetLanguage(언어 select의 현재 선택값)가 아니라
   // targetCountry에서만 파생된다 — 국가를 바꿔도 이미 고른 언어 값은
@@ -795,14 +775,22 @@ function NewJobPageInner() {
                             채운다(세로형은 좌우, 가로형은 상하 letterbox). */}
                         {/* eslint-disable-next-line @next/next/no-img-element -- 로컬 blob: objectURL이라 next/image 최적화 대상이 아니다 */}
                         <img src={img.previewUrl} alt={img.file.name} className="h-full w-full object-contain" />
+                        <SourceImageUploadStatus
+                          fileName={img.file.name}
+                          upload={img.upload}
+                          onRetry={() => handleRetryUpload(img.localId)}
+                          retryDisabled={isSubmitting || !draftJobId}
+                        />
                         <button
                           type="button"
-                          onClick={() => removeImage(img.localId)}
+                          onClick={() => void removeImage(draftJobId, img.localId)}
+                          // 업로드 중에는 삭제할 수 없다(서버 결과를 기다린다). 업로드 완료 파일은 서버 DELETE 후 지운다.
+                          disabled={img.upload.status === 'uploading' || img.deleting || isSubmitting}
                           aria-label={`${img.file.name} 삭제`}
                           // top/right를 %로 둬서(12px÷244px≈4.92%) 카드가
                           // 축소돼도 여백 비율이 그대로 유지된다 — 버튼
                           // 자체 크기(24px)는 클릭 타겟 확보를 위해 고정.
-                          className="absolute top-[4.92%] right-[4.92%] flex size-6 items-center justify-center rounded-full border border-[#eaeaea] bg-white hover:bg-gray-50"
+                          className="absolute top-[4.92%] right-[4.92%] flex size-6 items-center justify-center rounded-full border border-[#eaeaea] bg-white hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           <CloseIcon />
                         </button>
@@ -926,7 +914,7 @@ function NewJobPageInner() {
                 <div className="relative">
                   <select
                     value={regulatoryClass}
-                    onChange={(e) => setRegulatoryClass(e.target.value)}
+                    onChange={(e) => setRegulatoryClass(e.target.value as ApiRegulatoryClass | '')}
                     className="w-full appearance-none rounded-[6px] border border-[#eaeaea] bg-white px-[14px] py-[10px] text-[14px] tracking-[-0.01em] text-[#707070] outline-none focus:border-[#ff6a38]"
                   >
                     <option value="">선택</option>
@@ -938,6 +926,9 @@ function NewJobPageInner() {
                     <ChevronDownIcon />
                   </div>
                 </div>
+                {regulatoryClassHelper && (
+                  <p className="text-left text-[12px] font-light tracking-[-0.04em] text-[#707070]">{regulatoryClassHelper}</p>
+                )}
               </div>
             </div>
 
@@ -1046,15 +1037,18 @@ function NewJobPageInner() {
 
         {/* 하단 — 에러 메시지 + 다음 버튼 (Figma는 버튼만 우하단에 둔다) */}
         <div className="flex shrink-0 items-center justify-end gap-4 px-10 pb-10">
-          {submitError && (
-            <p className="flex-1 text-sm text-red-500">
-              {submitError instanceof Error ? submitError.message : '오류가 발생했습니다. 다시 시도해 주세요.'}
+          {(submitError != null || hasUploadFailed || uploadNotice) && (
+            <p role="alert" className="flex-1 text-sm text-red-500">
+              {hasUploadFailed
+                ? '업로드에 실패한 파일이 있습니다. 다시 시도하거나 삭제한 뒤 진행해 주세요.'
+                : uploadNotice ??
+                  (submitError instanceof Error ? submitError.message : '오류가 발생했습니다. 다시 시도해 주세요.')}
             </p>
           )}
           <button
             type="button"
             onClick={handleSubmit}
-            disabled={!isValid || isSubmitting}
+            disabled={!isValid || isSubmitting || isUploadBusy}
             title={!isValid ? '필수 항목을 모두 입력해 주세요.' : undefined}
             className="w-[148px] shrink-0 rounded-[6px] bg-[#171717] px-8 py-3.5 text-[14px] font-medium tracking-[-0.03em] text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
           >

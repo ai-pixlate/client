@@ -1,7 +1,6 @@
 import { ensureBackendSession, getAccessToken, isApiMockingEnabled, setAccessToken } from '@/lib/api/session';
-import type { CreateJobRequest, CreateJobResponse } from '@/lib/api/types';
 import type { ApiBlockPatch, ApiBlockPatchResponse, ApiConfirmRequest, ApiJob, ApiJobTaskStatus, ApiReviewPreview, ApiTextBlock } from '@/lib/api/n5-schema';
-import type { ApiAcceptedTask } from '@/lib/api/job-schema';
+import type { ApiAcceptedTask, ApiJobPatch, ApiSourceImageUploadResult } from '@/lib/api/job-schema';
 import type { ApiSection, ApiSectionList, ApiSectionPatch, ApiSourceImage } from '@/lib/api/n3-schema';
 import type {
   ApiRenderResponse,
@@ -98,27 +97,77 @@ export class ApiRequestError extends Error {
 }
 
 // ─────────────────────────────────────────────
-// N1 — job 생성. 경로는 실제 OpenAPI(POST /jobs)로 맞췄다 — mock 전용 /api
-// 프리픽스를 쓰지 않는다. 요청/응답 payload 자체(CreateJobRequest/
-// CreateJobResponse, 실제 JobCreate/Job 계약과 다름 — 예: targetCountry 등
-// N1 값을 한 번에 같이 받음)는 오늘(경로 정리) 범위가 아니라 그대로 뒀다 —
-// N1을 draft-first(brandId만 POST → PATCH로 나머지 세팅) 흐름으로 다시
-// 만드는 건 더 큰 화면 작업이라 별도로 다룬다.
+// N1 — draft-first (OpenAPI jobCreate 설명 그대로):
+// POST /jobs(draft) → POST source-images(원본 업로드) → PATCH /jobs/{jobId}(N1 값)
+// → (필요 시) source-images/reorder → analyze. N1 필수값 검증은 analyze 게이트다.
 // ─────────────────────────────────────────────
 
-export async function createJob(payload: CreateJobRequest): Promise<CreateJobResponse> {
-  const brandIdNum = Number(payload.brandId);
-  const created = await apiFetch<CreateJobResponse>('/jobs', {
+/**
+ * draft 생성 (API-JOB-02). body는 JobCreate의 brandId만 보낸다 — N1 값은 PATCH로 세팅한다.
+ * 응답은 Job이고 식별자는 Job.id(number)다. 이후 router/API path가 문자열 jobId를 쓰므로
+ * 이 경계에서 String(id)로 바꾼다. idempotencyKey는 같은 생성 재요청(네트워크 중복)에서만
+ * 재사용한다 — 파일 업로드 재시도와는 무관하다.
+ */
+export async function createJob(brandId: string, options: { idempotencyKey?: string } = {}): Promise<{ jobId: string }> {
+  const brandIdNum = Number(brandId);
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (options.idempotencyKey) headers['Idempotency-Key'] = options.idempotencyKey;
+  const created = await apiFetch<ApiJob>('/jobs', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      ...payload,
-      brandId: Number.isFinite(brandIdNum) ? brandIdNum : payload.brandId,
-    }),
+    headers,
+    // brandId는 int64 계약이다. mock brand id(문자열)는 숫자로 바꿀 수 없어 그대로 보낸다.
+    body: JSON.stringify({ brandId: Number.isFinite(brandIdNum) ? brandIdNum : brandId }),
   });
-  // 실백엔드는 jobId를 number로 주고, mock은 MOCK_JOB_ID 문자열을 준다.
-  // 이후 analyze/router.push가 둘 다 문자열 jobId를 기대하므로 여기서 맞춘다.
-  return { ...created, jobId: String(created.jobId) };
+  if (created.id == null) throw new Error('작업 생성 응답에 id가 없습니다.');
+  return { jobId: String(created.id) };
+}
+
+/** 4xx/5xx 응답에서 공통 Error의 error.code를 꺼낸다 (없으면 null) */
+export function apiErrorCode(error: unknown): string | null {
+  if (!(error instanceof ApiRequestError)) return null;
+  const body = error.body as { error?: { code?: unknown } } | null;
+  return typeof body?.error?.code === 'string' ? body.error.code : null;
+}
+
+/**
+ * 원본 이미지 업로드 (API-SRC-02, multipart 다중). field 이름은 계약대로 `files`이고,
+ * 전달한 순서대로 append한다. Content-Type은 직접 넣지 않는다 — 브라우저가
+ * multipart boundary를 포함해 설정한다. 파일별 성공/실패는 200 응답의 results[]로
+ * 오고, 요청 자체가 실패(413/415/네트워크 등)하면 ApiRequestError로 던진다.
+ */
+export async function uploadSourceImages(jobId: string, files: File[]): Promise<ApiSourceImageUploadResult> {
+  const formData = new FormData();
+  files.forEach((file) => {
+    formData.append('files', file);
+  });
+  const res = await authorizedFetch(`/jobs/${jobId}/source-images`, { method: 'POST', body: formData });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) throw new ApiRequestError(res.status, body);
+  return body as ApiSourceImageUploadResult;
+}
+
+/** 업로드된 원본 삭제 (API-SRC-04, 204 본문 없음) */
+export async function deleteSourceImage(jobId: string, sourceImageId: number): Promise<void> {
+  const res = await authorizedFetch(`/jobs/${jobId}/source-images/${sourceImageId}`, { method: 'DELETE' });
+  if (!res.ok) throw new ApiRequestError(res.status, await res.json().catch(() => null));
+}
+
+/** 원본 순서 재정렬 (API-SRC-03). order는 sourceImageId 배열이다. */
+export function reorderSourceImages(jobId: string, order: number[]): Promise<ApiSourceImage[]> {
+  return apiFetch<ApiSourceImage[]>(`/jobs/${jobId}/source-images/reorder`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ order }),
+  });
+}
+
+/** N1 입력값 세팅 (JobPatch 부분 갱신). draft/N1 단계가 아니면 409 INVALID_STATE. */
+export function patchJob(jobId: string, payload: ApiJobPatch): Promise<ApiJob> {
+  return apiFetch<ApiJob>(`/jobs/${jobId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
 }
 
 // ─────────────────────────────────────────────

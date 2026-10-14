@@ -1,7 +1,7 @@
 /**
  * pix/ate N1~N6 Mock fixture 데이터
  *
- * - job_mock_001 하나를 기준으로 N2~N6 전 화면을 재사용합니다.
+ * - job 1(MOCK_JOB_ID '1') 하나를 기준으로 N2~N6 전 화면을 재사용합니다.
  * - detail 이미지 2장만 사용합니다. thumbnail fixture는 파이프라인 미확정으로 제외합니다.
  * - 이미지 URL은 실제 파일 없이 placeholder 경로를 사용합니다.
  *   실제 파일을 public/mock/에 넣으면 곧바로 연결됩니다.
@@ -18,7 +18,9 @@ import type { ApiDeliverable, ApiDeliverableList, ApiValidationDetail } from '@/
 // 공통 ID 상수
 // ─────────────────────────────────────────────
 
-export const MOCK_JOB_ID = 'job_mock_001';
+// 실제 계약의 Job.id는 number(int64)다 — MSW POST /jobs는 id: 1을 주고, FE는 createJob
+// 경계에서 String(id)로 바꿔 router/API path에 쓴다. mockN5Job.id(1)와 같은 값이다.
+export const MOCK_JOB_ID = '1';
 export const MOCK_BRAND_ID = 'brand_mock_001';
 
 // SRC_A/SRC_B는 N3 mockSectionsResponse/mockN3VerdictContractSections 등이
