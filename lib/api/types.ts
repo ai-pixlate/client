@@ -31,7 +31,8 @@ export type SectionBucket = 'include' | 'exclude';
 export type ExclusionReasonCode =
   | 'auto_regulatory'
   | 'auto_channel'
-  | 'auto_local_irrelevant'
+  | 'auto_local'
+  | 'auto_local_failed'
   | 'user_manual'
   | 'restored_by_user';
 

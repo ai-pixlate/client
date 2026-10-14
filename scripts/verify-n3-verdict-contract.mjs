@@ -140,7 +140,7 @@ console.log('\n[5] Mock 계약 케이스 (9월 5종) — section.bucket이 UI �
       verdictType: 'local_irrelevant',
       verdictStatus: 'irrelevant',
       bucket: 'exclude',
-      exclusionReason: 'auto_local_irrelevant',
+      exclusionReason: 'auto_local',
     },
     {
       name: 'needs_fix / include',

@@ -134,7 +134,7 @@ export const mockSectionsResponse: SectionsResponse = {
       bucket: 'exclude',
       // 카카오톡 상담 안내 — 미국(도착 시장)에서 의미 없는 채널이라 자동 제외.
       // 표시 문구는 코드값 그대로 노출하지 않고 EXCLUSION_REASON_LABELS를 거친다.
-      exclusionReason: 'auto_local_irrelevant',
+      exclusionReason: 'auto_local',
       // N3에서 자동 제외된 섹션. N5 화면에 표시되지 않음.
       excludedStage: 'N3',
       bbox: { x: 0, y: 1100, width: 1000, height: 200 },
@@ -297,7 +297,7 @@ export const mockN3VerdictContractSections: Section[] = [
     imageKey: '/mock/vc-local-irrelevant-original.jpg',
     renderImageKey: '/mock/vc-local-irrelevant-render.jpg',
     bucket: 'exclude',
-    exclusionReason: 'auto_local_irrelevant',
+    exclusionReason: 'auto_local',
     excludedStage: 'N3',
     bbox: { x: 0, y: 0, width: 1000, height: 300 },
     verdicts: [
