@@ -24,3 +24,6 @@ export type ApiJobStatus = components['schemas']['JobStatus'];
 
 /** 비동기 트리거(analyze/sections proceed 등) 202 공용 응답 */
 export type ApiAcceptedTask = components['schemas']['AcceptedTask'];
+
+/** N1 셀러 선택 규제 분류 (job.regulatory_class) */
+export type ApiRegulatoryClass = components['schemas']['RegulatoryClass'];

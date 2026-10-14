@@ -4,6 +4,7 @@ import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
 import { useCreateJobMutation, useAnalyzeJobMutation } from '@/lib/queries/pixlate';
+import type { ApiRegulatoryClass } from '@/lib/api/job-schema';
 import type { ImageType } from '@/lib/api/types';
 import { StepNav } from '../[jobId]/_components/step-nav';
 
@@ -43,14 +44,20 @@ const COUNTRY_RECOMMENDED_LANGUAGE: Partial<Record<string, string>> = {
   US: 'en',
 };
 
-// TODO: 백엔드 규제 분류 목록 API 연결 시 교체
-const REGULATORY_CLASS_OPTIONS = [
-  { value: 'cosmetics', label: '화장품' },
-  { value: 'food', label: '식품' },
-  { value: 'health_supplement', label: '건강기능식품' },
-  { value: 'medical_device', label: '의료기기' },
-  { value: 'general', label: '일반 상품' },
+// 규제 분류 — 미국 MVP 4종. 값은 OpenAPI RegulatoryClass enum 그대로다.
+// TODO: GET /master/regulatory-classes 연결 시 교체
+const REGULATORY_CLASS_OPTIONS: { value: ApiRegulatoryClass; label: string }[] = [
+  { value: 'cosmetic', label: '화장품' },
+  { value: 'otc', label: 'OTC 의약품' },
+  { value: 'combination', label: '화장품+OTC 복합' },
+  { value: 'unknown', label: '잘 모름' },
 ];
+
+/** 선택값별 검사 기준 안내 (helper text) */
+const REGULATORY_CLASS_HELPER: Partial<Record<ApiRegulatoryClass, string>> = {
+  unknown: '잘 모름을 선택하면 화장품 기준으로 검사됩니다.',
+  combination: '복합 제품은 현재 OTC 기준으로 검사됩니다.',
+};
 
 // ─────────────────────────────────────────────────────────────────
 // 카테고리 계층 — Figma 카테고리 선택 모달(381:6293)이 실제로 보여준 값만
@@ -385,7 +392,7 @@ function NewJobPageInner() {
   // ── 폼 상태 ─────────────────────────────────────────────────────
   const [targetCountry, setTargetCountry] = useState('');
   const [targetLanguage, setTargetLanguage] = useState('');
-  const [regulatoryClass, setRegulatoryClass] = useState('');
+  const [regulatoryClass, setRegulatoryClass] = useState<ApiRegulatoryClass | ''>('');
   const [displayCategory, setDisplayCategory] = useState('');
   const [keywords, setKeywords] = useState<string[]>([]);
   const [keywordInput, setKeywordInput] = useState('');
@@ -517,6 +524,7 @@ function NewJobPageInner() {
     !!targetLanguage &&
     !!regulatoryClass &&
     images.length > 0;
+  const regulatoryClassHelper = regulatoryClass ? REGULATORY_CLASS_HELPER[regulatoryClass] : undefined;
 
   // ── 제출 ────────────────────────────────────────────────────────
   //
@@ -926,7 +934,7 @@ function NewJobPageInner() {
                 <div className="relative">
                   <select
                     value={regulatoryClass}
-                    onChange={(e) => setRegulatoryClass(e.target.value)}
+                    onChange={(e) => setRegulatoryClass(e.target.value as ApiRegulatoryClass | '')}
                     className="w-full appearance-none rounded-[6px] border border-[#eaeaea] bg-white px-[14px] py-[10px] text-[14px] tracking-[-0.01em] text-[#707070] outline-none focus:border-[#ff6a38]"
                   >
                     <option value="">선택</option>
@@ -938,6 +946,9 @@ function NewJobPageInner() {
                     <ChevronDownIcon />
                   </div>
                 </div>
+                {regulatoryClassHelper && (
+                  <p className="text-left text-[12px] font-light tracking-[-0.04em] text-[#707070]">{regulatoryClassHelper}</p>
+                )}
               </div>
             </div>
 
