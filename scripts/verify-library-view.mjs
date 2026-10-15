@@ -7,10 +7,19 @@
  */
 
 import {
+  clampPage,
+  countHiddenSelected,
+  countSelected,
   filterLibraryCards,
   formatSavedDate,
   getCodeLabel,
+  getSelectionSummary,
   getCountryFilterCodes,
+  getPageItems,
+  getPaginationItems,
+  getSpecTypeLabel,
+  getTotalPages,
+  LIBRARY_PAGE_SIZE,
   isAllSelected,
   sortLibraryCardsByNewest,
   toggleSelectAll,
@@ -93,8 +102,7 @@ console.log('\n[4] formatSavedDate — YYYY.MM.DD(로컬 날짜)');
   check('파싱 불가 -> null', formatSavedDate('not-a-date') === null);
 }
 
-// 전체선택 범위(전체 library vs 현재 필터 결과)는 PM 미확정이라 여기서 고정하지 않는다 —
-// 주어진 대상 목록에 대한 토글 동작만 확인한다.
+// 전체선택·해제의 대상은 현재 검색·필터 결과다(확정) — 여기서는 주어진 대상 목록에 대한 토글을 확인한다.
 console.log('\n[5] 선택 — 개별 / 복수 / 전체선택·해제');
 {
   let selected = new Set();
@@ -108,11 +116,42 @@ console.log('\n[5] 선택 — 개별 / 복수 / 전체선택·해제');
   const visible = [1, 2, 3];
   check('일부만 선택 -> 전체선택 아님', !isAllSelected(selected, visible));
   selected = toggleSelectAll(selected, visible);
-  check('전체선택 -> 주어진 대상 전부', ids([...selected].map((jobId) => ({ jobId }))) === '1,2,3');
+  check('전체선택 -> 주어진 대상 전부', [...selected].sort().join(',') === '1,2,3');
   check('전체선택 상태', isAllSelected(selected, visible));
   selected = toggleSelectAll(selected, visible);
   check('전체선택 해제 -> 0건', selected.size === 0);
   check('대상 0건이면 전체선택 아님', !isAllSelected(new Set(), []));
+
+  // 선택 개수 — 현재 결과(대상) 안의 선택만 센다
+  check('선택 개수 0', countSelected(new Set(), visible) === 0);
+  check('선택 개수 = 대상 안 선택 수', countSelected(new Set([1, 3]), visible) === 2);
+  check('대상 밖 선택은 세지 않음', countSelected(new Set([1, 9]), visible) === 1);
+  const filtered = [1, 3];
+  const afterSelectAll = toggleSelectAll(new Set(), filtered);
+  check('필터 결과 전체선택 -> 결과 밖(2)은 선택 안 됨', !afterSelectAll.has(2) && afterSelectAll.size === 2);
+  check('전체선택 후 개수 = 결과 수', countSelected(afterSelectAll, filtered) === filtered.length);
+
+  // 전체선택·해제는 대상(현재 결과)에만 적용 — 대상 밖 선택(9)은 유지
+  const withHidden = toggleSelectAll(new Set([9]), filtered);
+  check('전체선택 -> 대상 밖 선택 유지', withHidden.has(9) && withHidden.has(1) && withHidden.has(3) && withHidden.size === 3);
+  const clearedVisible = toggleSelectAll(withHidden, filtered);
+  check('전체해제 -> 대상만 해제, 대상 밖 선택 유지', clearedVisible.has(9) && clearedVisible.size === 1);
+  check('전체해제 후 대상 안 개수 0', countSelected(clearedVisible, filtered) === 0);
+
+  // 결과 밖 선택 수 — 보관함 전체(all) 중 현재 결과(filtered) 밖 선택만, 보관함에 없는 id(99)는 제외
+  const all = [1, 2, 3, 4, 9];
+  check('결과 밖 선택 수', countHiddenSelected(new Set([1, 2, 9, 99]), all, filtered) === 2);
+  check('결과 밖 선택 없음', countHiddenSelected(new Set([1, 3]), all, filtered) === 0);
+  check('결과 = 전체면 결과 밖 0', countHiddenSelected(new Set([1, 2]), all, all) === 0);
+
+  // 선택 개수 문구
+  check('선택 없음 -> 숨김(null)', getSelectionSummary(0, 0) === null);
+  const onlyVisible = getSelectionSummary(3, 0);
+  check('현재 결과만 -> "3개 선택"', onlyVisible?.visible === '3개 선택' && onlyVisible.hidden === null);
+  const both = getSelectionSummary(2, 12);
+  check('둘 다 -> "2개 선택" + "다른 조건에서 12개 선택됨"', both?.visible === '2개 선택' && both.hidden === '다른 조건에서 12개 선택됨');
+  const onlyHidden = getSelectionSummary(0, 14);
+  check('결과 밖만 -> "다른 조건에서 14개 선택됨"', onlyHidden?.visible === null && onlyHidden.hidden === '다른 조건에서 14개 선택됨');
 
 }
 
@@ -135,6 +174,39 @@ console.log('\n[6] getCodeLabel — master 이름 우선, 없으면 code(빈 문
   // 국가 filter option은 화면에서 getCountryFilterCodes → getCodeLabel 순서로 만든다
   const optionLabels = getCountryFilterCodes(cards).map((code) => getCodeLabel(code, emptyFromFailure));
   check('E. master 없을 때 filter option = code, 빈칸 없음', optionLabels.join(',') === 'US,JP,AE' && optionLabels.every((l) => l !== ''));
+}
+
+console.log('\n[7] getSpecTypeLabel — N1 규격 명칭');
+{
+  check('original -> 원본 유지', getSpecTypeLabel('original') === '원본 유지');
+  check('site -> 판매처 맞춤', getSpecTypeLabel('site') === '판매처 맞춤');
+  check('custom -> 커스텀', getSpecTypeLabel('custom') === '커스텀');
+  check('null -> null(라벨 생략)', getSpecTypeLabel(null) === null);
+  check('계약 밖 값 -> null', getSpecTypeLabel('unknown') === null);
+}
+
+console.log('\n[8] 페이지네이션 — 결과 카드 7장/페이지, 1페이지 이하는 숨김(LibraryView: totalPages > 1)');
+{
+  check('페이지 크기 7', LIBRARY_PAGE_SIZE === 7);
+  const table = [[0, 0], [4, 1], [7, 1], [8, 2], [14, 2], [15, 3], [17, 3]];
+  for (const [count, pages] of table) {
+    check(`${count}건 -> ${pages}페이지, pagination ${pages > 1 ? '표시' : '숨김'}`, getTotalPages(count) === pages);
+  }
+  check('사라진 페이지 -> 마지막 페이지', clampPage(3, 2) === 2);
+  check('0페이지 -> 1', clampPage(3, 0) === 1);
+  check('범위 안은 그대로', clampPage(2, 3) === 2);
+  check('0 이하 -> 1', clampPage(0, 3) === 1);
+  const list = Array.from({ length: 17 }, (_, i) => i);
+  check('1페이지 = 0~6', getPageItems(list, 1).join(',') === '0,1,2,3,4,5,6');
+  check('3페이지 = 14~16', getPageItems(list, 3).join(',') === '14,15,16');
+  const items = (c, t) => getPaginationItems(c, t).join(' ');
+  check('3페이지 -> 1 2 3', items(1, 3) === '1 2 3');
+  check('5페이지 -> 전부', items(4, 5) === '1 2 3 4 5');
+  check('7페이지·현재 1 -> Figma 1 2 3 … 7', items(1, 7) === '1 2 3 more 7');
+  check('8페이지·현재 3 -> 1 2 3 … 8', items(3, 8) === '1 2 3 more 8');
+  check('8페이지·현재 4 -> 1 … 4 … 8', items(4, 8) === '1 more 4 more 8');
+  check('8페이지·현재 6 -> 1 … 6 7 8', items(6, 8) === '1 more 6 7 8');
+  check('8페이지·현재 8 -> 1 … 6 7 8', items(8, 8) === '1 more 6 7 8');
 }
 
 console.log(`\n총 ${pass + fail}건 — PASS ${pass} / FAIL ${fail}`);
