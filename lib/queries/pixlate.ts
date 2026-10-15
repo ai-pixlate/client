@@ -24,7 +24,6 @@ import {
   getValidation,
   createExport,
   getExportDownload,
-  getExportDownloadByType,
   saveJob,
 } from '@/lib/api/pixlate';
 import type { ApiJobPatch } from '@/lib/api/job-schema';
@@ -365,13 +364,19 @@ export function useExportDownloadMutation(jobId: string) {
 }
 
 /**
- * N6 행별 개별 다운로드 (exportDownloadByType) — export 묶음 생성 없이
- * images|csv|html 구성요소 하나만 바로 presigned URL로 받는다. psd는 호출부가
- * 애초에 disabled라 이 mutation을 쓰지 않는다.
+ * N6 행별 개별 다운로드 — 계약상 타입별 다운로드(GET /export/download)는 "이미 만든
+ * 구성요소"만 돌려준다(미생성 404). 그래서 먼저 POST /export 로 그 구성요소 하나를 만들고
+ * 응답 artifactId 로 GET /exports/{artifactId}/download 를 부른다. 생성이 실패하거나
+ * 응답에 artifactId 가 없으면 예외로 끝나 다운로드 조회는 하지 않는다.
+ * psd는 호출부가 애초에 disabled라 이 mutation을 쓰지 않는다.
  */
-export function useExportDownloadByTypeMutation(jobId: string) {
+export function useExportComponentDownloadMutation(jobId: string) {
   return useMutation({
-    mutationFn: (artifactType: ApiExportArtifactType) => getExportDownloadByType(jobId, artifactType),
+    mutationFn: async (artifactType: ApiExportArtifactType) => {
+      const created = await createExport(jobId, { components: [artifactType as string] });
+      if (created.artifactId == null) throw new Error('내보내기 산출물이 만들어지지 않았습니다');
+      return getExportDownload(jobId, created.artifactId);
+    },
   });
 }
 

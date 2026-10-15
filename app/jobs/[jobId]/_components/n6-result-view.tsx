@@ -10,7 +10,7 @@ import {
   useValidationQuery,
   useExportMutation,
   useExportDownloadMutation,
-  useExportDownloadByTypeMutation,
+  useExportComponentDownloadMutation,
   useSaveJobMutation,
 } from '@/lib/queries/pixlate';
 import type { ApiDeliverable, ApiDeliverableComponent, ApiExportArtifactType } from '@/lib/api/n6-schema';
@@ -364,8 +364,10 @@ function ArtifactCheckbox({
 }
 
 /**
- * 행별 개별 다운로드 — GET /jobs/{jobId}/export/download?artifactType=(images|csv|html).
- * POST /export(묶음 선택)와 별개 흐름이라, 행마다 독립된 mutation을 갖는다.
+ * 행별 개별 다운로드 — POST /jobs/{jobId}/export {components:[type]} 로 그 구성요소를
+ * 만든 뒤 응답 artifactId 로 GET /jobs/{jobId}/exports/{artifactId}/download 를 부른다
+ * (계약상 타입별 다운로드는 이미 만든 구성요소만 돌려줘서, 내보내기 전에는 404였다).
+ * 아래 "선택 항목 내보내기"(묶음)와 별개 흐름이라, 행마다 독립된 mutation을 갖는다.
  * PSD는 이 컨트롤 자체를 렌더하지 않는다(항상 disabled, 호출 자체가 없다).
  */
 function ArtifactRow({
@@ -385,7 +387,19 @@ function ArtifactRow({
   const label = ARTIFACT_LABEL[type] ?? type;
   const desc = ARTIFACT_DESC[type] ?? '';
 
-  const downloadMutation = useExportDownloadByTypeMutation(jobId);
+  const downloadMutation = useExportComponentDownloadMutation(jobId);
+  // 빠른 연속 클릭은 isPending 이 화면에 반영되기 전에 두 번 들어올 수 있어, 생성 요청(POST /export)이
+  // 한 번만 나가도록 진행 중 표시를 ref 로도 막는다.
+  const inFlightRef = useRef(false);
+  const startDownload = () => {
+    if (inFlightRef.current || downloadMutation.isPending) return;
+    inFlightRef.current = true;
+    downloadMutation.mutate(type as ApiExportArtifactType, {
+      onSettled: () => {
+        inFlightRef.current = false;
+      },
+    });
+  };
 
   return (
     <div className="flex w-full flex-col gap-4">
@@ -422,7 +436,7 @@ function ArtifactRow({
             <button
               type="button"
               data-testid={`n6-download-row-${type}`}
-              onClick={() => downloadMutation.mutate(type as ApiExportArtifactType)}
+              onClick={startDownload}
               disabled={disabled || downloadMutation.isPending}
               className="w-[97px] shrink-0 rounded-[4px] bg-white px-2.5 py-[5px] text-[12px] text-[#171717] hover:bg-[#f5f5f5] disabled:cursor-not-allowed disabled:text-[#b8b8b8]"
             >
