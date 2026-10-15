@@ -74,15 +74,22 @@ test('render → deliverables → validation → export → download → save �
   await expect(page.locator('#artifact-csv')).not.toBeChecked();
   await expect(page.getByText('선택된 산출물 2개')).toBeVisible();
 
-  // ── 개별 다운로드(행별, artifactType 쿼리) ─────────────────────────
-  await page.getByTestId('n6-download-row-csv').click();
-  await expect(page.getByTestId('n6-download-row-csv')).toHaveText('다운로드', { timeout: 10_000 });
-  const byTypeReq = requests.find(
-    (r) => r.method === 'GET' && r.path === `/jobs/${MOCK_JOB_ID}/export/download?artifactType=csv`,
+  // ── 개별 다운로드(행별) — POST /export {components:[csv]} → 응답 artifactId 로 다운로드 ──
+  const rowExport = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname === `/jobs/${MOCK_JOB_ID}/export`,
   );
-  expect(byTypeReq).toBeDefined();
+  await page.getByTestId('n6-download-row-csv').click();
+  const rowExportBody = await (await rowExport).json();
+  await expect(page.getByTestId('n6-download-row-csv')).toHaveText('다운로드', { timeout: 10_000 });
+  expect(JSON.parse(requests.find((r) => r.method === 'POST' && r.path === `/jobs/${MOCK_JOB_ID}/export`)!.body ?? '{}'))
+    .toEqual({ components: ['csv'] });
+  expect(rowExportBody.artifactType).toBe('csv');
+  expect(
+    requests.some((r) => r.method === 'GET' && r.path === `/jobs/${MOCK_JOB_ID}/exports/${rowExportBody.artifactId}/download`),
+  ).toBe(true);
+  expect(requests.some((r) => r.path.startsWith(`/jobs/${MOCK_JOB_ID}/export/download`))).toBe(false);
   const rowHref = await page.getByTestId('n6-download-row-csv').getAttribute('href');
-  expect(rowHref).toContain('mock-presigned-bytype-csv');
+  expect(rowHref).toContain(`mock-presigned-${rowExportBody.artifactId}`);
   expect(rowHref).toContain('export.csv');
 
   // ── export 실행(묶음 선택) ────────────────────────────────────────
@@ -90,7 +97,8 @@ test('render → deliverables → validation → export → download → save �
 
   await expect(page.getByTestId('n6-download-link')).toBeVisible({ timeout: 10_000 });
 
-  const exportReq = requests.find((r) => r.method === 'POST' && r.path === `/jobs/${MOCK_JOB_ID}/export`);
+  // 행 다운로드가 먼저 POST /export 를 한 번 냈으므로, 묶음 내보내기는 그 다음 요청이다
+  const exportReq = requests.filter((r) => r.method === 'POST' && r.path === `/jobs/${MOCK_JOB_ID}/export`)[1];
   expect(exportReq).toBeDefined();
   const exportBody = JSON.parse(exportReq!.body ?? '{}');
   expect(new Set(exportBody.components)).toEqual(new Set(['images', 'html']));

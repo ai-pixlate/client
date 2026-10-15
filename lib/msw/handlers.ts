@@ -287,6 +287,10 @@ function isN6RenderDone(): boolean {
  */
 let n6ExportArtifactIdCounter = 70000;
 const n6ExportArtifactState = new Map<number, { artifactType: ApiExportResponse['artifactType']; components: string[] }>();
+/** POST /export 로 한 번이라도 만든 구성요소(타입별 개별 다운로드 GET /export/download 가 조회한다). */
+const n6GeneratedComponents = new Set<string>();
+/** e2e 가 page 에서 true 로 두면 다음 POST /export 한 번이 500 으로 실패한다(MSW 핸들러는 페이지 쪽에서 돈다). */
+export const MOCK_EXPORT_FAIL_ONCE_FLAG = '__pixlateMockExportFailOnce';
 
 /**
  * N2 진행 중(processing) 단계에서 다음 단계로 넘어갈 조건 — 오늘(N1→N6
@@ -1054,9 +1058,22 @@ export const handlers = [
       return badRequest('components가 1개 이상 필요합니다');
     }
 
+    // e2e 전용 실패 주입 — 한 번만 500(생성 실패 시 다운로드를 이어가지 않는지 확인용)
+    const failFlags = globalThis as { [MOCK_EXPORT_FAIL_ONCE_FLAG]?: boolean };
+    if (failFlags[MOCK_EXPORT_FAIL_ONCE_FLAG]) {
+      failFlags[MOCK_EXPORT_FAIL_ONCE_FLAG] = false;
+      return HttpResponse.json(
+        { error: { code: 'INTERNAL_ERROR', message: 'mock export failure', retryable: true, details: {}, traceId: 'mock' } },
+        { status: 500 },
+      );
+    }
+
     const artifactId = n6ExportArtifactIdCounter++;
-    const artifactType: ApiExportResponse['artifactType'] = 'zip';
+    // 계약(API-FIN-04): 둘 이상이면 zip 하나, 하나면 그 구성요소(csv·images)를 돌려준다
+    const artifactType = (components.length > 1 ? 'zip' : components[0]) as ApiExportResponse['artifactType'];
     n6ExportArtifactState.set(artifactId, { artifactType, components });
+    for (const c of components) n6GeneratedComponents.add(c);
+    if (components.length > 1) n6GeneratedComponents.add('zip');
 
     const response: ApiExportResponse = { artifactId, artifactType, components };
     return HttpResponse.json(response, { status: 201 });
@@ -1075,7 +1092,7 @@ export const handlers = [
     const artifact = n6ExportArtifactState.get(artifactId);
     if (!artifact) return notFound(`Export artifact '${artifactId}' not found`);
 
-    const fileName = artifact.artifactType === 'zip' ? 'export.zip' : `export.${artifact.artifactType}`;
+    const fileName = artifact.artifactType === 'csv' ? 'export.csv' : 'export.zip'; // images 단독도 zip 묶음(BE 와 같음)
     return HttpResponse.json({
       url: `/mock/download/${fileName}?token=mock-presigned-${artifactId}`,
       fileName,
@@ -1097,9 +1114,12 @@ export const handlers = [
     if (!['zip', 'images', 'csv', 'html'].includes(artifactType)) {
       return badRequest("artifactType은 'zip'|'images'|'csv'|'html'이어야 합니다");
     }
-    if (!isN6RenderDone()) return notFound(`'${artifactType}' 구성요소가 아직 생성되지 않았습니다`);
+    // 계약(exportDownloadByType): export_artifact 에 이미 만든 구성요소만 — 미생성은 404
+    if (!isN6RenderDone() || !n6GeneratedComponents.has(artifactType)) {
+      return notFound(`'${artifactType}' 구성요소가 아직 생성되지 않았습니다`);
+    }
 
-    const fileName = artifactType === 'zip' ? 'export.zip' : `export.${artifactType}`;
+    const fileName = artifactType === 'csv' || artifactType === 'html' ? `export.${artifactType}` : 'export.zip';
     return HttpResponse.json({
       url: `/mock/download/${fileName}?token=mock-presigned-bytype-${artifactType}-${Date.now()}`,
       fileName,
