@@ -121,7 +121,7 @@ test('생성은 성공했지만 응답에 artifactId 가 없으면 다운로드 
   expect(pageErrors).toEqual([]);
 });
 
-test('생성 후 GET /exports/{artifactId}/download 가 404 면 오류를 보여 주고 화면은 유지된다', async ({ page }) => {
+test('GET /exports/{artifactId}/download 가 404 면 오류를 보이고, 다시 시도하면 새 artifactId 로 다운로드에 성공한다', async ({ page }) => {
   const requests = track(page);
   const pageErrors = collectPageErrors(page);
   await reachN6(page);
@@ -147,6 +147,33 @@ test('생성 후 GET /exports/{artifactId}/download 가 404 면 오류를 보여
   await expect(page.getByTestId('n6-download-row-csv')).toBeEnabled();
   await expect(page.getByTestId('n6-export-panel')).toBeVisible();
   await expect(page.getByText('번역이 완료되었습니다.')).toBeVisible();
+  expect(pageErrors).toEqual([]);
+
+  // 다시 시도 — 1회용 404 플래그는 첫 GET 에서 소비됐으므로 이번에는 정상 성공해야 한다
+  const reExported = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname === `/jobs/${MOCK_JOB_ID}/export`,
+  );
+  const reDownloaded = page.waitForResponse(
+    (r) => r.request().method() === 'GET' && /\/exports\/\d+\/download$/.test(new URL(r.url()).pathname),
+  );
+  await page.getByTestId('n6-download-row-csv').click();
+  const retryBody = await (await reExported).json();
+  const retryDlRes = await reDownloaded;
+
+  expect(exportPosts(requests).map((r) => JSON.parse(r.body ?? '{}'))).toEqual([{ components: ['csv'] }, { components: ['csv'] }]);
+  expect(retryBody.artifactId).toEqual(expect.any(Number));
+  expect(retryBody.artifactId).not.toBe(body.artifactId);
+  expect(new URL(retryDlRes.url()).pathname).toBe(`/jobs/${MOCK_JOB_ID}/exports/${retryBody.artifactId}/download`);
+  expect(retryDlRes.status()).toBe(200);
+  expect(downloads(requests).map((r) => r.path)).toEqual([
+    `/jobs/${MOCK_JOB_ID}/exports/${body.artifactId}/download`,
+    `/jobs/${MOCK_JOB_ID}/exports/${retryBody.artifactId}/download`,
+  ]);
+
+  const link = page.getByTestId('n6-download-row-csv');
+  await expect(link).toHaveText('다운로드', { timeout: 10_000 });
+  await expect(link).toHaveAttribute('href', new RegExp(`mock-presigned-${retryBody.artifactId}$`));
+  await expect(page.getByTestId('n6-download-row-error-csv')).toHaveCount(0);
   expect(pageErrors).toEqual([]);
 });
 
