@@ -15,6 +15,7 @@ export const UNSELECTED_BORDER_CLASS = 'border-[#eaeaea]';
  *   Unchecked(1063:5143): border #EAEAEA
  *   Checked(1063:5146):   border #FF6A38 + Card/Action/Check 16 glyph(visual 좌상단 0,0 기준 — Figma inside
  *                         stroke라 CSS border 안쪽 기준으로는 −1px)
+ *   disabled: N6 산출물 checkbox와 같은 표현 — border #EAEAEA + bg #F5F5F5, check 없음, not-allowed
  */
 export function CompactCheckbox({
   id,
@@ -22,10 +23,12 @@ export function CompactCheckbox({
   onChange,
   label,
   testId,
+  disabled = false,
 }: {
   id: string;
   checked: boolean;
   onChange: () => void;
+  disabled?: boolean;
   /** 화면에 보이는 label이 없을 때의 접근성 이름 */
   label?: string;
   testId?: string;
@@ -36,18 +39,19 @@ export function CompactCheckbox({
         type="checkbox"
         id={id}
         checked={checked}
+        disabled={disabled}
         onChange={onChange}
         aria-label={label}
         data-testid={testId}
-        className="peer absolute inset-0 size-5 cursor-pointer opacity-0"
+        className="peer absolute inset-0 size-5 cursor-pointer opacity-0 disabled:cursor-not-allowed"
       />
       <span
         data-checkbox-visual=""
-        className={`pointer-events-none relative block size-[18px] overflow-hidden rounded-[4px] border bg-white peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-[#ff6a38] ${
-          checked ? SELECTED_BORDER_CLASS : UNSELECTED_BORDER_CLASS
+        className={`pointer-events-none relative block size-[18px] overflow-hidden rounded-[4px] border peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-[#ff6a38] ${
+          disabled ? `${UNSELECTED_BORDER_CLASS} bg-[#f5f5f5]` : `${checked ? SELECTED_BORDER_CLASS : UNSELECTED_BORDER_CLASS} bg-white`
         }`}
       >
-        {checked && <CheckGlyph16 />}
+        {checked && !disabled && <CheckGlyph16 />}
       </span>
     </span>
   );
@@ -107,13 +111,16 @@ export function ChevronDownGlyph14() {
   );
 }
 
-/** Card/Action/Plus · Size=12, Icon Button Circle/XXS/Secondary 색(#707070) (285:2110) */
+/**
+ * Card/Action/Plus · Size=12 (53:1124) — 색은 부모 text color를 따른다(MaskGlyph).
+ * Icon Button Circle/XXS: Secondary(285:2110) #707070, Disabled(285:2116) #999.
+ */
 export function PlusGlyph12() {
   return (
     <span aria-hidden="true" className="relative block size-3 shrink-0 overflow-hidden">
       <span className="absolute inset-[20%]">
         <span className="absolute inset-[-5.21%]">
-          <img alt="" src="/library/icons/plus-12-secondary.svg" className="block size-full max-w-none" />
+          <MaskGlyph src="/library/icons/plus-12-secondary.svg" />
         </span>
       </span>
     </span>
@@ -134,3 +141,27 @@ export function PlusGlyph16() {
 }
 
 /* eslint-enable @next/next/no-img-element */
+
+/**
+ * 상태(기본·선택·Hover·비활성)에 따라 색이 바뀌는 glyph. Figma 원본 SVG의 모양을 CSS mask로 그대로 쓰고
+ * 색은 bg-current(부모 text color)로 칠한다 — 상태별 색을 바꾼 SVG 사본을 만들지 않는다.
+ * 부모 inset 상자를 꽉 채우는 것은 원본 <img className="size-full">와 같다.
+ */
+export function MaskGlyph({ src, className = 'block size-full' }: { src: string; className?: string }) {
+  const url = `url(${src})`;
+  return (
+    <span
+      aria-hidden="true"
+      data-glyph-src={src}
+      className={`bg-current ${className}`}
+      style={{
+        maskImage: url,
+        WebkitMaskImage: url,
+        maskSize: '100% 100%',
+        WebkitMaskSize: '100% 100%',
+        maskRepeat: 'no-repeat',
+        WebkitMaskRepeat: 'no-repeat',
+      }}
+    />
+  );
+}

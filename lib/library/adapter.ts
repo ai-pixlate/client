@@ -12,8 +12,8 @@
  *     중복 제거하지 않는다 — 국가·언어·규격이 다르면 서버가 이미 별도 job(=별도 카드)로 준다.
  *   - 목록에는 저장(완료)된 job만 온다. status/currentStep 필드가 없으므로 미완료 카드의
  *     "마지막 단계"는 이 계약으로 표시할 수 없다 — 여기서 지어내지 않는다.
- *   - 국가/언어/규격은 코드값 그대로 둔다. 화면 표시 문구 매핑(특히 specType)은 승인된
- *     라벨이 아직 없어 이 단계에서 만들지 않는다.
+ *   - 국가/언어/규격은 코드값 그대로 둔다. 표시 문구 매핑은 UI 단계(lib/library/view.ts
+ *     getSpecTypeLabel, master 이름 조회)가 맡는다.
  */
 
 import type { ApiLibraryCard } from '@/lib/api/n6-schema';
@@ -27,7 +27,7 @@ export interface LibraryCardViewModel {
   targetCountry: string | null;
   /** 코드값(예: 'en'). */
   targetLanguage: string | null;
-  /** 코드값('original' | 'site' | 'custom'). 스펙상 optional이라 없으면 null. */
+  /** 코드값('original' | 'site' | 'custom'). 스펙상 optional이라 없으면 null. 표시 이름은 getSpecTypeLabel. */
   specType: ApiLibraryCard['specType'] | null;
   /** presigned URL(만료 5분). 영구 식별자로 저장하지 않는다 — 필요하면 목록을 재조회한다. */
   thumbnailUrl: string | null;

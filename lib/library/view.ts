@@ -75,6 +75,21 @@ export function getCodeLabel(code: string, names: ReadonlyMap<string, string>): 
   return names.get(code) ?? code;
 }
 
+/**
+ * 규격(specType) 표시 이름 — N1 결과물 규격 선택과 같은 명칭(Figma 1211:6585 "M1 카드 사이즈").
+ * 계약 enum 밖의 값이나 null이면 null을 돌려준다(빈칸·임의 라벨을 만들지 않는다).
+ */
+const SPEC_TYPE_LABEL: Record<NonNullable<LibraryCardViewModel['specType']>, string> = {
+  original: '원본 유지',
+  site: '판매처 맞춤',
+  custom: '커스텀',
+};
+
+export function getSpecTypeLabel(specType: LibraryCardViewModel['specType']): string | null {
+  if (specType == null) return null;
+  return SPEC_TYPE_LABEL[specType] ?? null;
+}
+
 /** savedAt(ISO) → 'YYYY.MM.DD'(사용자 로컬 날짜). 없거나 파싱할 수 없으면 null. */
 export function formatSavedDate(savedAt: string | null): string | null {
   if (!savedAt) return null;
@@ -97,12 +112,95 @@ export function toggleSelection(selected: ReadonlySet<number>, jobId: number): S
   return next;
 }
 
+/** 대상 카드 중 선택된 개수 — 선택 개수 표시와 다운로드 활성 판단이 같은 값을 쓴다. */
+export function countSelected(selected: ReadonlySet<number>, jobIds: number[]): number {
+  return jobIds.reduce((count, id) => (selected.has(id) ? count + 1 : count), 0);
+}
+
+/**
+ * 결과 밖 선택 수 — 보관함에 있는 카드(allJobIds) 중 현재 검색·필터 결과(visibleJobIds) 밖에서 선택된 수.
+ * 재조회로 보관함에서 사라진 jobId가 선택 Set에 남아 있어도 세지 않는다.
+ */
+export function countHiddenSelected(
+  selected: ReadonlySet<number>,
+  allJobIds: number[],
+  visibleJobIds: number[],
+): number {
+  const visible = new Set(visibleJobIds);
+  return allJobIds.reduce((count, id) => (selected.has(id) && !visible.has(id) ? count + 1 : count), 0);
+}
+
+/**
+ * 선택 개수 문구 — 현재 결과 안 선택(visible)과 결과 밖 선택(hidden)을 나눠 돌려준다. 둘 다 0이면 null(숨김).
+ *   visible만:  "3개 선택"
+ *   둘 다:      "2개 선택" + "다른 조건에서 12개 선택됨"
+ *   hidden만:   "다른 조건에서 14개 선택됨"
+ */
+export function getSelectionSummary(
+  visibleCount: number,
+  hiddenCount: number,
+): { visible: string | null; hidden: string | null } | null {
+  if (visibleCount <= 0 && hiddenCount <= 0) return null;
+  return {
+    visible: visibleCount > 0 ? `${visibleCount}개 선택` : null,
+    hidden: hiddenCount > 0 ? `다른 조건에서 ${hiddenCount}개 선택됨` : null,
+  };
+}
+
 /** 대상 카드가 하나 이상이고 전부 선택돼 있는지. */
 export function isAllSelected(selected: ReadonlySet<number>, jobIds: number[]): boolean {
   return jobIds.length > 0 && jobIds.every((id) => selected.has(id));
 }
 
-/** 전체선택 토글 — 대상이 전부 선택돼 있으면 해제, 아니면 대상 전부를 선택한다. */
+/**
+ * 전체선택 토글 — 대상(현재 검색·필터 결과)이 전부 선택돼 있으면 대상만 해제하고, 아니면 대상 전부를
+ * 선택에 더한다. 대상 밖(필터에 가려진) 카드의 선택은 어느 쪽이든 그대로 둔다.
+ */
 export function toggleSelectAll(selected: ReadonlySet<number>, jobIds: number[]): Set<number> {
-  return isAllSelected(selected, jobIds) ? new Set() : new Set(jobIds);
+  const next = new Set(selected);
+  if (isAllSelected(selected, jobIds)) for (const id of jobIds) next.delete(id);
+  else for (const id of jobIds) next.add(id);
+  return next;
+}
+
+/* ------------------------------------------------------------------ *
+ * 페이지네이션 — GET /library에 page 계약이 없어 받은 목록을 FE에서 나눈다.
+ * 페이지 수는 전체 보관함이 아니라 현재 검색·필터 결과 수로 계산한다.
+ * ------------------------------------------------------------------ */
+
+/**
+ * 한 페이지의 결과 카드 수. Figma 719:7428의 4열×2줄 grid는 결과 카드 7장 + "이미지 추가 생성"
+ * 카드 1장이다 — 추가 카드는 매 페이지 마지막 칸에 둔다(2026-10-14 사용자 확정).
+ */
+export const LIBRARY_PAGE_SIZE = 7;
+
+/** 결과 0건이면 0페이지. */
+export function getTotalPages(count: number, pageSize: number = LIBRARY_PAGE_SIZE): number {
+  return count <= 0 ? 0 : Math.ceil(count / pageSize);
+}
+
+/** 검색·필터로 페이지 수가 줄면 존재하는 마지막 페이지로, 0페이지면 1로 맞춘다. */
+export function clampPage(page: number, totalPages: number): number {
+  return Math.min(Math.max(1, page), Math.max(1, totalPages));
+}
+
+export function getPageItems<T>(items: T[], page: number, pageSize: number = LIBRARY_PAGE_SIZE): T[] {
+  const start = (page - 1) * pageSize;
+  return items.slice(start, start + pageSize);
+}
+
+export type PaginationItem = number | 'more';
+
+/**
+ * 페이지 번호 구성 — Figma Frame 477(1·2·3·…·7, 현재 1)처럼 번호 칸을 최대 5개로 고정한다.
+ *   전체 5페이지 이하: 전부
+ *   현재가 앞쪽(≤3):   1 2 3 … N
+ *   현재가 뒤쪽(≥N−2): 1 … N−2 N−1 N
+ *   그 사이:           1 … 현재 … N
+ */
+export function getPaginationItems(current: number, totalPages: number): PaginationItem[] {
+  if (totalPages <= 5) return Array.from({ length: totalPages }, (_, i) => i + 1);
+  if (current <= 3) return [1, 2, 3, 'more', totalPages];
+  if (current >= totalPages - 2) return [1, 'more', totalPages - 2, totalPages - 1, totalPages];
+  return [1, 'more', current, 'more', totalPages];
 }

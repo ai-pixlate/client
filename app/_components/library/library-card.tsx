@@ -1,7 +1,7 @@
 import Link from 'next/link';
 
 import type { LibraryCardViewModel } from '@/lib/library/adapter';
-import { formatSavedDate } from '@/lib/library/view';
+import { formatSavedDate, getSpecTypeLabel } from '@/lib/library/view';
 
 import { CompactCheckbox, PlusGlyph12, PlusGlyph16, SELECTED_BORDER_CLASS, UNSELECTED_BORDER_CLASS } from './library-controls';
 
@@ -10,11 +10,11 @@ import { CompactCheckbox, PlusGlyph12, PlusGlyph16, SELECTED_BORDER_CLASS, UNSEL
 //   폭은 grid 칸을 채운다(1920에서 400) — 내부 요소도 고정 폭 없이 부모를 따른다.
 //   상단 row(24): Checkbox/Compact 20 + gap 8 + 상품명(14 Medium, -0.42) ↔ 다른 버전 만들기(Circle/XXS 24)
 //   Slot: 남은 높이를 채우고(1920에서 374×192) 그 안 placeholder는 좌우 4px 들인 #F5F5F5
-//   하단 row(14): 날짜·상태(12 Light, -0.48) ↔ 국가(12 Regular, -0.24)·언어(12 Light, -0.48)
+//   하단 row(14): "M1 카드 사이즈"(1211:6585) ↔ 국가(12 Regular, -0.24)·언어(12 Light, -0.48)
+//     M1 카드 사이즈: 규격(12 Light #707070) + gap 12 + [날짜(#707070) + gap 4 + 완료(#999)], 모두 12 Light -0.48
+//     규격 명칭은 N1 결과물 규격 선택과 같다(original 원본 유지 · site 판매처 맞춤 · custom 커스텀, F-LST-02 ①).
 //
-// 표시 필드는 Figma에 있는 것만 둔다. specType(규격)은 PRD F-LST-02 표시 항목이지만 Figma
-// 카드에 위치가 없어 ViewModel에만 유지한다. 카드 자체 클릭(F-LST-05)은 상세 route/계약이 없어
-// 연결하지 않는다.
+// 표시 필드는 Figma에 있는 것만 둔다. 카드 자체 클릭(F-LST-05)은 상세 route/계약이 없어 연결하지 않는다.
 
 /** GET /library는 job(is_saved=true) 투영만 돌려준다 — 현재 계약에서 카드 = 완료 결과물. */
 const COMPLETED_STATUS_LABEL = '완료';
@@ -37,6 +37,8 @@ export function LibraryCard({
 }) {
   const productName = card.productName ?? '';
   const savedDate = formatSavedDate(card.savedAt);
+  const specLabel = getSpecTypeLabel(card.specType);
+  const versionDisabled = !onCreateVersion;
 
   return (
     <article
@@ -61,15 +63,17 @@ export function LibraryCard({
             {productName}
           </p>
         </div>
-        {/* F-VER-01 "다른 버전 만들기" — Icon Button Circle/XXS/Secondary(24, border #EAEAEA,
-            Plus 12 glyph). 계약 미확정 동안에는 aria-disabled로만 알린다(가짜 생성 금지). */}
+        {/* F-VER-01 "다른 버전 만들기" — Icon Button Circle/XXS(24, Plus 12 glyph).
+              Secondary(285:2110): white, border #EAEAEA, glyph #707070
+              Disabled(285:2116):  bg #F5F5F5, border 없음, glyph #999
+            계약 미확정 동안에는 Disabled로 두고 클릭·포커스 대상에서 뺀다(가짜 생성 금지). */}
         <button
           type="button"
           aria-label={`${productName} 다른 버전 만들기`}
-          aria-disabled={onCreateVersion ? undefined : true}
+          disabled={versionDisabled}
           onClick={onCreateVersion}
           data-testid={`library-card-version-${card.jobId}`}
-          className="flex size-6 shrink-0 items-center justify-center rounded-full border border-[#eaeaea] bg-white"
+          className="flex size-6 shrink-0 items-center justify-center rounded-full border border-[#eaeaea] bg-white text-[#707070] disabled:cursor-not-allowed disabled:border-transparent disabled:bg-[#f5f5f5] disabled:text-[#999]"
         >
           <PlusGlyph12 />
         </button>
@@ -95,13 +99,20 @@ export function LibraryCard({
       </div>
 
       <div className="flex w-full items-center justify-between gap-2 text-[12px] leading-[normal] whitespace-nowrap">
-        <div className="flex items-center gap-2 font-light tracking-[-0.48px]">
-          {savedDate && (
-            <span data-testid={`library-card-date-${card.jobId}`} className="text-[#707070]">
-              {savedDate}
+        <div className="flex items-center gap-3 font-light tracking-[-0.48px]">
+          {specLabel && (
+            <span data-testid={`library-card-spec-${card.jobId}`} className="text-[#707070]">
+              {specLabel}
             </span>
           )}
-          <span className="text-[#999]">{COMPLETED_STATUS_LABEL}</span>
+          <div className="flex items-center gap-1">
+            {savedDate && (
+              <span data-testid={`library-card-date-${card.jobId}`} className="text-[#707070]">
+                {savedDate}
+              </span>
+            )}
+            <span className="text-[#999]">{COMPLETED_STATUS_LABEL}</span>
+          </div>
         </div>
         <div data-testid={`library-card-locale-${card.jobId}`} className="flex min-w-0 items-center gap-1 text-[#171717]">
           {countryName && <span className="tracking-[-0.24px]">{countryName}</span>}
