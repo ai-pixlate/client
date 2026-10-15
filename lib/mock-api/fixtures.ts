@@ -399,16 +399,15 @@ export const mockN6Deliverables: ApiDeliverable[] = [
 ];
 
 /**
- * N6 산출물 구성요소 상태 — Figma(643:5523) N6 저장 화면 기준: images/
- * content.csv/HTML 3행은 전부 선택 가능한 흰 배경 체크박스로 나오고,
- * PSD 한 행만 "12월 제공 예정"으로 비활성이다(html은 API-FIN-02가
- * should(🟡)로 표시한 9월 계약이지만, 이 mock의 happy path 완료 상태는
- * html도 이미 생성된 것으로 둔다 — psd만 항상 isActive=false).
+ * N6 산출물 구성요소 상태 — BE release/1.0.0 계약 기준: 1.0.0 에서 만드는
+ * 구성요소는 csv·images 뿐이라 html·psd 는 항상 isActive=false 다(html·psd 는
+ * 생성기가 없어 릴리즈 범위 밖, 2026-10-14 결정). POST /export 도 csv·images 만
+ * 받는다(아래 lib/msw/handlers.ts 참고).
  */
 export const mockN6Components: NonNullable<ApiDeliverableList['components']> = [
   { artifactId: null, type: 'images', status: 'generated', isGenerated: true, isActive: true, failedCount: 0, retryAction: null },
   { artifactId: null, type: 'csv', status: 'generated', isGenerated: true, isActive: true, failedCount: 0, retryAction: null },
-  { artifactId: null, type: 'html', status: 'generated', isGenerated: true, isActive: true, failedCount: 0, retryAction: null },
+  { artifactId: null, type: 'html', status: 'pending', isGenerated: false, isActive: false, failedCount: 0, retryAction: null },
   { artifactId: null, type: 'psd', status: 'pending', isGenerated: false, isActive: false, failedCount: 0, retryAction: null },
 ];
 

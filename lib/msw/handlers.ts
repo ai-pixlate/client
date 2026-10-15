@@ -291,6 +291,20 @@ const n6ExportArtifactState = new Map<number, { artifactType: ApiExportResponse[
 const n6GeneratedComponents = new Set<string>();
 /** e2e 가 page 에서 true 로 두면 다음 POST /export 한 번이 500 으로 실패한다(MSW 핸들러는 페이지 쪽에서 돈다). */
 export const MOCK_EXPORT_FAIL_ONCE_FLAG = '__pixlateMockExportFailOnce';
+/** e2e 전용 — 다음 POST /export 한 번이 201 이지만 artifactId 없이 응답한다(다운로드 조회를 이어가지 않는지 확인용). */
+export const MOCK_EXPORT_NO_ARTIFACT_ID_ONCE_FLAG = '__pixlateMockExportNoArtifactIdOnce';
+/** e2e 전용 — 다음 GET /exports/:artifactId/download 한 번이 404 로 실패한다. */
+export const MOCK_EXPORT_DOWNLOAD_NOT_FOUND_ONCE_FLAG = '__pixlateMockExportDownloadNotFoundOnce';
+/** BE release/1.0.0 에서 POST /export 가 만드는 구성요소. html·psd 가 섞이면 아무것도 만들지 않고 400 이다. */
+const N6_EXPORTABLE_COMPONENTS = ['csv', 'images'];
+
+/** e2e 가 page 에서 켠 1회 주입 플래그를 읽고 바로 끈다. */
+function takeMockFlag(flag: string): boolean {
+  const flags = globalThis as Record<string, unknown>;
+  if (!flags[flag]) return false;
+  flags[flag] = false;
+  return true;
+}
 
 /**
  * N2 진행 중(processing) 단계에서 다음 단계로 넘어갈 조건 — 오늘(N1→N6
@@ -1057,6 +1071,11 @@ export const handlers = [
     if (components.length === 0) {
       return badRequest('components가 1개 이상 필요합니다');
     }
+    // 계약(BE release/1.0.0): 지원하지 않는 구성요소(html·psd 등)가 하나라도 있으면 전체 400
+    const unsupported = components.filter((c) => !N6_EXPORTABLE_COMPONENTS.includes(c));
+    if (unsupported.length > 0) {
+      return contractError(400, 'VALIDATION_ERROR', `unsupported export components: ${unsupported.join(', ')}`);
+    }
 
     // e2e 전용 실패 주입 — 한 번만 500(생성 실패 시 다운로드를 이어가지 않는지 확인용)
     const failFlags = globalThis as { [MOCK_EXPORT_FAIL_ONCE_FLAG]?: boolean };
@@ -1075,6 +1094,9 @@ export const handlers = [
     for (const c of components) n6GeneratedComponents.add(c);
     if (components.length > 1) n6GeneratedComponents.add('zip');
 
+    if (takeMockFlag(MOCK_EXPORT_NO_ARTIFACT_ID_ONCE_FLAG)) {
+      return HttpResponse.json({ artifactType, components }, { status: 201 });
+    }
     const response: ApiExportResponse = { artifactId, artifactType, components };
     return HttpResponse.json(response, { status: 201 });
   }),
@@ -1091,6 +1113,7 @@ export const handlers = [
     const artifactId = Number(params.artifactId);
     const artifact = n6ExportArtifactState.get(artifactId);
     if (!artifact) return notFound(`Export artifact '${artifactId}' not found`);
+    if (takeMockFlag(MOCK_EXPORT_DOWNLOAD_NOT_FOUND_ONCE_FLAG)) return notFound(`Export artifact '${artifactId}' not found`);
 
     const fileName = artifact.artifactType === 'csv' ? 'export.csv' : 'export.zip'; // images 단독도 zip 묶음(BE 와 같음)
     return HttpResponse.json({

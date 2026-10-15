@@ -11,8 +11,22 @@ import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 // GET /exports/{artifactId}/download 를 불러야 한다. mock 도 계약대로 "미생성 404"를 재현한다.
 // ─────────────────────────────────────────────────────────────────
 
-// lib/msw/handlers.ts MOCK_EXPORT_FAIL_ONCE_FLAG 와 같은 값(핸들러 모듈을 Node 쪽 시험에서 불러오지 않으려고 문자열로 둔다)
+// lib/msw/handlers.ts 의 같은 이름 상수와 같은 값(핸들러 모듈을 Node 쪽 시험에서 불러오지 않으려고 문자열로 둔다)
 const MOCK_EXPORT_FAIL_ONCE_FLAG = '__pixlateMockExportFailOnce';
+const MOCK_EXPORT_NO_ARTIFACT_ID_ONCE_FLAG = '__pixlateMockExportNoArtifactIdOnce';
+const MOCK_EXPORT_DOWNLOAD_NOT_FOUND_ONCE_FLAG = '__pixlateMockExportDownloadNotFoundOnce';
+
+async function setMockFlag(page: Page, flag: string) {
+  await page.evaluate((f) => {
+    (globalThis as Record<string, unknown>)[f] = true;
+  }, flag);
+}
+
+function collectPageErrors(page: Page): Error[] {
+  const errors: Error[] = [];
+  page.on('pageerror', (e) => errors.push(e));
+  return errors;
+}
 
 type Req = { method: string; path: string; body?: string };
 
@@ -86,18 +100,142 @@ test('빠른 연속 클릭에도 생성 요청은 한 번만 나간다', async (
   expect(exportPosts(requests)).toHaveLength(1);
 });
 
-test('기본 선택 묶음 내보내기는 그대로 zip 하나를 만들어 내려받는다', async ({ page }) => {
+test('생성은 성공했지만 응답에 artifactId 가 없으면 다운로드 요청을 보내지 않고 오류를 보여 준다', async ({ page }) => {
+  const requests = track(page);
+  const pageErrors = collectPageErrors(page);
+  await reachN6(page);
+
+  await setMockFlag(page, MOCK_EXPORT_NO_ARTIFACT_ID_ONCE_FLAG);
+  const exported = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname === `/jobs/${MOCK_JOB_ID}/export`,
+  );
+  await page.getByTestId('n6-download-row-csv').click();
+  const res = await exported;
+  expect(res.status()).toBe(201);
+  expect((await res.json()).artifactId).toBeUndefined();
+  await expect(page.getByTestId('n6-download-row-error-csv')).toBeVisible({ timeout: 10_000 });
+
+  expect(exportPosts(requests)).toHaveLength(1);
+  expect(downloads(requests)).toHaveLength(0);
+  await expect(page.getByTestId('n6-download-row-csv')).toHaveText('개별 다운로드');
+  expect(pageErrors).toEqual([]);
+});
+
+test('GET /exports/{artifactId}/download 가 404 면 오류를 보이고, 다시 시도하면 새 artifactId 로 다운로드에 성공한다', async ({ page }) => {
+  const requests = track(page);
+  const pageErrors = collectPageErrors(page);
+  await reachN6(page);
+
+  await setMockFlag(page, MOCK_EXPORT_DOWNLOAD_NOT_FOUND_ONCE_FLAG);
+  const exported = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname === `/jobs/${MOCK_JOB_ID}/export`,
+  );
+  const downloaded = page.waitForResponse(
+    (r) => r.request().method() === 'GET' && /\/exports\/\d+\/download$/.test(new URL(r.url()).pathname),
+  );
+  await page.getByTestId('n6-download-row-csv').click();
+  const body = await (await exported).json();
+  const dlRes = await downloaded;
+
+  expect(dlRes.status()).toBe(404);
+  await expect(page.getByTestId('n6-download-row-error-csv')).toBeVisible({ timeout: 10_000 });
+  expect(exportPosts(requests).map((r) => JSON.parse(r.body ?? '{}'))).toEqual([{ components: ['csv'] }]);
+  expect(downloads(requests).map((r) => r.path)).toEqual([`/jobs/${MOCK_JOB_ID}/exports/${body.artifactId}/download`]);
+
+  // 화면이 깨지지 않고 다시 시도할 수 있는 상태로 남는다
+  await expect(page.getByTestId('n6-download-row-csv')).toHaveText('개별 다운로드');
+  await expect(page.getByTestId('n6-download-row-csv')).toBeEnabled();
+  await expect(page.getByTestId('n6-export-panel')).toBeVisible();
+  await expect(page.getByText('번역이 완료되었습니다.')).toBeVisible();
+  expect(pageErrors).toEqual([]);
+
+  // 다시 시도 — 1회용 404 플래그는 첫 GET 에서 소비됐으므로 이번에는 정상 성공해야 한다
+  const reExported = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname === `/jobs/${MOCK_JOB_ID}/export`,
+  );
+  const reDownloaded = page.waitForResponse(
+    (r) => r.request().method() === 'GET' && /\/exports\/\d+\/download$/.test(new URL(r.url()).pathname),
+  );
+  await page.getByTestId('n6-download-row-csv').click();
+  const retryBody = await (await reExported).json();
+  const retryDlRes = await reDownloaded;
+
+  expect(exportPosts(requests).map((r) => JSON.parse(r.body ?? '{}'))).toEqual([{ components: ['csv'] }, { components: ['csv'] }]);
+  expect(retryBody.artifactId).toEqual(expect.any(Number));
+  expect(retryBody.artifactId).not.toBe(body.artifactId);
+  expect(new URL(retryDlRes.url()).pathname).toBe(`/jobs/${MOCK_JOB_ID}/exports/${retryBody.artifactId}/download`);
+  expect(retryDlRes.status()).toBe(200);
+  expect(downloads(requests).map((r) => r.path)).toEqual([
+    `/jobs/${MOCK_JOB_ID}/exports/${body.artifactId}/download`,
+    `/jobs/${MOCK_JOB_ID}/exports/${retryBody.artifactId}/download`,
+  ]);
+
+  const link = page.getByTestId('n6-download-row-csv');
+  await expect(link).toHaveText('다운로드', { timeout: 10_000 });
+  await expect(link).toHaveAttribute('href', new RegExp(`mock-presigned-${retryBody.artifactId}$`));
+  await expect(page.getByTestId('n6-download-row-error-csv')).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+});
+
+test('HTML·PSD 는 비활성이고 기본 선택에 들어가지 않으며, POST /export 는 html·psd 가 섞이면 400 이다', async ({ page }) => {
+  await reachN6(page);
+
+  await expect(page.locator('#artifact-html')).toBeDisabled();
+  await expect(page.locator('#artifact-html')).not.toBeChecked();
+  await expect(page.getByTestId('n6-download-row-html')).toBeDisabled();
+  await expect(page.locator('#artifact-psd')).toBeDisabled();
+  await expect(page.locator('#artifact-psd')).not.toBeChecked();
+  await expect(page.getByTestId('n6-download-row-psd')).toHaveCount(0);
+
+  // mock 이 BE release/1.0.0 계약(csv·images 만 생성, 그 밖이 섞이면 전체 400)을 따르는지
+  const statuses = await page.evaluate(async (jobId) => {
+    const post = (components: string[]) =>
+      fetch(`/jobs/${jobId}/export`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-pixlate-api-proxy': '1' },
+        body: JSON.stringify({ components }),
+      }).then((r) => r.status);
+    return { html: await post(['images', 'html']), psd: await post(['csv', 'psd']) };
+  }, MOCK_JOB_ID);
+  expect(statuses).toEqual({ html: 400, psd: 400 });
+});
+
+test('기본 선택(active 인 images/ 만)으로 묶음 내보내기가 성공한다', async ({ page }) => {
   const requests = track(page);
   await reachN6(page);
 
+  await expect(page.getByText('선택된 산출물 1개')).toBeVisible();
   const exported = page.waitForResponse(
     (r) => r.request().method() === 'POST' && new URL(r.url()).pathname === `/jobs/${MOCK_JOB_ID}/export`,
   );
   await page.getByTestId('n6-export-button').click();
-  const body = await (await exported).json();
+  const res = await exported;
+  const body = await res.json();
   await expect(page.getByTestId('n6-download-link')).toBeVisible({ timeout: 10_000 });
 
-  expect(new Set(JSON.parse(exportPosts(requests)[0].body ?? '{}').components)).toEqual(new Set(['images', 'html']));
+  expect(res.status()).toBe(201);
+  expect(JSON.parse(exportPosts(requests)[0].body ?? '{}')).toEqual({ components: ['images'] });
+  expect(body).toMatchObject({ artifactType: 'images', components: ['images'] });
+  expect(downloads(requests).map((r) => r.path)).toEqual([`/jobs/${MOCK_JOB_ID}/exports/${body.artifactId}/download`]);
+  await expect(page.getByTestId('n6-download-link')).toHaveAttribute('href', /export\.zip/);
+});
+
+test('active 인 csv·images 를 함께 고르면 zip 하나를 만들어 내려받는다', async ({ page }) => {
+  const requests = track(page);
+  await reachN6(page);
+
+  await page.locator('label[for="artifact-csv"]').click();
+  await expect(page.getByText('선택된 산출물 2개')).toBeVisible();
+  const exported = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname === `/jobs/${MOCK_JOB_ID}/export`,
+  );
+  await page.getByTestId('n6-export-button').click();
+  const res = await exported;
+  const body = await res.json();
+  await expect(page.getByTestId('n6-download-link')).toBeVisible({ timeout: 10_000 });
+
+  expect(res.status()).toBe(201);
+  expect(new Set(JSON.parse(exportPosts(requests)[0].body ?? '{}').components)).toEqual(new Set(['images', 'csv']));
   expect(body.artifactType).toBe('zip');
   expect(downloads(requests).map((r) => r.path)).toEqual([`/jobs/${MOCK_JOB_ID}/exports/${body.artifactId}/download`]);
   await expect(page.getByTestId('n6-download-link')).toHaveAttribute('href', /export\.zip/);
