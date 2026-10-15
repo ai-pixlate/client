@@ -450,6 +450,10 @@ function BlockRow({
         data-testid={`n5-block-row-${block.id}`}
         onClick={onSelect}
         onKeyDown={(e) => {
+          // 행 자신에 포커스가 있을 때만 키보드 선택으로 처리한다. 안쪽 textarea·버튼에서
+          // 버블돼 온 스페이스·Enter·한글 조합 입력은 막지 않는다(F1: 번역문에 띄어쓰기가
+          // 들어가지 않았다).
+          if (e.target !== e.currentTarget) return;
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
             onSelect();
