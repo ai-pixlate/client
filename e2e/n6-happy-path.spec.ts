@@ -50,11 +50,14 @@ test('render → deliverables → validation → export → download → save �
   expect(requests.some((r) => r.method === 'GET' && r.path === `/jobs/${MOCK_JOB_ID}/deliverables`)).toBe(true);
   expect(requests.some((r) => r.method === 'GET' && r.path === `/jobs/${MOCK_JOB_ID}/validation`)).toBe(true);
 
-  // 기본 선택: images/HTML만 체크된 상태로 로드된다 (9/23 재정합 — 이전 images/
-  // content.csv에서 변경, n6-result-view.tsx DEFAULT_SELECTED_TYPES 참고)
+  // 기본 선택: DEFAULT_SELECTED_TYPES(images/HTML) 중 active 인 것만 체크된다
+  // (n6-result-view.tsx 참고). BE release/1.0.0 계약상 HTML 은 isActive=false 라
+  // 기본 선택에 들어가지 않고 비활성으로 보인다 — images/ 만 체크된다.
   await expect(page.locator('#artifact-images')).toBeChecked();
   await expect(page.locator('#artifact-csv')).not.toBeChecked();
-  await expect(page.locator('#artifact-html')).toBeChecked();
+  await expect(page.locator('#artifact-html')).not.toBeChecked();
+  await expect(page.locator('#artifact-html')).toBeDisabled();
+  await expect(page.getByTestId('n6-download-row-html')).toBeDisabled();
   await expect(page.locator('#artifact-psd')).toBeDisabled();
   await expect(page.getByText('12월 제공 예정')).toBeVisible();
 
@@ -69,10 +72,10 @@ test('render → deliverables → validation → export → download → save �
   // ── content.csv 선택/해제 ────────────────────────────────────────
   await page.locator('label[for="artifact-csv"]').click();
   await expect(page.locator('#artifact-csv')).toBeChecked();
-  await expect(page.getByText('선택된 산출물 3개')).toBeVisible();
+  await expect(page.getByText('선택된 산출물 2개')).toBeVisible();
   await page.locator('label[for="artifact-csv"]').click();
   await expect(page.locator('#artifact-csv')).not.toBeChecked();
-  await expect(page.getByText('선택된 산출물 2개')).toBeVisible();
+  await expect(page.getByText('선택된 산출물 1개')).toBeVisible();
 
   // ── 개별 다운로드(행별) — POST /export {components:[csv]} → 응답 artifactId 로 다운로드 ──
   const rowExport = page.waitForResponse(
@@ -101,7 +104,7 @@ test('render → deliverables → validation → export → download → save �
   const exportReq = requests.filter((r) => r.method === 'POST' && r.path === `/jobs/${MOCK_JOB_ID}/export`)[1];
   expect(exportReq).toBeDefined();
   const exportBody = JSON.parse(exportReq!.body ?? '{}');
-  expect(new Set(exportBody.components)).toEqual(new Set(['images', 'html']));
+  expect(new Set(exportBody.components)).toEqual(new Set(['images']));
 
   // ── download URL 획득 (mock presigned, 실제 파일 생성 없음) ───────
   const downloadReq = requests.find(
