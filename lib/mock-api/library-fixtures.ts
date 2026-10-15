@@ -11,6 +11,10 @@
  *   - 9004: 다른 상품명·국가(AE) — M1 상품명 검색·국가 필터 확인용. 이 카드만
  *     thumbnailUrl을 채워 실제 썸네일 렌더를 확인한다(나머지는 null placeholder).
  *
+ * savedAt은 카드마다 날짜가 자연스럽게 달라 보이도록 고정값으로 분산한다(랜덤·현재 시각 금지).
+ * 9001·9002는 같은 날(10/07) 다른 시각이라 같은 날짜 표시 + 시각 기준 최신순을 함께 확인한다.
+ * 시각은 UTC 02~08시라 KST(+9)로 봐도 날짜가 바뀌지 않는다. 최신순: 9003 → 9002 → 9001 → 9004.
+ *
  * jobId는 MSW의 실제 흐름 job(mockN5Job.id = 1)과 겹치지 않게 9000번대를 쓴다.
  * thumbnailUrl은 계약상 nullable이다. 9004의 값은 기존 N6 mock 결과 이미지 경로를
  * 재사용한다(실제 서버에서는 deliverable 썸네일의 presigned URL).
@@ -27,7 +31,7 @@ export const mockLibraryCards: ApiLibraryCard[] = [
     targetLanguage: 'en',
     specType: 'original',
     thumbnailUrl: null,
-    savedAt: '2026-10-01T09:00:00Z',
+    savedAt: '2026-10-07T02:45:00Z',
   },
   {
     jobId: 9002,
@@ -37,7 +41,7 @@ export const mockLibraryCards: ApiLibraryCard[] = [
     targetLanguage: 'ja',
     specType: 'original',
     thumbnailUrl: null,
-    savedAt: '2026-10-02T09:00:00Z',
+    savedAt: '2026-10-07T08:10:00Z',
   },
   {
     jobId: 9003,
@@ -47,7 +51,7 @@ export const mockLibraryCards: ApiLibraryCard[] = [
     targetLanguage: 'en',
     specType: 'site',
     thumbnailUrl: null,
-    savedAt: '2026-10-03T09:00:00Z',
+    savedAt: '2026-10-12T05:30:00Z',
   },
   {
     jobId: 9004,
@@ -57,6 +61,6 @@ export const mockLibraryCards: ApiLibraryCard[] = [
     targetLanguage: 'ar',
     specType: 'original',
     thumbnailUrl: '/mock/n5/sections/501-translated.png',
-    savedAt: '2026-09-28T09:00:00Z',
+    savedAt: '2026-09-19T06:20:00Z',
   },
 ];
