@@ -143,3 +143,40 @@ export function getTextBlockDisplayRect(
 ): DisplayRect {
   return getBlockDisplayRect(block.bbox, displayTop, scale);
 }
+
+/* ------------------------------------------------------------------ *
+ * 4. block 클릭 영역(hit rect)
+ * ------------------------------------------------------------------ */
+
+/**
+ * 화면에 보이는 block 영역(visual rect = getBlockDisplayRect 결과)은 그대로 두고, 클릭을
+ * 받는 영역만 넓힌다. bbox 데이터와 선택 테두리 크기는 바꾸지 않는다.
+ *
+ * paddingPx/minSizePx 는 화면 px 기준이다. canvas 는 CSS transform scale(zoom)로 그려지므로
+ * canvas 좌표로 바꿀 때 zoom 으로 나눈다 — 축소해서 봐도 손으로 누르는 크기는 같다.
+ * 결과는 소속 section(bounds) 안으로 자른다. 옆 section 의 클릭을 가로채지 않게 하기 위해서다.
+ */
+export interface BlockHitRectOptions {
+  paddingPx: number;
+  minSizePx: number;
+  zoom: number;
+  bounds: { width: number; height: number };
+}
+
+export function getBlockHitRect(visual: DisplayRect, options: BlockHitRectOptions): DisplayRect {
+  const zoom = Number.isFinite(options.zoom) && options.zoom > 0 ? options.zoom : 1;
+  const padding = options.paddingPx / zoom;
+  const minSize = options.minSizePx / zoom;
+
+  const width = Math.max(visual.width + padding * 2, minSize);
+  const height = Math.max(visual.height + padding * 2, minSize);
+  const centerX = visual.left + visual.width / 2;
+  const centerY = visual.top + visual.height / 2;
+
+  const left = Math.max(0, centerX - width / 2);
+  const top = Math.max(0, centerY - height / 2);
+  const right = Math.min(options.bounds.width, centerX + width / 2);
+  const bottom = Math.min(options.bounds.height, centerY + height / 2);
+
+  return { left, top, width: Math.max(0, right - left), height: Math.max(0, bottom - top) };
+}
