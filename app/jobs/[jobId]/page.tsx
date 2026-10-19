@@ -217,7 +217,7 @@ export default function Page({
               />
             )}
             {displayStep === 'N3' && <N3View jobId={jobId} />}
-            {displayStep === 'N4' && <N4ProcessingView status={tasksQuery.data} />}
+            {displayStep === 'N4' && <N4ProcessingView jobId={jobId} status={tasksQuery.data} />}
             {displayStep === 'N5' && <N5View jobId={jobId} />}
             {displayStep === 'N6' && <N6ResultView jobId={jobId} />}
           </>

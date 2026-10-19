@@ -1,5 +1,7 @@
 import type { ApiJobTaskStatus } from '@/lib/api/job-schema';
+import { toServerPercent, type ProgressBand } from '@/lib/processing/displayed-progress';
 import { ProcessingStageLayout, type ProcessingStep } from './processing/processing-stage-layout';
+import { hasProcessingFailure, useDisplayedProgress } from './processing/use-displayed-progress';
 
 // ─────────────────────────────────────────────────────────────────
 // N4 — 번역 중 (Figma node 660:4221 "N4 번역중")
@@ -37,6 +39,17 @@ import { ProcessingStageLayout, type ProcessingStep } from './processing/process
 // 04/05를 모두 보여주기 위해 running을 두 번(progress 0.8 → 04, 0.9 →
 // 05) 보낸다. stages가 완전히 비어 있거나 전혀 다른 key만 오는 경우(다른
 // mock/실제 배포 전환기)를 대비해 progress 기반 fallback도 별도로 둔다.
+//
+// 10/19 — 표시용 진행률(displayedProgress) 분리. 이전엔 화면 숫자로 서버의
+// 최상위 progress를 그대로 써서, stage가 바뀔 때 숫자가 내려가는 일이
+// 실제 화면에서 보였다(예: 43% → 더 낮은 값). 이제 5개 presentation stage가
+// 각각 20% 구간을 맡는다(01 0~19 · 02 20~39 · 03 40~59 · 04 60~79 ·
+// 05 80~99 · 완료 100). 진행 중인 구간 안에서는 시간에 따라 천천히 오르되
+// 다음 구간 경계 - 1에서 멈추고, 한 번 보여 준 숫자와 단계는 내리지 않는다.
+// 구간 안의 숫자는 정확한 서버 처리율이 아니라 UX용 진행 표현이다(서버는
+// stage 내부 progress를 주지 않는다). status.progress는 계속 원본 그대로
+// presentation stage 판정(render 04/05 분리)에만 쓴다 —
+// lib/processing/displayed-progress.ts 참고.
 //
 // 9/23 — GIF 하단 caption을 5단계 각각의 고정 문구로 추가했다(N2와 같은
 // 방식). N4는 presentation stage가 이미 5개 화면 항목 중 정확히 하나만
@@ -95,6 +108,15 @@ const FIVE_STEP_META: {
 // 항목 중 어느 시점에도 active는 정확히 하나뿐이다.
 type N4PresentationStage = 'inpaint' | 'translate' | 'verify' | 'render_04' | 'render_05' | 'done';
 
+const N4_PRESENTATION_STAGE_ORDER: readonly N4PresentationStage[] = [
+  'inpaint',
+  'translate',
+  'verify',
+  'render_04',
+  'render_05',
+  'done',
+];
+
 const FIVE_STEP_STATES_BY_N4_PRESENTATION_STAGE: Record<N4PresentationStage, ProcessingStep['state'][]> = {
   inpaint: ['active', 'pending', 'pending', 'pending', 'pending'],
   translate: ['done', 'active', 'pending', 'pending', 'pending'],
@@ -103,6 +125,21 @@ const FIVE_STEP_STATES_BY_N4_PRESENTATION_STAGE: Record<N4PresentationStage, Pro
   render_05: ['done', 'done', 'done', 'done', 'active'],
   done: ['done', 'done', 'done', 'done', 'done'],
 };
+
+/**
+ * presentation stage → 표시 progress 구간. UX 표시 전용 값이며 서버 progress를 바꾸지 않는다.
+ * 진행 중 구간의 ceiling은 다음 구간 floor - 1이다.
+ */
+const DISPLAY_BAND_BY_N4_PRESENTATION_STAGE: Record<N4PresentationStage, ProgressBand> = {
+  inpaint: { floor: 0, ceiling: 19 },
+  translate: { floor: 20, ceiling: 39 },
+  verify: { floor: 40, ceiling: 59 },
+  render_04: { floor: 60, ceiling: 79 },
+  render_05: { floor: 80, ceiling: 99 },
+  done: { floor: 100, ceiling: 100 },
+};
+/** 한 구간을 floor → ceiling까지 시간 기반으로 채우는 시간(UX 값, 서버 처리 시간 아님) */
+const N4_STAGE_DISPLAY_FILL_MS = 90_000;
 
 /**
  * API 계약값이 아니다 — N4 global progress를 coarse 4단계가 동일 비중으로
@@ -199,15 +236,26 @@ function resolveActiveVisualCaption(steps: ProcessingStep[]): { title: string; d
   return { title: meta.visualTitle, description: meta.visualDescription };
 }
 
-export function N4ProcessingView({ status }: { status: ApiJobTaskStatus }) {
+export function N4ProcessingView({ jobId, status }: { jobId: string; status: ApiJobTaskStatus }) {
   // page.tsx가 넘기는 mock 표시 progressOverride는 N2 전용이라(5절 참고,
   // 이번 단계에서 N4로 확장하지 않는다) status.progress를 그대로 쓴다 —
   // stages가 비어 있을 때, 그리고 render 내부 04/05를 가를 때 이 값을 쓴다.
-  const presentationStage = resolveN4PresentationStage(status.stages, status.progress);
+  // serverPresentationStage는 이번 응답만으로 파생한 단계다. 화면에는 한 세션에서 이미
+  // 보여 준 가장 높은 단계 아래로 내려가지 않는 presentationStage를 쓴다(서버 progress가
+  // 내려가면 render 04/05 분리가 05 → 04로 되돌아갈 수 있다). 둘 다 화면 표시 전용이다.
+  const serverPresentationStage = resolveN4PresentationStage(status.stages, status.progress);
+  const failedItems = (status.items ?? []).filter((i) => i.status === 'failed');
+  const { presentationStage, displayedProgress } = useDisplayedProgress({
+    persistKey: `n4:${jobId}`,
+    serverStage: serverPresentationStage,
+    stageOrder: N4_PRESENTATION_STAGE_ORDER,
+    bandOf: (stage) => DISPLAY_BAND_BY_N4_PRESENTATION_STAGE[stage],
+    activeDurationOf: (stage) => (stage === 'done' ? null : N4_STAGE_DISPLAY_FILL_MS),
+    serverPercent: toServerPercent(status.progress),
+    isFrozen: hasProcessingFailure(status),
+  });
   const steps = buildFiveSteps(FIVE_STEP_STATES_BY_N4_PRESENTATION_STAGE[presentationStage]);
   const caption = resolveActiveVisualCaption(steps);
-  const progressPercent = Math.round((status.progress ?? 0) * 100);
-  const failedItems = (status.items ?? []).filter((i) => i.status === 'failed');
 
   return (
     <ProcessingStageLayout
@@ -232,7 +280,7 @@ export function N4ProcessingView({ status }: { status: ApiJobTaskStatus }) {
         description: '번역문을 원래 디자인 안에 다시 맞추고 있습니다.',
       }}
       steps={steps}
-      progressPercent={progressPercent}
+      progressPercent={displayedProgress}
       progressHint={N4_AUTO_ADVANCE_NOTICE}
       pauseButtonTitle={N4_PAUSE_BUTTON_TITLE}
       failedItems={failedItems}

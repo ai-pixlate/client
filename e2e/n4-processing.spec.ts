@@ -68,6 +68,36 @@ async function readSteps(page: Page): Promise<StepSnapshot[]> {
 
 const RANK: Record<StepStatusLabel, number> = { 대기: 0, '진행 중': 1, 완료: 2 };
 
+async function readProgress(page: Page): Promise<number> {
+  return Number(await page.getByRole('progressbar').getAttribute('aria-valuenow'));
+}
+
+/**
+ * 표시 progress 구간(n4-processing-view.tsx DISPLAY_BAND_BY_N4_PRESENTATION_STAGE) —
+ * active 단계 번호(01~05) 기준. 진행 중 단계는 다음 단계 floor - 1을 넘지 않는다.
+ */
+const DISPLAY_BAND_BY_ACTIVE_STEP: Record<string, { floor: number; ceiling: number }> = {
+  '01': { floor: 0, ceiling: 19 },
+  '02': { floor: 20, ceiling: 39 },
+  '03': { floor: 40, ceiling: 59 },
+  '04': { floor: 60, ceiling: 79 },
+  '05': { floor: 80, ceiling: 99 },
+};
+
+/** progressbar 의 aria-valuenow 변화를 전부 기록한다 — 2초 polling 사이의 값도 놓치지 않는다. */
+async function recordProgressChanges(page: Page) {
+  await page.evaluate(() => {
+    const w = window as unknown as { __progressLog: number[] };
+    w.__progressLog = [];
+    const bar = document.querySelector('[role="progressbar"]');
+    if (!bar) return;
+    w.__progressLog.push(Number(bar.getAttribute('aria-valuenow')));
+    new MutationObserver(() => {
+      if (document.contains(bar)) w.__progressLog.push(Number(bar.getAttribute('aria-valuenow')));
+    }).observe(bar, { attributes: true, attributeFilter: ['aria-valuenow'] });
+  });
+}
+
 test('N4 — 5단계 stage mapping이 역행 없이 순서대로 진행되고, render는 04/05 중 하나만 active다', async ({
   page,
 }) => {
@@ -76,6 +106,8 @@ test('N4 — 5단계 stage mapping이 역행 없이 순서대로 진행되고, r
 
   // 1. "번역 중" 진입 확인.
   await expect(page.getByRole('heading', { name: '번역 중' })).toBeVisible({ timeout: 5_000 });
+  await recordProgressChanges(page);
+  const seenActiveSteps = new Set<string>();
 
   const lastRank = new Map<string, number>();
   let saw04ActiveWith05Pending = false;
@@ -114,6 +146,18 @@ test('N4 — 5단계 stage mapping이 역행 없이 순서대로 진행되고, r
       1,
     );
 
+    // 4-1. 표시 progress 는 active 단계의 20% 구간 안에 있다(10/19 표시용 진행률).
+    if (activeSteps.length === 1) {
+      const band = DISPLAY_BAND_BY_ACTIVE_STEP[activeSteps[0].no];
+      const shown = await readProgress(page);
+      const stillSameStep = (await readSteps(page)).find((s) => s.status === '진행 중')?.no === activeSteps[0].no;
+      if (stillSameStep) {
+        seenActiveSteps.add(activeSteps[0].no);
+        expect(shown, `tick ${tick}: ${activeSteps[0].no} 진행 중 표시 progress`).toBeGreaterThanOrEqual(band.floor);
+        expect(shown, `tick ${tick}: ${activeSteps[0].no} 진행 중 표시 progress`).toBeLessThanOrEqual(band.ceiling);
+      }
+    }
+
     const step04 = steps.find((s) => s.no === '04');
     const step05 = steps.find((s) => s.no === '05');
 
@@ -142,6 +186,80 @@ test('N4 — 5단계 stage mapping이 역행 없이 순서대로 진행되고, r
     expect(saw05ActiveAt, '05 active는 04 active보다 나중이어야 한다').toBeGreaterThan(saw04ActiveAt);
   }
 
+  // 8. 01→05 전체 동안 표시 progress 는 한 번도 내려가지 않는다(단계 전환 포함).
+  const progressLog = await page.evaluate(() => (window as unknown as { __progressLog?: number[] }).__progressLog ?? []);
+  for (let i = 1; i < progressLog.length; i += 1) {
+    expect(progressLog[i], `표시 progress 감소: ${progressLog.join(' → ')}`).toBeGreaterThanOrEqual(progressLog[i - 1]);
+  }
+  expect(seenActiveSteps.size, `구간 검증한 단계: ${[...seenActiveSteps].join(',')}`).toBeGreaterThanOrEqual(4);
+
   // 7. 마지막에 N5로 이동한다.
+  await expect(page.locator('[data-testid="n5-panel"]')).toBeVisible({ timeout: 10_000 });
+});
+
+test('N4 — stage 실패를 받으면 기존 실패 안내가 뜨고 표시 progress 는 시간이 지나도 오르지 않는다', async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+  await page.clock.install();
+  await reachN4(page);
+  await expect(page.getByRole('heading', { name: '번역 중' })).toBeVisible({ timeout: 5_000 });
+
+  await page.evaluate(() => {
+    (globalThis as Record<string, unknown>).__pixlateMockN4Fail = true;
+  });
+  await expect(page.getByText('일부 항목을 처리하지 못했습니다')).toBeVisible({ timeout: 10_000 });
+  const atFailure = await readProgress(page);
+
+  await page.clock.fastForward('05:00');
+  await page.clock.fastForward('00:05');
+  expect(await readProgress(page)).toBe(atFailure);
+  // 실패를 완료처럼 처리하지 않는다 — N4 화면에 그대로 남는다
+  await expect(page.getByRole('heading', { name: '번역 중' })).toBeVisible();
+  expect(atFailure).toBeLessThan(100);
+});
+
+test('N4 — 05 이미지 합성까지 간 뒤 서버 progress 가 내려가도 화면 단계와 숫자가 04 로 돌아가지 않는다', async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+  await page.addInitScript(() => {
+    (globalThis as Record<string, unknown>).__pixlateMockN4ProgressDropOnce = true;
+  });
+  const progressByPoll: number[] = [];
+  page.on('response', async (res) => {
+    if (res.request().method() === 'GET' && new URL(res.url()).pathname === `/jobs/${MOCK_JOB_ID}/tasks`) {
+      const body = await res.json().catch(() => null);
+      if (body?.currentStep === 'N4' && typeof body.progress === 'number') progressByPoll.push(body.progress);
+    }
+  });
+
+  await reachN4(page);
+  await expect(page.getByRole('heading', { name: '번역 중' })).toBeVisible({ timeout: 5_000 });
+  await recordProgressChanges(page);
+
+  let reached05 = false;
+  const activeAfter05: string[] = [];
+  for (let i = 0; i < 200; i += 1) {
+    const onN4 = await page.getByRole('heading', { name: '번역 중' }).isVisible().catch(() => false);
+    if (!onN4) break;
+    const active = (await readSteps(page)).find((s) => s.status === '진행 중')?.no;
+    if (active === '05') reached05 = true;
+    if (reached05 && active) activeAfter05.push(active);
+    await page.waitForTimeout(150);
+  }
+
+  expect(reached05, '05 진행 중 상태를 관찰하지 못했다').toBe(true);
+  // 서버는 실제로 0.9 → 0.8 로 progress 를 내렸다(render 04/05 분리 기준 0.875 아래)
+  const dropAt = progressByPoll.findIndex((p, i) => i > 0 && p < progressByPoll[i - 1]);
+  expect(dropAt, `서버 progress: ${progressByPoll.join(' → ')}`).toBeGreaterThan(0);
+  expect(progressByPoll[dropAt]).toBeLessThan(0.875);
+  // 그래도 화면은 05 에서 04 로 돌아가지 않았다
+  expect(activeAfter05.every((no) => no === '05'), `05 이후 active: ${activeAfter05.join(',')}`).toBe(true);
+
+  const progressLog = await page.evaluate(() => (window as unknown as { __progressLog?: number[] }).__progressLog ?? []);
+  for (let i = 1; i < progressLog.length; i += 1) {
+    expect(progressLog[i], `표시 progress 감소: ${progressLog.join(' → ')}`).toBeGreaterThanOrEqual(progressLog[i - 1]);
+  }
   await expect(page.locator('[data-testid="n5-panel"]')).toBeVisible({ timeout: 10_000 });
 });

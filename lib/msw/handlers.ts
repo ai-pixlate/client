@@ -327,6 +327,8 @@ type MockJobProcessingTick = {
   total: number;
   done: number;
   stages: { key: string; label: string; status: 'pending' | 'running' | 'done' | 'failed' }[];
+  /** 실패 시나리오 flag 에서만 채운다 — 정상 흐름은 항상 비어 있다. */
+  items?: ApiJobAsyncTaskItem[];
 };
 
 /**
@@ -418,14 +420,55 @@ const N4_POLL_SCHEDULE: { stageIndex: number; status: 'running' | 'done'; progre
   { stageIndex: 3, status: 'done', progress: 1 }, // render 완료 → N5로 전환
 ];
 
-function advanceN4Processing(): {
-  progress: number;
-  total: number;
-  done: number;
-  stages: { key: string; label: string; status: 'running' | 'done' }[];
-} {
+/** e2e 전용 — 켜져 있으면 N4 의 현재 stage 를 failed 로 돌려주고 진행을 멈춘다. */
+const MOCK_N4_FAIL_FLAG = '__pixlateMockN4Fail';
+
+/**
+ * e2e 전용 — render 후반부(progress 0.9, 화면 05)를 보낸 다음 poll 한 번만 progress 를 0.8 로
+ * 되돌린다(render 는 계속 running). 서버 top-level progress 가 내려갈 때 화면 단계가 05 → 04 로
+ * 돌아가지 않는지 확인하기 위한 값이다.
+ */
+const MOCK_N4_PROGRESS_DROP_ONCE_FLAG = '__pixlateMockN4ProgressDropOnce';
+
+function mockFailedJobTaskItem(taskType: ApiJobAsyncTaskItem['taskType'], errorCode: string): ApiJobAsyncTaskItem {
+  return {
+    taskId: 9001,
+    taskType,
+    unitType: 'job',
+    unitId: jobState.id,
+    status: 'failed',
+    uiStatus: 'failed',
+    retryCount: 3,
+    maxRetry: 3,
+    retryable: false,
+    errorCode,
+    revision: null,
+  };
+}
+
+function advanceN4Processing(): MockJobProcessingTick {
   const tick = N4_POLL_SCHEDULE[Math.min(n4PollIndex, N4_POLL_SCHEDULE.length - 1)];
   const stageMeta = N4_PROCESSING_STAGES[tick.stageIndex];
+
+  if (n4PollIndex === N4_POLL_SCHEDULE.length - 1 && takeMockFlag(MOCK_N4_PROGRESS_DROP_ONCE_FLAG)) {
+    return {
+      progress: 0.8,
+      total: N4_PROCESSING_STAGES.length,
+      done: tick.stageIndex,
+      stages: [{ ...N4_PROCESSING_STAGES[3], status: 'running' }],
+    };
+  }
+
+  if ((globalThis as Record<string, unknown>)[MOCK_N4_FAIL_FLAG]) {
+    // 진행을 멈추고(n4PollIndex 그대로) 현재 stage 를 failed 로 보고한다.
+    return {
+      progress: tick.progress,
+      total: N4_PROCESSING_STAGES.length,
+      done: tick.stageIndex,
+      stages: [{ ...stageMeta, status: 'failed' }],
+      items: [mockFailedJobTaskItem(stageMeta.key as ApiJobAsyncTaskItem['taskType'], 'MOCK_STAGE_FAILED')],
+    };
+  }
   const isLastTick = n4PollIndex >= N4_POLL_SCHEDULE.length - 1;
 
   n4PollIndex += 1;
@@ -964,6 +1007,8 @@ export const handlers = [
     }
 
     const jobProgress = advanceJobProcessing();
+    // 실패 시나리오 flag 가 켜졌을 때만 job 단계 실패 item 이 붙는다(정상 흐름은 빈 배열).
+    const jobFailedItems = jobProgress.items ?? [];
     // n6 render item(job 단위)과 n5 rerender item(block 단위) 둘 다 여기 속한다
     // — N2/N4 job 단계 진행(advanceJobProcessing)과는 별도 진행률 소스라 있으면
     // 이쪽을 우선한다(과거 이름 hasN5Items를 오늘 N6 항목도 포함하도록 재사용).
@@ -976,9 +1021,9 @@ export const handlers = [
       progress: hasTaskItems ? items.filter((i) => i.status === 'done').length / items.length : jobProgress.progress,
       total: hasTaskItems ? items.length : jobProgress.total,
       done: hasTaskItems ? items.filter((i) => i.status === 'done').length : jobProgress.done,
-      failedCount: items.filter((i) => i.status === 'failed').length,
+      failedCount: items.filter((i) => i.status === 'failed').length + jobFailedItems.length,
       stages: jobProgress.stages,
-      items,
+      items: [...items, ...jobFailedItems],
     });
   }),
 
