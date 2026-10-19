@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 
 import { reachN6 } from './helpers/reach-n6';
+import { disableDirectoryPicker } from './helpers/directory-picker';
 import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 
 // ─────────────────────────────────────────────────────────────────
@@ -44,6 +45,13 @@ function track(page: Page): Req[] {
 const exportPosts = (rs: Req[]) => rs.filter((r) => r.method === 'POST' && r.path === `/jobs/${MOCK_JOB_ID}/export`);
 const downloads = (rs: Req[]) =>
   rs.filter((r) => r.method === 'GET' && new RegExp(`^/jobs/${MOCK_JOB_ID}/exports?/`).test(r.path) && r.path.includes('download'));
+
+// "선택 항목 내보내기"는 지원 환경(Chromium localhost = secure context)에서 폴더 선택 창을 연다.
+// 이 파일은 기존 다운로드 링크 흐름을 검증하므로 picker 를 없앤 미지원 환경으로 고정한다
+// (폴더 저장 흐름은 e2e/n6-folder-save.spec.ts).
+test.beforeEach(async ({ page }) => {
+  await disableDirectoryPicker(page);
+});
 
 test('CSV 를 아직 만들지 않은 상태에서 개별 다운로드가 생성 → artifactId 다운로드 순서로 성공한다', async ({ page }) => {
   const requests = track(page);

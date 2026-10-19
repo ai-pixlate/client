@@ -295,6 +295,12 @@ export const MOCK_EXPORT_FAIL_ONCE_FLAG = '__pixlateMockExportFailOnce';
 export const MOCK_EXPORT_NO_ARTIFACT_ID_ONCE_FLAG = '__pixlateMockExportNoArtifactIdOnce';
 /** e2e 전용 — 다음 GET /exports/:artifactId/download 한 번이 404 로 실패한다. */
 export const MOCK_EXPORT_DOWNLOAD_NOT_FOUND_ONCE_FLAG = '__pixlateMockExportDownloadNotFoundOnce';
+/**
+ * e2e 전용 — 다음 presigned 파일 GET(/mock/download/...) 한 번이 네트워크 오류로 끝난다.
+ * 실제 환경에서 S3 CORS 가 막혀 FE fetch 가 실패하는 경우를 흉내 낸다(브라우저는 CORS 실패를
+ * 네트워크 오류(TypeError)로만 알려 준다).
+ */
+export const MOCK_PRESIGNED_FETCH_FAIL_ONCE_FLAG = '__pixlateMockPresignedFetchFailOnce';
 /** BE release/1.0.0 에서 POST /export 가 만드는 구성요소. html·psd 가 섞이면 아무것도 만들지 않고 400 이다. */
 const N6_EXPORTABLE_COMPONENTS = ['csv', 'images'];
 
@@ -1266,5 +1272,17 @@ export const handlers = [
       savedAt: new Date().toISOString(),
     };
     return HttpResponse.json(card);
+  }),
+
+  // ──────────────────────────────────────────
+  // presigned 다운로드 URL(mock) — 실제로는 S3 객체다. 위 download 응답의 url 이 이 경로를
+  // 가리킨다. N6 폴더 직접 저장(FE fetch)을 mock 에서 확인할 수 있도록 작은 더미 바이트를
+  // 돌려준다(실제 zip/csv 내용 아님). <a href> 다운로드도 같은 응답을 받는다.
+  // ──────────────────────────────────────────
+  http.get('/mock/download/:fileName', ({ params }) => {
+    if (takeMockFlag(MOCK_PRESIGNED_FETCH_FAIL_ONCE_FLAG)) return HttpResponse.error();
+    const fileName = params.fileName as string;
+    const contentType = fileName.endsWith('.csv') ? 'text/csv' : 'application/zip';
+    return new HttpResponse(`pixlate mock artifact: ${fileName}`, { headers: { 'Content-Type': contentType } });
   }),
 ];

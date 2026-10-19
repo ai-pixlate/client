@@ -14,6 +14,13 @@ import {
   useSaveJobMutation,
 } from '@/lib/queries/pixlate';
 import type { ApiDeliverable, ApiDeliverableComponent, ApiExportArtifactType } from '@/lib/api/n6-schema';
+import {
+  fetchPresignedFile,
+  getDirectoryPicker,
+  isDirectoryPickerAbort,
+  resolveSaveFileName,
+  writeFileToDirectory,
+} from '@/lib/n6/directory-save';
 import { StepNav } from './step-nav';
 import { ZoomControls } from './n5/n5-toolbar';
 
@@ -457,6 +464,21 @@ function ArtifactRow({
   );
 }
 
+/**
+ * "선택 항목 내보내기" 폴더 직접 저장 상태(지원 환경에서만 idle 이 아닌 값이 된다).
+ * - saving   : 폴더를 골랐고 POST /export → GET download → 파일 쓰기 진행 중
+ * - saved    : 고른 폴더에 파일을 썼다(전체 경로는 브라우저가 주지 않아 폴더 이름만 안다)
+ * - fallback : 산출물은 만들어졌지만 직접 저장을 못 했다(presigned fetch CORS/네트워크 실패 등)
+ *              → 기존 다운로드 링크를 보여 준다
+ */
+type DirectSaveState =
+  | { phase: 'idle' }
+  | { phase: 'saving'; directoryName: string }
+  | { phase: 'saved'; directoryName: string; fileName: string }
+  | { phase: 'fallback' };
+
+const DIRECT_SAVE_IDLE: DirectSaveState = { phase: 'idle' };
+
 function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeliverableComponent[] }) {
   // 표시 순서만 ARTIFACT_DISPLAY_ORDER로 정렬한다 — component 객체 자체(type
   // 포함)는 그대로라 checkbox/선택 state/handleExport 페이로드의 타입 의미는
@@ -488,7 +510,12 @@ function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeli
   const hasSelection = selected.size > 0;
   const selectedLabels = [...selected].map((type) => ARTIFACT_LABEL[type] ?? type);
 
-  const handleExport = () => {
+  const [directSave, setDirectSave] = useState<DirectSaveState>(DIRECT_SAVE_IDLE);
+  const isDirectSaving = directSave.phase === 'saving';
+
+  // 기존 흐름(지원하지 않는 환경의 fallback): POST /export → artifactId → GET download →
+  // 다운로드 링크. 계약 순서와 오류 처리는 PR #37 그대로다.
+  const exportWithDownloadLink = () => {
     exportMutation.mutate(
       { components: [...selected] },
       {
@@ -498,6 +525,65 @@ function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeli
       },
     );
   };
+
+  // 지원 환경: 같은 계약 순서로 만든 뒤, presigned URL 을 직접 받아 고른 폴더에 쓴다.
+  // POST/GET 실패는 각 mutation 의 기존 오류 표시를 그대로 쓰고 파일은 쓰지 않는다.
+  const exportToDirectory = async (directory: FileSystemDirectoryHandle) => {
+    const payload = { components: [...selected] };
+    downloadMutation.reset();
+    setDirectSave({ phase: 'saving', directoryName: directory.name });
+
+    let artifactId: number | undefined;
+    let download: Awaited<ReturnType<typeof downloadMutation.mutateAsync>>;
+    try {
+      const created = await exportMutation.mutateAsync(payload);
+      if (created.artifactId == null) {
+        setDirectSave(DIRECT_SAVE_IDLE);
+        return;
+      }
+      artifactId = created.artifactId;
+      download = await downloadMutation.mutateAsync(artifactId);
+    } catch {
+      setDirectSave(DIRECT_SAVE_IDLE);
+      return;
+    }
+
+    if (!download.url) {
+      setDirectSave({ phase: 'fallback' });
+      return;
+    }
+    const fileName = resolveSaveFileName(download, `pixlate_export_${artifactId}.zip`);
+    try {
+      const file = await fetchPresignedFile(download.url);
+      await writeFileToDirectory(directory, fileName, file);
+      setDirectSave({ phase: 'saved', directoryName: directory.name, fileName });
+    } catch {
+      setDirectSave({ phase: 'fallback' });
+    }
+  };
+
+  const handleExport = async () => {
+    if (exportMutation.isPending || isDirectSaving) return;
+    const pickDirectory = getDirectoryPicker();
+    if (!pickDirectory) {
+      exportWithDownloadLink();
+      return;
+    }
+
+    // user activation 이 살아 있는 클릭 직후에 폴더 선택 창을 먼저 연다 — POST 등을 await 한 뒤
+    // 열면 브라우저가 막는다. readwrite 권한도 이때 함께 받아 둔다.
+    let directory: FileSystemDirectoryHandle;
+    try {
+      directory = await pickDirectory({ id: 'pixlate-export', mode: 'readwrite' });
+    } catch (error) {
+      if (isDirectoryPickerAbort(error)) return; // 취소 — 아무 요청도 보내지 않고 화면을 그대로 둔다
+      exportWithDownloadLink(); // 그 밖의 picker 오류는 기존 다운로드 링크 흐름으로 진행한다
+      return;
+    }
+    await exportToDirectory(directory);
+  };
+
+  const showDownloadLink = downloadMutation.data && (directSave.phase === 'idle' || directSave.phase === 'fallback');
 
   return (
     <div
@@ -565,10 +651,10 @@ function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeli
             type="button"
             data-testid="n6-export-button"
             onClick={handleExport}
-            disabled={!hasSelection || exportMutation.isPending}
+            disabled={!hasSelection || exportMutation.isPending || isDirectSaving}
             className="w-full rounded-[6px] bg-[#171717] px-8 py-3.5 text-[14px] font-medium tracking-[-0.03em] text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {exportMutation.isPending ? '내보내는 중...' : '선택 항목 내보내기'}
+            {exportMutation.isPending || isDirectSaving ? '내보내는 중...' : '선택 항목 내보내기'}
           </button>
 
           {exportMutation.isError && (
@@ -576,8 +662,32 @@ function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeli
               내보내기에 실패했습니다. 다시 시도해주세요.
             </p>
           )}
-          {downloadMutation.isPending && <p className="text-[12px] text-[#999]">다운로드 링크 준비 중...</p>}
-          {downloadMutation.data && (
+          {downloadMutation.isPending && !isDirectSaving && (
+            <p className="text-[12px] text-[#999]">다운로드 링크 준비 중...</p>
+          )}
+          {isDirectSaving && (
+            <p className="text-[12px] text-[#999]" data-testid="n6-direct-save-progress">
+              선택한 폴더에 저장하는 중...
+            </p>
+          )}
+          {directSave.phase === 'saved' && (
+            <div
+              role="status"
+              data-testid="n6-direct-save-done"
+              className="flex w-full flex-col gap-1 rounded-[6px] border border-[#eaeaea] bg-white px-5 py-3"
+            >
+              <p className="text-[14px] font-medium tracking-[-0.03em] text-[#04421f]">저장 완료</p>
+              <p className="text-[12px] tracking-[-0.02em] break-all text-[#707070]">
+                선택한 폴더({directSave.directoryName})에 {directSave.fileName}을 저장했습니다.
+              </p>
+            </div>
+          )}
+          {directSave.phase === 'fallback' && downloadMutation.data && (
+            <p className="text-[12px] text-[#707070]" data-testid="n6-direct-save-fallback">
+              직접 저장을 사용할 수 없어 다운로드 링크를 준비했습니다.
+            </p>
+          )}
+          {showDownloadLink && downloadMutation.data && (
             <a
               href={downloadMutation.data.url}
               download={downloadMutation.data.fileName}
