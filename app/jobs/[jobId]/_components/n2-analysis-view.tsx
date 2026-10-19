@@ -132,6 +132,15 @@ function resolveCoarseStage(
   return 'ocr';
 }
 
+/**
+ * 이 status 로 그린 N2 화면이 이미 5단계 전부 완료 상태인지 — page.tsx 가 N2 → 다음 단계 전환
+ * 직전에 완료 표시를 한 번 더 보여 줄지 판단할 때만 쓴다. 단계 해석은 아래 resolveCoarseStage
+ * 그대로다(새 key·순서를 가정하지 않는다).
+ */
+export function isN2PresentationDone(status: ApiJobTaskStatus, progressOverride?: number): boolean {
+  return resolveCoarseStage(status.stages, progressOverride) === 'done';
+}
+
 function buildFiveSteps(states: ProcessingStep['state'][]): ProcessingStep[] {
   return FIVE_STEP_META.map((step, i) => ({ ...step, state: states[i] }));
 }
@@ -139,8 +148,14 @@ function buildFiveSteps(states: ProcessingStep['state'][]): ProcessingStep[] {
 export function N2AnalysisView({
   status,
   progressOverride,
+  isCompleted = false,
 }: {
   status: ApiJobTaskStatus;
+  /**
+   * 서버가 이미 N2 를 끝냈다(currentStep 이 N2 를 벗어났다)는 뜻 — page.tsx 가 다음 화면으로
+   * 넘어가기 직전 짧게 완료 상태를 보여 줄 때만 true 로 넘긴다. 5단계 전부를 완료로 그린다.
+   */
+  isCompleted?: boolean;
   /**
    * mock 환경에서 N2 최소 체류(7초)와 진행률을 맞추기 위해 page.tsx가
    * 계산해 넘기는 표시 전용 값(0~1). 실서버/mock 비활성에서는 항상
@@ -149,7 +164,7 @@ export function N2AnalysisView({
    */
   progressOverride?: number;
 }) {
-  const coarseStage = resolveCoarseStage(status.stages, progressOverride);
+  const coarseStage = isCompleted ? 'done' : resolveCoarseStage(status.stages, progressOverride);
   const steps = buildFiveSteps(FIVE_STEP_STATES_BY_COARSE_STAGE[coarseStage]);
   const caption = resolveOverlayCaption(coarseStage);
   const progressPercent = Math.round((progressOverride ?? status.progress ?? 0) * 100);
