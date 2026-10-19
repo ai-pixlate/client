@@ -10,6 +10,7 @@
 import {
   computeSectionDisplayTops,
   getBlockDisplayRect,
+  getBlockHitRect,
   getPreviewScale,
 } from '../lib/n5/coordinates.ts';
 
@@ -266,6 +267,26 @@ console.log('\n[6] 하단 section(큰 displayTop) + section-local bbox -> 최종
       rectAsIfSrcA.width === rectAsIfSrcB.width &&
       rectAsIfSrcA.height === rectAsIfSrcB.height,
   );
+}
+
+console.log('\n[7] block hit rect — visual rect는 그대로, 클릭 영역만 넓힌다');
+{
+  const bounds = { width: 990, height: 600 };
+  const opts = { paddingPx: 8, minSizePx: 32, zoom: 1, bounds };
+  const visual = getBlockDisplayRect({ x: 100, y: 100, width: 200, height: 40 }, 0, 1);
+  const visualBefore = { ...visual };
+  const hit = getBlockHitRect(visual, opts);
+  check('visual rect 자체는 바뀌지 않는다', JSON.stringify(visual) === JSON.stringify(visualBefore));
+  check('큰 block: 사방 8px 여백', hit.left === 92 && hit.top === 92 && hit.width === 216 && hit.height === 56, JSON.stringify(hit));
+
+  const tiny = getBlockHitRect({ left: 300, top: 300, width: 6, height: 4 }, opts);
+  check('작은 block: 최소 32×32, 중심 유지', tiny.width === 32 && tiny.height === 32 && tiny.left === 287 && tiny.top === 286, JSON.stringify(tiny));
+
+  const zoomedOut = getBlockHitRect({ left: 300, top: 300, width: 6, height: 4 }, { ...opts, zoom: 0.5 });
+  check('zoom 50%: canvas 좌표로는 2배(화면에서는 같은 32px)', zoomedOut.width === 64 && zoomedOut.height === 64, JSON.stringify(zoomedOut));
+
+  const edge = getBlockHitRect({ left: 2, top: 590, width: 50, height: 8 }, opts);
+  check('section 밖으로 나가지 않는다', edge.left === 0 && edge.top + edge.height === 600, JSON.stringify(edge));
 }
 
 console.log(`\n결과: PASS ${pass} / FAIL ${fail}\n`);
