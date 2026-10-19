@@ -4,7 +4,8 @@ import { use, useEffect, useState } from 'react';
 import Link from 'next/link';
 
 import { useJobTasksQuery } from '@/lib/queries/pixlate';
-import { N2AnalysisView } from './_components/n2-analysis-view';
+import type { ApiJobTaskStatus } from '@/lib/api/job-schema';
+import { N2AnalysisView, isN2PresentationDone } from './_components/n2-analysis-view';
 import { N3View } from './_components/n3/n3-view';
 import { N4ProcessingView } from './_components/n4-processing-view';
 import { N5View } from './_components/n5/n5-view';
@@ -30,6 +31,24 @@ import { N6ResultView } from './_components/n6-result-view';
 // 않는다.
 // ─────────────────────────────────────────────────────────────────
 const N2_MOCK_MIN_DWELL_MS = 7000;
+
+// ─────────────────────────────────────────────────────────────────
+// N2 완료 표시 — mock/실서버 공통.
+//
+// 서버는 마지막 stage 를 끝낸 바로 그 응답에서 currentStep 을 N3 로 바꿔 줄 수 있다. 그러면
+// 직전 poll 이 아직 앞 단계(예: 02·03 진행 중)였을 때 화면 5단계 중 뒤쪽 항목(04·05)은 진행
+// 중으로도 완료로도 한 번도 그려지지 않은 채 N3 로 넘어간다(2초 polling 사이에 끝나는 stage 는
+// 화면에 남지 않는다). 그래서 N2 가 화면에 떠 있었고 마지막으로 그린 상태가 "전부 완료"가
+// 아니었다면, 서버가 N2 를 벗어난 응답을 받은 뒤 그 응답 그대로 5단계 완료 상태를 한 번 짧게
+// 보여 주고 다음 화면으로 넘어간다. 서버가 이미 N2 완료를 알린 뒤의 표시라 처리되지 않은 일을
+// 완료라고 보여 주지 않는다. 이 시점에 "진행 중" 상태를 새로 만들지 않는다 — 건너뛴 항목은
+// 대기 → 완료로 바로 바뀐다. currentStep 정본, polling, task 상태는 바꾸지 않는다.
+//
+// N2_COMPLETION_DWELL_MS 는 API 계약값이나 실제 처리 시간이 아니라 화면 표시용 체류 시간이다
+// — 마지막 완료 상태를 알아볼 수 있을 만큼만 두고, N3 진입이 늦어졌다고 느끼지 않을 정도로
+// 짧게 잡은 UX 값이다.
+// ─────────────────────────────────────────────────────────────────
+const N2_COMPLETION_DWELL_MS = 600;
 const IS_MOCK_ENABLED = process.env.NEXT_PUBLIC_API_MOCKING === 'enabled';
 
 // ─────────────────────────────────────────────────────────────────
@@ -92,7 +111,6 @@ export default function Page({
     IS_MOCK_ENABLED && n2EnteredAt !== null && !n2DwellElapsed && rawCurrentStep !== 'N2'
       ? 'N2'
       : rawCurrentStep;
-  const meta = (currentStep && STEP_META[currentStep]) || STEP_META_FALLBACK;
 
   // N2 mock progress 동기화 — mock 서버는 실제로는 poll 2회(약 4초) 만에
   // task를 끝내버려서, 위 7초 체류 게이트가 화면을 붙잡고 있는 동안
@@ -123,14 +141,37 @@ export default function Page({
     mockN2Progress = serverCompleted && elapsedRatio >= 1 ? 1 : Math.min(0.99, elapsedRatio);
   }
 
+  // N2 완료 표시(위 N2_COMPLETION_DWELL_MS 주석) — 렌더 중 조건부 setState("이전 값에서 state
+  // 조정" 패턴)로 전환 순간을 잡고, 시간이 지나면 effect 의 timer 로 푼다.
+  const [shownStep, setShownStep] = useState(currentStep);
+  const [lastN2ShownDone, setLastN2ShownDone] = useState(false);
+  const [n2CompletionStatus, setN2CompletionStatus] = useState<ApiJobTaskStatus | null>(null);
+  if (currentStep !== shownStep) {
+    setShownStep(currentStep);
+    if (shownStep === 'N2' && currentStep && currentStep !== 'N2' && tasksQuery.data && !lastN2ShownDone) {
+      setN2CompletionStatus(tasksQuery.data);
+    }
+  }
+  if (currentStep === 'N2' && tasksQuery.data) {
+    const done = isN2PresentationDone(tasksQuery.data, mockN2Progress);
+    if (done !== lastN2ShownDone) setLastN2ShownDone(done);
+  }
+  useEffect(() => {
+    if (!n2CompletionStatus) return;
+    const timer = setTimeout(() => setN2CompletionStatus(null), N2_COMPLETION_DWELL_MS);
+    return () => clearTimeout(timer);
+  }, [n2CompletionStatus]);
+  const displayStep = n2CompletionStatus ? 'N2' : currentStep;
+  const meta = (displayStep && STEP_META[displayStep]) || STEP_META_FALLBACK;
+
   return (
     <div className="flex h-screen flex-col bg-gray-50">
       {/* 상단 헤더 — N2/N3/N4/N5/N6는 Figma 기준 자체 헤더(StepNav+나가기)를 가지므로 숨긴다 */}
-      {currentStep !== 'N2' &&
-        currentStep !== 'N3' &&
-        currentStep !== 'N4' &&
-        currentStep !== 'N5' &&
-        currentStep !== 'N6' && (
+      {displayStep !== 'N2' &&
+        displayStep !== 'N3' &&
+        displayStep !== 'N4' &&
+        displayStep !== 'N5' &&
+        displayStep !== 'N6' && (
         <header className="flex h-14 shrink-0 items-center gap-4 border-b bg-white px-6 shadow-sm">
           <Link
             href="/"
@@ -168,11 +209,17 @@ export default function Page({
 
         {tasksQuery.data && (
           <>
-            {currentStep === 'N2' && <N2AnalysisView status={tasksQuery.data} progressOverride={mockN2Progress} />}
-            {currentStep === 'N3' && <N3View jobId={jobId} />}
-            {currentStep === 'N4' && <N4ProcessingView status={tasksQuery.data} />}
-            {currentStep === 'N5' && <N5View jobId={jobId} />}
-            {currentStep === 'N6' && <N6ResultView jobId={jobId} />}
+            {displayStep === 'N2' && (
+              <N2AnalysisView
+                status={n2CompletionStatus ?? tasksQuery.data}
+                progressOverride={mockN2Progress}
+                isCompleted={n2CompletionStatus != null}
+              />
+            )}
+            {displayStep === 'N3' && <N3View jobId={jobId} />}
+            {displayStep === 'N4' && <N4ProcessingView status={tasksQuery.data} />}
+            {displayStep === 'N5' && <N5View jobId={jobId} />}
+            {displayStep === 'N6' && <N6ResultView jobId={jobId} />}
           </>
         )}
       </div>
