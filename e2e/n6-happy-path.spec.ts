@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 import { reachN6 } from './helpers/reach-n6';
+import { disableDirectoryPicker } from './helpers/directory-picker';
 import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 
 // ─────────────────────────────────────────────────────────────────
@@ -13,6 +14,13 @@ import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 // (lib/msw/handlers.ts), 이 테스트는 수동 POST /render 호출 없이도 render가
 // done까지 진행되는 것을 확인한다.
 // ─────────────────────────────────────────────────────────────────
+
+// "선택 항목 내보내기"는 지원 환경(Chromium localhost = secure context)에서 폴더 선택 창을 연다.
+// 이 파일은 기존 다운로드 링크 흐름을 검증하므로 picker 를 없앤 미지원 환경으로 고정한다
+// (폴더 저장 흐름은 e2e/n6-folder-save.spec.ts).
+test.beforeEach(async ({ page }) => {
+  await disableDirectoryPicker(page);
+});
 
 test('render → deliverables → validation → export → download → save 전체 흐름이 새로고침 없이 이어진다', async ({
   page,
