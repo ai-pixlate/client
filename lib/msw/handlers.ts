@@ -13,6 +13,8 @@ import {
   mockN6Validation,
 } from '@/lib/mock-api/fixtures';
 import { mockN5Job, mockN5Blocks, mockN5PreviewSections, buildMockN5Preview } from '@/lib/mock-api/n5-fixtures';
+import { mockLibraryCards } from '@/lib/mock-api/library-fixtures';
+import { mockMasterCountries, mockMasterLanguages } from '@/lib/mock-api/master-fixtures';
 import type { ApiJob, ApiJobAsyncTaskItem, ApiTextBlock } from '@/lib/api/n5-schema';
 import type { ApiAcceptedTask } from '@/lib/api/job-schema';
 import type {
@@ -181,6 +183,27 @@ function resetJobState() {
   n6LatestRenderTaskId = null;
   n6RenderTaskState.clear();
   n6ExportArtifactState.clear();
+  mockJobSavedAt = null;
+}
+
+/**
+ * M1 보관함 — 흐름 job(jobState)이 POST /jobs/:jobId/save로 저장된 시각.
+ * GET /library가 저장 응답과 같은 savedAt을 돌려주도록 보관한다.
+ */
+let mockJobSavedAt: string | null = null;
+
+/** 흐름 job → LibraryCard 투영. POST /save 응답과 GET /library가 같은 모양을 쓴다. */
+function buildMockLibraryCardFromJobState(savedAt: string | null): ApiLibraryCard {
+  return {
+    jobId: jobState.id,
+    productName: jobState.productName ?? null,
+    brandName: null,
+    targetCountry: jobState.targetCountry ?? null,
+    targetLanguage: jobState.targetLanguage ?? null,
+    specType: jobState.specType,
+    thumbnailUrl: mockN6Deliverables[0]?.imageUrl ?? null,
+    savedAt,
+  };
 }
 
 /**
@@ -1007,17 +1030,26 @@ export const handlers = [
     }
 
     jobState = { ...jobState, isSaved: true, status: 'done', userFacingStatus: 'done' };
+    mockJobSavedAt = new Date().toISOString();
 
-    const card: ApiLibraryCard = {
-      jobId: jobState.id,
-      productName: jobState.productName ?? null,
-      brandName: null,
-      targetCountry: jobState.targetCountry ?? null,
-      targetLanguage: jobState.targetLanguage ?? null,
-      specType: jobState.specType,
-      thumbnailUrl: mockN6Deliverables[0]?.imageUrl ?? null,
-      savedAt: new Date().toISOString(),
-    };
-    return HttpResponse.json(card);
+    return HttpResponse.json(buildMockLibraryCardFromJobState(mockJobSavedAt));
   }),
+
+  // ──────────────────────────────────────────
+  // M1 — 보관함 카드 목록 (API-LIB-01, F-LST-02)
+  //
+  // 계약: job(is_saved=true) 투영. 고정 fixture(저장 완료 job들) 뒤에, 흐름 job이
+  // 저장됐으면 그 카드도 함께 돌려준다. 미저장 job은 포함하지 않는다.
+  // ──────────────────────────────────────────
+  http.get('/library', () => {
+    const cards: ApiLibraryCard[] = [...mockLibraryCards];
+    if (jobState.isSaved) cards.push(buildMockLibraryCardFromJobState(mockJobSavedAt));
+    return HttpResponse.json(cards);
+  }),
+
+  // ──────────────────────────────────────────
+  // Master — 국가/언어 기준 목록 (API-MST-01/02). M1 카드의 국가·언어 표시 이름 출처.
+  // ──────────────────────────────────────────
+  http.get('/master/countries', () => HttpResponse.json(mockMasterCountries)),
+  http.get('/master/languages', () => HttpResponse.json(mockMasterLanguages)),
 ];
