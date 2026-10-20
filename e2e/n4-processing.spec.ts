@@ -2,6 +2,8 @@ import { test, expect, type Page } from '@playwright/test';
 
 import { MOCK_BRAND_ID, MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 
+import { pickCategory } from './helpers/pick-category';
+
 // ─────────────────────────────────────────────────────────────────
 // N4 — "번역 중" 5단계 stage mapping 회귀 검증 (Figma 660:4221).
 //
@@ -31,14 +33,14 @@ async function reachN4(page: Page): Promise<void> {
   await page.getByPlaceholder('상품 이름을 입력해주세요').fill('N4 stage mapping 검증');
   await selectFirstValidOption(page, 0);
   await selectFirstValidOption(page, 1);
-  await page.getByRole('button', { name: '선택하기' }).click();
-  await page.getByRole('dialog', { name: '카테고리 선택' }).getByRole('button', { name: '바디/헤어' }).click();
+  await pickCategory(page);
   await selectFirstValidOption(page, 2);
   await page.getByLabel('파일 선택').setInputFiles({
     name: 'n4-processing.png',
     mimeType: 'image/png',
     buffer: Buffer.from(TINY_PNG_BASE64, 'base64'),
   });
+  await page.getByRole('checkbox', { name: /결과물에 쓰는 인증·시험 결과/ }).check(); // 책임 한계 동의(F-ACC-04)
   await page.getByRole('button', { name: '다음' }).click();
   await page.waitForURL(new RegExp(`/jobs/${MOCK_JOB_ID}$`));
   await page.getByRole('button', { name: '번역 시작' }).waitFor({ state: 'visible', timeout: 10_000 });
