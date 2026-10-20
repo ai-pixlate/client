@@ -44,16 +44,23 @@ const CHANNEL_PRESETS = [
   },
 ] as const;
 
-/** 탭 아래 설명(1162:5337 · 1170:5994) — Figma 문구 그대로. */
-const SIZE_TAB_DESCRIPTION: Record<SizeTab, string> = {
-  original: '원본 크기와 배치를 유지하고 글자만 번역해요. 규격을 바꿀 필요가 없을 때 선택하세요.',
-  resize: '사이트 규격에 맞게 이미지를 다시 구성해요. 크기와 배치가 원본과 달라져요.',
+/** 탭 아래 설명(1162:5337 · 1170:5994) — 자리는 Figma 그대로, 문구는 PR 리뷰 요청대로. */
+export const SIZE_TAB_DESCRIPTION: Record<SizeTab, string> = {
+  original: '올린 이미지의 크기와 배치를 그대로 두고 글자만 번역해요. 판매 사이트 규격에 맞춘 이미지를 이미 준비했거나, 규격을 바꿀 필요가 없을 때 고르세요.',
+  resize: '판매 사이트 규격에 맞게 이미지를 다시 구성해요. 크기와 배치가 원본과 달라져요.',
+};
+
+/** 「사이즈 변경」 안 radio 아래 방식별 안내(PR 리뷰). Figma에 없는 한 줄이라 탭 설명과 같은 스타일만 쓴다. */
+export const RESIZE_MODE_DESCRIPTION: Record<ResizeMode, string> = {
+  channel: '판매 사이트가 정한 규격에 맞춰요.',
+  custom: '원하는 크기를 직접 정해요.',
 };
 
 export const INITIAL_SIZE_SELECTION: SizeSelection = {
   // 현재 제출 계약(original 고정)과 같은 "원본 유지"에서 시작한다.
   tab: 'original',
-  resizeMode: 'custom',
+  // 잠금이 풀려 「사이즈 변경」에 처음 들어가면 판매처 맞춤부터 보인다(PR 리뷰).
+  resizeMode: 'channel',
   customWidth: '',
   customHeight: '',
   // 판매처 맞춤 variant를 처음 열었을 때의 모습은 Figma 예시(아마존 · Basic A+ 선택)를 따른다.
@@ -89,7 +96,7 @@ export function SizeSelector({
             testId="n1-size-tab-resize"
           />
         </div>
-        <p data-testid="n1-size-description" className="text-center text-[12px] leading-[14px] font-light tracking-[-0.48px] whitespace-nowrap text-[#707070]">
+        <p data-testid="n1-size-description" className="text-center text-[12px] leading-[14px] font-light tracking-[-0.48px] break-keep text-[#707070]">
           {SIZE_TAB_DESCRIPTION[value.tab]}
         </p>
       </div>
@@ -105,6 +112,9 @@ export function SizeSelector({
               <SizeRadio label="커스텀" name="n1-resize-mode" checked={value.resizeMode === 'custom'} onSelect={() => set({ resizeMode: 'custom' })} testId="n1-resize-custom" />
             </div>
           </div>
+          <p data-testid="n1-resize-mode-description" className="text-[12px] leading-[14px] font-light tracking-[-0.48px] text-[#707070]">
+            {RESIZE_MODE_DESCRIPTION[value.resizeMode]}
+          </p>
 
           {value.resizeMode === 'custom' ? (
             <div className="flex w-full items-center gap-1">

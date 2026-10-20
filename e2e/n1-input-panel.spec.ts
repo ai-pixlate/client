@@ -1,5 +1,6 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
 
+import { INITIAL_SIZE_SELECTION, RESIZE_MODE_DESCRIPTION, SIZE_TAB_DESCRIPTION } from '@/app/jobs/new/_components/size-selector';
 import { categoryPathValue, findCategoryPath, SELLER_DISPLAY_CATEGORIES } from '@/app/jobs/new/_data/seller-display-categories';
 
 import { pickCategory } from './helpers/pick-category';
@@ -118,8 +119,8 @@ test.describe('우측 입력 패널 — Figma 643:5942 위치·크기와 세로 
     expect(await top(page.getByTestId('n1-image-continuity-switch'))).toBe(543);
     expect(await top(page.getByText('사이즈 선택', { exact: true }))).toBe(633);
     expect(await top(page.getByTestId('n1-size-selector'))).toBe(658);
-    // 카테고리 표시 필드 placeholder — Figma 문구 "검색하기"
-    await expect(page.getByText('검색하기', { exact: true })).toBeVisible();
+    // 카테고리 표시 필드 — 검색 없는 3-column 선택이라 "검색하기" 대신 "카테고리 선택"(PR 리뷰)
+    await expect(page.getByTestId('n1-category-display')).toHaveText('카테고리 선택');
   });
 
   test('이미지 연속 토글 — Toggle/Switch Off·Disabled(223:1172) track, 문구 → track gap 10', async ({ page }) => {
@@ -228,12 +229,16 @@ test.describe('SizeSelector — 「사이즈 변경」 잠금(계약 전까지 �
     const original = page.getByTestId('n1-size-tab-original');
     const resize = page.getByTestId('n1-size-tab-resize');
 
-    // 원본유지(1093:10279) — 탭(32) + gap 8 + 설명(14)
-    const ORIGINAL_DESCRIPTION = '원본 크기와 배치를 유지하고 글자만 번역해요. 규격을 바꿀 필요가 없을 때 선택하세요.';
+    // 원본유지(1093:10279) — 탭(32) + gap 8 + 설명. 리뷰 문구는 두 문장이라 줄바꿈될 수 있어 높이는 설명 기준으로 본다.
+    const ORIGINAL_DESCRIPTION =
+      '올린 이미지의 크기와 배치를 그대로 두고 글자만 번역해요. 판매 사이트 규격에 맞춘 이미지를 이미 준비했거나, 규격을 바꿀 필요가 없을 때 고르세요.';
     await expect(selector(page)).toHaveAttribute('data-variant', 'original');
-    expect((await box(selector(page))).height).toBe(54);
     const description = page.getByTestId('n1-size-description');
     await expect(description).toHaveText(ORIGINAL_DESCRIPTION);
+    const selectorHeight = (await box(selector(page))).height;
+    expect(selectorHeight).toBe(32 + 8 + (await box(description)).height);
+    // 설명은 selector 폭 안에 들어간다(가로 넘침 없음)
+    expect((await box(description)).width).toBeLessThanOrEqual((await box(selector(page))).width);
     await expect(description).toHaveCSS('font-size', '12px');
     await expect(description).toHaveCSS('font-weight', '300');
     await expect(description).toHaveCSS('color', 'rgb(112, 112, 112)');
@@ -270,8 +275,17 @@ test.describe('SizeSelector — 「사이즈 변경」 잠금(계약 전까지 �
     await page.keyboard.press('Tab');
     await expect(resize).not.toBeFocused();
     await expect(page.getByPlaceholder('키워드를 입력해주세요.')).toBeFocused();
-    expect((await box(selector(page))).height).toBe(54);
+    expect((await box(selector(page))).height).toBe(selectorHeight);
     await expect(page.getByTestId('n1-size-description')).toHaveText(ORIGINAL_DESCRIPTION);
+  });
+
+  // 잠금 동안 「사이즈 변경」 화면은 사용자에게 노출되지 않는다 — 잠금을 우회해 클릭하지 않고, 화면이 쓰는 값만 확인한다.
+  test('데이터 — 잠금이 풀리면 판매처 맞춤이 기본, 사이즈 변경·판매처 맞춤·커스텀 안내 문구', () => {
+    expect(INITIAL_SIZE_SELECTION.tab).toBe('original');
+    expect(INITIAL_SIZE_SELECTION.resizeMode).toBe('channel');
+    expect(SIZE_TAB_DESCRIPTION.resize).toBe('판매 사이트 규격에 맞게 이미지를 다시 구성해요. 크기와 배치가 원본과 달라져요.');
+    expect(RESIZE_MODE_DESCRIPTION.channel).toBe('판매 사이트가 정한 규격에 맞춰요.');
+    expect(RESIZE_MODE_DESCRIPTION.custom).toBe('원하는 크기를 직접 정해요.');
   });
 
   test('제출 spec은 여전히 spec_original', async ({ page }) => {
@@ -688,6 +702,24 @@ test.describe('카테고리 필수 — PRD F-SRC-04 ① 미선택 시 진행 불
     await page.getByPlaceholder('상품 이름을 입력해주세요').fill('');
     await expect(next).toBeDisabled();
   });
+
+  test('표시 영역은 입력창이 아니다 — "검색하기"·돋보기 없이 "카테고리 선택", 선택 후 최종 항목 이름', async ({ page }) => {
+    const display = page.getByTestId('n1-category-display');
+    await expect(display).toHaveText('카테고리 선택');
+    await expect(display).not.toContainText('검색하기');
+    await expect(page.getByText('검색하기')).toHaveCount(0);
+    // 실제 text input·textbox가 아니고 검색 아이콘도 없다
+    await expect(display.locator('input, textarea, [contenteditable]')).toHaveCount(0);
+    await expect(display.getByRole('textbox')).toHaveCount(0);
+    expect(await display.evaluate((el) => el.tagName)).not.toBe('INPUT');
+    await expect(display.locator('img, svg')).toHaveCount(0);
+    // 「선택하기」 버튼은 그대로
+    await expect(page.getByRole('button', { name: '선택하기' })).toBeVisible();
+
+    await pickCategory(page);
+    await expect(display).toHaveText('스킨/토너');
+    await expect(display.locator('input, textarea, [contenteditable]')).toHaveCount(0);
+  });
 });
 
 test.describe('카테고리 선택 — Figma 1094:11176, 셀러 표시용 트리(Excel)', () => {
@@ -785,8 +817,8 @@ test.describe('카테고리 선택 — Figma 1094:11176, 셀러 표시용 트리
   });
 
   test('스킨케어 > 크림 > 아이크림 확인 → 반영, 소분류 없는 스킨/토너도 최종 선택, X·Escape는 기존 값 유지', async ({ page }) => {
-    const field = page.getByText(/^(검색하기|아이크림|스킨\/토너)$/);
-    await expect(field).toHaveText('검색하기');
+    const field = page.getByTestId('n1-category-display');
+    await expect(field).toHaveText('카테고리 선택');
 
     await pickCategory(page, ['스킨케어', '크림', '아이크림']);
     await expect(page.getByRole('dialog', { name: '카테고리 선택' })).toHaveCount(0);
@@ -958,6 +990,14 @@ async function fillRequiredExceptCategory(page: Page, { consent = true }: { cons
   await page.locator('#image-upload').setInputFiles(pngFile('source.png'));
   if (consent) await page.getByTestId('n1-consent-checkbox').check();
 }
+
+test('이미지를 올린 뒤 추가 카드에도 용량 문구 없이 "JPG, PNG"만 — "최대 1GB" 미표시', async ({ page }) => {
+  await expect(page.getByText('최대 1GB')).toHaveCount(0);
+  await page.locator('#image-upload').setInputFiles(pngFile('source.png'));
+  const addCardHint = page.getByText('JPG, PNG', { exact: true });
+  await expect(addCardHint).toBeVisible();
+  await expect(page.getByText(/1GB/)).toHaveCount(0);
+});
 
 test('1920×1080 가로 넘침 없음', async ({ page }) => {
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1920);

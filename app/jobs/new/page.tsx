@@ -9,7 +9,7 @@ import { StepNav } from '../[jobId]/_components/step-nav';
 
 import { CategorySelectorModal } from './_components/category-selector';
 import { CertificationUploadButton, CertificationUploadModal, type CertificationMark } from './_components/certification-upload';
-import { CheckGlyph16, ChevronDownGlyph14, PlusGlyph16, PlusGlyph24, SearchGlyph14 } from './_components/n1-glyphs';
+import { CheckGlyph16, ChevronDownGlyph14, PlusGlyph16, PlusGlyph24 } from './_components/n1-glyphs';
 import { INITIAL_SIZE_SELECTION, SizeSelector, type SizeSelection } from './_components/size-selector';
 import { findCategoryPath } from './_data/seller-display-categories';
 
@@ -159,8 +159,8 @@ function NewJobPageInner() {
   const [isDragOver, setIsDragOver] = useState(false);
 
   // ── 책임 한계 동의 (Figma 1170:6002, PRD F-ACC-04 필수) ─────────────
-  // 초기 미동의. 동의 기록 계약(POST /consents → consentId를 job에 연결)은 API v3.4.2에 있지만 FE client·mock이
-  // 아직 없어 이 값은 화면 validation에만 쓴다 — 서버 기록·consentId 연결은 별도 작업(가짜 consentId를 만들지 않는다).
+  // 초기 미동의. 이 값은 화면 validation에만 쓴다 — 동의는 따로 저장하지 않고, 작업 생성 시각을 동의 시각으로
+  // 본다(PRD F-ACC-04). 그래서 POST /consents·consentId를 연결하지 않는다.
   const [consentAgreed, setConsentAgreed] = useState(false);
 
   // ── 나가기 확인 ─────────────────────────────────────────────────
@@ -611,7 +611,7 @@ function NewJobPageInner() {
                       <p className="text-[16px] font-medium tracking-[-0.03em] whitespace-nowrap text-[#171717]">
                         파일을 드래그하거나 선택
                       </p>
-                      <p className="text-[12px] tracking-[-0.01em] whitespace-nowrap text-[#707070]">JPG, PNG · 최대 1GB</p>
+                      <p className="text-[12px] tracking-[-0.01em] whitespace-nowrap text-[#707070]">JPG, PNG</p>
                     </div>
                     {/* 기존 빈 상태와 동일한 label 패턴 — htmlFor로 숨은
                         input#image-upload를 직접 연다(accessible name이
@@ -672,23 +672,27 @@ function NewJobPageInner() {
                 />
               </div>
 
-              {/* 카테고리 — Figma(643:5824)는 검색 표시 입력(w-323) + "선택하기"
+              {/* 카테고리 — Figma(643:5824)는 표시 필드(w-323) + "선택하기"
                   버튼(w-108) 두 요소가 한 행에 나란히 있다. 버튼을 누르면
                   카테고리 선택 모달(381:6293)이 뜬다 — 실제 값 변경은 모달의
-                  leaf 클릭으로만 일어나고, 이 표시 필드 자체는 읽기 전용이다. */}
+                  leaf 클릭으로만 일어나고, 이 표시 필드 자체는 읽기 전용이다.
+                  모달은 검색 없는 3-column 선택이라, 입력할 수 있는 검색창으로
+                  오해하지 않게 "검색하기"·돋보기 대신 "카테고리 선택"만 보인다(PR 리뷰). */}
               {/* Figma(643:5822) 카테고리 행은 폭 447 고정(입력 323 + gap 16 + 버튼 108). */}
               <div className="flex max-w-[447px] flex-col gap-1">
                 <FieldLabel required>카테고리</FieldLabel>
                 <div className="flex items-center gap-4">
-                  <div className="flex h-[39px] flex-1 items-center justify-between rounded-[6px] border border-[#eaeaea] bg-white px-[14px] py-[10px]">
+                  <div
+                    data-testid="n1-category-display"
+                    className="flex h-[39px] flex-1 items-center rounded-[6px] border border-[#eaeaea] bg-white px-[14px] py-[10px]"
+                  >
                     <span
                       className={`truncate text-[14px] tracking-[-0.01em] ${
                         selectedCategoryLabel ? 'text-[#171717]' : 'text-[#707070]'
                       }`}
                     >
-                      {selectedCategoryLabel ?? '검색하기'}
+                      {selectedCategoryLabel ?? '카테고리 선택'}
                     </span>
-                    <SearchGlyph14 />
                   </div>
                   {/* h-[37px]를 고정한 채 py-2.5(=line-height 21px과 합쳐 41px)를
                       그대로 두면 실제 필요한 높이(41px)가 선언한 높이(37px)를
