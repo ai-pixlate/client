@@ -25,6 +25,9 @@ import {
   createExport,
   getExportDownload,
   saveJob,
+  getLibrary,
+  getMasterCountries,
+  getMasterLanguages,
 } from '@/lib/api/pixlate';
 import type { ApiJobPatch } from '@/lib/api/job-schema';
 import type { ApiBlockPatch, ApiConfirmRequest, ApiJobTaskStatus, ApiTextBlock } from '@/lib/api/n5-schema';
@@ -56,6 +59,9 @@ export const pixlateKeys = {
   n5Task: (jobId: string, taskId: number | null) => ['pixlate', 'job', jobId, 'n5-task', taskId] as const,
   deliverables: (jobId: string) => ['pixlate', 'job', jobId, 'deliverables'] as const,
   validation: (jobId: string) => ['pixlate', 'job', jobId, 'validation'] as const,
+  library: () => ['pixlate', 'library'] as const,
+  masterCountries: () => ['pixlate', 'master', 'countries'] as const,
+  masterLanguages: () => ['pixlate', 'master', 'languages'] as const,
 };
 
 // ─────────────────────────────────────────────
@@ -388,6 +394,39 @@ export function useExportComponentDownloadMutation(jobId: string) {
 export function useSaveJobMutation(jobId: string) {
   return useMutation({
     mutationFn: () => saveJob(jobId),
+  });
+}
+
+// ─────────────────────────────────────────────
+// M1 — 보관함 카드 목록 (API-LIB-01, F-LST-02). DTO 해석은 lib/library/adapter.ts가
+// 맡고 이 hook은 원본 LibraryCard[]만 캐시한다(N5의 blocks/preview query와 같은 방식).
+// ─────────────────────────────────────────────
+
+export function useLibraryQuery() {
+  return useQuery({
+    queryKey: pixlateKeys.library(),
+    queryFn: getLibrary,
+  });
+}
+
+// ─────────────────────────────────────────────
+// Master — 국가/언어 기준 목록. 세션 중 거의 바뀌지 않는 기준 데이터라
+// staleTime을 길게 둔다(화면마다 반복 조회하지 않기 위함).
+// ─────────────────────────────────────────────
+
+export function useMasterCountriesQuery() {
+  return useQuery({
+    queryKey: pixlateKeys.masterCountries(),
+    queryFn: getMasterCountries,
+    staleTime: Infinity,
+  });
+}
+
+export function useMasterLanguagesQuery() {
+  return useQuery({
+    queryKey: pixlateKeys.masterLanguages(),
+    queryFn: getMasterLanguages,
+    staleTime: Infinity,
   });
 }
 
