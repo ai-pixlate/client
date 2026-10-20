@@ -109,6 +109,30 @@ export function toAutoAdjustViewModel(
 }
 
 /* ------------------------------------------------------------------ *
+ * 2-1. 자리 맞춤(F-CFM-05) — overflow·autoAdjust를 FE 화면용 3값 한 축으로 묶는다.
+ *
+ * FE 내부 파생 상태일 뿐이다 — API DTO의 overflow/autoAdjust 필드는 그대로 두고
+ * 새 enum으로 바꾸지 않는다. 판정은 이 함수 하나에서만 한다(컴포넌트에서
+ * overflow·fontScale·lineBreakApplied를 다시 조합하지 않는다).
+ *   - overflow   : overflow === true (autoAdjust가 있어도 overflow가 우선)
+ *   - adjusted   : overflow가 아니고 toAutoAdjustViewModel().applied
+ *                  (fontScale !== 1 || lineBreakApplied — 기존 "실제 조정" 기준 재사용)
+ *   - fit        : 그 외
+ * 재렌더 전에는 서버가 돌려준 이전 overflow/autoAdjust 값이므로 이 값도 이전
+ * 상태를 반영한다 — FE가 새 편집 결과를 추측해 바꾸지 않는다.
+ * ------------------------------------------------------------------ */
+
+export type FitStatus = 'fit' | 'adjusted' | 'overflow';
+
+export function deriveFitStatus(
+  dto: Pick<ApiTextBlock, 'overflow' | 'autoAdjust'>,
+): FitStatus {
+  if (dto.overflow === true) return 'overflow';
+  if (toAutoAdjustViewModel(dto.autoAdjust).applied) return 'adjusted';
+  return 'fit';
+}
+
+/* ------------------------------------------------------------------ *
  * 3. TextBlock → BlockViewModel
  * ------------------------------------------------------------------ */
 
@@ -127,6 +151,8 @@ export interface BlockViewModel {
   displayTop: number | null;
   badges: SignalBadge[];
   autoAdjust: AutoAdjustViewModel;
+  /** 자리 맞춤 3값 상태. deriveFitStatus()에서만 계산한다. */
+  fitStatus: FitStatus;
 }
 
 /**
@@ -166,6 +192,7 @@ export function toBlockViewModel(dto: ApiTextBlock): BlockViewModel {
     displayTop: dto.displayTop ?? null,
     badges: toSignalBadges(dto.signals),
     autoAdjust: toAutoAdjustViewModel(dto.autoAdjust),
+    fitStatus: deriveFitStatus(dto),
   };
 }
 
