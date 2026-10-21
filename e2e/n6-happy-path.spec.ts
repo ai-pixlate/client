@@ -58,16 +58,25 @@ test('render → deliverables → validation → export → download → save �
   expect(requests.some((r) => r.method === 'GET' && r.path === `/jobs/${MOCK_JOB_ID}/deliverables`)).toBe(true);
   expect(requests.some((r) => r.method === 'GET' && r.path === `/jobs/${MOCK_JOB_ID}/validation`)).toBe(true);
 
-  // 기본 선택: DEFAULT_SELECTED_TYPES(images/HTML) 중 active 인 것만 체크된다
-  // (n6-result-view.tsx 참고). BE release/1.0.0 계약상 HTML 은 isActive=false 라
-  // 기본 선택에 들어가지 않고 비활성으로 보인다 — images/ 만 체크된다.
+  // 기본 선택: DEFAULT_SELECTED_TYPES(images/ + content.csv, PM 확정 — n6-result-view.tsx 참고).
+  // HTML·PSD 는 1.0.0 에서 제공하지 않아 비활성·미체크이고, 행 우측에 "12월 제공 예정"만 보인다.
   await expect(page.locator('#artifact-images')).toBeChecked();
-  await expect(page.locator('#artifact-csv')).not.toBeChecked();
+  await expect(page.locator('#artifact-csv')).toBeChecked();
   await expect(page.locator('#artifact-html')).not.toBeChecked();
   await expect(page.locator('#artifact-html')).toBeDisabled();
-  await expect(page.getByTestId('n6-download-row-html')).toBeDisabled();
+  await expect(page.locator('#artifact-psd')).not.toBeChecked();
   await expect(page.locator('#artifact-psd')).toBeDisabled();
-  await expect(page.getByText('12월 제공 예정')).toBeVisible();
+  await expect(page.getByText('선택된 산출물 2개')).toBeVisible();
+  const artifactRow = (type: string) =>
+    page
+      .locator('[data-testid="n6-export-panel"] div.flex.w-full.items-center.gap-4')
+      .filter({ has: page.locator(`#artifact-${type}`) });
+  await expect(page.getByText('12월 제공 예정')).toHaveCount(2);
+  await expect(artifactRow('html')).toContainText('12월 제공 예정');
+  await expect(artifactRow('psd')).toContainText('12월 제공 예정');
+  // HTML·PSD 행에는 개별 다운로드 컨트롤이 없다
+  await expect(page.getByTestId('n6-download-row-html')).toHaveCount(0);
+  await expect(page.getByTestId('n6-download-row-psd')).toHaveCount(0);
 
   // 9/23 — 표시 순서: images → HTML → content.csv → PSD (backend type 값은
   // 그대로, ARTIFACT_DISPLAY_ORDER로 presentation만 재정렬). 각 행 라벨을
@@ -77,13 +86,13 @@ test('render → deliverables → validation → export → download → save �
     .allTextContents();
   expect(labelTexts.filter((_, i) => i % 2 === 0)).toEqual(['images/', 'HTML', 'content.csv', 'PSD']);
 
-  // ── content.csv 선택/해제 ────────────────────────────────────────
-  await page.locator('label[for="artifact-csv"]').click();
-  await expect(page.locator('#artifact-csv')).toBeChecked();
-  await expect(page.getByText('선택된 산출물 2개')).toBeVisible();
+  // ── content.csv 해제/재선택 ──────────────────────────────────────
   await page.locator('label[for="artifact-csv"]').click();
   await expect(page.locator('#artifact-csv')).not.toBeChecked();
   await expect(page.getByText('선택된 산출물 1개')).toBeVisible();
+  await page.locator('label[for="artifact-csv"]').click();
+  await expect(page.locator('#artifact-csv')).toBeChecked();
+  await expect(page.getByText('선택된 산출물 2개')).toBeVisible();
 
   // ── 개별 다운로드(행별) — POST /export {components:[csv]} → 응답 artifactId 로 다운로드 ──
   const rowExport = page.waitForResponse(
@@ -103,8 +112,16 @@ test('render → deliverables → validation → export → download → save �
   expect(rowHref).toContain(`mock-presigned-${rowExportBody.artifactId}`);
   expect(rowHref).toContain('export.csv');
 
-  // ── export 실행(묶음 선택) ────────────────────────────────────────
+  // ── export 실행(기본 묶음 선택 images/ + content.csv) ────────────────
+  const bundleExport = page.waitForResponse(
+    (r) =>
+      r.request().method() === 'POST' &&
+      new URL(r.url()).pathname === `/jobs/${MOCK_JOB_ID}/export` &&
+      new Set(JSON.parse(r.request().postData() ?? '{}').components ?? []).size === 2,
+  );
   await page.getByTestId('n6-export-button').click();
+  const bundleExportBody = await (await bundleExport).json();
+  expect(bundleExportBody.artifactType).toBe('zip');
 
   await expect(page.getByTestId('n6-download-link')).toBeVisible({ timeout: 10_000 });
 
@@ -112,7 +129,7 @@ test('render → deliverables → validation → export → download → save �
   const exportReq = requests.filter((r) => r.method === 'POST' && r.path === `/jobs/${MOCK_JOB_ID}/export`)[1];
   expect(exportReq).toBeDefined();
   const exportBody = JSON.parse(exportReq!.body ?? '{}');
-  expect(new Set(exportBody.components)).toEqual(new Set(['images']));
+  expect(new Set(exportBody.components)).toEqual(new Set(['images', 'csv']));
 
   // ── download URL 획득 (mock presigned, 실제 파일 생성 없음) ───────
   const downloadReq = requests.find(
