@@ -344,7 +344,8 @@ type MockJobProcessingTick = {
  * stage key·순서는 테스트가 정한다(mock 은 어떤 key 도 가정하지 않는다). `advance: true`
  * 인 항목을 응답하는 poll 에서 job 을 N3 로 넘긴다 — 서버가 마지막 stage 를 끝내자마자
  * currentStep=N3 를 돌려주는 상황을 재현하기 위한 것이다. `advanceTo: 'N1'` 이면 같은 poll 에서
- * job 을 N1(draft)로 돌려 N2 중단 복귀를 재현한다(생략 시 N3). `items`·`analysisProgress` 는 그대로 응답에
+ * job 을 N1(draft)로 돌려 N2 중단 복귀를 재현한다(생략 시 N3). `fail: true` 면 그 poll 에서 job 을
+ * N2 그대로 jobStatus=failed 로 바꾼다(분석 실패 종료). `items`·`analysisProgress` 는 그대로 응답에
  * 싣는다 — analysisProgress 를 생략한 tick 은 속성 없는 응답이 된다.
  */
 const MOCK_N2_SCRIPT_FLAG = '__pixlateMockN2Script';
@@ -356,6 +357,7 @@ type MockN2ScriptTick = {
   analysisProgress?: ApiAnalysisProgress;
   advance?: boolean;
   advanceTo?: 'N1' | 'N3';
+  fail?: boolean;
 };
 
 function takeN2ScriptTick(): MockN2ScriptTick | null {
@@ -379,6 +381,8 @@ function advanceN2Processing(): MockJobProcessingTick {
               status: 'review',
             };
       jobProcessingPollCount = 0;
+    } else if (scripted.fail) {
+      jobState = { ...jobState, status: 'failed', userFacingStatus: 'failed' };
     }
     return {
       progress: scripted.progress,

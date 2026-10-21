@@ -165,6 +165,9 @@ export default function Page({
     return () => clearTimeout(timer);
   }, [n2CompletionStatus]);
   const displayStep = n2CompletionStatus ? 'N2' : currentStep;
+  // N2 전체 분석 실패 SSOT — currentStep=N2 && jobStatus=failed 뿐이다. failedCount·stages·progress·
+  // analysisProgress.status 는 보지 않는다(LOCAL_JUDGE_FAILED 부분 제외는 실패가 아니다).
+  const isN2Failed = !n2CompletionStatus && currentStep === 'N2' && tasksQuery.data?.jobStatus === 'failed';
   const meta = (displayStep && STEP_META[displayStep]) || STEP_META_FALLBACK;
 
   return (
@@ -215,8 +218,9 @@ export default function Page({
             {displayStep === 'N2' && (
               <N2AnalysisView
                 status={n2CompletionStatus ?? tasksQuery.data}
-                progressOverride={mockN2Progress}
+                progressOverride={isN2Failed ? undefined : mockN2Progress}
                 isCompleted={n2CompletionStatus != null}
+                isFailed={isN2Failed}
               />
             )}
             {displayStep === 'N3' && <N3View jobId={jobId} />}

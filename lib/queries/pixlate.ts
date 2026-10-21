@@ -144,6 +144,8 @@ export function useJobTasksQuery(jobId: string, options: { polling?: boolean } =
       ? (query) => {
           const data = query.state.data;
           if (!data) return 2_000; // 첫 응답 대기 중
+          // N2 전체 분석 실패(currentStep=N2 && jobStatus=failed)는 종료 상태라 폴링을 멈춘다
+          if (data.currentStep === 'N2' && data.jobStatus === 'failed') return false;
           if (data.currentStep === 'N2' || data.currentStep === 'N4') return 2_000;
           if (data.currentStep === 'N6') return hasActiveN6RenderTask(data) ? 2_000 : false;
           return false;

@@ -10,6 +10,8 @@ import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 // - analysisProgress 가 있으면 상세 표시, 없으면 기존 5단계 fallback
 // - null 은 정보 없음(0·완료·이전 값으로 채우지 않음), 재시도 때 이전 시도 detail 이 남지 않음
 // - 원본마다 split → ocr → merge 가 반복돼도 지금 poll 의 서버 값만 보임
+// - 전체 실패는 currentStep=N2 && jobStatus=failed 뿐, LOCAL_JUDGE_FAILED 부분 제외는 N3 정상 전환
+// - N2 → N3 만 완료 표시, N2 → N1 은 완료 표시 없이 이동
 // ─────────────────────────────────────────────────────────────────
 
 type StageStatus = 'pending' | 'running' | 'done' | 'failed';
@@ -102,6 +104,8 @@ async function setup(page: Page, script: unknown[]) {
 }
 
 const detailLog = (page: Page) => page.evaluate(() => (window as unknown as { __detailLog: string[] }).__detailLog);
+const rowsLog = (page: Page) => page.evaluate(() => (window as unknown as { __rowsLog: Record<string, string>[] }).__rowsLog);
+const allDone = (s: Record<string, string>) => ['01', '02', '03', '04', '05'].every((no) => s[no] === '완료');
 const fiveStepRows = (page: Page) => page.locator('p').filter({ hasText: /^0[1-5]\s/ });
 
 /** 순서대로 나타났는지(사이에 다른 상태가 끼어도 된다) */
@@ -209,5 +213,124 @@ test.describe('N2 analysisProgress 상세 진행', () => {
     await expect(page.getByTestId('n2-detail-regions')).toHaveCount(0);
     // regionCountInSource=null 을 0개로 보이지 않는다
     for (const t of await detailLog(page)) expect(t).not.toMatch(/(^|\s)0개/);
+  });
+
+  test('F. LOCAL_JUDGE_FAILED 로 failedCount>0·section failed·progress<1 이어도 실패가 아니고 N3 로 정상 전환한다', async ({ page }) => {
+    const judgeItems = [
+      item(9001, 'ocr', 'job', 'done'),
+      item(9002, 'section', 'section', 'done'),
+      item(9004, 'section', 'section', 'failed', 'LOCAL_JUDGE_FAILED'),
+      item(9005, 'section', 'section', 'running'),
+    ];
+    const judging = {
+      progress: 0.5,
+      stages: stages('done', 'failed', 'pending'),
+      items: judgeItems,
+      analysisProgress: judgePhase('running', { total: 5, done: 2, excluded: 1, running: 1, waiting: 1, retrying: 0, failed: 0, cancelled: 0 }),
+    };
+    const responses = await setup(page, [
+      judging,
+      judging,
+      judging,
+      judging,
+      // N3 전환(OpenAPI JobTasksN3AfterPartialExclusion) — analysisProgress 는 생략된다
+      {
+        progress: 0.83,
+        stages: stages('done', 'failed', 'done'),
+        items: judgeItems.map((i) => (i.status === 'running' ? { ...i, status: 'done', uiStatus: 'done' } : i)),
+        advance: true,
+      },
+    ]);
+
+    await expect(page.getByTestId('n2-detail-judge')).toContainText('자동 제외 1');
+    // 부분 실패 안내는 "일부 항목" 문구다 — 전체 실패 표시가 아니다
+    await expect(page.getByText('일부 항목을 처리하지 못했습니다')).toBeVisible();
+    await expect(page.getByText('분석 실패', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('이미지 분석에 실패했습니다')).toHaveCount(0);
+
+    await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 25_000 });
+    const last = responses.at(-1)!;
+    expect(last.currentStep).toBe('N3');
+    expect(last.hasAnalysisProgress).toBe(false);
+    expect(responses.some((r) => r.jobStatus === 'failed')).toBe(false);
+  });
+
+  test('G. 전체 분석 실패는 currentStep=N2 && jobStatus=failed 로만 보이고 폴링을 멈춘다', async ({ page }) => {
+    const responses = await setup(page, [
+      analyzingTick(analyze('running', 'ocr', { sourceIndex: 1, sourceImageId: 701, regionIndex: 1, regionCountInSource: 3 }, { done: 0, known: 3, totalFixed: false })),
+      // OpenAPI JobTasksN2JudgeFailed — progress 0.75·stages.ocr=done 이어도 jobStatus=failed 면 실패
+      {
+        progress: 0.75,
+        stages: stages('done', 'failed', 'pending'),
+        items: [
+          item(9001, 'ocr', 'job', 'done'),
+          item(9002, 'section', 'section', 'done'),
+          item(9104, 'section', 'section', 'failed', 'REGULATORY_JUDGE_FAILED'),
+        ],
+        analysisProgress: judgePhase('failed', { total: 5, done: 2, excluded: 0, running: 0, waiting: 0, retrying: 0, failed: 1, cancelled: 2 }),
+        fail: true,
+      },
+    ]);
+
+    await expect(page.getByText('분석 실패', { exact: true }).first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('이미지 분석에 실패했습니다')).toBeVisible();
+    await expect(page.getByText('이미지 분석을 완료하지 못했습니다.', { exact: true }).first()).toBeVisible();
+    await expect(page.getByText('상세페이지의 구조와 문맥을 읽고 있습니다.')).toHaveCount(0);
+    await expect(page.getByText('분석을 완료하지 못해 다음 단계로 자동 이동하지 않습니다.')).toBeVisible();
+    await expect(page.getByText('분석이 끝나면 섹션 확인 단계로 자동 이동합니다.')).toHaveCount(0);
+    // 서버가 준 판정 실패 값은 그대로 보인다
+    await expect(page.getByTestId('n2-detail-judge')).toContainText('실패 1 · 취소 2');
+    // 화면은 N2 그대로(서버 currentStep 정본)
+    await expect(page.getByRole('heading', { name: '이미지 분석' })).toBeVisible();
+
+    const failedAt = responses.findIndex((r) => r.jobStatus === 'failed');
+    expect(failedAt).toBeGreaterThanOrEqual(0);
+    expect(responses[failedAt].currentStep).toBe('N2');
+    const countAtFailure = responses.length;
+    await page.waitForTimeout(5_000);
+    expect(responses.length, '실패 응답 뒤 추가 polling 없음').toBe(countAtFailure);
+  });
+
+  test('H. analysisProgress 를 보이다 N3 로 넘어가면 600ms 완료 표시를 거쳐 N3 로 이동한다', async ({ page }) => {
+    const judging = {
+      progress: 0.5,
+      stages: stages('done', 'running', 'pending'),
+      items: [item(9001, 'ocr', 'job', 'done'), item(9002, 'section', 'section', 'running')],
+      analysisProgress: judgePhase('running', { total: 3, done: 1, excluded: 0, running: 1, waiting: 1, retrying: 0, failed: 0, cancelled: 0 }),
+    };
+    // mock N2 최소 체류(7초)가 지난 뒤에 N3 응답이 오도록 poll 수를 잡는다
+    const responses = await setup(page, [
+      judging,
+      judging,
+      judging,
+      judging,
+      judging,
+      { progress: 1, stages: stages('done', 'done', 'done'), items: [item(9001, 'ocr', 'job', 'done')], advance: true },
+    ]);
+
+    await expect(page.getByTestId('n2-analysis-detail')).toBeVisible();
+    await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 25_000 });
+    expect(responses.at(-1)?.currentStep).toBe('N3');
+    // 마지막 poll 에 analysisProgress 가 없어도 N3 전환이면 완료 표시(5단계 전부 완료)를 한 번 그린다
+    const rows = await rowsLog(page);
+    expect(rows.length, JSON.stringify(rows)).toBeGreaterThan(0);
+    expect(rows.every(allDone), JSON.stringify(rows)).toBe(true);
+  });
+
+  test('I. analysisProgress 를 보이다 N1 로 돌아가면 완료 표시 없이 바로 N1 로 이동한다', async ({ page }) => {
+    const responses = await setup(page, [
+      analyzingTick(analyze('running', 'ocr', { sourceIndex: 1, sourceImageId: 701, regionIndex: 1, regionCountInSource: 2 }, { done: 0, known: 2, totalFixed: false })),
+      analyzingTick(analyze('running', 'merge', { sourceIndex: 1, sourceImageId: 701, regionIndex: 1, regionCountInSource: 2 }, { done: 0, known: 2, totalFixed: false })),
+      { ...analyzingTick(analyze('running', 'merge', { sourceIndex: 1, sourceImageId: 701, regionIndex: 1, regionCountInSource: 2 }, null)), advance: true, advanceTo: 'N1' },
+    ]);
+
+    await expect(page.getByTestId('n2-analysis-detail')).toBeVisible();
+    const n1Header = page.locator('header', { has: page.getByRole('link', { name: '← 뒤로' }) });
+    await expect(n1Header).toBeVisible({ timeout: 8_000 });
+    await expect(n1Header).toContainText('정보 입력');
+    expect(responses.some((r) => r.currentStep === 'N1')).toBe(true);
+    expect(responses.some((r) => r.currentStep === 'N3')).toBe(false);
+    // 완료 표시(5단계 행)를 한 번도 그리지 않았다
+    expect(await rowsLog(page)).toEqual([]);
   });
 });

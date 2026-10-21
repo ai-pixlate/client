@@ -49,6 +49,9 @@ import { ProcessingStageLayout, type ProcessingStep } from './processing/process
 const HEADLINE_FALLBACK = '상세페이지의 구조와 문맥을 읽고 있습니다.';
 const AUTO_ADVANCE_NOTICE = '분석이 끝나면 섹션 확인 단계로 자동 이동합니다.';
 const PAUSE_BUTTON_TITLE = '분석 중단 기능은 아직 제공되지 않습니다.';
+const FAILED_HEADLINE = '이미지 분석을 완료하지 못했습니다.';
+const FAILED_NOTICE = '분석을 완료하지 못해 다음 단계로 자동 이동하지 않습니다.';
+const FAILED_CAPTION = { title: '분석 실패', description: '이미지 분석을 완료하지 못했습니다.' };
 
 const FIVE_STEP_META: { no: string; label: string }[] = [
   { no: '01', label: '전체 텍스트 인식' },
@@ -274,8 +277,15 @@ export function N2AnalysisView({
   status,
   progressOverride,
   isCompleted = false,
+  isFailed = false,
 }: {
   status: ApiJobTaskStatus;
+  /**
+   * N2 전체 분석 실패(currentStep=N2 && jobStatus=failed) — page.tsx 가 그 조건으로만 넘긴다.
+   * failedCount·stages.section=failed·progress<1·analysisProgress.status=failed 만으로는 true 가 아니다
+   * (LOCAL_JUDGE_FAILED 는 그 영역만 제외하고 N3 로 넘어갈 수 있다).
+   */
+  isFailed?: boolean;
   /**
    * 서버가 이미 N2 를 끝냈다(currentStep 이 N2 를 벗어났다)는 뜻 — page.tsx 가 다음 화면으로
    * 넘어가기 직전 짧게 완료 상태를 보여 줄 때만 true 로 넘긴다. 5단계 전부를 완료로 그린다.
@@ -293,7 +303,11 @@ export function N2AnalysisView({
   const steps = buildFiveSteps(FIVE_STEP_STATES_BY_COARSE_STAGE[coarseStage]);
   // 완료 표시(isCompleted)는 N3 응답으로 그린다 — 그 응답엔 analysisProgress 가 없어 기존 5단계 완료로 그린다.
   const detail = isCompleted ? undefined : status.analysisProgress;
-  const caption = detail ? resolveDetailCaption(detail) : resolveOverlayCaption(coarseStage);
+  const caption = isFailed
+    ? FAILED_CAPTION
+    : detail
+      ? resolveDetailCaption(detail)
+      : resolveOverlayCaption(coarseStage);
   const progressPercent = Math.round((progressOverride ?? status.progress ?? 0) * 100);
   const failedItems = (status.items ?? []).filter((i) => i.status === 'failed');
 
@@ -304,11 +318,11 @@ export function N2AnalysisView({
         title: '이미지 분석',
         description: '등록한 이미지의 텍스트와 구조를 분석하고 있습니다.',
       }}
-      statusTagLabel="진행중"
+      statusTagLabel={isFailed ? '분석 실패' : '진행중'}
       visual={{
         // 공용 GIF — N2/N4가 같은 자산을 쓴다(별도 복사본 금지).
         src: '/process/ai-processing.gif',
-        headline: HEADLINE_FALLBACK,
+        headline: isFailed ? FAILED_HEADLINE : HEADLINE_FALLBACK,
         description: '텍스트만 추출하지 않고, 번역에 필요한 섹션과 판단 근거를 함께 정리합니다.',
         overlayTopLabel: 'SCAN  ·  STRUCTURE  ·  CONTEXT',
         overlayBottomTitle: caption.title,
@@ -322,9 +336,10 @@ export function N2AnalysisView({
       steps={steps}
       stepsReplacement={detail ? <N2AnalysisDetail detail={detail} /> : undefined}
       progressPercent={progressPercent}
-      progressHint={AUTO_ADVANCE_NOTICE}
+      progressHint={isFailed ? FAILED_NOTICE : AUTO_ADVANCE_NOTICE}
       pauseButtonTitle={PAUSE_BUTTON_TITLE}
       failedItems={failedItems}
+      failedItemsTitle={isFailed ? '이미지 분석에 실패했습니다' : undefined}
     />
   );
 }
