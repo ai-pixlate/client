@@ -26,6 +26,8 @@ import { N6ResultView } from './_components/n6-result-view';
 // 이미 다음 단계로 넘어갔어도(task 완료) 이 시간 전에는 화면을 넘기지
 // 않고, 반대로 서버가 7초보다 오래 걸리면 기존처럼 task 완료 시점까지
 // 그대로 기다린다 — 즉 "task 완료"와 "최소 체류 충족" 둘 다 필요하다.
+// 여기서 "task 완료"는 정상 완료(currentStep=N3)만 뜻한다. N1 복귀 같은
+// 다른 전환은 붙잡지 않고 바로 반영한다.
 // 실서버/mock 비활성 환경에서는 이 게이트를 아예 타지 않는다(기존 동작
 // 그대로). polling 주기(2초)나 mock의 task 완료 로직 자체는 건드리지
 // 않는다.
@@ -39,8 +41,9 @@ const N2_MOCK_MIN_DWELL_MS = 7000;
 // 직전 poll 이 아직 앞 단계(예: 02·03 진행 중)였을 때 화면 5단계 중 뒤쪽 항목(04·05)은 진행
 // 중으로도 완료로도 한 번도 그려지지 않은 채 N3 로 넘어간다(2초 polling 사이에 끝나는 stage 는
 // 화면에 남지 않는다). 그래서 N2 가 화면에 떠 있었고 마지막으로 그린 상태가 "전부 완료"가
-// 아니었다면, 서버가 N2 를 벗어난 응답을 받은 뒤 그 응답 그대로 5단계 완료 상태를 한 번 짧게
-// 보여 주고 다음 화면으로 넘어간다. 서버가 이미 N2 완료를 알린 뒤의 표시라 처리되지 않은 일을
+// 아니었다면, 서버가 N3 로 넘어간 응답을 받은 뒤 그 응답 그대로 5단계 완료 상태를 한 번 짧게
+// 보여 주고 N3 로 넘어간다. 정상 완료는 N2 → N3 전환뿐이라, N1 복귀 등 다른 step 으로 나가는
+// 경우에는 완료 상태를 만들지 않고 바로 이동한다. 서버가 이미 N2 완료를 알린 뒤의 표시라 처리되지 않은 일을
 // 완료라고 보여 주지 않는다. 이 시점에 "진행 중" 상태를 새로 만들지 않는다 — 건너뛴 항목은
 // 대기 → 완료로 바로 바뀐다. currentStep 정본, polling, task 상태는 바꾸지 않는다.
 //
@@ -104,11 +107,11 @@ export default function Page({
     return () => clearTimeout(timer);
   }, [n2EnteredAt]);
 
-  // task는 끝났지만(rawCurrentStep이 N2를 벗어남) 최소 체류 시간이 아직
+  // task는 끝났지만(rawCurrentStep이 N3로 넘어감) 최소 체류 시간이 아직
   // 안 지났으면 N2 화면을 그대로 유지한다. 두 조건이 모두 만족되면(=
   // n2DwellElapsed) 실제 서버 상태를 그대로 반영한다.
   const currentStep =
-    IS_MOCK_ENABLED && n2EnteredAt !== null && !n2DwellElapsed && rawCurrentStep !== 'N2'
+    IS_MOCK_ENABLED && n2EnteredAt !== null && !n2DwellElapsed && rawCurrentStep === 'N3'
       ? 'N2'
       : rawCurrentStep;
 
@@ -135,7 +138,7 @@ export default function Page({
   let mockN2Progress: number | undefined;
   if (IS_MOCK_ENABLED && n2EnteredAt !== null) {
     const elapsedRatio = Math.min(1, (Date.now() - n2EnteredAt) / N2_MOCK_MIN_DWELL_MS);
-    const serverCompleted = rawCurrentStep !== 'N2';
+    const serverCompleted = rawCurrentStep === 'N3';
     // 서버가 끝났고 7초도 다 찼을 때만 100% — 그 전에는 어느 쪽이든
     // 99%에서 멈춰 기다린다("100%인데 화면이 안 넘어가는 상태" 방지).
     mockN2Progress = serverCompleted && elapsedRatio >= 1 ? 1 : Math.min(0.99, elapsedRatio);
@@ -148,7 +151,7 @@ export default function Page({
   const [n2CompletionStatus, setN2CompletionStatus] = useState<ApiJobTaskStatus | null>(null);
   if (currentStep !== shownStep) {
     setShownStep(currentStep);
-    if (shownStep === 'N2' && currentStep && currentStep !== 'N2' && tasksQuery.data && !lastN2ShownDone) {
+    if (shownStep === 'N2' && currentStep === 'N3' && tasksQuery.data && !lastN2ShownDone) {
       setN2CompletionStatus(tasksQuery.data);
     }
   }

@@ -99,3 +99,83 @@ test('N2 마지막 stage 가 끝나자마자 currentStep=N3 가 와도 04·05 �
     for (let i = 1; i < seq.length; i += 1) expect(seq[i], `${no}: ${sequenceOf(no).join(' → ')}`).toBeGreaterThan(seq[i - 1]);
   }
 });
+
+/** N2 중간(02·03 진행 중)에 서버가 currentStep=N1 로 돌려보내는 중단/복귀 응답. */
+const SCRIPT_RETURNING_TO_N1 = [
+  { progress: 0, stages: [stage('ocr', 'running'), stage('section', 'pending'), stage('verify', 'pending')] },
+  { progress: 0.34, stages: [stage('ocr', 'done'), stage('section', 'running'), stage('verify', 'pending')] },
+  {
+    progress: 0.34,
+    stages: [stage('ocr', 'done'), stage('section', 'running'), stage('verify', 'pending')],
+    advance: true,
+    advanceTo: 'N1',
+  },
+];
+
+test('N2 에서 currentStep=N1 로 돌아가면 5단계 완료 표시와 600ms 체류 없이 바로 N1 로 이동한다', async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.addInitScript((script) => {
+    (globalThis as Record<string, unknown>).__pixlateMockN2Script = script;
+  }, SCRIPT_RETURNING_TO_N1);
+  await installStepRecorder(page);
+  // N1 응답을 받은 시각과 N2 화면(5단계 행)이 사라진 시각을 같은 페이지 시계로 기록한다
+  await page.addInitScript(() => {
+    const w = window as unknown as { __n1ResponseAt?: number; __n2GoneAt?: number };
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = async (...args) => {
+      const res = await originalFetch(...args);
+      const url = typeof args[0] === 'string' ? args[0] : args[0] instanceof URL ? args[0].href : args[0].url;
+      if (w.__n1ResponseAt === undefined && /\/jobs\/[^/]+\/tasks(\?|$)/.test(url)) {
+        const body = await res.clone().json().catch(() => null);
+        if (body?.currentStep === 'N1') w.__n1ResponseAt = performance.now();
+      }
+      return res;
+    };
+    const start = () =>
+      new MutationObserver(() => {
+        if (w.__n1ResponseAt === undefined || w.__n2GoneAt !== undefined) return;
+        const hasN2Rows = Array.from(document.querySelectorAll('p')).some((p) => /^0[1-5]\s/.test(p.textContent ?? ''));
+        if (!hasN2Rows) w.__n2GoneAt = performance.now();
+      }).observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+    else start();
+  });
+
+  const steps: string[] = [];
+  page.on('response', async (res) => {
+    if (res.request().method() === 'GET' && new URL(res.url()).pathname === `/jobs/${MOCK_JOB_ID}/tasks`) {
+      const body = await res.json().catch(() => null);
+      if (body?.currentStep) steps.push(body.currentStep);
+    }
+  });
+
+  await page.goto(`/jobs/${MOCK_JOB_ID}`);
+  await expect(page.getByRole('heading', { name: '이미지 분석' })).toBeVisible({ timeout: 15_000 });
+
+  // 최종 화면은 서버 정본(currentStep=N1)대로 N1 — mock N2 최소 체류(7초)에도 붙잡히지 않는다
+  // (N2 의 StepNav 에도 "정보 입력"이 있으므로 N1 일 때만 그리는 페이지 공통 헤더로 확인한다)
+  const n1Header = page.locator('header', { has: page.getByRole('link', { name: '← 뒤로' }) });
+  await expect(n1Header).toBeVisible({ timeout: 6_000 });
+  await expect(n1Header).toContainText('N1');
+  await expect(n1Header).toContainText('정보 입력');
+  await expect(page.getByRole('heading', { name: '이미지 분석' })).toBeHidden();
+  expect(steps).toContain('N1');
+  expect(steps).not.toContain('N3');
+
+  const timing = await page.evaluate(() => {
+    const w = window as unknown as { __n1ResponseAt?: number; __n2GoneAt?: number };
+    return { n1ResponseAt: w.__n1ResponseAt, n2GoneAt: w.__n2GoneAt };
+  });
+  expect(timing.n1ResponseAt, 'N1 응답 수신 기록').toBeDefined();
+  expect(timing.n2GoneAt, 'N2 화면 해제 기록').toBeDefined();
+  // 600ms 성공 완료 체류를 거치지 않는다
+  expect(timing.n2GoneAt! - timing.n1ResponseAt!).toBeLessThan(600);
+
+  const log = await page.evaluate(() => (window as unknown as { __n2StepLog: Record<string, string>[] }).__n2StepLog);
+  // 5단계 전체 완료 presentation 이 한 번도 그려지지 않았다
+  const allDone = (s: Record<string, string>) => ['01', '02', '03', '04', '05'].every((no) => s[no] === '완료');
+  expect(log.length).toBeGreaterThan(0);
+  expect(log.some(allDone), JSON.stringify(log)).toBe(false);
+  // 서버가 끝내지 않은 04·05 는 완료로 바뀌지 않았다
+  expect(log.some((s) => s['04'] === '완료' || s['05'] === '완료'), JSON.stringify(log)).toBe(false);
+});

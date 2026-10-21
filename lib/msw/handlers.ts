@@ -341,7 +341,8 @@ type MockJobProcessingTick = {
  * e2e 전용 — 이 값(배열)이 있으면 N2 poll 마다 앞에서 하나씩 꺼내 그대로 응답한다.
  * stage key·순서는 테스트가 정한다(mock 은 어떤 key 도 가정하지 않는다). `advance: true`
  * 인 항목을 응답하는 poll 에서 job 을 N3 로 넘긴다 — 서버가 마지막 stage 를 끝내자마자
- * currentStep=N3 를 돌려주는 상황을 재현하기 위한 것이다.
+ * currentStep=N3 를 돌려주는 상황을 재현하기 위한 것이다. `advanceTo: 'N1'` 이면 같은 poll 에서
+ * job 을 N1(draft)로 돌려 N2 중단 복귀를 재현한다(생략 시 N3).
  */
 const MOCK_N2_SCRIPT_FLAG = '__pixlateMockN2Script';
 
@@ -349,6 +350,7 @@ type MockN2ScriptTick = {
   progress: number;
   stages: { key: string; label: string; status: 'pending' | 'running' | 'done' | 'failed' }[];
   advance?: boolean;
+  advanceTo?: 'N1' | 'N3';
 };
 
 function takeN2ScriptTick(): MockN2ScriptTick | null {
@@ -362,12 +364,15 @@ function advanceN2Processing(): MockJobProcessingTick {
   if (scripted) {
     if (scripted.advance) {
       (globalThis as Record<string, unknown>)[MOCK_N2_SCRIPT_FLAG] = undefined;
-      jobState = {
-        ...jobState,
-        currentStep: N2_PROCESSING_STAGE.next,
-        userFacingStatus: N2_PROCESSING_STAGE.nextUserFacingStatus,
-        status: 'review',
-      };
+      jobState =
+        scripted.advanceTo === 'N1'
+          ? { ...jobState, currentStep: 'N1', userFacingStatus: 'draft', status: 'draft' }
+          : {
+              ...jobState,
+              currentStep: N2_PROCESSING_STAGE.next,
+              userFacingStatus: N2_PROCESSING_STAGE.nextUserFacingStatus,
+              status: 'review',
+            };
       jobProcessingPollCount = 0;
     }
     return { progress: scripted.progress, total: scripted.stages.length, done: 0, stages: scripted.stages };
