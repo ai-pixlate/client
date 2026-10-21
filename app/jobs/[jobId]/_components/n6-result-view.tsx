@@ -326,12 +326,16 @@ const ARTIFACT_DESC: Record<string, string> = {
 // 실제 component.type 값을 그대로 쓴다(아래 ExportPanel 정렬 로직 참고).
 const ARTIFACT_DISPLAY_ORDER = ['images', 'html', 'csv', 'psd'];
 
-// 9/23 재정합 — N6 진입 기본 선택을 images/ + HTML로 바꿨다(이전 images/ +
-// content.csv). 이 Set 하나가 ExportPanel의 checkbox/개수 summary/"한 번에
+// N6 진입 기본 선택은 images/ + content.csv다(PM 확정 — HTML/PSD는 1.0.0에서
+// 제공하지 않아 기본 선택에서 뺀다). 이 Set 하나가 ExportPanel의 checkbox/개수 summary/"한 번에
 // 내려받기" 대상/handleExport 페이로드까지 전부 공유하는 단일 SSOT다(아래
 // ExportPanel의 `selected` state 초기값으로만 쓰이고, 파생값은 전부 그
 // state에서 다시 계산한다) — 화면 표시만 바꾸는 별도 상수를 추가하지 않는다.
-const DEFAULT_SELECTED_TYPES = new Set(['images', 'html']);
+const DEFAULT_SELECTED_TYPES = new Set(['images', 'csv']);
+
+// HTML/PSD는 1.0.0에서 제공하지 않는다(PM 확정) — 체크박스 비활성, 행 우측에 "12월 제공 예정"만
+// 표시하고 개별 다운로드 컨트롤을 렌더하지 않는다. backend export 계약(csv/images)은 그대로다.
+const COMING_SOON_TYPES = new Set(['html', 'psd']);
 
 /** Figma Checkbox(28:77) — checked(white+orange border)/unchecked(white+gray border)/disabled(gray fill) 3종. */
 function ArtifactCheckbox({
@@ -375,7 +379,7 @@ function ArtifactCheckbox({
  * 만든 뒤 응답 artifactId 로 GET /jobs/{jobId}/exports/{artifactId}/download 를 부른다
  * (계약상 타입별 다운로드는 이미 만든 구성요소만 돌려줘서, 내보내기 전에는 404였다).
  * 아래 "선택 항목 내보내기"(묶음)와 별개 흐름이라, 행마다 독립된 mutation을 갖는다.
- * PSD는 이 컨트롤 자체를 렌더하지 않는다(항상 disabled, 호출 자체가 없다).
+ * HTML/PSD는 이 컨트롤 자체를 렌더하지 않는다(항상 disabled, 호출 자체가 없다).
  */
 function ArtifactRow({
   jobId,
@@ -389,8 +393,8 @@ function ArtifactRow({
   onToggle: () => void;
 }) {
   const type = component.type ?? 'unknown';
-  const isPsd = type === 'psd';
-  const disabled = isPsd || !component.isActive;
+  const isComingSoon = COMING_SOON_TYPES.has(type);
+  const disabled = isComingSoon || !component.isActive;
   const label = ARTIFACT_LABEL[type] ?? type;
   const desc = ARTIFACT_DESC[type] ?? '';
 
@@ -426,7 +430,7 @@ function ArtifactRow({
             </span>
           </label>
 
-          {isPsd ? (
+          {isComingSoon ? (
             <span className="w-[94px] shrink-0 text-[12px] font-light tracking-[-0.04em] text-[#999]">12월 제공 예정</span>
           ) : downloadMutation.data ? (
             <a
