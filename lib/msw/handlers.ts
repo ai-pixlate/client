@@ -295,6 +295,12 @@ export const MOCK_EXPORT_FAIL_ONCE_FLAG = '__pixlateMockExportFailOnce';
 export const MOCK_EXPORT_NO_ARTIFACT_ID_ONCE_FLAG = '__pixlateMockExportNoArtifactIdOnce';
 /** e2e 전용 — 다음 GET /exports/:artifactId/download 한 번이 404 로 실패한다. */
 export const MOCK_EXPORT_DOWNLOAD_NOT_FOUND_ONCE_FLAG = '__pixlateMockExportDownloadNotFoundOnce';
+/**
+ * e2e 전용 — 다음 presigned 파일 GET(/mock/download/...) 한 번이 네트워크 오류로 끝난다.
+ * 실제 환경에서 S3 CORS 가 막혀 FE fetch 가 실패하는 경우를 흉내 낸다(브라우저는 CORS 실패를
+ * 네트워크 오류(TypeError)로만 알려 준다).
+ */
+export const MOCK_PRESIGNED_FETCH_FAIL_ONCE_FLAG = '__pixlateMockPresignedFetchFailOnce';
 /** BE release/1.0.0 에서 POST /export 가 만드는 구성요소. html·psd 가 섞이면 아무것도 만들지 않고 400 이다. */
 const N6_EXPORTABLE_COMPONENTS = ['csv', 'images'];
 
@@ -321,12 +327,57 @@ const N2_PROCESSING_STAGE = {
   nextUserFacingStatus: 'section_review' as const,
 };
 
-function advanceN2Processing(): {
+/** N2/N4 job 단계 진행 mock 이 GET /tasks 에 돌려주는 한 번의 진행 값. */
+type MockJobProcessingTick = {
   progress: number;
   total: number;
   done: number;
-  stages: { key: string; label: string; status: 'running' | 'done' }[];
-} {
+  stages: { key: string; label: string; status: 'pending' | 'running' | 'done' | 'failed' }[];
+  /** 실패 시나리오 flag 에서만 채운다 — 정상 흐름은 항상 비어 있다. */
+  items?: ApiJobAsyncTaskItem[];
+};
+
+/**
+ * e2e 전용 — 이 값(배열)이 있으면 N2 poll 마다 앞에서 하나씩 꺼내 그대로 응답한다.
+ * stage key·순서는 테스트가 정한다(mock 은 어떤 key 도 가정하지 않는다). `advance: true`
+ * 인 항목을 응답하는 poll 에서 job 을 N3 로 넘긴다 — 서버가 마지막 stage 를 끝내자마자
+ * currentStep=N3 를 돌려주는 상황을 재현하기 위한 것이다. `advanceTo: 'N1'` 이면 같은 poll 에서
+ * job 을 N1(draft)로 돌려 N2 중단 복귀를 재현한다(생략 시 N3).
+ */
+const MOCK_N2_SCRIPT_FLAG = '__pixlateMockN2Script';
+
+type MockN2ScriptTick = {
+  progress: number;
+  stages: { key: string; label: string; status: 'pending' | 'running' | 'done' | 'failed' }[];
+  advance?: boolean;
+  advanceTo?: 'N1' | 'N3';
+};
+
+function takeN2ScriptTick(): MockN2ScriptTick | null {
+  const script = (globalThis as Record<string, unknown>)[MOCK_N2_SCRIPT_FLAG];
+  if (!Array.isArray(script) || script.length === 0) return null;
+  return (script.length > 1 ? script.shift() : script[0]) as MockN2ScriptTick;
+}
+
+function advanceN2Processing(): MockJobProcessingTick {
+  const scripted = takeN2ScriptTick();
+  if (scripted) {
+    if (scripted.advance) {
+      (globalThis as Record<string, unknown>)[MOCK_N2_SCRIPT_FLAG] = undefined;
+      jobState =
+        scripted.advanceTo === 'N1'
+          ? { ...jobState, currentStep: 'N1', userFacingStatus: 'draft', status: 'draft' }
+          : {
+              ...jobState,
+              currentStep: N2_PROCESSING_STAGE.next,
+              userFacingStatus: N2_PROCESSING_STAGE.nextUserFacingStatus,
+              status: 'review',
+            };
+      jobProcessingPollCount = 0;
+    }
+    return { progress: scripted.progress, total: scripted.stages.length, done: 0, stages: scripted.stages };
+  }
+
   jobProcessingPollCount += 1;
 
   if (jobProcessingPollCount < 2) {
@@ -380,14 +431,55 @@ const N4_POLL_SCHEDULE: { stageIndex: number; status: 'running' | 'done'; progre
   { stageIndex: 3, status: 'done', progress: 1 }, // render 완료 → N5로 전환
 ];
 
-function advanceN4Processing(): {
-  progress: number;
-  total: number;
-  done: number;
-  stages: { key: string; label: string; status: 'running' | 'done' }[];
-} {
+/** e2e 전용 — 켜져 있으면 N4 의 현재 stage 를 failed 로 돌려주고 진행을 멈춘다. */
+const MOCK_N4_FAIL_FLAG = '__pixlateMockN4Fail';
+
+/**
+ * e2e 전용 — render 후반부(progress 0.9, 화면 05)를 보낸 다음 poll 한 번만 progress 를 0.8 로
+ * 되돌린다(render 는 계속 running). 서버 top-level progress 가 내려갈 때 화면 단계가 05 → 04 로
+ * 돌아가지 않는지 확인하기 위한 값이다.
+ */
+const MOCK_N4_PROGRESS_DROP_ONCE_FLAG = '__pixlateMockN4ProgressDropOnce';
+
+function mockFailedJobTaskItem(taskType: ApiJobAsyncTaskItem['taskType'], errorCode: string): ApiJobAsyncTaskItem {
+  return {
+    taskId: 9001,
+    taskType,
+    unitType: 'job',
+    unitId: jobState.id,
+    status: 'failed',
+    uiStatus: 'failed',
+    retryCount: 3,
+    maxRetry: 3,
+    retryable: false,
+    errorCode,
+    revision: null,
+  };
+}
+
+function advanceN4Processing(): MockJobProcessingTick {
   const tick = N4_POLL_SCHEDULE[Math.min(n4PollIndex, N4_POLL_SCHEDULE.length - 1)];
   const stageMeta = N4_PROCESSING_STAGES[tick.stageIndex];
+
+  if (n4PollIndex === N4_POLL_SCHEDULE.length - 1 && takeMockFlag(MOCK_N4_PROGRESS_DROP_ONCE_FLAG)) {
+    return {
+      progress: 0.8,
+      total: N4_PROCESSING_STAGES.length,
+      done: tick.stageIndex,
+      stages: [{ ...N4_PROCESSING_STAGES[3], status: 'running' }],
+    };
+  }
+
+  if ((globalThis as Record<string, unknown>)[MOCK_N4_FAIL_FLAG]) {
+    // 진행을 멈추고(n4PollIndex 그대로) 현재 stage 를 failed 로 보고한다.
+    return {
+      progress: tick.progress,
+      total: N4_PROCESSING_STAGES.length,
+      done: tick.stageIndex,
+      stages: [{ ...stageMeta, status: 'failed' }],
+      items: [mockFailedJobTaskItem(stageMeta.key as ApiJobAsyncTaskItem['taskType'], 'MOCK_STAGE_FAILED')],
+    };
+  }
   const isLastTick = n4PollIndex >= N4_POLL_SCHEDULE.length - 1;
 
   n4PollIndex += 1;
@@ -407,12 +499,7 @@ function advanceN4Processing(): {
   };
 }
 
-function advanceJobProcessing(): {
-  progress: number;
-  total: number;
-  done: number;
-  stages: { key: string; label: string; status: 'running' | 'done' }[];
-} {
+function advanceJobProcessing(): MockJobProcessingTick {
   const step = jobState.currentStep;
   if (step === 'N2') return advanceN2Processing();
   if (step === 'N4') return advanceN4Processing();
@@ -931,6 +1018,8 @@ export const handlers = [
     }
 
     const jobProgress = advanceJobProcessing();
+    // 실패 시나리오 flag 가 켜졌을 때만 job 단계 실패 item 이 붙는다(정상 흐름은 빈 배열).
+    const jobFailedItems = jobProgress.items ?? [];
     // n6 render item(job 단위)과 n5 rerender item(block 단위) 둘 다 여기 속한다
     // — N2/N4 job 단계 진행(advanceJobProcessing)과는 별도 진행률 소스라 있으면
     // 이쪽을 우선한다(과거 이름 hasN5Items를 오늘 N6 항목도 포함하도록 재사용).
@@ -943,9 +1032,9 @@ export const handlers = [
       progress: hasTaskItems ? items.filter((i) => i.status === 'done').length / items.length : jobProgress.progress,
       total: hasTaskItems ? items.length : jobProgress.total,
       done: hasTaskItems ? items.filter((i) => i.status === 'done').length : jobProgress.done,
-      failedCount: items.filter((i) => i.status === 'failed').length,
+      failedCount: items.filter((i) => i.status === 'failed').length + jobFailedItems.length,
       stages: jobProgress.stages,
-      items,
+      items: [...items, ...jobFailedItems],
     });
   }),
 
@@ -1188,5 +1277,17 @@ export const handlers = [
       savedAt: new Date().toISOString(),
     };
     return HttpResponse.json(card);
+  }),
+
+  // ──────────────────────────────────────────
+  // presigned 다운로드 URL(mock) — 실제로는 S3 객체다. 위 download 응답의 url 이 이 경로를
+  // 가리킨다. N6 폴더 직접 저장(FE fetch)을 mock 에서 확인할 수 있도록 작은 더미 바이트를
+  // 돌려준다(실제 zip/csv 내용 아님). <a href> 다운로드도 같은 응답을 받는다.
+  // ──────────────────────────────────────────
+  http.get('/mock/download/:fileName', ({ params }) => {
+    if (takeMockFlag(MOCK_PRESIGNED_FETCH_FAIL_ONCE_FLAG)) return HttpResponse.error();
+    const fileName = params.fileName as string;
+    const contentType = fileName.endsWith('.csv') ? 'text/csv' : 'application/zip';
+    return new HttpResponse(`pixlate mock artifact: ${fileName}`, { headers: { 'Content-Type': contentType } });
   }),
 ];

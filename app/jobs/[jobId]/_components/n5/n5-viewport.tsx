@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import type { BlockViewModel, PreviewSectionViewModel, PreviewViewModel } from '@/lib/n5/adapter';
-import { getBlockDisplayRect, type DisplayRect } from '@/lib/n5/coordinates';
+import { getBlockDisplayRect, getBlockHitRect, type DisplayRect } from '@/lib/n5/coordinates';
 import {
   ZOOM_BUTTON_STEP,
   computeWheelZoomFactor,
@@ -58,6 +58,19 @@ import { ZoomControls, FitControls, PlacementToolbar } from './n5-toolbar';
 // section 배경(태그가 없는 빈 영역)을 클릭하면 그 section만 선택한다(block
 // 선택은 해제). block hitbox는 stopPropagation으로 이 section 클릭과 분리한다
 // (선택·제외 조작이 서로 충돌하지 않게 — CLAUDE.md 클릭 영역 분리 원칙).
+//
+// 10/19 — block 클릭 영역 확대. 이전엔 클릭 영역이 OCR bbox × scale과 같아서
+// 글씨가 작거나 축소해서 볼 때 여러 번 눌러야 선택됐다. 이제 block마다 두
+// 사각형을 따로 둔다.
+// - visual rect: bbox 그대로(선택 테두리, keyboard focus, 기존 testid).
+// - hit rect: 화면 기준 8px 바깥 여백 + 최소 32px. 보이지 않는 클릭 전용 층이다
+//   (lib/n5/coordinates.ts getBlockHitRect, section 밖으로는 나가지 않는다).
+// 인접 block의 hit rect가 겹쳐도 엉뚱한 block이 잡히지 않도록 쌓는 순서를
+// 정했다: 모든 hit rect(z-1, 작은 block이 위) < 모든 visual rect(z-2) < 번호
+// 배지(z-10). 즉 실제 bbox 안을 누르면 항상 그 block이 선택되고, 여백끼리
+// 겹치는 곳에서는 작은 block이 우선한다. 번호 배지도 같은 선택 동작을 한다.
+// 세 층 모두 stopPropagation으로 부모 section 클릭이 뒤따라 선택을 덮어쓰지
+// 않게 한다. section tool일 때는 세 층 모두 기존 정책대로 section을 선택한다.
 //
 // F-CFM-13 양방향 이동(PRD v3.4.2 수용기준 2·3, 9/24 반영) — 이전엔 우측→좌측
 // 방향이 "표시만"(자동 pan 없음)이었다. selectedBlockId/selectedSectionId는
@@ -141,22 +154,78 @@ function BlockPinBadge({ index, isSelected }: { index: number; isSelected: boole
   );
 }
 
+/** 화면 px 기준 hit 여백/최소 크기 — getBlockHitRect가 현재 zoom으로 canvas 좌표로 바꾼다. */
+const BLOCK_HIT_PADDING_PX = 8;
+const BLOCK_HIT_MIN_SIZE_PX = 32;
+
+/** visual rect와 hit rect를 함께 들고 다니는 block 단위 묶음(같은 section 안). */
+interface BlockRects {
+  block: BlockViewModel;
+  visualRect: DisplayRect;
+  hitRect: DisplayRect;
+}
+
+function buildBlockRects(
+  blocks: BlockViewModel[],
+  scale: number,
+  zoom: number,
+  bounds: { width: number; height: number },
+): BlockRects[] {
+  const result: BlockRects[] = [];
+  for (const block of blocks) {
+    if (!block.bbox) continue;
+    const visualRect = getBlockDisplayRect(block.bbox, 0, scale);
+    const hitRect = getBlockHitRect(visualRect, {
+      paddingPx: BLOCK_HIT_PADDING_PX,
+      minSizePx: BLOCK_HIT_MIN_SIZE_PX,
+      zoom,
+      bounds,
+    });
+    result.push({ block, visualRect, hitRect });
+  }
+  return result;
+}
+
+/** hit rect를 그리는 순서 — 큰 block 먼저, 작은 block을 나중에(위에) 둔다. */
+function orderForHitLayer(rects: BlockRects[]): BlockRects[] {
+  const area = (r: DisplayRect) => r.width * r.height;
+  return [...rects].sort((a, b) => area(b.visualRect) - area(a.visualRect));
+}
+
+function stopAndRun(onSelect: () => void) {
+  return (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onSelect();
+  };
+}
+
+/** 보이지 않는 클릭 전용 층. 접근성 트리와 tab 순서에는 visual rect만 남긴다. */
+function BlockHitArea({ blockId, hitRect, onSelect }: { blockId: number; hitRect: DisplayRect; onSelect: () => void }) {
+  return (
+    <div
+      aria-hidden="true"
+      data-testid={`n5-block-hit-${blockId}`}
+      onClick={stopAndRun(onSelect)}
+      className="absolute z-[1] cursor-pointer"
+      style={{ left: hitRect.left, top: hitRect.top, width: hitRect.width, height: hitRect.height }}
+    />
+  );
+}
+
 function BlockOverlay({
   block,
+  visualRect,
   index,
-  scale,
   isSelected,
   onSelect,
 }: {
   block: BlockViewModel;
+  visualRect: DisplayRect;
   index: number;
-  scale: number;
   isSelected: boolean;
   /** ImageLayer가 현재 selectionTool에 맞춰 이미 만들어 둔 클릭 동작(block 선택 또는 section 선택)을 그대로 받는다. */
   onSelect: () => void;
 }) {
-  if (!block.bbox) return null;
-  const rect = getBlockDisplayRect(block.bbox, 0, scale);
   return (
     <>
       <div
@@ -164,22 +233,21 @@ function BlockOverlay({
         tabIndex={0}
         aria-pressed={isSelected}
         data-testid={`n5-block-overlay-${block.id}`}
-        onClick={(e) => {
-          e.stopPropagation();
-          onSelect();
-        }}
+        onClick={stopAndRun(onSelect)}
         onKeyDown={(e) => {
           if (e.key !== 'Enter' && e.key !== ' ') return;
           e.preventDefault();
           e.stopPropagation();
           onSelect();
         }}
-        className={`absolute cursor-pointer ${isSelected ? 'border border-[#ff6a38]' : ''}`}
-        style={{ left: rect.left, top: rect.top, width: rect.width, height: rect.height }}
+        className={`absolute z-[2] cursor-pointer ${isSelected ? 'border border-[#ff6a38]' : ''}`}
+        style={{ left: visualRect.left, top: visualRect.top, width: visualRect.width, height: visualRect.height }}
       />
       <div
+        aria-hidden="true"
         data-testid={`n5-block-pin-${block.id}`}
-        className="pointer-events-none absolute z-10"
+        onClick={stopAndRun(onSelect)}
+        className="absolute z-10 cursor-pointer"
         // 9/23 재확인 — rect.left/top은 preview.scale(소수)이 곱해진 값이라
         // 그대로 쓰면 배지가 소수 px 위치에 놓인다. Playwright로 Pretendard
         // leading-none 배지의 실제 glyph-vs-circle 중심 오차를 측정한 결과
@@ -188,7 +256,7 @@ function BlockOverlay({
         // 않다. 다만 소수 px 위치는 브라우저마다 서브픽셀 렌더링 방식이 달라
         // 미세한 흐림/치우침 인상을 줄 수 있어, 정수 px로 스냅한다(패딩/
         // translate로 임의 보정한 값이 아니라 위치 자체를 반올림한 것).
-        style={{ left: Math.round(rect.left - 10), top: Math.round(rect.top - 10) }}
+        style={{ left: Math.round(visualRect.left - 10), top: Math.round(visualRect.top - 10) }}
       >
         <BlockPinBadge index={index} isSelected={isSelected} />
       </div>
@@ -206,6 +274,7 @@ function ImageLayer({
   onExcludeSection,
   onRestoreSection,
   scale,
+  zoom,
   selectedBlockId,
   selectedSectionId,
   onSelectBlock,
@@ -225,6 +294,8 @@ function ImageLayer({
   onExcludeSection: (sectionId: number) => void;
   onRestoreSection: (sectionId: number) => void;
   scale: number;
+  /** 현재 canvas zoom — block hit 여백을 화면 px 기준으로 유지하는 데만 쓴다. */
+  zoom: number;
   selectedBlockId: number | null;
   selectedSectionId: number | null;
   onSelectBlock: (block: BlockViewModel) => void;
@@ -245,7 +316,11 @@ function ImageLayer({
         // 실제로는 거의 도달하지 않지만, 방어적으로 안내 문구를 보여준다(빈
         // 배경으로 조용히 실패 처리하지 않는다).
         const isPending = mode === 'translated' && !isExcluded && slice.render.status === 'unresolved';
-        const blocks = blocksBySection.get(slice.sectionId) ?? [];
+        const blockRects = isExcluded
+          ? []
+          : buildBlockRects(blocksBySection.get(slice.sectionId) ?? [], scale, zoom, slice);
+        const selectHandlerOf = (block: BlockViewModel) =>
+          selectionTool === 'section' ? () => onSelectSection(block.sectionId) : () => onSelectBlock(block);
         return (
           <div
             key={slice.sectionId}
@@ -275,21 +350,19 @@ function ImageLayer({
                 렌더 대기 중
               </div>
             )}
-            {!isExcluded &&
-              blocks.map((block) => (
-                <BlockOverlay
-                  key={block.id}
-                  block={block}
-                  index={blockIndexById.get(block.id) ?? 0}
-                  scale={scale}
-                  isSelected={block.id === selectedBlockId}
-                  onSelect={
-                    selectionTool === 'section'
-                      ? () => onSelectSection(block.sectionId)
-                      : () => onSelectBlock(block)
-                  }
-                />
-              ))}
+            {orderForHitLayer(blockRects).map(({ block, hitRect }) => (
+              <BlockHitArea key={block.id} blockId={block.id} hitRect={hitRect} onSelect={selectHandlerOf(block)} />
+            ))}
+            {blockRects.map(({ block, visualRect }) => (
+              <BlockOverlay
+                key={block.id}
+                block={block}
+                visualRect={visualRect}
+                index={blockIndexById.get(block.id) ?? 0}
+                isSelected={block.id === selectedBlockId}
+                onSelect={selectHandlerOf(block)}
+              />
+            ))}
             {!isExcluded && slice.sectionId === selectedSectionId && (
               <SectionSelectedTag sectionOrder={slice.sectionOrder} />
             )}
@@ -893,6 +966,7 @@ export function N5Viewport({
               onExcludeSection={handleExcludeSection}
               onRestoreSection={handleRestoreSection}
               scale={preview.scale}
+              zoom={transform.zoom}
               selectedBlockId={selectedBlockId}
               selectedSectionId={selectedSectionId}
               onSelectBlock={onSelectBlock}

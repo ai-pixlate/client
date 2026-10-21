@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 
 import { reachN6 } from './helpers/reach-n6';
+import { disableDirectoryPicker } from './helpers/directory-picker';
 import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 
 // ─────────────────────────────────────────────────────────────────
@@ -44,6 +45,13 @@ function track(page: Page): Req[] {
 const exportPosts = (rs: Req[]) => rs.filter((r) => r.method === 'POST' && r.path === `/jobs/${MOCK_JOB_ID}/export`);
 const downloads = (rs: Req[]) =>
   rs.filter((r) => r.method === 'GET' && new RegExp(`^/jobs/${MOCK_JOB_ID}/exports?/`).test(r.path) && r.path.includes('download'));
+
+// "선택 항목 내보내기"는 지원 환경(Chromium localhost = secure context)에서 폴더 선택 창을 연다.
+// 이 파일은 기존 다운로드 링크 흐름을 검증하므로 picker 를 없앤 미지원 환경으로 고정한다
+// (폴더 저장 흐름은 e2e/n6-folder-save.spec.ts).
+test.beforeEach(async ({ page }) => {
+  await disableDirectoryPicker(page);
+});
 
 test('CSV 를 아직 만들지 않은 상태에서 개별 다운로드가 생성 → artifactId 다운로드 순서로 성공한다', async ({ page }) => {
   const requests = track(page);
@@ -177,15 +185,24 @@ test('GET /exports/{artifactId}/download 가 404 면 오류를 보이고, 다시
   expect(pageErrors).toEqual([]);
 });
 
-test('HTML·PSD 는 비활성이고 기본 선택에 들어가지 않으며, POST /export 는 html·psd 가 섞이면 400 이다', async ({ page }) => {
+test('HTML·PSD 는 비활성·미체크로 "12월 제공 예정"만 보이고 개별 다운로드가 없으며, POST /export 는 html·psd 가 섞이면 400 이다', async ({ page }) => {
   await reachN6(page);
 
   await expect(page.locator('#artifact-html')).toBeDisabled();
   await expect(page.locator('#artifact-html')).not.toBeChecked();
-  await expect(page.getByTestId('n6-download-row-html')).toBeDisabled();
   await expect(page.locator('#artifact-psd')).toBeDisabled();
   await expect(page.locator('#artifact-psd')).not.toBeChecked();
+  const artifactRow = (type: string) =>
+    page
+      .locator('[data-testid="n6-export-panel"] div.flex.w-full.items-center.gap-4')
+      .filter({ has: page.locator(`#artifact-${type}`) });
+  await expect(page.getByText('12월 제공 예정')).toHaveCount(2);
+  await expect(artifactRow('html')).toContainText('12월 제공 예정');
+  await expect(artifactRow('psd')).toContainText('12월 제공 예정');
+  await expect(page.getByTestId('n6-download-row-html')).toHaveCount(0);
   await expect(page.getByTestId('n6-download-row-psd')).toHaveCount(0);
+  await expect(artifactRow('html').getByRole('button')).toHaveCount(0);
+  await expect(artifactRow('psd').getByRole('button')).toHaveCount(0);
 
   // mock 이 BE release/1.0.0 계약(csv·images 만 생성, 그 밖이 섞이면 전체 400)을 따르는지
   const statuses = await page.evaluate(async (jobId) => {
@@ -200,31 +217,12 @@ test('HTML·PSD 는 비활성이고 기본 선택에 들어가지 않으며, POS
   expect(statuses).toEqual({ html: 400, psd: 400 });
 });
 
-test('기본 선택(active 인 images/ 만)으로 묶음 내보내기가 성공한다', async ({ page }) => {
+test('기본 선택(images/ + content.csv)으로 묶음 내보내기하면 zip 하나를 만들어 내려받는다', async ({ page }) => {
   const requests = track(page);
   await reachN6(page);
 
-  await expect(page.getByText('선택된 산출물 1개')).toBeVisible();
-  const exported = page.waitForResponse(
-    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname === `/jobs/${MOCK_JOB_ID}/export`,
-  );
-  await page.getByTestId('n6-export-button').click();
-  const res = await exported;
-  const body = await res.json();
-  await expect(page.getByTestId('n6-download-link')).toBeVisible({ timeout: 10_000 });
-
-  expect(res.status()).toBe(201);
-  expect(JSON.parse(exportPosts(requests)[0].body ?? '{}')).toEqual({ components: ['images'] });
-  expect(body).toMatchObject({ artifactType: 'images', components: ['images'] });
-  expect(downloads(requests).map((r) => r.path)).toEqual([`/jobs/${MOCK_JOB_ID}/exports/${body.artifactId}/download`]);
-  await expect(page.getByTestId('n6-download-link')).toHaveAttribute('href', /export\.zip/);
-});
-
-test('active 인 csv·images 를 함께 고르면 zip 하나를 만들어 내려받는다', async ({ page }) => {
-  const requests = track(page);
-  await reachN6(page);
-
-  await page.locator('label[for="artifact-csv"]').click();
+  await expect(page.locator('#artifact-images')).toBeChecked();
+  await expect(page.locator('#artifact-csv')).toBeChecked();
   await expect(page.getByText('선택된 산출물 2개')).toBeVisible();
   const exported = page.waitForResponse(
     (r) => r.request().method() === 'POST' && new URL(r.url()).pathname === `/jobs/${MOCK_JOB_ID}/export`,
@@ -237,6 +235,28 @@ test('active 인 csv·images 를 함께 고르면 zip 하나를 만들어 내려
   expect(res.status()).toBe(201);
   expect(new Set(JSON.parse(exportPosts(requests)[0].body ?? '{}').components)).toEqual(new Set(['images', 'csv']));
   expect(body.artifactType).toBe('zip');
+  expect(downloads(requests).map((r) => r.path)).toEqual([`/jobs/${MOCK_JOB_ID}/exports/${body.artifactId}/download`]);
+  await expect(page.getByTestId('n6-download-link')).toHaveAttribute('href', /export\.zip/);
+});
+
+test('기본 선택에서 content.csv 를 해제하면 images/ 단일 내보내기가 성공한다', async ({ page }) => {
+  const requests = track(page);
+  await reachN6(page);
+
+  await page.locator('label[for="artifact-csv"]').click();
+  await expect(page.locator('#artifact-csv')).not.toBeChecked();
+  await expect(page.getByText('선택된 산출물 1개')).toBeVisible();
+  const exported = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname === `/jobs/${MOCK_JOB_ID}/export`,
+  );
+  await page.getByTestId('n6-export-button').click();
+  const res = await exported;
+  const body = await res.json();
+  await expect(page.getByTestId('n6-download-link')).toBeVisible({ timeout: 10_000 });
+
+  expect(res.status()).toBe(201);
+  expect(JSON.parse(exportPosts(requests)[0].body ?? '{}')).toEqual({ components: ['images'] });
+  expect(body).toMatchObject({ artifactType: 'images', components: ['images'] });
   expect(downloads(requests).map((r) => r.path)).toEqual([`/jobs/${MOCK_JOB_ID}/exports/${body.artifactId}/download`]);
   await expect(page.getByTestId('n6-download-link')).toHaveAttribute('href', /export\.zip/);
 });
