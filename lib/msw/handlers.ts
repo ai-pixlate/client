@@ -14,7 +14,7 @@ import {
 } from '@/lib/mock-api/fixtures';
 import { mockN5Job, mockN5Blocks, mockN5PreviewSections, buildMockN5Preview } from '@/lib/mock-api/n5-fixtures';
 import type { ApiJob, ApiJobAsyncTaskItem, ApiTextBlock } from '@/lib/api/n5-schema';
-import type { ApiAcceptedTask, ApiJobPatch, ApiSourceImageUploadResult } from '@/lib/api/job-schema';
+import type { ApiAcceptedTask, ApiAnalysisProgress, ApiJobPatch, ApiSourceImageUploadResult } from '@/lib/api/job-schema';
 import type {
   ApiExcludedStage,
   ApiExclusionReason,
@@ -333,8 +333,10 @@ type MockJobProcessingTick = {
   total: number;
   done: number;
   stages: { key: string; label: string; status: 'pending' | 'running' | 'done' | 'failed' }[];
-  /** 실패 시나리오 flag 에서만 채운다 — 정상 흐름은 항상 비어 있다. */
+  /** 실패 시나리오 flag·N2 e2e script 에서만 채운다 — 정상 흐름은 항상 비어 있다. */
   items?: ApiJobAsyncTaskItem[];
+  /** N2 e2e script 에서만 채운다. 없으면 응답에 속성 자체를 싣지 않는다(미구현 서버·레거시 작업과 같다). */
+  analysisProgress?: ApiAnalysisProgress;
 };
 
 /**
@@ -342,13 +344,16 @@ type MockJobProcessingTick = {
  * stage key·순서는 테스트가 정한다(mock 은 어떤 key 도 가정하지 않는다). `advance: true`
  * 인 항목을 응답하는 poll 에서 job 을 N3 로 넘긴다 — 서버가 마지막 stage 를 끝내자마자
  * currentStep=N3 를 돌려주는 상황을 재현하기 위한 것이다. `advanceTo: 'N1'` 이면 같은 poll 에서
- * job 을 N1(draft)로 돌려 N2 중단 복귀를 재현한다(생략 시 N3).
+ * job 을 N1(draft)로 돌려 N2 중단 복귀를 재현한다(생략 시 N3). `items`·`analysisProgress` 는 그대로 응답에
+ * 싣는다 — analysisProgress 를 생략한 tick 은 속성 없는 응답이 된다.
  */
 const MOCK_N2_SCRIPT_FLAG = '__pixlateMockN2Script';
 
 type MockN2ScriptTick = {
   progress: number;
   stages: { key: string; label: string; status: 'pending' | 'running' | 'done' | 'failed' }[];
+  items?: ApiJobAsyncTaskItem[];
+  analysisProgress?: ApiAnalysisProgress;
   advance?: boolean;
   advanceTo?: 'N1' | 'N3';
 };
@@ -375,7 +380,14 @@ function advanceN2Processing(): MockJobProcessingTick {
             };
       jobProcessingPollCount = 0;
     }
-    return { progress: scripted.progress, total: scripted.stages.length, done: 0, stages: scripted.stages };
+    return {
+      progress: scripted.progress,
+      total: scripted.stages.length,
+      done: 0,
+      stages: scripted.stages,
+      items: scripted.items,
+      analysisProgress: scripted.analysisProgress,
+    };
   }
 
   jobProcessingPollCount += 1;
@@ -1018,8 +1030,9 @@ export const handlers = [
     }
 
     const jobProgress = advanceJobProcessing();
-    // 실패 시나리오 flag 가 켜졌을 때만 job 단계 실패 item 이 붙는다(정상 흐름은 빈 배열).
-    const jobFailedItems = jobProgress.items ?? [];
+    // 실패 시나리오 flag·N2 e2e script 에서만 job 단계 item 이 붙는다(정상 흐름은 빈 배열).
+    const jobItems = jobProgress.items ?? [];
+    const allItems = [...items, ...jobItems];
     // n6 render item(job 단위)과 n5 rerender item(block 단위) 둘 다 여기 속한다
     // — N2/N4 job 단계 진행(advanceJobProcessing)과는 별도 진행률 소스라 있으면
     // 이쪽을 우선한다(과거 이름 hasN5Items를 오늘 N6 항목도 포함하도록 재사용).
@@ -1032,9 +1045,13 @@ export const handlers = [
       progress: hasTaskItems ? items.filter((i) => i.status === 'done').length / items.length : jobProgress.progress,
       total: hasTaskItems ? items.length : jobProgress.total,
       done: hasTaskItems ? items.filter((i) => i.status === 'done').length : jobProgress.done,
-      failedCount: items.filter((i) => i.status === 'failed').length + jobFailedItems.length,
+      failedCount: allItems.filter((i) => i.status === 'failed').length,
       stages: jobProgress.stages,
-      items: [...items, ...jobFailedItems],
+      items: allItems,
+      // 계약: currentStep=N2 일 때만 싣고, 그 밖에는 속성을 생략한다(null 을 보내지 않는다)
+      ...(jobState.currentStep === 'N2' && jobProgress.analysisProgress
+        ? { analysisProgress: jobProgress.analysisProgress }
+        : {}),
     });
   }),
 

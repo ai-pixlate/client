@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import type { ReactNode } from 'react';
 
 import { StepNav, type StepNavStep } from '../step-nav';
 
@@ -58,6 +59,11 @@ export interface ProcessingStageLayoutProps {
   };
   /** 항상 고정 5개를 그린다 — 개수가 늘/줄면 진행률 블록이 패널 안에서 밀린다. */
   steps: ProcessingStep[];
+  /**
+   * 있으면 고정 5단계 목록 자리에 대신 그린다(N2 analysisProgress 상세 진행). 없으면 기존
+   * 5단계 목록 그대로다 — 이 레이아웃은 내용을 해석하지 않는다.
+   */
+  stepsReplacement?: ReactNode;
   progressPercent: number;
   progressHint: string;
   /** 일시정지 버튼은 비활성 상태로만 존재한다(중단 API가 계약에 없음) — 이유 설명 문구. */
@@ -130,6 +136,7 @@ export function ProcessingStageLayout({
   visual,
   log,
   steps,
+  stepsReplacement,
   progressPercent,
   progressHint,
   pauseButtonTitle,
@@ -324,11 +331,13 @@ export function ProcessingStageLayout({
                   않는다. 이 목록 높이가 늘/줄면 아래 진행률 블록이 패널
                   위아래로 밀리므로, 개수를 고정해야 진행률이 항상 같은
                   위치(패널 하단부)에 남는다. */}
-              <div className="flex flex-col">
-                {steps.map((step) => (
-                  <StageRow key={step.no} no={step.no} label={step.label} state={step.state} />
-                ))}
-              </div>
+              {stepsReplacement ?? (
+                <div className="flex flex-col">
+                  {steps.map((step) => (
+                    <StageRow key={step.no} no={step.no} label={step.label} state={step.state} />
+                  ))}
+                </div>
+              )}
 
               {/* progress 내부 3개 관계(퍼센트↔전체 분석 / 전체 분석↔bar /
                   bar↔안내문)는 Figma 원본에서 서로 다른 간격이다 — 하나의

@@ -1,4 +1,4 @@
-import type { ApiJobTaskStatus } from '@/lib/api/job-schema';
+import type { ApiAnalysisProgress, ApiJobTaskStatus } from '@/lib/api/job-schema';
 import { ProcessingStageLayout, type ProcessingStep } from './processing/processing-stage-layout';
 
 // ─────────────────────────────────────────────────────────────────
@@ -145,6 +145,131 @@ function buildFiveSteps(states: ProcessingStep['state'][]): ProcessingStep[] {
   return FIVE_STEP_META.map((step, i) => ({ ...step, state: states[i] }));
 }
 
+// ─────────────────────────────────────────────────────────────────
+// analysisProgress(선택) 상세 진행 — server 315816e docs/openapi.yaml AnalysisProgress.
+//
+// 속성이 있으면 고정 5단계 목록 대신 서버가 이번 poll 에 준 값만 그대로 읽어 그린다.
+// - 원본마다 split → (영역마다) ocr → merge 가 반복되고, 그 뒤 finalize · judge 다. 고정 순방향
+//   단계로 바꾸지 않고 지금 서버가 말한 activity·current 만 보여 준다.
+// - null 은 정보 없음이다 — 0·완료·이전 값·추정값으로 채우지 않고 그 줄을 그리지 않는다.
+// - 이전 poll 값을 state 에 쌓지 않는다(재시도·새 시도 때 이전 detail 이 남지 않는다).
+// - 퍼센트를 만들지 않는다(regions 는 OCR·병합 처리량이고 known 은 totalFixed 전에는 분모가 아니다).
+//   아래 전체 분석 % 는 기존 top-level progress 그대로이며 이 값과 맞추지 않는다.
+// Figma 에 이 상태의 프레임이 없어 기존 5단계 행의 글꼴·색만 재사용한 최소 표시다.
+// ─────────────────────────────────────────────────────────────────
+
+const PHASE_LABEL: Record<ApiAnalysisProgress['phase'], string> = {
+  analyze: '이미지 분석',
+  judge: '영역별 판정',
+};
+
+const PHASE_STATUS_LABEL: Record<ApiAnalysisProgress['status'], string> = {
+  waiting: '대기',
+  running: '진행 중',
+  retrying: '재시도 대기',
+  failed: '실패',
+};
+
+const ACTIVITY_LABEL: Record<NonNullable<ApiAnalysisProgress['activity']>, string> = {
+  split: '영역을 나누는 중',
+  ocr: '텍스트를 추출하는 중',
+  merge: '텍스트를 병합하고 역할을 분석하는 중',
+  finalize: '분석 결과를 정리하는 중',
+};
+
+const ACTIVITY_REGION_VERB: Partial<Record<NonNullable<ApiAnalysisProgress['activity']>, string>> = {
+  ocr: '텍스트 추출 중',
+  merge: '텍스트 병합·역할 분석 중',
+};
+
+const DETAIL_CAPTION_BY_ACTIVITY: Record<NonNullable<ApiAnalysisProgress['activity']>, { title: string; description: string }> = {
+  split: { title: '영역 나누는 중', description: '원본 이미지를 콘텐츠 영역으로 나누고 있습니다.' },
+  ocr: { title: '텍스트 추출 중', description: '영역 속 텍스트와 위치를 읽고 있습니다.' },
+  merge: { title: '병합·역할 분석 중', description: '추출한 텍스트를 합치고 역할을 구분하고 있습니다.' },
+  finalize: { title: '분석 결과 정리 중', description: '분석 결과를 정리하고 있습니다.' },
+};
+
+function resolveDetailCaption(detail: ApiAnalysisProgress): { title: string; description: string } {
+  if (detail.phase === 'judge') {
+    return { title: '영역별 판정 중', description: '영역마다 번역 대상과 현지 적합성을 확인하고 있습니다.' };
+  }
+  if (detail.status === 'waiting') return { title: '분석 대기 중', description: '분석 시작을 기다리고 있습니다.' };
+  if (detail.status === 'retrying') return { title: '분석 재시도 대기 중', description: '분석을 다시 시도하기 전입니다.' };
+  // activity=null 이면 특정 작업을 하고 있다고 추정하지 않는다
+  if (detail.activity) return DETAIL_CAPTION_BY_ACTIVITY[detail.activity];
+  return { title: '이미지 분석 중', description: '원본 이미지를 분석하고 있습니다.' };
+}
+
+function describeActivity(detail: ApiAnalysisProgress): string | null {
+  const { activity, current } = detail;
+  if (!activity) return null;
+  const verb = ACTIVITY_REGION_VERB[activity];
+  if (verb && current && current.regionIndex != null && current.regionCountInSource != null) {
+    return `영역 ${current.regionCountInSource}개 중 ${current.regionIndex}번째 ${verb}`;
+  }
+  return ACTIVITY_LABEL[activity];
+}
+
+function describeJudge(judge: NonNullable<ApiAnalysisProgress['judge']>): string {
+  const parts = [`완료 ${judge.done}`, `자동 제외 ${judge.excluded}`, `진행 중 ${judge.running}`, `대기 ${judge.waiting}`];
+  if (judge.retrying > 0) parts.push(`재시도 대기 ${judge.retrying}`);
+  if (judge.failed > 0) parts.push(`실패 ${judge.failed}`);
+  if (judge.cancelled > 0) parts.push(`취소 ${judge.cancelled}`);
+  return parts.join(' · ');
+}
+
+function DetailLine({ testId, title, caption }: { testId: string; title: string; caption?: string }) {
+  return (
+    <div className="flex flex-col gap-1" data-testid={testId}>
+      <p className="font-['Pretendard:Regular'] text-[14px] tracking-[-0.01em] text-[#171717]">{title}</p>
+      {caption && <p className="font-['Pretendard:Light'] text-[12px] tracking-[-0.04em] text-[#999]">{caption}</p>}
+    </div>
+  );
+}
+
+function N2AnalysisDetail({ detail }: { detail: ApiAnalysisProgress }) {
+  const isRunning = detail.status === 'running';
+  const activityText = describeActivity(detail);
+  const { current, regions, judge } = detail;
+
+  return (
+    <div className="flex flex-col gap-[clamp(10px,min(1.241cqw,2.6cqh),20px)]" data-testid="n2-analysis-detail">
+      <div className="flex items-center gap-3.5" data-testid="n2-detail-phase">
+        <div
+          className={`size-[10px] shrink-0 rounded-full ${isRunning ? 'bg-[#ff6a38]' : 'border border-[#eaeaea] bg-transparent'}`}
+          aria-hidden="true"
+        />
+        <div className="flex flex-col gap-1">
+          <p className="font-['Pretendard:SemiBold'] text-[14px] text-[#171717]">{PHASE_LABEL[detail.phase]}</p>
+          <p
+            className={
+              isRunning
+                ? "font-['Pretendard:Regular'] text-[12px] text-[#ff6a38]"
+                : "font-['Pretendard:Light'] text-[12px] tracking-[-0.04em] text-[#999]"
+            }
+          >
+            {PHASE_STATUS_LABEL[detail.status]}
+          </p>
+        </div>
+      </div>
+
+      <DetailLine
+        testId="n2-detail-source"
+        title={current ? `원본 ${detail.sourceTotal}장 중 ${current.sourceIndex}번째` : `원본 ${detail.sourceTotal}장`}
+      />
+      {activityText && <DetailLine testId="n2-detail-activity" title={activityText} />}
+      {regions && (
+        <DetailLine
+          testId="n2-detail-regions"
+          title={`텍스트 처리를 마친 영역 ${regions.done}개`}
+          caption={regions.totalFixed ? `전체 영역 ${regions.known}개` : `지금까지 나눈 영역 ${regions.known}개 · 더 늘어날 수 있음`}
+        />
+      )}
+      {judge && <DetailLine testId="n2-detail-judge" title={`판정 대상 영역 ${judge.total}개`} caption={describeJudge(judge)} />}
+    </div>
+  );
+}
+
 export function N2AnalysisView({
   status,
   progressOverride,
@@ -166,7 +291,9 @@ export function N2AnalysisView({
 }) {
   const coarseStage = isCompleted ? 'done' : resolveCoarseStage(status.stages, progressOverride);
   const steps = buildFiveSteps(FIVE_STEP_STATES_BY_COARSE_STAGE[coarseStage]);
-  const caption = resolveOverlayCaption(coarseStage);
+  // 완료 표시(isCompleted)는 N3 응답으로 그린다 — 그 응답엔 analysisProgress 가 없어 기존 5단계 완료로 그린다.
+  const detail = isCompleted ? undefined : status.analysisProgress;
+  const caption = detail ? resolveDetailCaption(detail) : resolveOverlayCaption(coarseStage);
   const progressPercent = Math.round((progressOverride ?? status.progress ?? 0) * 100);
   const failedItems = (status.items ?? []).filter((i) => i.status === 'failed');
 
@@ -193,6 +320,7 @@ export function N2AnalysisView({
         description: '완료된 항목은 분리하고, 현재 판단만 선명하게 정리 중 입니다.',
       }}
       steps={steps}
+      stepsReplacement={detail ? <N2AnalysisDetail detail={detail} /> : undefined}
       progressPercent={progressPercent}
       progressHint={AUTO_ADVANCE_NOTICE}
       pauseButtonTitle={PAUSE_BUTTON_TITLE}
