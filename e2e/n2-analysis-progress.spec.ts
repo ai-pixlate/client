@@ -360,4 +360,63 @@ test.describe('N2 analysisProgress 상세 진행', () => {
     expect(rows.length).toBeGreaterThan(0);
     expect(rows.some(allDone), JSON.stringify(rows)).toBe(false);
   });
+
+  test('J. 긴 judge 문구도 ANALYSIS LOG 설명을 한 줄로 두고, 아래 5단계·progress 위치를 밀지 않는다', async ({ page }) => {
+    const judgeTick = (judge: Judge) => ({
+      progress: 0.5,
+      stages: stages('done', 'running', 'pending'),
+      items: [item(9001, 'ocr', 'job', 'done'), item(9002, 'section', 'section', 'running')],
+      analysisProgress: judgePhase('running', judge),
+    });
+    const normal = judgeTick({ total: 5, done: 2, excluded: 1, running: 1, waiting: 1, retrying: 0, failed: 0, cancelled: 0 });
+    // 재시도·실패·취소까지 전부 0보다 커서 설명 줄에 모든 조각이 붙는 경우
+    const long = judgeTick({ total: 120, done: 80, excluded: 12, running: 8, waiting: 10, retrying: 4, failed: 3, cancelled: 3 });
+    const NORMAL_TEXT = '판정 대상 5개 · 완료 2 · 자동 제외 1 · 진행 중 1';
+    const LONG_TEXT = '판정 대상 120개 · 완료 80 · 자동 제외 12 · 진행 중 8 · 재시도 대기 4 · 실패 3 · 취소 3';
+
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await setup(page, [normal, normal, long]);
+
+    const measure = async () => {
+      const box = async (locator: ReturnType<Page['locator']>) => {
+        const b = await locator.boundingBox();
+        expect(b).not.toBeNull();
+        return b!;
+      };
+      const bar = page.getByRole('progressbar');
+      return {
+        caption: await box(logCaption(page)),
+        firstRow: await box(fiveStepRows(page).first()),
+        // progress 숫자는 bar 앞 블록 안의 숫자 span 이다
+        percent: await box(page.locator('span').filter({ hasText: /^\d+$/ }).first()),
+        bar: await box(bar),
+        hint: await box(page.getByText('분석이 끝나면 섹션 확인 단계로 자동 이동합니다.', { exact: true })),
+      };
+    };
+
+    await expect(logCaption(page)).toHaveText(NORMAL_TEXT);
+    const before = await measure();
+
+    await expect(logCaption(page)).toHaveText(LONG_TEXT, { timeout: 10_000 });
+    await expectFigmaFiveRows(page);
+    const after = await measure();
+
+    // 1. 설명 줄은 한 줄 높이 그대로이고, 넘치는 부분은 말줄임으로 잘린다(다른 요소 위로 넘치지 않는다)
+    expect(after.caption.height).toBe(before.caption.height);
+    const clip = await logCaption(page).evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { overflowed: el.scrollWidth > el.clientWidth, overflow: s.overflowX, textOverflow: s.textOverflow, whiteSpace: s.whiteSpace };
+    });
+    expect(clip).toEqual({ overflowed: true, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' });
+
+    // 2~5. 아래 레이아웃은 일반 judge 와 같은 자리다
+    expect(after.firstRow.y).toBe(before.firstRow.y);
+    expect(after.percent.y).toBe(before.percent.y);
+    expect(after.bar.y).toBe(before.bar.y);
+    expect(after.hint.y).toBe(before.hint.y);
+
+    // 6. 전체 문구는 잘리지 않은 채 DOM(보조기기)과 title(hover)에 남아 있다
+    await expect(logCaption(page)).toHaveAttribute('title', LONG_TEXT);
+    await expect(page.getByText(LONG_TEXT, { exact: true })).toHaveCount(1);
+  });
 });

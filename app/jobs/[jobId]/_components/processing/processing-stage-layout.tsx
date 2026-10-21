@@ -316,8 +316,12 @@ export function ProcessingStageLayout({
                   <h2 className="font-['Pretendard:SemiBold'] text-[20px] tracking-[-0.02em] text-[#171717]">
                     {log.heading}
                   </h2>
+                  {/* Figma처럼 항상 한 줄이다 — 긴 동적 문구(N2 analysisProgress)가 줄바꿈되면 아래 5단계·
+                      progress가 통째로 밀리므로 말줄임으로 자른다. 텍스트는 DOM에 그대로 있어 보조기기는
+                      전체를 읽고, 잘린 내용은 title로 확인한다. */}
                   <p
-                    className="font-['Pretendard:Light'] text-[12px] tracking-[-0.04em] text-[#999]"
+                    className="truncate font-['Pretendard:Light'] text-[12px] tracking-[-0.04em] text-[#999]"
+                    title={log.description}
                     data-testid="processing-log-description"
                   >
                     {log.description}
