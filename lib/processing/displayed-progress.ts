@@ -2,18 +2,20 @@
  * 처리 화면(N4)의 "표시용 진행 상태" 순수 계산.
  *
  * 세 값을 일부러 다른 이름으로 구분한다.
- * - serverProgress: GET /jobs/{jobId}/tasks 의 최상위 progress(0~1). 서버 원본 그대로 두고
- *   task/stage 판정(render 04/05 분리 포함)은 계속 이 값과 stages[] 로 한다.
- * - presentationStage: 화면 단계(N4 5단계). 서버 stages[] 에서 파생한다.
- * - displayedProgress: 사용자에게 보여 주는 숫자(0~100 정수). 이 파일이 만드는 값이다.
+ * - serverProgress: GET /jobs/{jobId}/tasks 의 최상위 progress(0~1, job 전체 값). 서버 원본 그대로
+ *   둔다. stage 내부 진행률이 아니므로 render 를 04/05 로 가르는 데 쓰지 않는다.
+ * - observed stage: 서버 stages[] 에서 관측한 N4 단계(inpaint/translate/verify/render). 화면 행·caption
+ *   은 이 값으로 매 poll 그린다.
+ * - displayedProgress: 사용자에게 보여 주는 숫자(0~100 정수). 이 파일이 만드는 값이다. N4 동안은
+ *   band ceiling 이 99 라 100 이 되지 않는다 — N4 완료는 서버 currentStep=N5 전환뿐이다.
  *
  * displayedProgress 는 "정확한 서버 처리율"이 아니다. 서버가 단계 안의 세부 진행을 주지 않고,
  * 단계가 바뀔 때 global progress 가 오히려 작아지기도 한다. 그래서 단계별 구간(band) 안에서만
- * 시간에 따라 천천히 움직이고, 한 번 보여 준 숫자와 단계는 내리지 않는다. 이 값들을 서버 상태
+ * 시간에 따라 천천히 움직이고, 한 번 보여 준 숫자는 내리지 않는다. 이 값들을 서버 상태
  * 판정이나 API 요청에 쓰지 않는다.
  */
 
-/** presentation stage 하나가 차지하는 표시 구간(0~100 정수, 양 끝 포함). */
+/** stage 하나가 차지하는 표시 구간(0~100 정수, 양 끝 포함). */
 export interface ProgressBand {
   floor: number;
   ceiling: number;
@@ -39,7 +41,7 @@ export interface DisplayedProgressInput {
   band: ProgressBand;
   /** toServerPercent 결과(0~100) */
   serverPercent: number;
-  /** 현재 presentation stage 에 들어온 뒤 지난 시간 */
+  /** 현재 band stage 에 들어온 뒤 지난 시간 */
   elapsedMs: number;
   /** band 의 floor → ceiling 까지 시간 기반으로 채우는 데 걸리는 시간. null 이면 시간 기반 증가 없음 */
   activeDurationMs: number | null;
@@ -67,8 +69,9 @@ export function computeDisplayedProgress(input: DisplayedProgressInput): number 
 }
 
 /**
- * 이미 보여 준 stage 와 이번 응답에서 파생한 stage 중 진행 순서상 더 뒤의 것을 고른다.
- * 서버 데이터는 바꾸지 않고 화면 단계만 뒤로 가지 않게 한다. 순서에 없는 값은 가장 앞으로 본다.
+ * 이미 들어간 band stage 와 이번 응답에서 관측한 stage 중 진행 순서상 더 뒤의 것을 고른다.
+ * 표시 숫자 band 선택에만 쓴다 — 화면 행·caption 의 실제 처리 상태로 쓰지 않는다.
+ * 순서에 없는 값(예: 이전 정책의 저장값)은 가장 앞으로 본다.
  */
 export function pickFurtherStage<Stage extends string>(
   stageOrder: readonly Stage[],

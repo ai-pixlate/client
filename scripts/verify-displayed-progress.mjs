@@ -1,5 +1,5 @@
 /**
- * N4 표시용 진행 상태(displayedProgress · presentation stage) 순수 계산 자동 검증.
+ * N4 표시용 진행 상태(displayedProgress · 숫자 band 선택) 순수 계산 자동 검증.
  *
  * lib/processing/displayed-progress.ts 는 React 도 브라우저 API 도 쓰지 않기 때문에
  * Node 에서 그대로 불러와 확인할 수 있다. (scripts/verify-n5-viewport.mjs와 같은 패턴)
@@ -29,14 +29,13 @@ function check(name, condition, detail = '') {
 }
 
 const SECOND = 1000;
+// render 는 04/05 를 나누지 않는 한 구간이다. N4 에는 done(100) 구간이 없다 — 완료는 N5 전환뿐.
 const N4_BANDS = [
   ['inpaint', { floor: 0, ceiling: 19 }],
   ['translate', { floor: 20, ceiling: 39 }],
   ['verify', { floor: 40, ceiling: 59 }],
-  ['render_04', { floor: 60, ceiling: 79 }],
-  ['render_05', { floor: 80, ceiling: 99 }],
+  ['render', { floor: 60, ceiling: 99 }],
 ];
-const N4_DONE = { floor: 100, ceiling: 100 };
 const N4_FILL_MS = 90 * SECOND;
 
 console.log('\n[1] ease-out / 서버 progress 변환');
@@ -50,7 +49,7 @@ console.log('\n[1] ease-out / 서버 progress 변환');
   check('server 1.2 → 100(범위 밖 값은 자른다)', toServerPercent(1.2) === 100);
 }
 
-console.log('\n[2] N4 — 5단계 구간');
+console.log('\n[2] N4 — 4개 관측 단계 구간');
 {
   for (const [name, band] of N4_BANDS) {
     const atEntry = computeDisplayedProgress({
@@ -82,15 +81,28 @@ console.log('\n[2] N4 — 5단계 구간');
     check(`${name}: 서버 값이 커도 ceiling을 넘지 않는다`, serverHigh === band.ceiling, `got ${serverHigh}`);
   }
 
-  const done = computeDisplayedProgress({
-    band: N4_DONE,
+  // render=done·progress=1 이 와도(일부 섹션 render 집계) N4 동안 100 이 되지 않는다
+  const renderBand = new Map(N4_BANDS).get('render');
+  const renderServerDone = computeDisplayedProgress({
+    band: renderBand,
     serverPercent: 100,
-    elapsedMs: 0,
-    activeDurationMs: null,
+    elapsedMs: 3600 * SECOND,
+    activeDurationMs: N4_FILL_MS,
     isFrozen: false,
     previousShown: 87,
   });
-  check('완료 시 100', done === 100);
+  check('N4 render 에서 서버 100·오래 지나도 99 (100 아님)', renderServerDone === 99, `got ${renderServerDone}`);
+  const failedServerDone = computeDisplayedProgress({
+    band: renderBand,
+    serverPercent: 100,
+    elapsedMs: 3600 * SECOND,
+    activeDurationMs: N4_FILL_MS,
+    isFrozen: true,
+    previousShown: 70,
+  });
+  check('N4 실패(jobStatus=failed·progress=1)도 100 아님', failedServerDone < 100, `got ${failedServerDone}`);
+  const everyBandBelow100 = N4_BANDS.every(([, band]) => band.ceiling < 100);
+  check('N4 모든 구간 ceiling < 100', everyBandBelow100);
 }
 
 console.log('\n[3] N4 — 단계 전환과 서버 progress 역행에도 감소 없음');
@@ -103,10 +115,11 @@ console.log('\n[3] N4 — 단계 전환과 서버 progress 역행에도 감소 �
     ['translate', 30, 30],
     ['verify', 5, 0],
     ['verify', 80, 40],
-    ['render_04', 20, 0],
-    ['render_04', 10, 60],
-    ['render_05', 90, 0],
-    ['render_05', 30, 200],
+    ['render', 20, 0],
+    ['render', 10, 60],
+    ['render', 90, 0],
+    ['render', 30, 200],
+    ['render', 100, 3600],
   ];
   const bandOf = new Map(N4_BANDS);
   let last = 0;
@@ -128,7 +141,8 @@ console.log('\n[3] N4 — 단계 전환과 서버 progress 역행에도 감소 �
     shown.push(value);
     last = value;
   }
-  check('01→02→03→04→05 동안 감소 없음', !decreased, shown.join(' → '));
+  check('inpaint→translate→verify→render 동안 감소 없음', !decreased, shown.join(' → '));
+  check('N4 동안 한 번도 100 이 아니다', shown.every((v) => v < 100), shown.join(' → '));
   check('각 단계 숫자가 자기 구간 안에 있다', !outOfBand, shown.join(' → '));
 
   const frozen = computeDisplayedProgress({
@@ -142,28 +156,28 @@ console.log('\n[3] N4 — 단계 전환과 서버 progress 역행에도 감소 �
   check('N4 실패 시 시간 기반 증가 멈춤', frozen === 45, `got ${frozen}`);
 }
 
-console.log('\n[4] N4 — 화면 단계(presentation stage)도 뒤로 가지 않는다');
+console.log('\n[4] N4 — 서버 관측 단계가 앞으로 돌아가도 숫자 band 는 유지한다(행은 별도)');
 {
-  const ORDER = ['inpaint', 'translate', 'verify', 'render_04', 'render_05', 'done'];
-  check('앞으로는 그대로 이동', pickFurtherStage(ORDER, 'render_04', 'render_05') === 'render_05');
-  // 서버 progress 가 0.875 아래로 내려가 render 04/05 분리가 04 를 돌려줘도 05 를 유지한다
-  check('05까지 갔다가 낮은 progress로 04가 와도 05 유지', pickFurtherStage(ORDER, 'render_05', 'render_04') === 'render_05');
-  check('verify 이후 inpaint 가 와도 verify 유지', pickFurtherStage(ORDER, 'verify', 'inpaint') === 'verify');
+  const ORDER = ['inpaint', 'translate', 'verify', 'render'];
+  check('앞으로는 그대로 이동', pickFurtherStage(ORDER, 'verify', 'render') === 'render');
+  // 섹션마다 단계가 달라 render 뒤에 translate running 이 관측돼도 숫자 band 는 render 유지
+  check('render 이후 translate 가 와도 band 는 render', pickFurtherStage(ORDER, 'render', 'translate') === 'render');
   check('같은 단계는 그대로', pickFurtherStage(ORDER, 'translate', 'translate') === 'translate');
-  check('done 이후 render_05 가 와도 done 유지', pickFurtherStage(ORDER, 'done', 'render_05') === 'done');
+  // 이전 정책의 저장값(render_05·done)은 새 순서에 없어 가장 앞으로 본다 — 새 관측 단계가 이긴다
+  check('이전 정책 저장값 done 은 새 관측 단계에 진다', pickFurtherStage(ORDER, 'done', 'translate') === 'translate');
 
-  // 05 에서 85 까지 보여 준 뒤 서버가 낮은 progress(0.8 → render_04)를 보내는 순간
-  const stage = pickFurtherStage(ORDER, 'render_05', 'render_04');
+  // render 에서 85 까지 보여 준 뒤 translate(0.65) 가 관측되는 순간
+  const stage = pickFurtherStage(ORDER, 'render', 'translate');
   const band = new Map(N4_BANDS).get(stage);
   const value = computeDisplayedProgress({
     band,
-    serverPercent: 80,
+    serverPercent: 65,
     elapsedMs: 0,
     activeDurationMs: N4_FILL_MS,
     isFrozen: false,
     previousShown: 85,
   });
-  check('그때 숫자도 05 구간(80~99) 안에서 85 유지', value === 85, `got ${value}`);
+  check('그때 숫자는 85 유지(감소 없음, 100 아님)', value === 85, `got ${value}`);
 }
 
 console.log(`\n결과: ${pass} PASS / ${fail} FAIL`);
