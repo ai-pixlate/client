@@ -10,9 +10,8 @@ import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 // 않는다. 이 파일은 그 응답 순서를 mock 에서 그대로 만들고(lib/msw/handlers.ts
 // __pixlateMockN2Script — stage key 는 이 테스트가 넘긴다), 실제 DOM 에 04·05 가 진행 중 또는
 // 완료로 한 번이라도 그려졌는지를 MutationObserver 로 기록해 확인한다.
-//
-// mock 환경에는 N2 최소 체류(7초, page.tsx) 게이트가 있어 그 시간 안에 끝나면 문제가 가려진다.
-// 그래서 7초가 지난 뒤에 N3 로 넘어가도록 poll 수를 잡는다(실서버에는 이 게이트가 없다).
+// N3 응답 뒤 완료 표시(100% 와 5단계 전부 완료)는 page.tsx 가 짧게 보여 준다 — 표시 % 흐름 자체는
+// n2-analysis-progress.spec.ts 의 'N2 로딩 표현'에서 확인한다.
 // ─────────────────────────────────────────────────────────────────
 
 type StageStatus = 'pending' | 'running' | 'done';
@@ -112,7 +111,7 @@ const SCRIPT_RETURNING_TO_N1 = [
   },
 ];
 
-test('N2 에서 currentStep=N1 로 돌아가면 5단계 완료 표시와 600ms 체류 없이 바로 N1 로 이동한다', async ({ page }) => {
+test('N2 에서 currentStep=N1 로 돌아가면 5단계 완료 표시 없이 바로 N1 로 이동한다', async ({ page }) => {
   test.setTimeout(60_000);
   await page.addInitScript((script) => {
     (globalThis as Record<string, unknown>).__pixlateMockN2Script = script;
@@ -152,7 +151,7 @@ test('N2 에서 currentStep=N1 로 돌아가면 5단계 완료 표시와 600ms �
   await page.goto(`/jobs/${MOCK_JOB_ID}`);
   await expect(page.getByRole('heading', { name: '이미지 분석' })).toBeVisible({ timeout: 15_000 });
 
-  // 최종 화면은 서버 정본(currentStep=N1)대로 N1 — mock N2 최소 체류(7초)에도 붙잡히지 않는다
+  // 최종 화면은 서버 정본(currentStep=N1)대로 N1 — 완료 표시로 붙잡지 않는다
   // (N2 의 StepNav 에도 "정보 입력"이 있으므로 N1 일 때만 그리는 페이지 공통 헤더로 확인한다)
   const n1Header = page.locator('header', { has: page.getByRole('link', { name: '← 뒤로' }) });
   await expect(n1Header).toBeVisible({ timeout: 6_000 });
@@ -168,7 +167,7 @@ test('N2 에서 currentStep=N1 로 돌아가면 5단계 완료 표시와 600ms �
   });
   expect(timing.n1ResponseAt, 'N1 응답 수신 기록').toBeDefined();
   expect(timing.n2GoneAt, 'N2 화면 해제 기록').toBeDefined();
-  // 600ms 성공 완료 체류를 거치지 않는다
+  // 성공 완료 표시(약 0.75초)를 거치지 않는다
   expect(timing.n2GoneAt! - timing.n1ResponseAt!).toBeLessThan(600);
 
   const log = await page.evaluate(() => (window as unknown as { __n2StepLog: Record<string, string>[] }).__n2StepLog);
