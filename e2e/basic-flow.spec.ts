@@ -83,9 +83,8 @@ test('N1에서 N5 검수 화면까지 기본 작업 흐름을 완료한다', asy
   await expect(page.getByRole('progressbar')).toBeVisible();
 
   // N3 고유 UI가 나타날 때까지 대기 (고정 sleep 대신 polling 완료를 기다림).
-  // mock 환경 N2 최소 체류(7초, app/jobs/[jobId]/page.tsx) 때문에 task
-  // 자체는 더 빨리 끝나도 화면 전환은 최소 7초 뒤에 일어난다 — 그 위의
-  // 여유를 둔 타임아웃을 쓴다.
+  // mock N2 polling(2초 주기)과 N3 전환 전 완료 표시(app/jobs/[jobId]/page.tsx)를
+  // 감안해 여유를 둔 타임아웃을 쓴다.
   await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({
     timeout: 10_000,
   });

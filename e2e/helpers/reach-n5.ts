@@ -54,8 +54,8 @@ export async function reachN5(page: Page): Promise<void> {
   await expect(page).toHaveURL(new RegExp(`/jobs/${MOCK_JOB_ID}$`));
 
   // N3 고유 UI가 나타날 때까지 대기 (고정 sleep 대신 polling 완료를 기다림).
-  // mock 환경 N2 최소 체류(7초, app/jobs/[jobId]/page.tsx)를 감안한 여유
-  // 타임아웃.
+  // mock N2 polling과 N3 전환 전 완료 표시(app/jobs/[jobId]/page.tsx)를 감안한
+  // 여유 타임아웃.
   await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 10_000 });
 
   await page.getByRole('button', { name: '번역 시작' }).click();

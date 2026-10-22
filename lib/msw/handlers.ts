@@ -168,7 +168,7 @@ let jobState: ApiJob = { ...mockN5Job, currentStep: 'N2', userFacingStatus: 'ana
 let jobProcessingPollCount = 0;
 
 /**
- * N4 진행 polling index — N2의 jobProcessingPollCount(단일 stage, 2-poll)와
+ * N4 진행 polling index — N2의 jobProcessingPollCount(단일 stage, N2_MOCK_RUNNING_POLLS)와
  * 다르게 N4는 실제 계약(inpaint→translate→verify→render) 4단계를 순서대로
  * 최소 한 번씩 지나가야 해서 별도 카운터를 둔다. N4_POLL_SCHEDULE의 인덱스다.
  */
@@ -320,6 +320,13 @@ function takeMockFlag(flag: string): boolean {
  * 시나리오는 오늘 범위가 아니라 failedCount/items는 항상 0/[]이다. (N4는
  * 이 아래 별도 로직 — N4_PROCESSING_STAGES/advanceN4Processing 참고.)
  */
+/**
+ * 기본 mock N2 가 running 으로 응답하는 poll 수 — 그 다음 poll 에서 N3 로 넘긴다(약 6초).
+ * 10/22 — FE 의 mock 전용 N2 최소 체류(7초)를 없애면서, 화면을 붙잡는 대신 mock 서버 처리를 조금
+ * 길게 흉내 낸다(이전 1회 → 3회). 실서버 동작과 FE 로직은 이 값에 의존하지 않는다.
+ */
+const N2_MOCK_RUNNING_POLLS = 3;
+
 const N2_PROCESSING_STAGE = {
   key: 'analyze',
   label: '이미지를 분석하고 있습니다',
@@ -396,7 +403,7 @@ function advanceN2Processing(): MockJobProcessingTick {
 
   jobProcessingPollCount += 1;
 
-  if (jobProcessingPollCount < 2) {
+  if (jobProcessingPollCount <= N2_MOCK_RUNNING_POLLS) {
     return { progress: 0.5, total: 1, done: 0, stages: [{ ...N2_PROCESSING_STAGE, status: 'running' }] };
   }
 
