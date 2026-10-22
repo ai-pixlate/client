@@ -63,6 +63,8 @@ export interface ProcessingStageLayoutProps {
   /** 일시정지 버튼은 비활성 상태로만 존재한다(중단 API가 계약에 없음) — 이유 설명 문구. */
   pauseButtonTitle: string;
   failedItems: ProcessingFailedItem[];
+  /** 실패 안내 배너 제목 — 기본은 부분 실패 문구다. */
+  failedItemsTitle?: string;
 }
 
 function ExitIcon() {
@@ -134,6 +136,7 @@ export function ProcessingStageLayout({
   progressHint,
   pauseButtonTitle,
   failedItems,
+  failedItemsTitle = '일부 항목을 처리하지 못했습니다',
 }: ProcessingStageLayoutProps) {
   return (
     <div className="flex h-full w-full bg-white">
@@ -313,7 +316,14 @@ export function ProcessingStageLayout({
                   <h2 className="font-['Pretendard:SemiBold'] text-[20px] tracking-[-0.02em] text-[#171717]">
                     {log.heading}
                   </h2>
-                  <p className="font-['Pretendard:Light'] text-[12px] tracking-[-0.04em] text-[#999]">
+                  {/* Figma처럼 항상 한 줄이다 — 긴 동적 문구(N2 analysisProgress)가 줄바꿈되면 아래 5단계·
+                      progress가 통째로 밀리므로 말줄임으로 자른다. 텍스트는 DOM에 그대로 있어 보조기기는
+                      전체를 읽고, 잘린 내용은 title로 확인한다. */}
+                  <p
+                    className="truncate font-['Pretendard:Light'] text-[12px] tracking-[-0.04em] text-[#999]"
+                    title={log.description}
+                    data-testid="processing-log-description"
+                  >
                     {log.description}
                   </p>
                 </div>
@@ -392,7 +402,7 @@ export function ProcessingStageLayout({
         {failedItems.length > 0 && (
           <div className="shrink-0 px-10 pb-6">
             <div className="rounded-lg border border-orange-200 bg-orange-50 p-4">
-              <p className="mb-2 text-sm font-medium text-orange-700">일부 항목을 처리하지 못했습니다</p>
+              <p className="mb-2 text-sm font-medium text-orange-700">{failedItemsTitle}</p>
               <ul className="space-y-1">
                 {failedItems.map((item, index) => (
                   <li key={item.taskId ?? index} className="text-xs text-orange-600">

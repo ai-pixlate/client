@@ -3,15 +3,15 @@ import { test, expect, type Page } from '@playwright/test';
 import { MOCK_BRAND_ID, MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 
 // ─────────────────────────────────────────────────────────────────
-// N4 — "번역 중" 5단계 stage mapping 회귀 검증 (Figma 660:4221).
+// N4 — "번역 중" 5단계 표시 회귀 검증 (Figma 660:4221).
 //
-// N4의 backend coarse stage(inpaint→translate→verify→render, 4개)가 화면
-// 고정 5단계에 어떻게 매핑되는지 실제로 polling을 관찰해 확인한다 —
-// 특히 render 하나가 04(글자 수·줄바꿈 조정)/05(이미지 합성) 두 항목을
-// "동시에" active로 표시하던 예전 버그(둘 다 active)가 재발하지 않는지가
-// 핵심이다. mock(lib/msw/handlers.ts advanceN4Processing)이 4단계를
-// 순서대로 최소 한 번씩 running→done으로 보내도록 고쳐져 있어야 이
-// 테스트가 의미 있다.
+// 세 가지를 따로 본다.
+// - 서버에서 관측한 N4 상태(stages: inpaint→translate→verify→render) → 이번 poll 의 행·caption
+// - 화면의 5개 설명 행 — render 하나를 04·05 두 행이 함께 설명한다(서버에 04/05 substage 가 없어
+//   둘 중 하나만 고르거나 04 → 05 순서를 만들지 않는다)
+// - 표시 progress 숫자 — 뒤로 가지 않게 유지하되 currentStep=N4 동안 100 이 되지 않는다
+// N4 전체 완료는 서버 currentStep=N5 뿐이다. render=done·progress=1 만으로 완료로 보지 않는다.
+// 섹션마다 단계가 다른 응답은 lib/msw/handlers.ts __pixlateMockN4Script 로 poll 마다 지정한다.
 // ─────────────────────────────────────────────────────────────────
 
 async function selectFirstValidOption(page: Page, index: number) {
@@ -66,57 +66,108 @@ async function readSteps(page: Page): Promise<StepSnapshot[]> {
   });
 }
 
-const RANK: Record<StepStatusLabel, number> = { 대기: 0, '진행 중': 1, 완료: 2 };
-
 async function readProgress(page: Page): Promise<number> {
   return Number(await page.getByRole('progressbar').getAttribute('aria-valuenow'));
 }
 
 /**
- * 표시 progress 구간(n4-processing-view.tsx DISPLAY_BAND_BY_N4_PRESENTATION_STAGE) —
- * active 단계 번호(01~05) 기준. 진행 중 단계는 다음 단계 floor - 1을 넘지 않는다.
+ * 표시 progress 구간(n4-processing-view.tsx DISPLAY_BAND_BY_N4_STAGE) — 첫 active 행 기준.
+ * render 는 04·05 를 함께 설명하므로 한 구간(60~99)이다. N4 동안 100 은 없다.
  */
-const DISPLAY_BAND_BY_ACTIVE_STEP: Record<string, { floor: number; ceiling: number }> = {
+const DISPLAY_BAND_BY_FIRST_ACTIVE_STEP: Record<string, { floor: number; ceiling: number }> = {
   '01': { floor: 0, ceiling: 19 },
   '02': { floor: 20, ceiling: 39 },
   '03': { floor: 40, ceiling: 59 },
-  '04': { floor: 60, ceiling: 79 },
-  '05': { floor: 80, ceiling: 99 },
+  '04': { floor: 60, ceiling: 99 },
 };
 
-/** progressbar 의 aria-valuenow 변화를 전부 기록한다 — 2초 polling 사이의 값도 놓치지 않는다. */
-async function recordProgressChanges(page: Page) {
-  await page.evaluate(() => {
-    const w = window as unknown as { __progressLog: number[] };
-    w.__progressLog = [];
-    const bar = document.querySelector('[role="progressbar"]');
-    if (!bar) return;
-    w.__progressLog.push(Number(bar.getAttribute('aria-valuenow')));
-    new MutationObserver(() => {
-      if (document.contains(bar)) w.__progressLog.push(Number(bar.getAttribute('aria-valuenow')));
-    }).observe(bar, { attributes: true, attributeFilter: ['aria-valuenow'] });
-  });
+const P = '대기';
+const A = '진행 중';
+const D = '완료';
+const rowsOf = (...states: string[]) => Object.fromEntries(states.map((state, i) => [`0${i + 1}`, state]));
+const RENDER_CAPTION = '번역 결과 이미지 적용 중';
+const TRANSLATE_CAPTION = '번역·용어 맞춤 중';
+
+type N4Snapshot = { rows: Record<string, string>; progress: number; caption: string };
+
+/**
+ * N4 화면의 5단계 행·표시 progress·GIF caption 을 DOM 변화마다 기록한다(연속 중복 제거).
+ * N4 heading 이 보이는 동안만 기록한다 — N5 로 넘어간 뒤 값은 섞지 않는다.
+ */
+async function recordN4Snapshots(page: Page) {
+  await page.addInitScript(
+    ({ captions }) => {
+      const w = window as unknown as { __n4Log: N4Snapshot[] };
+      w.__n4Log = [];
+      const snapshot = () => {
+        const onN4 = Array.from(document.querySelectorAll('h1, h2, h3')).some((h) => h.textContent?.trim() === '번역 중');
+        const bar = document.querySelector('[role="progressbar"]');
+        const rowEls = Array.from(document.querySelectorAll('p')).filter((p) => /^0[1-5]\s/.test(p.textContent ?? ''));
+        if (!onN4 || !bar || rowEls.length !== 5) return;
+        const rows: Record<string, string> = {};
+        for (const p of rowEls) rows[(p.textContent ?? '').trim().slice(0, 2)] = (p.nextElementSibling?.textContent ?? '').trim();
+        const text = document.body.textContent ?? '';
+        const caption = captions.find((c) => text.includes(c)) ?? '';
+        const entry = { rows, progress: Number(bar.getAttribute('aria-valuenow')), caption };
+        const last = w.__n4Log[w.__n4Log.length - 1];
+        if (!last || JSON.stringify(last) !== JSON.stringify(entry)) w.__n4Log.push(entry);
+      };
+      const start = () =>
+        new MutationObserver(snapshot).observe(document.documentElement, {
+          childList: true,
+          subtree: true,
+          characterData: true,
+          attributes: true,
+          attributeFilter: ['aria-valuenow'],
+        });
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+      else start();
+    },
+    {
+      captions: ['원문 제거·배경 복원 중', TRANSLATE_CAPTION, '규제 기준 확인 중', RENDER_CAPTION],
+    },
+  );
 }
 
-test('N4 — 5단계 stage mapping이 역행 없이 순서대로 진행되고, render는 04/05 중 하나만 active다', async ({
+const n4Log = (page: Page) => page.evaluate(() => (window as unknown as { __n4Log: N4Snapshot[] }).__n4Log);
+const allDone = (rows: Record<string, string>) => Object.values(rows).every((v) => v === D);
+
+/** N4 동안 공통으로 지켜야 하는 것: 100% 없음 · 5행 전부 완료 없음 · 숫자 감소 없음 */
+function expectN4Invariants(log: N4Snapshot[]) {
+  const dump = JSON.stringify(log);
+  expect(log.length, dump).toBeGreaterThan(0);
+  for (const entry of log) {
+    expect(entry.progress, `N4 동안 100% 금지: ${dump}`).toBeLessThan(100);
+    expect(allDone(entry.rows), `N4 동안 5행 전부 완료 금지: ${dump}`).toBe(false);
+  }
+  for (let i = 1; i < log.length; i += 1) {
+    expect(log[i].progress, `표시 progress 감소: ${log.map((e) => e.progress).join(' → ')}`).toBeGreaterThanOrEqual(log[i - 1].progress);
+  }
+}
+
+const n4Stage = (key: string, status: 'pending' | 'running' | 'done' | 'failed') => ({ key, label: key, status });
+
+/** 섹션마다 단계가 다른 응답 — A 섹션 render 완료, B 섹션은 아직 번역 중(render 시도 없음) */
+const PARTIAL_RENDER_DONE = { progress: 0.65, stages: [n4Stage('translate', 'running'), n4Stage('render', 'done')] };
+/** 그 다음 B 섹션 render 시도가 생겨 running — 서버 global progress 는 오히려 내려간다 */
+const LATER_RENDER_RUNNING = { progress: 0.6, stages: [n4Stage('render', 'running')] };
+
+async function setN4Script(page: Page, script: unknown[]) {
+  await page.addInitScript((s) => {
+    (globalThis as Record<string, unknown>).__pixlateMockN4Script = s;
+  }, script);
+}
+
+test('N4 — 기본 순차 mock: 서버 단계대로 행이 바뀌고, render 는 04·05 를 함께 진행 중으로 두며, N5 에서만 끝난다', async ({
   page,
 }) => {
   test.setTimeout(60_000);
+  await recordN4Snapshots(page);
   await reachN4(page);
-
-  // 1. "번역 중" 진입 확인.
   await expect(page.getByRole('heading', { name: '번역 중' })).toBeVisible({ timeout: 5_000 });
-  await recordProgressChanges(page);
-  const seenActiveSteps = new Set<string>();
+  const seenBands = new Set<string>();
 
-  const lastRank = new Map<string, number>();
-  let saw04ActiveWith05Pending = false;
-  let saw05Active = false;
-  let saw04ActiveAt: number | null = null;
-  let saw05ActiveAt: number | null = null;
-
-  // mock은 2초 polling으로 9번(inpaint×2, translate×2, verify×2, render×3)
-  // 만에 N5로 전환한다 — 여유 있게 15회까지 관찰한다.
+  // mock은 2초 polling으로 9번(inpaint×2, translate×2, verify×2, render×3) 만에 N5로 전환한다.
   for (let tick = 0; tick < 15; tick += 1) {
     const stillOnN4 = await page
       .getByRole('heading', { name: '번역 중' })
@@ -125,75 +176,31 @@ test('N4 — 5단계 stage mapping이 역행 없이 순서대로 진행되고, r
     if (!stillOnN4) break;
 
     const steps = await readSteps(page);
-
-    // 2. 5단계 모두 렌더된다.
     expect(steps, `tick ${tick}: 5단계가 전부 렌더돼야 한다`).toHaveLength(5);
 
-    // 3. 각 단계 상태가 역행하지 않는다(대기→진행 중→완료 순서만 허용).
-    for (const step of steps) {
-      const rank = RANK[step.status];
-      const prev = lastRank.get(step.no) ?? 0;
-      expect(rank, `tick ${tick}: ${step.no} ${step.label}이(가) ${step.status}(rank ${rank})로 역행했다(이전 rank ${prev})`).toBeGreaterThanOrEqual(
-        prev,
-      );
-      lastRank.set(step.no, rank);
-    }
-
-    // 4. 한 시점에 active(진행 중)는 정확히 1개만 존재한다 — render가
-    // 04/05를 동시에 active로 만들던 예전 버그의 직접적인 회귀 검증.
-    const activeSteps = steps.filter((s) => s.status === '진행 중');
-    expect(activeSteps.length, `tick ${tick}: active step 개수는 항상 1개여야 한다(${JSON.stringify(steps)})`).toBe(
-      1,
-    );
-
-    // 4-1. 표시 progress 는 active 단계의 20% 구간 안에 있다(10/19 표시용 진행률).
-    if (activeSteps.length === 1) {
-      const band = DISPLAY_BAND_BY_ACTIVE_STEP[activeSteps[0].no];
-      const shown = await readProgress(page);
-      const stillSameStep = (await readSteps(page)).find((s) => s.status === '진행 중')?.no === activeSteps[0].no;
-      if (stillSameStep) {
-        seenActiveSteps.add(activeSteps[0].no);
-        expect(shown, `tick ${tick}: ${activeSteps[0].no} 진행 중 표시 progress`).toBeGreaterThanOrEqual(band.floor);
-        expect(shown, `tick ${tick}: ${activeSteps[0].no} 진행 중 표시 progress`).toBeLessThanOrEqual(band.ceiling);
-      }
-    }
-
+    // 04·05 는 render 하나를 함께 설명한다 — 둘 중 하나만 진행 중이거나 완료인 상태는 없다
     const step04 = steps.find((s) => s.no === '04');
     const step05 = steps.find((s) => s.no === '05');
+    expect(step04?.status, `tick ${tick}: 04·05 는 같은 상태여야 한다(${JSON.stringify(steps)})`).toBe(step05?.status);
 
-    // 5. "04 진행 중 / 05 대기" 상태(Figma 660:4221 예시 그대로)가 실제로 한 번 존재.
-    if (step04?.status === '진행 중' && step05?.status === '대기') {
-      saw04ActiveWith05Pending = true;
-      saw04ActiveAt ??= tick;
+    const firstActive = steps.find((s) => s.status === '진행 중');
+    if (firstActive) {
+      const band = DISPLAY_BAND_BY_FIRST_ACTIVE_STEP[firstActive.no];
+      const shown = await readProgress(page);
+      const stillSame = (await readSteps(page)).find((s) => s.status === '진행 중')?.no === firstActive.no;
+      if (stillSame && band) {
+        seenBands.add(firstActive.no);
+        expect(shown, `tick ${tick}: ${firstActive.no} 진행 중 표시 progress`).toBeGreaterThanOrEqual(band.floor);
+        expect(shown, `tick ${tick}: ${firstActive.no} 진행 중 표시 progress`).toBeLessThanOrEqual(band.ceiling);
+      }
     }
-    // 6. 이후 "05 진행 중"(04는 완료) 상태도 존재.
-    if (step05?.status === '진행 중' && step04?.status === '완료') {
-      saw05Active = true;
-      saw05ActiveAt ??= tick;
-    }
-    // 04/05가 동시에 진행 중인 건 절대 없어야 한다(이번에 고친 버그).
-    expect(
-      step04?.status === '진행 중' && step05?.status === '진행 중',
-      `tick ${tick}: 04와 05가 동시에 진행 중이면 안 된다`,
-    ).toBe(false);
-
     await page.waitForTimeout(1900);
   }
 
-  expect(saw04ActiveWith05Pending, '"04 진행 중 / 05 대기"(Figma 예시) 상태를 한 번도 관찰하지 못했다').toBe(true);
-  expect(saw05Active, '"05 진행 중"(04 완료) 상태를 한 번도 관찰하지 못했다').toBe(true);
-  if (saw04ActiveAt !== null && saw05ActiveAt !== null) {
-    expect(saw05ActiveAt, '05 active는 04 active보다 나중이어야 한다').toBeGreaterThan(saw04ActiveAt);
-  }
-
-  // 8. 01→05 전체 동안 표시 progress 는 한 번도 내려가지 않는다(단계 전환 포함).
-  const progressLog = await page.evaluate(() => (window as unknown as { __progressLog?: number[] }).__progressLog ?? []);
-  for (let i = 1; i < progressLog.length; i += 1) {
-    expect(progressLog[i], `표시 progress 감소: ${progressLog.join(' → ')}`).toBeGreaterThanOrEqual(progressLog[i - 1]);
-  }
-  expect(seenActiveSteps.size, `구간 검증한 단계: ${[...seenActiveSteps].join(',')}`).toBeGreaterThanOrEqual(4);
-
-  // 7. 마지막에 N5로 이동한다.
+  expect(seenBands.size, `구간 검증한 단계: ${[...seenBands].join(',')}`).toBeGreaterThanOrEqual(4);
+  const log = await n4Log(page);
+  expectN4Invariants(log);
+  expect(log.some((e) => JSON.stringify(e.rows) === JSON.stringify(rowsOf(D, D, D, A, A))), JSON.stringify(log)).toBe(true);
   await expect(page.locator('[data-testid="n5-panel"]')).toBeVisible({ timeout: 10_000 });
 });
 
@@ -219,47 +226,127 @@ test('N4 — stage 실패를 받으면 기존 실패 안내가 뜨고 표시 pro
   expect(atFailure).toBeLessThan(100);
 });
 
-test('N4 — 05 이미지 합성까지 간 뒤 서버 progress 가 내려가도 화면 단계와 숫자가 04 로 돌아가지 않는다', async ({
+test('N4 A — 일부 섹션 render=done 이어도 translate 가 running 이면 완료가 아니고, 다음 render running 에서도 100% 가 아니다', async ({
   page,
 }) => {
   test.setTimeout(60_000);
-  await page.addInitScript(() => {
-    (globalThis as Record<string, unknown>).__pixlateMockN4ProgressDropOnce = true;
-  });
-  const progressByPoll: number[] = [];
+  await setN4Script(page, [PARTIAL_RENDER_DONE, PARTIAL_RENDER_DONE, LATER_RENDER_RUNNING]);
+  await recordN4Snapshots(page);
+  await reachN4(page);
+  await expect(page.getByRole('heading', { name: '번역 중' })).toBeVisible({ timeout: 5_000 });
+
+  // tick 1: 현재 관측 가능한 running 은 translate — render=done 을 우선하지 않는다
+  await expect.poll(async () => (await n4Log(page)).at(-1)?.rows, { timeout: 10_000 }).toEqual(rowsOf(D, A, P, P, P));
+  await expect(page.getByText(TRANSLATE_CAPTION, { exact: true })).toBeVisible();
+  const atTranslate = await readProgress(page);
+  expect(atTranslate).toBeLessThan(100);
+
+  // tick 2: render running(서버 progress 0.65 → 0.60) — 여전히 N4, 100% 아님, render 표시
+  await expect.poll(async () => (await n4Log(page)).at(-1)?.rows, { timeout: 10_000 }).toEqual(rowsOf(D, D, D, A, A));
+  await expect(page.getByText(RENDER_CAPTION, { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '번역 중' })).toBeVisible();
+  const atRender = await readProgress(page);
+  expect(atRender).toBeLessThan(100);
+  // 숫자는 서버 progress 가 내려가도 tick 1 보다 내려가지 않는다(행 상태와 별개인 UX 규칙)
+  expect(atRender).toBeGreaterThanOrEqual(atTranslate);
+
+  const log = await n4Log(page);
+  expectN4Invariants(log);
+  await expect(page.locator('[data-testid="n5-panel"]')).toHaveCount(0);
+});
+
+test('N4 B — render=done 이 아니라 서버 currentStep=N5 가 와야 N5 로 이동한다', async ({ page }) => {
+  test.setTimeout(60_000);
+  const steps: string[] = [];
   page.on('response', async (res) => {
     if (res.request().method() === 'GET' && new URL(res.url()).pathname === `/jobs/${MOCK_JOB_ID}/tasks`) {
       const body = await res.json().catch(() => null);
-      if (body?.currentStep === 'N4' && typeof body.progress === 'number') progressByPoll.push(body.progress);
+      if (body?.currentStep) steps.push(body.currentStep);
     }
   });
-
+  await setN4Script(page, [
+    PARTIAL_RENDER_DONE,
+    PARTIAL_RENDER_DONE,
+    LATER_RENDER_RUNNING,
+    LATER_RENDER_RUNNING,
+    { progress: 1, stages: [n4Stage('render', 'done')], advance: true },
+  ]);
+  await recordN4Snapshots(page);
   await reachN4(page);
   await expect(page.getByRole('heading', { name: '번역 중' })).toBeVisible({ timeout: 5_000 });
-  await recordProgressChanges(page);
 
-  let reached05 = false;
-  const activeAfter05: string[] = [];
-  for (let i = 0; i < 200; i += 1) {
-    const onN4 = await page.getByRole('heading', { name: '번역 중' }).isVisible().catch(() => false);
-    if (!onN4) break;
-    const active = (await readSteps(page)).find((s) => s.status === '진행 중')?.no;
-    if (active === '05') reached05 = true;
-    if (reached05 && active) activeAfter05.push(active);
-    await page.waitForTimeout(150);
+  await expect(page.locator('[data-testid="n5-panel"]')).toBeVisible({ timeout: 20_000 });
+  // N5 응답 전까지 N4 화면은 100%·전부 완료를 그리지 않았다(완료 dwell 없음)
+  const log = await n4Log(page);
+  expectN4Invariants(log);
+  expect(log.some((e) => JSON.stringify(e.rows) === JSON.stringify(rowsOf(D, A, P, P, P))), JSON.stringify(log)).toBe(true);
+  expect(log.some((e) => JSON.stringify(e.rows) === JSON.stringify(rowsOf(D, D, D, A, A))), JSON.stringify(log)).toBe(true);
+  expect(steps.filter((s) => s === 'N4').length, steps.join(',')).toBeGreaterThanOrEqual(4);
+  expect(steps.at(-1)).toBe('N5');
+});
+
+test('N4 C — 첫 render 관측이 progress=0.9 여도 04·05 를 함께 render 로 보이고, 보지 않은 04 단독 단계를 만들지 않는다', async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+  await page.clock.install();
+  await setN4Script(page, [{ progress: 0.9, stages: [n4Stage('render', 'running')] }]);
+  await recordN4Snapshots(page);
+  await reachN4(page);
+  await expect(page.getByRole('heading', { name: '번역 중' })).toBeVisible({ timeout: 5_000 });
+
+  await expect.poll(async () => (await n4Log(page)).at(-1)?.rows, { timeout: 10_000 }).toEqual(rowsOf(D, D, D, A, A));
+  await expect(page.getByText(RENDER_CAPTION, { exact: true })).toBeVisible();
+  // 시간이 지나도 04 → 05 로 넘어가는 최소 체류·자동 전환이 없다
+  await page.clock.fastForward('05:00');
+  await expect.poll(async () => (await n4Log(page)).at(-1)?.rows).toEqual(rowsOf(D, D, D, A, A));
+
+  const log = await n4Log(page);
+  expectN4Invariants(log);
+  // 서버가 준 적 없는 "04 만 진행 중"·"05 만 진행 중" 상태가 한 번도 그려지지 않았다
+  for (const e of log) {
+    expect(e.rows['04'], JSON.stringify(log)).toBe(e.rows['05']);
   }
+  expect(log.every((e) => JSON.stringify(e.rows) === JSON.stringify(rowsOf(D, D, D, A, A))), JSON.stringify(log)).toBe(true);
+});
 
-  expect(reached05, '05 진행 중 상태를 관찰하지 못했다').toBe(true);
-  // 서버는 실제로 0.9 → 0.8 로 progress 를 내렸다(render 04/05 분리 기준 0.875 아래)
-  const dropAt = progressByPoll.findIndex((p, i) => i > 0 && p < progressByPoll[i - 1]);
-  expect(dropAt, `서버 progress: ${progressByPoll.join(' → ')}`).toBeGreaterThan(0);
-  expect(progressByPoll[dropAt]).toBeLessThan(0.875);
-  // 그래도 화면은 05 에서 04 로 돌아가지 않았다
-  expect(activeAfter05.every((no) => no === '05'), `05 이후 active: ${activeAfter05.join(',')}`).toBe(true);
+test('N4 D — jobStatus=failed·render=done·progress=1 이어도 완료가 아니고 N4 실패 안내에 머문다', async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.clock.install();
+  await setN4Script(page, [
+    {
+      progress: 1,
+      stages: [n4Stage('render', 'done')],
+      items: [
+        {
+          taskId: 9301,
+          taskType: 'render',
+          unitType: 'section',
+          unitId: 9301,
+          status: 'failed',
+          uiStatus: 'failed',
+          retryCount: 3,
+          maxRetry: 3,
+          retryable: false,
+          errorCode: 'RENDER_FAILED',
+          revision: null,
+        },
+      ],
+      fail: true,
+    },
+  ]);
+  await recordN4Snapshots(page);
+  await reachN4(page);
+  await expect(page.getByRole('heading', { name: '번역 중' })).toBeVisible({ timeout: 5_000 });
 
-  const progressLog = await page.evaluate(() => (window as unknown as { __progressLog?: number[] }).__progressLog ?? []);
-  for (let i = 1; i < progressLog.length; i += 1) {
-    expect(progressLog[i], `표시 progress 감소: ${progressLog.join(' → ')}`).toBeGreaterThanOrEqual(progressLog[i - 1]);
-  }
-  await expect(page.locator('[data-testid="n5-panel"]')).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText('일부 항목을 처리하지 못했습니다')).toBeVisible({ timeout: 10_000 });
+  const atFailure = await readProgress(page);
+  expect(atFailure).toBeLessThan(100);
+
+  await page.clock.fastForward('05:00');
+  await page.clock.fastForward('00:05');
+  expect(await readProgress(page)).toBe(atFailure);
+  await expect(page.getByRole('heading', { name: '번역 중' })).toBeVisible();
+  await expect(page.locator('[data-testid="n5-panel"]')).toHaveCount(0);
+  expectN4Invariants(await n4Log(page));
 });

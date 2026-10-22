@@ -14,7 +14,7 @@ import {
 } from '@/lib/mock-api/fixtures';
 import { mockN5Job, mockN5Blocks, mockN5PreviewSections, buildMockN5Preview } from '@/lib/mock-api/n5-fixtures';
 import type { ApiJob, ApiJobAsyncTaskItem, ApiTextBlock } from '@/lib/api/n5-schema';
-import type { ApiAcceptedTask, ApiJobPatch, ApiSourceImageUploadResult } from '@/lib/api/job-schema';
+import type { ApiAcceptedTask, ApiAnalysisProgress, ApiJobPatch, ApiSourceImageUploadResult } from '@/lib/api/job-schema';
 import type {
   ApiExcludedStage,
   ApiExclusionReason,
@@ -333,8 +333,10 @@ type MockJobProcessingTick = {
   total: number;
   done: number;
   stages: { key: string; label: string; status: 'pending' | 'running' | 'done' | 'failed' }[];
-  /** 실패 시나리오 flag 에서만 채운다 — 정상 흐름은 항상 비어 있다. */
+  /** 실패 시나리오 flag·N2 e2e script 에서만 채운다 — 정상 흐름은 항상 비어 있다. */
   items?: ApiJobAsyncTaskItem[];
+  /** N2 e2e script 에서만 채운다. 없으면 응답에 속성 자체를 싣지 않는다(미구현 서버·레거시 작업과 같다). */
+  analysisProgress?: ApiAnalysisProgress;
 };
 
 /**
@@ -342,15 +344,20 @@ type MockJobProcessingTick = {
  * stage key·순서는 테스트가 정한다(mock 은 어떤 key 도 가정하지 않는다). `advance: true`
  * 인 항목을 응답하는 poll 에서 job 을 N3 로 넘긴다 — 서버가 마지막 stage 를 끝내자마자
  * currentStep=N3 를 돌려주는 상황을 재현하기 위한 것이다. `advanceTo: 'N1'` 이면 같은 poll 에서
- * job 을 N1(draft)로 돌려 N2 중단 복귀를 재현한다(생략 시 N3).
+ * job 을 N1(draft)로 돌려 N2 중단 복귀를 재현한다(생략 시 N3). `fail: true` 면 그 poll 에서 job 을
+ * N2 그대로 jobStatus=failed 로 바꾼다(분석 실패 종료). `items`·`analysisProgress` 는 그대로 응답에
+ * 싣는다 — analysisProgress 를 생략한 tick 은 속성 없는 응답이 된다.
  */
 const MOCK_N2_SCRIPT_FLAG = '__pixlateMockN2Script';
 
 type MockN2ScriptTick = {
   progress: number;
   stages: { key: string; label: string; status: 'pending' | 'running' | 'done' | 'failed' }[];
+  items?: ApiJobAsyncTaskItem[];
+  analysisProgress?: ApiAnalysisProgress;
   advance?: boolean;
   advanceTo?: 'N1' | 'N3';
+  fail?: boolean;
 };
 
 function takeN2ScriptTick(): MockN2ScriptTick | null {
@@ -374,8 +381,17 @@ function advanceN2Processing(): MockJobProcessingTick {
               status: 'review',
             };
       jobProcessingPollCount = 0;
+    } else if (scripted.fail) {
+      jobState = { ...jobState, status: 'failed', userFacingStatus: 'failed' };
     }
-    return { progress: scripted.progress, total: scripted.stages.length, done: 0, stages: scripted.stages };
+    return {
+      progress: scripted.progress,
+      total: scripted.stages.length,
+      done: 0,
+      stages: scripted.stages,
+      items: scripted.items,
+      analysisProgress: scripted.analysisProgress,
+    };
   }
 
   jobProcessingPollCount += 1;
@@ -400,13 +416,11 @@ function advanceN2Processing(): MockJobProcessingTick {
  * 2-poll로 줘서 inpaint/verify/render(04·05) 화면을 mock에서 확인할 방법이
  * 없었다 — 4단계를 순서대로 최소 한 번씩 running→done으로 흘려보낸다.
  *
- * render는 화면 04(글자 수·줄바꿈 조정)·05(이미지 합성) 두 항목을 만들어야
- * 해서 running을 두 번(전반부→04, 후반부→05) 보낸다 — 그 외 3단계는 N2와
- * 같은 1-running-then-done 패턴이다. progress는 poll마다 커지는 누적값이고
- * (JobTaskStatus.progress는 stage-local이 아니라 job 전체 global 값 —
- * lib/api/generated/openapi.d.ts의 JobTaskStatus.progress에는 stage별 필드가
- * 없고 최상위 progress 하나뿐이다), N4TranslationView의 render 04/05 분기
- * 임계값(0.875)과 같은 "4단계 동일 비중" 가정으로 구간을 나눴다.
+ * render는 running을 두 번 보낸다(render 가 여러 poll 동안 이어지는 경우). 화면은
+ * render 를 04·05 두 행으로 함께 설명할 뿐 04/05 를 나누지 않는다(n4-processing-view.tsx).
+ * 그 외 3단계는 N2와 같은 1-running-then-done 패턴이다. progress는 poll마다 커지는
+ * 누적값이다(JobTaskStatus.progress는 stage-local이 아니라 job 전체 global 값).
+ * 섹션마다 단계가 다른 응답(예: translate=running·render=done)은 아래 N4 script 로 재현한다.
  */
 const N4_PROCESSING_STAGES: { key: string; label: string }[] = [
   { key: 'inpaint', label: '한글을 지우고 배경을 복원하고 있습니다' },
@@ -426,20 +440,36 @@ const N4_POLL_SCHEDULE: { stageIndex: number; status: 'running' | 'done'; progre
   { stageIndex: 1, status: 'done', progress: 0.5 }, // translate 완료 → 03 active로 승격
   { stageIndex: 2, status: 'running', progress: 0.55 }, // verify 진행 중 → 03 active
   { stageIndex: 2, status: 'done', progress: 0.75 }, // verify 완료 → render(04) active로 승격
-  { stageIndex: 3, status: 'running', progress: 0.8 }, // render 전반부(<0.875) → 04 active
-  { stageIndex: 3, status: 'running', progress: 0.9 }, // render 후반부(>=0.875) → 05 active
-  { stageIndex: 3, status: 'done', progress: 1 }, // render 완료 → N5로 전환
+  { stageIndex: 3, status: 'running', progress: 0.8 }, // render 진행 중 → 04·05 active
+  { stageIndex: 3, status: 'running', progress: 0.9 }, // render 계속 진행 중 → 04·05 active
+  { stageIndex: 3, status: 'done', progress: 1 }, // render 완료와 같은 poll 에서 N5로 전환
 ];
 
 /** e2e 전용 — 켜져 있으면 N4 의 현재 stage 를 failed 로 돌려주고 진행을 멈춘다. */
 const MOCK_N4_FAIL_FLAG = '__pixlateMockN4Fail';
 
 /**
- * e2e 전용 — render 후반부(progress 0.9, 화면 05)를 보낸 다음 poll 한 번만 progress 를 0.8 로
- * 되돌린다(render 는 계속 running). 서버 top-level progress 가 내려갈 때 화면 단계가 05 → 04 로
- * 돌아가지 않는지 확인하기 위한 값이다.
+ * e2e 전용 — 이 값(배열)이 있으면 N4 poll 마다 앞에서 하나씩 꺼내 그대로 응답한다(N2 script 와
+ * 같은 방식, 마지막 항목은 계속 반복). stage key·status·progress 는 테스트가 정한다 — 섹션마다
+ * 단계가 다른 응답(translate=running·render=done)을 재현하기 위한 것이다. `advance: true` 인 항목을
+ * 응답하는 poll 에서 job 을 N5 로 넘기고, `fail: true` 면 그 poll 에서 job 을 N4 그대로
+ * jobStatus=failed 로 바꾼다. 정상 흐름(값 없음)에는 영향이 없다.
  */
-const MOCK_N4_PROGRESS_DROP_ONCE_FLAG = '__pixlateMockN4ProgressDropOnce';
+const MOCK_N4_SCRIPT_FLAG = '__pixlateMockN4Script';
+
+type MockN4ScriptTick = {
+  progress: number;
+  stages: { key: string; label: string; status: 'pending' | 'running' | 'done' | 'failed' }[];
+  items?: ApiJobAsyncTaskItem[];
+  advance?: boolean;
+  fail?: boolean;
+};
+
+function takeN4ScriptTick(): MockN4ScriptTick | null {
+  const script = (globalThis as Record<string, unknown>)[MOCK_N4_SCRIPT_FLAG];
+  if (!Array.isArray(script) || script.length === 0) return null;
+  return (script.length > 1 ? script.shift() : script[0]) as MockN4ScriptTick;
+}
 
 function mockFailedJobTaskItem(taskType: ApiJobAsyncTaskItem['taskType'], errorCode: string): ApiJobAsyncTaskItem {
   return {
@@ -458,17 +488,26 @@ function mockFailedJobTaskItem(taskType: ApiJobAsyncTaskItem['taskType'], errorC
 }
 
 function advanceN4Processing(): MockJobProcessingTick {
-  const tick = N4_POLL_SCHEDULE[Math.min(n4PollIndex, N4_POLL_SCHEDULE.length - 1)];
-  const stageMeta = N4_PROCESSING_STAGES[tick.stageIndex];
-
-  if (n4PollIndex === N4_POLL_SCHEDULE.length - 1 && takeMockFlag(MOCK_N4_PROGRESS_DROP_ONCE_FLAG)) {
+  const scripted = takeN4ScriptTick();
+  if (scripted) {
+    if (scripted.advance) {
+      (globalThis as Record<string, unknown>)[MOCK_N4_SCRIPT_FLAG] = undefined;
+      jobState = { ...jobState, currentStep: N4_NEXT_STEP, userFacingStatus: N4_NEXT_USER_FACING_STATUS, status: 'review' };
+      n4PollIndex = 0;
+    } else if (scripted.fail) {
+      jobState = { ...jobState, status: 'failed', userFacingStatus: 'failed' };
+    }
     return {
-      progress: 0.8,
+      progress: scripted.progress,
       total: N4_PROCESSING_STAGES.length,
-      done: tick.stageIndex,
-      stages: [{ ...N4_PROCESSING_STAGES[3], status: 'running' }],
+      done: 0,
+      stages: scripted.stages,
+      items: scripted.items,
     };
   }
+
+  const tick = N4_POLL_SCHEDULE[Math.min(n4PollIndex, N4_POLL_SCHEDULE.length - 1)];
+  const stageMeta = N4_PROCESSING_STAGES[tick.stageIndex];
 
   if ((globalThis as Record<string, unknown>)[MOCK_N4_FAIL_FLAG]) {
     // 진행을 멈추고(n4PollIndex 그대로) 현재 stage 를 failed 로 보고한다.
@@ -1018,8 +1057,9 @@ export const handlers = [
     }
 
     const jobProgress = advanceJobProcessing();
-    // 실패 시나리오 flag 가 켜졌을 때만 job 단계 실패 item 이 붙는다(정상 흐름은 빈 배열).
-    const jobFailedItems = jobProgress.items ?? [];
+    // 실패 시나리오 flag·N2 e2e script 에서만 job 단계 item 이 붙는다(정상 흐름은 빈 배열).
+    const jobItems = jobProgress.items ?? [];
+    const allItems = [...items, ...jobItems];
     // n6 render item(job 단위)과 n5 rerender item(block 단위) 둘 다 여기 속한다
     // — N2/N4 job 단계 진행(advanceJobProcessing)과는 별도 진행률 소스라 있으면
     // 이쪽을 우선한다(과거 이름 hasN5Items를 오늘 N6 항목도 포함하도록 재사용).
@@ -1032,9 +1072,13 @@ export const handlers = [
       progress: hasTaskItems ? items.filter((i) => i.status === 'done').length / items.length : jobProgress.progress,
       total: hasTaskItems ? items.length : jobProgress.total,
       done: hasTaskItems ? items.filter((i) => i.status === 'done').length : jobProgress.done,
-      failedCount: items.filter((i) => i.status === 'failed').length + jobFailedItems.length,
+      failedCount: allItems.filter((i) => i.status === 'failed').length,
       stages: jobProgress.stages,
-      items: [...items, ...jobFailedItems],
+      items: allItems,
+      // 계약: currentStep=N2 일 때만 싣고, 그 밖에는 속성을 생략한다(null 을 보내지 않는다)
+      ...(jobState.currentStep === 'N2' && jobProgress.analysisProgress
+        ? { analysisProgress: jobProgress.analysisProgress }
+        : {}),
     });
   }),
 

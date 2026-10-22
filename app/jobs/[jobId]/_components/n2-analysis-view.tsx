@@ -1,4 +1,4 @@
-import type { ApiJobTaskStatus } from '@/lib/api/job-schema';
+import type { ApiAnalysisProgress, ApiJobTaskStatus } from '@/lib/api/job-schema';
 import { ProcessingStageLayout, type ProcessingStep } from './processing/processing-stage-layout';
 
 // ─────────────────────────────────────────────────────────────────
@@ -49,10 +49,13 @@ import { ProcessingStageLayout, type ProcessingStep } from './processing/process
 const HEADLINE_FALLBACK = '상세페이지의 구조와 문맥을 읽고 있습니다.';
 const AUTO_ADVANCE_NOTICE = '분석이 끝나면 섹션 확인 단계로 자동 이동합니다.';
 const PAUSE_BUTTON_TITLE = '분석 중단 기능은 아직 제공되지 않습니다.';
+const FAILED_HEADLINE = '이미지 분석을 완료하지 못했습니다.';
+const FAILED_NOTICE = '분석을 완료하지 못해 다음 단계로 자동 이동하지 않습니다.';
+const FAILED_CAPTION = { title: '분석 실패', description: '이미지 분석을 완료하지 못했습니다.' };
 
 const FIVE_STEP_META: { no: string; label: string }[] = [
-  { no: '01', label: '전체 텍스트 인식' },
-  { no: '02', label: '콘텐츠 영역 나누기' },
+  { no: '01', label: '콘텐츠 영역 나누기' },
+  { no: '02', label: '전체 텍스트 인식' },
   { no: '03', label: '문단별 역할 파악' },
   { no: '04', label: '제품 라벨 자동 제외' },
   { no: '05', label: '규제 · 현지 적합성 확인' },
@@ -145,12 +148,140 @@ function buildFiveSteps(states: ProcessingStep['state'][]): ProcessingStep[] {
   return FIVE_STEP_META.map((step, i) => ({ ...step, state: states[i] }));
 }
 
+// ─────────────────────────────────────────────────────────────────
+// analysisProgress(선택) 상세 진행 — server 315816e docs/openapi.yaml AnalysisProgress.
+//
+// 기존 N2 화면(Figma 660:4139)을 바꾸지 않는다 — 5단계 목록·progress 레이아웃은 그대로 두고, 서버가
+// 이번 poll 에 준 값을 기존 동적 문구 두 곳과 5단계 행 상태에 같이 쓴다(셋이 서로 다른 상태를 말하지 않게).
+// - GIF 하단 caption: 지금 하는 작업(activity / phase·status)
+// - ANALYSIS LOG 설명 줄: 원본·영역 위치 또는 판정 수치(짧게 한 줄)
+// - 5단계 행: resolveAnalysisProgressStepStates — analysisProgress 가 없을 때만 기존 coarse stages 해석
+// 원본마다 split → (영역마다) ocr → merge 가 반복되고 그 뒤 finalize · judge 다. 그래서 행은 01 → 02 → 03
+// → (다음 원본) 다시 01 로 돌아갈 수 있다 — 이전 행을 완료로 남기거나 단조 증가 단계로 저장하지 않는다
+// (N4 의 monotonic presentation 과 공유하지 않는다). judge 에는 04·05 를 가르는 하위 단계가 없으므로
+// 둘 중 하나만 현재 단계로 고르지 않는다(running 이면 둘 다 진행 중).
+// - null 은 정보 없음이다 — 0·완료·이전 값·추정값으로 채우지 않고 그 조각을 빼고 쓴다.
+// - 이전 poll 값을 state 에 쌓지 않는다(재시도·새 시도 때 이전 detail 이 남지 않는다).
+// - 퍼센트를 만들지 않는다. 아래 전체 분석 % 는 기존 top-level progress 그대로다.
+// ─────────────────────────────────────────────────────────────────
+
+const LOG_DESCRIPTION = '완료된 항목은 분리하고, 현재 판단만 선명하게 정리 중 입니다.';
+
+const ACTIVITY_LABEL: Record<NonNullable<ApiAnalysisProgress['activity']>, string> = {
+  split: '영역을 나누는 중',
+  ocr: '텍스트를 추출하는 중',
+  merge: '텍스트를 병합하고 역할을 분석하는 중',
+  finalize: '분석 결과를 정리하는 중',
+};
+
+const ACTIVITY_REGION_VERB: Partial<Record<NonNullable<ApiAnalysisProgress['activity']>, string>> = {
+  ocr: '텍스트 추출 중',
+  merge: '병합·역할 분석 중',
+};
+
+/** running 이 아닐 때 analyze 상태를 짧게 덧붙이는 말 — running 은 activity 가 대신 말한다. */
+const ANALYZE_STATUS_LABEL: Partial<Record<ApiAnalysisProgress['status'], string>> = {
+  waiting: '대기',
+  retrying: '재시도 대기',
+  failed: '실패',
+};
+
+const DETAIL_CAPTION_BY_ACTIVITY: Record<NonNullable<ApiAnalysisProgress['activity']>, { title: string; description: string }> = {
+  split: { title: '영역 나누는 중', description: '원본 이미지를 콘텐츠 영역으로 나누고 있습니다.' },
+  ocr: { title: '텍스트 추출 중', description: '영역 속 텍스트와 위치를 읽고 있습니다.' },
+  merge: { title: '병합·역할 분석 중', description: '추출한 텍스트를 합치고 역할을 구분하고 있습니다.' },
+  finalize: { title: '분석 결과 정리 중', description: '분석 결과를 정리하고 있습니다.' },
+};
+
+const JUDGE_CAPTION_BY_STATUS: Record<ApiAnalysisProgress['status'], { title: string; description: string }> = {
+  waiting: { title: '영역별 판정 대기 중', description: '영역별 판정 시작을 기다리고 있습니다.' },
+  retrying: { title: '영역별 판정 재시도 대기 중', description: '일부 영역 판정을 다시 시도하기 전입니다.' },
+  running: { title: '영역별 판정 중', description: '영역마다 번역 대상과 현지 적합성을 확인하고 있습니다.' },
+  // 판정 실행 실패 종료 — 전체 실패 표시(FAILED_CAPTION)는 isFailed 일 때만이고, 여기선 "판정 중"이라고만 하지 않는다
+  failed: { title: '영역별 판정 중단', description: '영역별 판정을 마치지 못했습니다.' },
+};
+
+function resolveDetailCaption(detail: ApiAnalysisProgress): { title: string; description: string } {
+  if (detail.phase === 'judge') return JUDGE_CAPTION_BY_STATUS[detail.status];
+  if (detail.status === 'waiting') return { title: '분석 대기 중', description: '분석 시작을 기다리고 있습니다.' };
+  if (detail.status === 'retrying') return { title: '분석 재시도 대기 중', description: '분석을 다시 시도하기 전입니다.' };
+  // activity=null 이면 특정 작업을 하고 있다고 추정하지 않는다
+  if (detail.activity) return DETAIL_CAPTION_BY_ACTIVITY[detail.activity];
+  return { title: '이미지 분석 중', description: '원본 이미지를 분석하고 있습니다.' };
+}
+
+function describeActivity(detail: ApiAnalysisProgress): string | null {
+  const { activity, current } = detail;
+  if (!activity) return null;
+  const verb = ACTIVITY_REGION_VERB[activity];
+  if (verb && current && current.regionIndex != null && current.regionCountInSource != null) {
+    return `영역 ${current.regionCountInSource}개 중 ${current.regionIndex}번째 ${verb}`;
+  }
+  return ACTIVITY_LABEL[activity];
+}
+
+/** ANALYSIS LOG 설명 줄에 넣을 한 줄. 예: "원본 2장 중 1번째 · 영역 3개 중 2번째 텍스트 추출 중" */
+function describeDetailLine(detail: ApiAnalysisProgress): string {
+  const { judge, current } = detail;
+  if (detail.phase === 'judge' && judge) {
+    const parts = [
+      `판정 대상 ${judge.total}개`,
+      `완료 ${judge.done}`,
+      `자동 제외 ${judge.excluded}`,
+      `진행 중 ${judge.running}`,
+      `대기 ${judge.waiting}`,
+    ];
+    if (judge.retrying > 0) parts.push(`재시도 대기 ${judge.retrying}`);
+    if (judge.failed > 0) parts.push(`실패 ${judge.failed}`);
+    if (judge.cancelled > 0) parts.push(`취소 ${judge.cancelled}`);
+    return parts.join(' · ');
+  }
+  const parts = [current ? `원본 ${detail.sourceTotal}장 중 ${current.sourceIndex}번째` : `원본 ${detail.sourceTotal}장`];
+  const activityText = describeActivity(detail);
+  if (activityText) parts.push(activityText);
+  else if (ANALYZE_STATUS_LABEL[detail.status]) parts.push(ANALYZE_STATUS_LABEL[detail.status]!);
+  return parts.join(' · ');
+}
+
+const ALL_PENDING: ProcessingStep['state'][] = ['pending', 'pending', 'pending', 'pending', 'pending'];
+
+// analyze·running 의 activity → 5단계 행. 이번 poll 값만 본다 — 원본이 바뀌면 다시 01 이 진행 중이다.
+// finalize 는 모든 원본의 split/ocr/merge 뒤라 01~03 완료를 계약상 알 수 있다.
+const STEP_STATES_BY_ACTIVITY: Record<NonNullable<ApiAnalysisProgress['activity']>, ProcessingStep['state'][]> = {
+  split: ['active', 'pending', 'pending', 'pending', 'pending'],
+  ocr: ['pending', 'active', 'pending', 'pending', 'pending'],
+  merge: ['pending', 'pending', 'active', 'pending', 'pending'],
+  finalize: ['done', 'done', 'done', 'pending', 'pending'],
+};
+
+/**
+ * analysisProgress 가 있을 때의 5단계 행 상태 — 계약으로 확실히 알 수 있는 것만 표시한다.
+ * - analyze: status=running 이고 activity 가 있을 때만 그 행을 진행 중으로. waiting/retrying/activity=null 은 전부 대기.
+ * - judge: analyze 가 끝났으므로 01~03 완료. 04·05 는 구분할 하위 단계가 없어 running 이면 둘 다 진행 중,
+ *   그 외(waiting/retrying/failed)는 둘 다 대기.
+ */
+function resolveAnalysisProgressStepStates(detail: ApiAnalysisProgress): ProcessingStep['state'][] {
+  if (detail.phase === 'judge') {
+    const judgeState = detail.status === 'running' ? 'active' : 'pending';
+    return ['done', 'done', 'done', judgeState, judgeState];
+  }
+  if (detail.status === 'running' && detail.activity) return STEP_STATES_BY_ACTIVITY[detail.activity];
+  return ALL_PENDING;
+}
+
 export function N2AnalysisView({
   status,
   progressOverride,
   isCompleted = false,
+  isFailed = false,
 }: {
   status: ApiJobTaskStatus;
+  /**
+   * N2 전체 분석 실패(currentStep=N2 && jobStatus=failed) — page.tsx 가 그 조건으로만 넘긴다.
+   * failedCount·stages.section=failed·progress<1·analysisProgress.status=failed 만으로는 true 가 아니다
+   * (LOCAL_JUDGE_FAILED 는 그 영역만 제외하고 N3 로 넘어갈 수 있다).
+   */
+  isFailed?: boolean;
   /**
    * 서버가 이미 N2 를 끝냈다(currentStep 이 N2 를 벗어났다)는 뜻 — page.tsx 가 다음 화면으로
    * 넘어가기 직전 짧게 완료 상태를 보여 줄 때만 true 로 넘긴다. 5단계 전부를 완료로 그린다.
@@ -165,8 +296,17 @@ export function N2AnalysisView({
   progressOverride?: number;
 }) {
   const coarseStage = isCompleted ? 'done' : resolveCoarseStage(status.stages, progressOverride);
-  const steps = buildFiveSteps(FIVE_STEP_STATES_BY_COARSE_STAGE[coarseStage]);
-  const caption = resolveOverlayCaption(coarseStage);
+  // 완료 표시(isCompleted)는 N3 응답으로 그린다 — 그 응답엔 analysisProgress 가 없어 기존 5단계 완료로 그린다.
+  const detail = isCompleted ? undefined : status.analysisProgress;
+  // analysisProgress 가 있으면 행도 그 값으로, 없을 때만 기존 coarse stages 해석(레거시 응답 그대로).
+  const stepStates = detail ? resolveAnalysisProgressStepStates(detail) : FIVE_STEP_STATES_BY_COARSE_STAGE[coarseStage];
+  // 전체 실패면 진행 중인 행이 없다 — 별도 실패 행 디자인이 없어 "진행 중"만 "대기"로 낮춘다(완료 행은 그대로).
+  const steps = buildFiveSteps(stepStates.map((state) => (isFailed && state === 'active' ? 'pending' : state)));
+  const caption = isFailed
+    ? FAILED_CAPTION
+    : detail
+      ? resolveDetailCaption(detail)
+      : resolveOverlayCaption(coarseStage);
   const progressPercent = Math.round((progressOverride ?? status.progress ?? 0) * 100);
   const failedItems = (status.items ?? []).filter((i) => i.status === 'failed');
 
@@ -177,11 +317,11 @@ export function N2AnalysisView({
         title: '이미지 분석',
         description: '등록한 이미지의 텍스트와 구조를 분석하고 있습니다.',
       }}
-      statusTagLabel="진행중"
+      statusTagLabel={isFailed ? '분석 실패' : '진행중'}
       visual={{
         // 공용 GIF — N2/N4가 같은 자산을 쓴다(별도 복사본 금지).
         src: '/process/ai-processing.gif',
-        headline: HEADLINE_FALLBACK,
+        headline: isFailed ? FAILED_HEADLINE : HEADLINE_FALLBACK,
         description: '텍스트만 추출하지 않고, 번역에 필요한 섹션과 판단 근거를 함께 정리합니다.',
         overlayTopLabel: 'SCAN  ·  STRUCTURE  ·  CONTEXT',
         overlayBottomTitle: caption.title,
@@ -190,13 +330,14 @@ export function N2AnalysisView({
       log={{
         sectionLabel: 'ANALYSIS LOG',
         heading: '지금 처리하는 일',
-        description: '완료된 항목은 분리하고, 현재 판단만 선명하게 정리 중 입니다.',
+        description: detail ? describeDetailLine(detail) : LOG_DESCRIPTION,
       }}
       steps={steps}
       progressPercent={progressPercent}
-      progressHint={AUTO_ADVANCE_NOTICE}
+      progressHint={isFailed ? FAILED_NOTICE : AUTO_ADVANCE_NOTICE}
       pauseButtonTitle={PAUSE_BUTTON_TITLE}
       failedItems={failedItems}
+      failedItemsTitle={isFailed ? '이미지 분석에 실패했습니다' : undefined}
     />
   );
 }
