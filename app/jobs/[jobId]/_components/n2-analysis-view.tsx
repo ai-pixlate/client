@@ -151,13 +151,15 @@ function buildFiveSteps(states: ProcessingStep['state'][]): ProcessingStep[] {
 // ─────────────────────────────────────────────────────────────────
 // analysisProgress(선택) 상세 진행 — server 315816e docs/openapi.yaml AnalysisProgress.
 //
-// 기존 N2 화면(Figma 660:4139)을 바꾸지 않는다 — 5단계 목록·progress 는 그대로 두고, 서버가 이번
-// poll 에 준 값만 기존 동적 문구 두 곳에 넣는다.
+// 기존 N2 화면(Figma 660:4139)을 바꾸지 않는다 — 5단계 목록·progress 레이아웃은 그대로 두고, 서버가
+// 이번 poll 에 준 값을 기존 동적 문구 두 곳과 5단계 행 상태에 같이 쓴다(셋이 서로 다른 상태를 말하지 않게).
 // - GIF 하단 caption: 지금 하는 작업(activity / phase·status)
 // - ANALYSIS LOG 설명 줄: 원본·영역 위치 또는 판정 수치(짧게 한 줄)
-// 원본마다 split → (영역마다) ocr → merge 가 반복되고 그 뒤 finalize · judge 다. activity 를 5단계 행에
-// 매핑하거나 단조 증가 단계로 저장하지 않는다(행은 기존 stages 해석 그대로다). judge 에는 04·05 를
-// 가르는 하위 단계가 없으므로 둘의 순서를 만들지 않는다.
+// - 5단계 행: resolveAnalysisProgressStepStates — analysisProgress 가 없을 때만 기존 coarse stages 해석
+// 원본마다 split → (영역마다) ocr → merge 가 반복되고 그 뒤 finalize · judge 다. 그래서 행은 01 → 02 → 03
+// → (다음 원본) 다시 01 로 돌아갈 수 있다 — 이전 행을 완료로 남기거나 단조 증가 단계로 저장하지 않는다
+// (N4 의 monotonic presentation 과 공유하지 않는다). judge 에는 04·05 를 가르는 하위 단계가 없으므로
+// 둘 중 하나만 현재 단계로 고르지 않는다(running 이면 둘 다 진행 중).
 // - null 은 정보 없음이다 — 0·완료·이전 값·추정값으로 채우지 않고 그 조각을 빼고 쓴다.
 // - 이전 poll 값을 state 에 쌓지 않는다(재시도·새 시도 때 이전 detail 이 남지 않는다).
 // - 퍼센트를 만들지 않는다. 아래 전체 분석 % 는 기존 top-level progress 그대로다.
@@ -191,10 +193,16 @@ const DETAIL_CAPTION_BY_ACTIVITY: Record<NonNullable<ApiAnalysisProgress['activi
   finalize: { title: '분석 결과 정리 중', description: '분석 결과를 정리하고 있습니다.' },
 };
 
+const JUDGE_CAPTION_BY_STATUS: Record<ApiAnalysisProgress['status'], { title: string; description: string }> = {
+  waiting: { title: '영역별 판정 대기 중', description: '영역별 판정 시작을 기다리고 있습니다.' },
+  retrying: { title: '영역별 판정 재시도 대기 중', description: '일부 영역 판정을 다시 시도하기 전입니다.' },
+  running: { title: '영역별 판정 중', description: '영역마다 번역 대상과 현지 적합성을 확인하고 있습니다.' },
+  // 판정 실행 실패 종료 — 전체 실패 표시(FAILED_CAPTION)는 isFailed 일 때만이고, 여기선 "판정 중"이라고만 하지 않는다
+  failed: { title: '영역별 판정 중단', description: '영역별 판정을 마치지 못했습니다.' },
+};
+
 function resolveDetailCaption(detail: ApiAnalysisProgress): { title: string; description: string } {
-  if (detail.phase === 'judge') {
-    return { title: '영역별 판정 중', description: '영역마다 번역 대상과 현지 적합성을 확인하고 있습니다.' };
-  }
+  if (detail.phase === 'judge') return JUDGE_CAPTION_BY_STATUS[detail.status];
   if (detail.status === 'waiting') return { title: '분석 대기 중', description: '분석 시작을 기다리고 있습니다.' };
   if (detail.status === 'retrying') return { title: '분석 재시도 대기 중', description: '분석을 다시 시도하기 전입니다.' };
   // activity=null 이면 특정 작업을 하고 있다고 추정하지 않는다
@@ -216,7 +224,13 @@ function describeActivity(detail: ApiAnalysisProgress): string | null {
 function describeDetailLine(detail: ApiAnalysisProgress): string {
   const { judge, current } = detail;
   if (detail.phase === 'judge' && judge) {
-    const parts = [`판정 대상 ${judge.total}개`, `완료 ${judge.done}`, `자동 제외 ${judge.excluded}`, `진행 중 ${judge.running}`];
+    const parts = [
+      `판정 대상 ${judge.total}개`,
+      `완료 ${judge.done}`,
+      `자동 제외 ${judge.excluded}`,
+      `진행 중 ${judge.running}`,
+      `대기 ${judge.waiting}`,
+    ];
     if (judge.retrying > 0) parts.push(`재시도 대기 ${judge.retrying}`);
     if (judge.failed > 0) parts.push(`실패 ${judge.failed}`);
     if (judge.cancelled > 0) parts.push(`취소 ${judge.cancelled}`);
@@ -227,6 +241,32 @@ function describeDetailLine(detail: ApiAnalysisProgress): string {
   if (activityText) parts.push(activityText);
   else if (ANALYZE_STATUS_LABEL[detail.status]) parts.push(ANALYZE_STATUS_LABEL[detail.status]!);
   return parts.join(' · ');
+}
+
+const ALL_PENDING: ProcessingStep['state'][] = ['pending', 'pending', 'pending', 'pending', 'pending'];
+
+// analyze·running 의 activity → 5단계 행. 이번 poll 값만 본다 — 원본이 바뀌면 다시 01 이 진행 중이다.
+// finalize 는 모든 원본의 split/ocr/merge 뒤라 01~03 완료를 계약상 알 수 있다.
+const STEP_STATES_BY_ACTIVITY: Record<NonNullable<ApiAnalysisProgress['activity']>, ProcessingStep['state'][]> = {
+  split: ['active', 'pending', 'pending', 'pending', 'pending'],
+  ocr: ['pending', 'active', 'pending', 'pending', 'pending'],
+  merge: ['pending', 'pending', 'active', 'pending', 'pending'],
+  finalize: ['done', 'done', 'done', 'pending', 'pending'],
+};
+
+/**
+ * analysisProgress 가 있을 때의 5단계 행 상태 — 계약으로 확실히 알 수 있는 것만 표시한다.
+ * - analyze: status=running 이고 activity 가 있을 때만 그 행을 진행 중으로. waiting/retrying/activity=null 은 전부 대기.
+ * - judge: analyze 가 끝났으므로 01~03 완료. 04·05 는 구분할 하위 단계가 없어 running 이면 둘 다 진행 중,
+ *   그 외(waiting/retrying/failed)는 둘 다 대기.
+ */
+function resolveAnalysisProgressStepStates(detail: ApiAnalysisProgress): ProcessingStep['state'][] {
+  if (detail.phase === 'judge') {
+    const judgeState = detail.status === 'running' ? 'active' : 'pending';
+    return ['done', 'done', 'done', judgeState, judgeState];
+  }
+  if (detail.status === 'running' && detail.activity) return STEP_STATES_BY_ACTIVITY[detail.activity];
+  return ALL_PENDING;
 }
 
 export function N2AnalysisView({
@@ -256,12 +296,12 @@ export function N2AnalysisView({
   progressOverride?: number;
 }) {
   const coarseStage = isCompleted ? 'done' : resolveCoarseStage(status.stages, progressOverride);
-  // 전체 실패면 진행 중인 행이 없다 — 별도 실패 행 디자인이 없어 "진행 중"만 "대기"로 낮춘다(완료 행은 그대로).
-  const steps = buildFiveSteps(
-    FIVE_STEP_STATES_BY_COARSE_STAGE[coarseStage].map((state) => (isFailed && state === 'active' ? 'pending' : state)),
-  );
   // 완료 표시(isCompleted)는 N3 응답으로 그린다 — 그 응답엔 analysisProgress 가 없어 기존 5단계 완료로 그린다.
   const detail = isCompleted ? undefined : status.analysisProgress;
+  // analysisProgress 가 있으면 행도 그 값으로, 없을 때만 기존 coarse stages 해석(레거시 응답 그대로).
+  const stepStates = detail ? resolveAnalysisProgressStepStates(detail) : FIVE_STEP_STATES_BY_COARSE_STAGE[coarseStage];
+  // 전체 실패면 진행 중인 행이 없다 — 별도 실패 행 디자인이 없어 "진행 중"만 "대기"로 낮춘다(완료 행은 그대로).
+  const steps = buildFiveSteps(stepStates.map((state) => (isFailed && state === 'active' ? 'pending' : state)));
   const caption = isFailed
     ? FAILED_CAPTION
     : detail
