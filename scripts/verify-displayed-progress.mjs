@@ -38,15 +38,13 @@ const SECOND = 1000;
 const ticksOf = (ms) => Math.round(ms / DISPLAY_TICK_MS);
 
 /**
- * [상한, 그 상한이 열려 있는 시간(ms)] 목록대로 tick 을 돌린다. 상한은 내려가지 않는다(hook 과 같다).
- * 매 tick 의 화면 정수를 돌려준다.
+ * [상한, 그 상한이 열려 있는 시간(ms)] 목록대로 tick 을 돌린다. 상한은 그 구간의 값 그대로다(hook 과 같다 —
+ * 상한이 내려가도 숫자는 내려가지 않는다). 매 tick 의 화면 정수를 돌려준다.
  */
 function simulate(phases, { start = 0, isFrozen = false } = {}) {
   let value = start;
-  let ceiling = 0;
   const shown = [toShownPercent(value, false)];
-  for (const [phaseCeiling, ms] of phases) {
-    ceiling = Math.max(ceiling, phaseCeiling);
+  for (const [ceiling, ms] of phases) {
     for (let i = 0; i < ticksOf(ms); i += 1) {
       value = stepDisplayedProgress(value, ceiling, isFrozen);
       shown.push(toShownPercent(value, false));
@@ -120,6 +118,22 @@ console.log('\n[3] 처리 중 타임라인 — 감소·점프·100 없음');
   check('상한 근처에서는 10초 동안 거의 움직이지 않는다(≤ 1)', late.at(-1) - late[0] <= 1);
   const render = simulate([[N4.render, 10 * 60 * SECOND]]);
   check('N4 render 에 10분 머물러도 99 를 넘지 않는다', render.shown.every((v) => v <= 99));
+}
+
+console.log('\n[3-1] N4 병렬 섹션 — 상한이 내려가면 숫자는 머문다');
+{
+  // inpaint·translate·verify running(상한 59) → translate running · render done(상한 39) → render running(99)
+  const parallel = simulate([
+    [N4.verify, 8 * SECOND],
+    [N4.translate, 6 * SECOND],
+  ]);
+  const atDrop = parallel.shown[ticksOf(8 * SECOND)];
+  const duringTranslate = parallel.shown.slice(ticksOf(8 * SECOND));
+  check('상한이 내려가도 숫자는 줄지 않는다', neverDecreases(parallel.shown));
+  check('render=done 은 상한을 열지 않는다 — translate 동안 39 또는 그때 값 이상으로 오르지 않는다', duringTranslate.every((v) => v <= Math.max(39, atDrop)), `${atDrop} → ${duringTranslate.at(-1)}`);
+  const resumed = simulate([[N4.render, 2 * SECOND]], { start: parallel.value });
+  check('render running 에서 다시 오른다', resumed.shown.at(-1) > parallel.shown.at(-1));
+  check('render 진입 순간 60 으로 뛰지 않는다', resumed.shown[1] - parallel.shown.at(-1) <= 1);
 }
 
 console.log('\n[4] 실패면 멈춘다');

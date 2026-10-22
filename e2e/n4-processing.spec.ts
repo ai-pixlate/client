@@ -3,6 +3,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { MOCK_BRAND_ID, MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 
 import {
+  expectCompletionCopy,
   expectCompletionPresentation,
   expectSmoothProcessing,
   formatTimeline,
@@ -53,7 +54,8 @@ async function reachN4(page: Page): Promise<void> {
   });
   await page.getByRole('button', { name: '다음' }).click();
   await page.waitForURL(new RegExp(`/jobs/${MOCK_JOB_ID}$`));
-  await page.getByRole('button', { name: '번역 시작' }).waitFor({ state: 'visible', timeout: 10_000 });
+  // 기본 mock N2 는 analyze → finalize → judge 를 poll 마다 보여 준 뒤 N3 로 간다(약 11초)
+  await page.getByRole('button', { name: '번역 시작' }).waitFor({ state: 'visible', timeout: 30_000 });
   await page.getByRole('button', { name: '번역 시작' }).click();
 }
 
@@ -284,6 +286,8 @@ test('N4 D — jobStatus=failed·render=done·progress=1 이어도 완료가 아
 
 // ── 로딩 표현 안정화: 서버 관측 단계 · 표시 % · 실제 완료(N5) 를 분리 ──
 const N4_TITLE = '번역 중';
+const N4_PARALLEL_CAPTION = '여러 번역 작업 함께 처리 중';
+const N4_COMPLETION_COPY = { heading: '번역 완료', line: '번역과 이미지 적용이 완료되었습니다.', hint: '검수 화면으로 이동합니다.' };
 
 /** 같은 실행 안에서 행 상태가 바뀐 순서(연속 중복 제거) */
 const rowSequence = (snaps: DomSnap[]) => snaps.map((s) => s.rows).filter((r, i, arr) => r !== arr[i - 1]);
@@ -332,7 +336,7 @@ test('N4 E-2 — 기본 순차 mock: 행은 서버 단계 순서대로, % 는 �
   expectCompletionPresentation(rec, N4_TITLE, 'N5', timeline);
 });
 
-test('N4 E-3 — 섹션 병렬: 가장 앞 running 이 inpaint 로 남아도 뒤 단계가 관측되면 % 가 01 구간에 묶이지 않는다', async ({
+test('N4 E-3 — 섹션 병렬: 네 단계가 함께 running 이면 01~05 를 함께 진행 중으로 보이고 % 가 01 구간에 묶이지 않는다', async ({
   page,
 }) => {
   test.setTimeout(90_000);
@@ -349,8 +353,9 @@ test('N4 E-3 — 섹션 병렬: 가장 앞 running 이 inpaint 로 남아도 뒤
 
   const timeline = formatTimeline(rec);
   const snaps = processingSnaps(rec, N4_TITLE, 'N5');
-  // 행은 기존 관측 규칙(가장 앞 running) 그대로 01 진행 중이다
-  expect(new Set(snaps.map((s) => s.rows)), timeline).toEqual(new Set(['APPPP']));
+  // 처음 poll 은 inpaint 하나만 running, 그 뒤에는 서버가 running 이라고 한 단계를 모두 진행 중으로 보인다
+  expect(rowSequence(snaps), timeline).toEqual(['APPPP', 'AAAAA']);
+  expect(snaps.at(-1)!.cap, timeline).toBe(N4_PARALLEL_CAPTION);
   expectSmoothProcessing(snaps, timeline);
   expect(snaps.at(-1)!.pct!, `inpaint 구간(19)에 묶이지 않는다\n${timeline}`).toBeGreaterThan(25);
 });
@@ -400,4 +405,75 @@ test('N4 E-5 — N4 도중 새로 시작(페이지 이동)한 다음 실행이 �
   expect(snaps[0].pct!, `두 번째 실행 첫 표시 %\n${timeline}`).toBeLessThanOrEqual(5);
   expectSmoothProcessing(snaps, timeline);
   expectCompletionPresentation(rec, N4_TITLE, 'N5', timeline, secondFrom);
+});
+
+test('N4 E-6 — N5 응답 뒤 완료 표시 동안 상태 태그·LOG·안내가 모두 완료를 말하고, 그 전에는 완료라고 하지 않는다', async ({ page }) => {
+  test.setTimeout(90_000);
+  const rec = await recordProcessing(page);
+  await setN4Script(page, [
+    { progress: 0.8, stages: [n4Stage('render', 'running')] },
+    { progress: 0.8, stages: [n4Stage('render', 'running')] },
+    { progress: 1, stages: [n4Stage('render', 'done')], advance: true },
+  ]);
+  await reachN4(page);
+  await expect(page.locator('[data-testid="n5-panel"]')).toBeVisible({ timeout: 30_000 });
+
+  const timeline = formatTimeline(rec);
+  const { first100At, leftAt } = expectCompletionPresentation(rec, N4_TITLE, 'N5', timeline);
+  expectCompletionCopy(rec, N4_TITLE, 'N5', N4_COMPLETION_COPY, timeline);
+  const processing = processingSnaps(rec, N4_TITLE, 'N5');
+  expect(new Set(processing.map((d) => d.tag)), timeline).toEqual(new Set(['진행중']));
+  expect(new Set(processing.map((d) => d.heading)), timeline).toEqual(new Set(['지금 처리하는 일']));
+  expect(new Set(processing.map((d) => d.hint)), timeline).toEqual(new Set(['완료되면 검수 화면으로 자동 이동합니다.']));
+  console.log(`N4 100% 노출 ${leftAt - first100At}ms`);
+});
+
+test('N4 E-7 — 병렬 running 은 해당 행을 모두 진행 중으로, render=done 은 완료·상한으로 쓰지 않고, 상한은 running 인 가장 뒤 단계로 연다', async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  const rec = await recordProcessing(page);
+  const A = { progress: 0.3, stages: [n4Stage('inpaint', 'running'), n4Stage('translate', 'running'), n4Stage('verify', 'running')] };
+  const B = { progress: 0.65, stages: [n4Stage('translate', 'running'), n4Stage('render', 'done')] };
+  const C = { progress: 0.6, stages: [n4Stage('render', 'running')] };
+  await setN4Script(page, [A, A, A, B, B, C, C, { progress: 1, stages: [n4Stage('render', 'done')], advance: true }]);
+  await reachN4(page);
+  await expect(page.locator('[data-testid="n5-panel"]')).toBeVisible({ timeout: 40_000 });
+
+  const timeline = formatTimeline(rec);
+  const snaps = processingSnaps(rec, N4_TITLE, 'N5');
+  // A → B → C: 서버가 running 이라고 한 단계만 진행 중. render=done 은 04·05 완료가 아니다
+  expect(rowSequence(snaps), timeline).toEqual(['AAAPP', 'DAPPP', 'DDDAA']);
+  const a = snaps.filter((d) => d.rows === 'AAAPP');
+  const b = snaps.filter((d) => d.rows === 'DAPPP');
+  const c = snaps.filter((d) => d.rows === 'DDDAA');
+  // A: 하나의 단계만 지금 작업이라고 말하지 않는다. 01 구간(19)에 묶이지 않는다
+  expect(new Set(a.map((d) => d.cap)), timeline).toEqual(new Set([N4_PARALLEL_CAPTION]));
+  expect(a.at(-1)!.pct!, timeline).toBeGreaterThan(19);
+  // B: translate 만 running — render=done 으로 99 상한을 열지 않는다(02 상한 39 안에 머문다)
+  expect(new Set(b.map((d) => d.cap)), timeline).toEqual(new Set(['번역·용어 맞춤 중']));
+  for (const d of b) expect(d.pct!, timeline).toBeLessThanOrEqual(Math.max(39, b[0].pct!));
+  // C: render running 에서 상한이 열려 계속 오르되, render 하한(60)으로 뛰지 않는다
+  expect(c[0].pct!, timeline).toBeGreaterThanOrEqual(b.at(-1)!.pct!);
+  expect(c[0].pct!, timeline).toBeLessThan(60);
+  expect(c.at(-1)!.pct!, timeline).toBeGreaterThan(c[0].pct!);
+  expectSmoothProcessing(snaps, timeline);
+  // D: N5 응답 뒤에만 100 · 완료 표시
+  expectCompletionPresentation(rec, N4_TITLE, 'N5', timeline);
+  expectCompletionCopy(rec, N4_TITLE, 'N5', N4_COMPLETION_COPY, timeline);
+});
+
+test('N4 E-8 — translate running · render done 에 오래 머물러도 render=done 으로 상한을 열지 않는다(02 상한 39)', async ({ page }) => {
+  test.setTimeout(90_000);
+  const rec = await recordProcessing(page);
+  await setN4Script(page, [PARTIAL_RENDER_DONE]);
+  await reachN4(page);
+  await expect(page.getByRole('heading', { name: N4_TITLE })).toBeVisible({ timeout: 5_000 });
+  await page.waitForTimeout(12_000);
+
+  const timeline = formatTimeline(rec);
+  const snaps = processingSnaps(rec, N4_TITLE, 'N5');
+  expect(new Set(snaps.map((d) => d.rows)), timeline).toEqual(new Set(['DAPPP']));
+  for (const d of snaps) expect(d.pct!, timeline).toBeLessThanOrEqual(39);
+  expectSmoothProcessing(snaps, timeline);
 });

@@ -10,7 +10,8 @@
  *
  * 표시 % 규칙
  * - 서버에서 관측한 단계는 숫자가 "올라갈 수 있는 상한(ceiling)"만 연다. 단계가 바뀌었다고 그 단계의
- *   하한으로 숫자를 끌어올리지 않는다(30 → 80 같은 점프 없음). 상한은 내려가지 않는다.
+ *   하한으로 숫자를 끌어올리지 않는다(30 → 80 같은 점프 없음). 상한은 매 poll 의 관측 단계로 정하며, 상한이
+ *   지금 값보다 낮아지면 숫자는 내려가지 않고 그 자리에 머문다.
  * - 화면 tick 마다 상한까지 남은 거리의 일부만큼, 그러나 tick 당 MAX_STEP_PER_TICK 이하로만 오른다.
  *   같은 단계에 오래 머물면 상한 근처에서 점점 느려지며 멈춘다. 숫자는 내려가지 않는다.
  * - 처리 중에는 PROCESSING_MAX_PERCENT(99)를 넘지 않는다. 서버가 실패를 알리면 멈춘다.
@@ -41,8 +42,11 @@ export const PROCESSING_MAX_PERCENT = 99;
 /** 완료 표시: 현재 값 → 100 으로 올리는 시간과 그 tick(눈에 보이게 촘촘히) */
 export const COMPLETION_ANIMATE_MS = 450;
 export const COMPLETION_TICK_MS = 40;
-/** 완료 표시: 100% 와 완료 상태를 확인할 수 있게 유지하는 시간 */
-export const COMPLETION_HOLD_MS = 300;
+/**
+ * 완료 표시: 100% 와 완료 상태를 확인할 수 있게 유지하는 시간. 10/22 (3) — 300ms 에서는 100% 가 실측 약 0.27초만
+ * 보여 완료 문구(상태 태그·LOG·안내)와 함께 알아보기 짧아 400ms 로 늘렸다(총 약 0.85초, 서버 완료 응답 뒤에만).
+ */
+export const COMPLETION_HOLD_MS = 400;
 /** page.tsx 가 실제 완료 응답 뒤 처리 화면을 유지하는 총 시간(올리기 + 유지) */
 export const COMPLETION_PRESENTATION_MS = COMPLETION_ANIMATE_MS + COMPLETION_HOLD_MS;
 

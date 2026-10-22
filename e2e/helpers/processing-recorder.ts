@@ -4,7 +4,8 @@ import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 
 // ─────────────────────────────────────────────────────────────────
 // N2/N4 처리 화면을 사용자 눈 기준으로 시간 순서대로 기록한다.
-// - dom: DOM 이 바뀔 때마다 h1·표시 %·5단계 행·GIF caption·LOG 설명 줄(연속 중복 제거)
+// - dom: DOM 이 바뀔 때마다 h1·표시 %·5단계 행·GIF caption·status tag·LOG 제목·LOG 설명 줄·progress 안내
+//   (연속 중복 제거)
 // - polls: GET /jobs/{jobId}/tasks 응답마다 서버가 보낸 값
 // 두 기록 모두 페이지의 Date.now() 기준이라 같은 시계로 비교할 수 있다. exposeFunction 으로
 // Node 쪽 배열에 쌓기 때문에 page.goto 로 다시 들어가도(같은 context 두 번 실행) 이어서 기록된다.
@@ -19,7 +20,13 @@ export interface DomSnap {
   pct: number | null;
   rows: RowCode;
   cap: string;
+  /** 패널 좌상단 상태 태그(진행중·완료·분석 실패) */
+  tag: string;
+  /** LOG 제목(지금 처리하는 일 · 분석 완료 …) */
+  heading: string;
   line: string;
+  /** progress bar 아래 안내 문구 */
+  hint: string;
 }
 
 export interface PollSnap {
@@ -62,7 +69,10 @@ export async function recordProcessing(page: Page): Promise<ProcessingRecord> {
       const rows = rowEls.length === 5 ? rowEls.map((p) => code[(p.nextElementSibling?.textContent ?? '').trim()] ?? '?').join('') : '';
       const cap = Array.from(document.querySelectorAll('p')).find((p) => p.className.includes('text-[#ff6a38]'))?.textContent?.trim() ?? '';
       const line = document.querySelector('[data-testid="processing-log-description"]')?.textContent?.replace(/\s+/g, ' ').trim() ?? '';
-      const entry = { h1, pct: bar ? Number(bar.getAttribute('aria-valuenow')) : null, rows, cap, line };
+      const tag = document.querySelector('div[class*="bg-[#f5f5f5]"] > p')?.textContent?.trim() ?? '';
+      const heading = document.querySelector('h2')?.textContent?.trim() ?? '';
+      const hint = bar?.nextElementSibling?.textContent?.trim() ?? '';
+      const entry = { h1, pct: bar ? Number(bar.getAttribute('aria-valuenow')) : null, rows, cap, tag, heading, line, hint };
       const key = JSON.stringify(entry);
       if (key === last) return;
       last = key;
@@ -123,7 +133,7 @@ export function formatTimeline(rec: ProcessingRecord, from = 0, until = Infinity
     ...rec.polls.filter((p) => p.t >= from && p.t <= until).map((p) => ({ t: p.t, s: `POLL ${p.currentStep} ${p.jobStatus} p=${p.progress} [${p.stages}] ${p.ap ?? ''}` })),
     ...rec.dom
       .filter((d, i, all) => d.t >= from && d.t <= until && (d.pct !== null || d.h1 !== all[i - 1]?.h1))
-      .map((d) => ({ t: d.t, s: d.pct !== null ? `  ${d.h1} ${d.pct}% ${d.rows} "${d.cap}" ${d.line}` : `  → 화면: ${d.h1 || '(h1 없음)'}` })),
+      .map((d) => ({ t: d.t, s: d.pct !== null ? `  ${d.h1} ${d.pct}% ${d.rows} [${d.tag}] "${d.cap}" ${d.heading}: ${d.line} / ${d.hint}` : `  → 화면: ${d.h1 || '(h1 없음)'}` })),
   ].sort((a, b) => a.t - b.t);
   return rows.map((r) => `${((r.t - t0) / 1000).toFixed(2).padStart(6)}s ${r.s}`).join('\n');
 }
@@ -157,4 +167,37 @@ export function expectCompletionPresentation(rec: ProcessingRecord, title: strin
   // 완료 응답 뒤 처리 화면을 붙잡는 시간은 완료 표시(약 0.8초) 정도다 — 그보다 길게 기다리지 않는다
   expect(left!.t - donePoll!.t, `완료 응답 → 다음 화면\n${context}`).toBeLessThan(1_600);
   return { donePollAt: donePoll!.t, first100At: first100!.t, leftAt: left!.t };
+}
+
+/**
+ * 완료 표시 문구 정합 — 실제 완료(nextStep 응답) 전에는 완료 문구가 없고, 응답 뒤 처리 화면에 남아 있는 동안
+ * (100% 를 그린 순간부터) 상태 태그·LOG·안내가 모두 완료를 말한다. 완료 표시 중 '진행중' 태그가 남지 않는다.
+ */
+export function expectCompletionCopy(
+  rec: ProcessingRecord,
+  title: string,
+  nextStep: string,
+  copy: { heading: string; line: string; hint: string },
+  context: string,
+  from = 0,
+) {
+  const donePollAt = rec.polls.find((p) => p.t >= from && p.currentStep === nextStep)!.t;
+  const screen = onScreen(rec.dom, title).filter((d) => d.t >= from);
+  const before = screen.filter((d) => d.t < donePollAt);
+  const during = screen.filter((d) => d.t >= donePollAt);
+  expect(before.length, context).toBeGreaterThan(0);
+  for (const d of before) {
+    expect(d.tag, `완료 전 상태 태그\n${context}`).not.toBe('완료');
+    expect(d.heading, `완료 전 LOG 제목\n${context}`).not.toBe(copy.heading);
+    expect(d.rows, `완료 전 5행 전부 완료 금지\n${context}`).not.toBe('DDDDD');
+  }
+  const at100 = during.filter((d) => d.pct === 100);
+  expect(at100.length, `완료 표시 중 100%\n${context}`).toBeGreaterThan(0);
+  for (const d of during) {
+    expect(d.tag, `완료 표시 중 상태 태그\n${context}`).toBe('완료');
+    expect(d.rows, `완료 표시 중 5행\n${context}`).toBe('DDDDD');
+    expect(d.heading, `완료 표시 중 LOG 제목\n${context}`).toBe(copy.heading);
+    expect(d.line, `완료 표시 중 LOG 설명\n${context}`).toBe(copy.line);
+    expect(d.hint, `완료 표시 중 안내\n${context}`).toBe(copy.hint);
+  }
 }

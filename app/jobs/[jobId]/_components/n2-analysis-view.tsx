@@ -99,8 +99,18 @@ function resolveOverlayCaption(stage: keyof typeof FIVE_STEP_STATES_BY_COARSE_ST
   return OVERLAY_CAPTION_BY_COARSE_STAGE[stage === 'done' ? 'verify' : stage];
 }
 
-/** 실제 완료(currentStep=N3) 응답 뒤 완료 표시 동안의 caption — Figma 에 없는 상태라 최소 문구로 보완했다. */
+/**
+ * 실제 완료(currentStep=N3) 응답 뒤 완료 표시 동안의 문구 — Figma 에 별도 완료 상태가 없어 기존 슬롯(상태 태그·
+ * GIF caption·LOG·progress 안내) 안에서만 최소한으로 바꾼다. 완료 표시 동안 "진행중"·"…하고 있습니다"·
+ * "끝나면 이동합니다"가 남아 100%·5행 완료와 서로 다른 말을 하지 않게 한다.
+ */
 const N2_COMPLETION_CAPTION = { title: '분석 완료', description: '섹션 확인 단계로 이동합니다.' };
+const N2_COMPLETION_COPY = {
+  statusTag: '완료',
+  logHeading: '분석 완료',
+  logDescription: '이미지 분석이 완료되었습니다.',
+  progressHint: '섹션 확인 단계로 이동합니다.',
+};
 
 function resolveCoarseStage(stages: ApiJobTaskStatus['stages']): keyof typeof FIVE_STEP_STATES_BY_COARSE_STAGE {
   const find = (key: string) => stages?.find((s) => s.key?.toLowerCase() === key);
@@ -224,6 +234,9 @@ const ALL_PENDING: ProcessingStep['state'][] = ['pending', 'pending', 'pending',
 // analyze·running 의 activity → 5단계 행. split/ocr/merge 는 원본마다 반복되는 한 묶음이라 01~03 을 함께
 // 진행 중으로 둔다(원본이 바뀌어도 행이 돌아가지 않는다). finalize 는 모든 원본의 split/ocr/merge 뒤라 01~03
 // 완료를 계약상 알 수 있다.
+// 01~03 이 함께 진행 중이라는 것은 "서버의 세부 단계 3개가 지금 동시에 실행 중"이라는 뜻이 아니다 —
+// "원본별로 반복되는 analyze 작업 묶음이 진행 중"이라는 presentation 이다. 지금 정확히 어느 activity 인지는
+// ANALYSIS LOG 설명 줄(describeDetailLine)에서만 보여 준다.
 const ANALYZE_BUNDLE_ACTIVE: ProcessingStep['state'][] = ['active', 'active', 'active', 'pending', 'pending'];
 const STEP_STATES_BY_ACTIVITY: Record<NonNullable<ApiAnalysisProgress['activity']>, ProcessingStep['state'][]> = {
   split: ANALYZE_BUNDLE_ACTIVE,
@@ -313,7 +326,7 @@ export function N2AnalysisView({
         title: '이미지 분석',
         description: '등록한 이미지의 텍스트와 구조를 분석하고 있습니다.',
       }}
-      statusTagLabel={isFailed ? '분석 실패' : '진행중'}
+      statusTagLabel={isFailed ? '분석 실패' : isCompleted ? N2_COMPLETION_COPY.statusTag : '진행중'}
       visual={{
         // 공용 GIF — N2/N4가 같은 자산을 쓴다(별도 복사본 금지).
         src: '/process/ai-processing.gif',
@@ -325,12 +338,12 @@ export function N2AnalysisView({
       }}
       log={{
         sectionLabel: 'ANALYSIS LOG',
-        heading: '지금 처리하는 일',
-        description: detail ? describeDetailLine(detail) : LOG_DESCRIPTION,
+        heading: isCompleted ? N2_COMPLETION_COPY.logHeading : '지금 처리하는 일',
+        description: isCompleted ? N2_COMPLETION_COPY.logDescription : detail ? describeDetailLine(detail) : LOG_DESCRIPTION,
       }}
       steps={steps}
       progressPercent={progressPercent}
-      progressHint={isFailed ? FAILED_NOTICE : AUTO_ADVANCE_NOTICE}
+      progressHint={isFailed ? FAILED_NOTICE : isCompleted ? N2_COMPLETION_COPY.progressHint : AUTO_ADVANCE_NOTICE}
       pauseButtonTitle={PAUSE_BUTTON_TITLE}
       failedItems={failedItems}
       failedItemsTitle={isFailed ? '이미지 분석에 실패했습니다' : undefined}

@@ -37,10 +37,18 @@ import { hasProcessingFailure, useDisplayedProgress } from './processing/use-dis
 // - 단계가 바뀌어도 다음 구간 하한으로 뛰지 않고 현재 값에서 tick 마다 조금씩 오른다. 이전의 90초
 //   구간 채우기·서버 progress 하한은 쓰지 않는다(2초 polling 에 수 초 만에 끝나는 처리에서 5 → 25 → 50
 //   처럼 뛰거나, 01 구간 19 에 묶여 있다가 N5 로 넘어갔다).
-// - 상한은 행이 고른 단계(가장 앞 running)가 아니라 이번 poll 에 시작된 가장 뒤 단계로 연다. 섹션이
-//   병렬로 진행되면 inpaint 가 끝까지 running 일 수 있어서다(stages 는 task_type 집계 — 하나라도 running
-//   이면 running). 행·caption 은 위 관측 규칙 그대로다.
 // - 2초 polling 사이에 지나간 단계는 관측하지 못할 수 있다 — 그 단계를 화면에 재생하지 않는다.
+//
+// 10/22 (3) — 병렬 섹션 정합(resolveN4Presentation). stages 는 task_type 집계라(하나라도 running 이면
+// running) 섹션이 병렬로 진행되면 여러 단계가 함께 running 이다. 이전에는 행·caption 은 가장 앞 running
+// 하나, 상한은 시작된(running·done) 가장 뒤 단계로 열어 "01 진행 중 · 47%" 처럼 둘이 따로 놀았다.
+// - N4 key 가 둘 이상 오는 응답: running 인 단계 행을 모두 진행 중으로 둔다(서버가 실제로 running 이라고 한
+//   단계뿐이다). 가장 앞 running 보다 앞 단계만 완료로 보고, 그 뒤의 done(예: render=done)은 완료로 그리지
+//   않는다 — 지금 생성된 시도들의 집계일 뿐 이후 render 가 다시 생길 수 있다.
+// - key 가 하나뿐인 호환(sparse) 응답·running 이 없는 응답은 위 resolveN4ObservedStage 순서 규칙 그대로다.
+// - 표시 % 상한은 화면에 진행 중으로 그린 단계 중 가장 뒤 단계로 연다 — done 은 상한을 열지 않는다. 행과
+//   숫자가 같은 상태를 말하고, 숫자는 그 단계 하한으로 뛰지 않고 현재 값에서 오른다.
+// - 여러 단계가 함께 진행 중이면 caption 은 하나의 단계만 지금 작업이라고 말하지 않는 병렬 문구다.
 //
 // stages가 완전히 비어 있거나 전혀 다른 key만 오는 경우(다른 mock/실제 배포 전환기)를 대비한
 // progress 기반 coarse fallback 은 남긴다(4단계까지만, render 내부는 나누지 않는다).
@@ -96,8 +104,21 @@ const OVERLAY_CAPTION_BY_N4_STAGE: Record<N4ObservedStage, { title: string; desc
   render: { title: '번역 결과 이미지 적용 중', description: '번역문을 디자인에 맞게 조정하고 이미지에 반영합니다.' },
 };
 
-/** 실제 완료(currentStep=N5) 응답 뒤 완료 표시 동안의 caption — Figma 에 없는 상태라 최소 문구로 보완했다. */
+/** 여러 단계가 함께 running 일 때 — 하나의 단계만 지금 작업이라고 단정하지 않는다(Figma 에 없는 상태, 최소 보완). */
+const N4_PARALLEL_CAPTION = { title: '여러 번역 작업 함께 처리 중', description: '섹션별 번역·검증·이미지 적용을 함께 진행하고 있습니다.' };
+
+/**
+ * 실제 완료(currentStep=N5) 응답 뒤 완료 표시 동안의 문구 — Figma 에 별도 완료 상태가 없어 기존 슬롯(상태 태그·
+ * GIF caption·LOG·progress 안내) 안에서만 최소한으로 바꾼다. 완료 표시 동안 "진행중"·"…하고 있습니다"·
+ * "완료되면 이동합니다"가 남아 100%·5행 완료와 서로 다른 말을 하지 않게 한다.
+ */
 const N4_COMPLETION_CAPTION = { title: '번역 완료', description: '검수 화면으로 이동합니다.' };
+const N4_COMPLETION_COPY = {
+  statusTag: '완료',
+  logHeading: '번역 완료',
+  logDescription: '번역과 이미지 적용이 완료되었습니다.',
+  progressHint: '검수 화면으로 이동합니다.',
+};
 const ALL_DONE: ProcessingStep['state'][] = ['done', 'done', 'done', 'done', 'done'];
 
 /**
@@ -136,13 +157,32 @@ function resolveN4ObservedStage(stages: ApiJobTaskStatus['stages'], progress: nu
 }
 
 /**
- * 표시 % 상한을 여는 단계 — 이번 poll 에서 이미 시작된(pending 이 아닌) 가장 뒤 단계. 모두 pending 이거나
- * stages 가 없으면 행과 같은 관측 단계를 쓴다. 상한에만 쓰고 행·caption 에는 쓰지 않는다.
+ * 이번 poll 의 5행 상태와, 화면에 진행 중으로 그린 단계(가장 앞 → 뒤 순서). 위 10/22 (3) 주석 참고.
+ * activeStages 는 행·caption·표시 % 상한이 함께 쓰는 하나의 값이다.
  */
-function resolveN4CeilingStage(stages: ApiJobTaskStatus['stages'], progress: number | undefined): N4ObservedStage {
+function resolveN4Presentation(
+  stages: ApiJobTaskStatus['stages'],
+  progress: number | undefined,
+): { rows: ProcessingStep['state'][]; activeStages: N4ObservedStage[] } {
   const statusOf = (key: N4ObservedStage) => stages?.find((s) => s.key?.toLowerCase() === key)?.status;
-  const started = N4_OBSERVED_STAGE_ORDER.filter((key) => statusOf(key) !== undefined && statusOf(key) !== 'pending');
-  return started.at(-1) ?? resolveN4ObservedStage(stages, progress);
+  const observed = N4_OBSERVED_STAGE_ORDER.filter((key) => statusOf(key) !== undefined);
+  const running = observed.filter((key) => statusOf(key) === 'running');
+
+  if (observed.length >= 2 && running.length > 0) {
+    const firstRunningIndex = N4_OBSERVED_STAGE_ORDER.indexOf(running[0]);
+    const stateOf = (key: N4ObservedStage): ProcessingStep['state'] => {
+      const status = statusOf(key);
+      if (status === 'running') return 'active';
+      // 가장 앞 running 보다 앞 단계는 끝난 것으로 본다(호환 응답과 같은 가정). 그 뒤의 done 은 완료가 아니다.
+      if (N4_OBSERVED_STAGE_ORDER.indexOf(key) < firstRunningIndex && status !== 'pending' && status !== 'failed') return 'done';
+      return 'pending';
+    };
+    const render = stateOf('render');
+    return { rows: [stateOf('inpaint'), stateOf('translate'), stateOf('verify'), render, render], activeStages: running };
+  }
+
+  const stage = resolveN4ObservedStage(stages, progress);
+  return { rows: FIVE_STEP_STATES_BY_N4_STAGE[stage], activeStages: [stage] };
 }
 
 function buildFiveSteps(states: ProcessingStep['state'][]): ProcessingStep[] {
@@ -162,18 +202,22 @@ export function N4ProcessingView({
    */
   isCompleted?: boolean;
 }) {
-  // 행·caption 은 이번 poll 의 서버 관측 단계로만 그린다. status.progress 는 stages 가 비어 있을 때의
-  // coarse fallback 에만 쓴다 — 표시 % 는 hook 이 관측 단계가 연 상한 안에서 따로 올린다.
-  const observedStage = resolveN4ObservedStage(status.stages, status.progress);
+  // 행·caption·표시 % 상한은 이번 poll 의 서버 관측(진행 중으로 그린 단계)으로만 정한다. status.progress 는
+  // stages 가 비어 있을 때의 coarse fallback 에만 쓴다 — 숫자는 hook 이 그 상한 안에서 따로 올린다.
+  const { rows, activeStages } = resolveN4Presentation(status.stages, status.progress);
   const failedItems = (status.items ?? []).filter((i) => i.status === 'failed');
   const displayedProgress = useDisplayedProgress({
     persistKey: n4DisplayedProgressKey(jobId),
-    ceiling: DISPLAY_CEILING_BY_N4_STAGE[resolveN4CeilingStage(status.stages, status.progress)],
+    ceiling: Math.max(...activeStages.map((stage) => DISPLAY_CEILING_BY_N4_STAGE[stage])),
     isFrozen: !isCompleted && hasProcessingFailure(status),
     isCompleted,
   });
-  const steps = buildFiveSteps(isCompleted ? ALL_DONE : FIVE_STEP_STATES_BY_N4_STAGE[observedStage]);
-  const caption = isCompleted ? N4_COMPLETION_CAPTION : OVERLAY_CAPTION_BY_N4_STAGE[observedStage];
+  const steps = buildFiveSteps(isCompleted ? ALL_DONE : rows);
+  const caption = isCompleted
+    ? N4_COMPLETION_CAPTION
+    : activeStages.length > 1
+      ? N4_PARALLEL_CAPTION
+      : OVERLAY_CAPTION_BY_N4_STAGE[activeStages[0]];
 
   return (
     <ProcessingStageLayout
@@ -182,7 +226,7 @@ export function N4ProcessingView({
         title: '번역 중',
         description: '확정한 섹션을 번역하고 이미지에 적용하고 있습니다.',
       }}
-      statusTagLabel="진행중"
+      statusTagLabel={isCompleted ? N4_COMPLETION_COPY.statusTag : '진행중'}
       visual={{
         // N2/N4 공용 GIF — 별도 복사본을 만들지 않는다.
         src: '/process/ai-processing.gif',
@@ -194,12 +238,12 @@ export function N4ProcessingView({
       }}
       log={{
         sectionLabel: 'TRANSLATION LOG',
-        heading: '지금 처리하는 일',
-        description: '번역문을 원래 디자인 안에 다시 맞추고 있습니다.',
+        heading: isCompleted ? N4_COMPLETION_COPY.logHeading : '지금 처리하는 일',
+        description: isCompleted ? N4_COMPLETION_COPY.logDescription : '번역문을 원래 디자인 안에 다시 맞추고 있습니다.',
       }}
       steps={steps}
       progressPercent={displayedProgress}
-      progressHint={N4_AUTO_ADVANCE_NOTICE}
+      progressHint={isCompleted ? N4_COMPLETION_COPY.progressHint : N4_AUTO_ADVANCE_NOTICE}
       pauseButtonTitle={N4_PAUSE_BUTTON_TITLE}
       failedItems={failedItems}
     />

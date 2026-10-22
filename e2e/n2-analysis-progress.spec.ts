@@ -3,6 +3,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 
 import {
+  expectCompletionCopy,
   expectCompletionPresentation,
   expectSmoothProcessing,
   formatTimeline,
@@ -621,5 +622,48 @@ test.describe('N2 로딩 표현', () => {
     // 완료 표시 동안 5단계는 전부 완료다
     const completion = onScreen(rec.dom, N2_TITLE).filter((d) => d.t >= first100At && d.t < leftAt);
     expect(completion.every((d) => d.rows === 'DDDDD'), timeline).toBe(true);
+  });
+  const N2_COMPLETION_COPY = { heading: '분석 완료', line: '이미지 분석이 완료되었습니다.', hint: '섹션 확인 단계로 이동합니다.' };
+
+  test('M-1. N3 응답 뒤 완료 표시 동안 상태 태그·LOG·안내가 모두 완료를 말하고, 그 전에는 완료라고 하지 않는다', async ({ page }) => {
+    const rec = await recordProcessing(page);
+    await setup(page, [ocr(S1), merge(S1), { progress: 1, stages: stages('done', 'done', 'done'), items: [item(9001, 'ocr', 'job', 'done')], advance: true }]);
+    await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 20_000 });
+
+    const timeline = formatTimeline(rec);
+    expectCompletionPresentation(rec, N2_TITLE, 'N3', timeline);
+    expectCompletionCopy(rec, N2_TITLE, 'N3', N2_COMPLETION_COPY, timeline);
+    // 처리 중에는 기존 문구 그대로다
+    const processing = processingSnaps(rec, N2_TITLE, 'N3');
+    expect(new Set(processing.map((d) => d.tag)), timeline).toEqual(new Set(['진행중']));
+    expect(new Set(processing.map((d) => d.heading)), timeline).toEqual(new Set(['지금 처리하는 일']));
+    expect(new Set(processing.map((d) => d.hint)), timeline).toEqual(new Set(['분석이 끝나면 섹션 확인 단계로 자동 이동합니다.']));
+  });
+
+  test('M-2. script 없는 기본 mock 도 analyze → finalize → judge → N3 를 계약 값으로 보여 준다(수동 QA 흐름)', async ({ page }) => {
+    test.setTimeout(60_000);
+    const rec = await recordProcessing(page);
+    await setup(page, []);
+    await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 30_000 });
+
+    const timeline = formatTimeline(rec);
+    const snaps = processingSnaps(rec, N2_TITLE, 'N3');
+    // 01 만 진행 중이다가 끝나는 레거시 표시가 아니라 analyze 묶음 → finalize → judge 다
+    expect(rowSequence(snaps), timeline).toEqual(['AAAPP', 'DDDPP', 'DDDAA']);
+    const caps = snaps.map((d) => d.cap).filter((c, i, arr) => c !== arr[i - 1]);
+    expect(caps, timeline).toEqual(['이미지 구조 분석 중', '분석 결과 정리 중', '영역별 판정 중']);
+    // 실제 세부 작업은 LOG 설명 줄에서 바뀐다
+    const lines = snaps.map((d) => d.line).filter((l, i, arr) => l !== arr[i - 1]);
+    expect(lines.some((l) => l.endsWith('영역을 나누는 중')), timeline).toBe(true);
+    expect(lines.some((l) => l.endsWith('텍스트 추출 중')), timeline).toBe(true);
+    expect(lines.some((l) => l.endsWith('병합·역할 분석 중')), timeline).toBe(true);
+    expect(lines.some((l) => l.startsWith('판정 대상')), timeline).toBe(true);
+    // 서버(mock) 응답도 계약 값이다 — analyze 동안 analysisProgress 가 있고, N3 응답에는 없다
+    const n2Polls = rec.polls.filter((p) => p.currentStep === 'N2');
+    expect(n2Polls.every((p) => p.ap !== null), timeline).toBe(true);
+    expect(rec.polls.find((p) => p.currentStep === 'N3')?.ap, timeline).toBeNull();
+    expectSmoothProcessing(snaps, timeline);
+    expectCompletionPresentation(rec, N2_TITLE, 'N3', timeline);
+    expectCompletionCopy(rec, N2_TITLE, 'N3', N2_COMPLETION_COPY, timeline);
   });
 });

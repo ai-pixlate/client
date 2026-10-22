@@ -20,10 +20,11 @@ import {
 // ─────────────────────────────────────────────────────────────────
 // 처리 화면(N2·N4) 표시 % hook — 계산 규칙은 lib/processing/displayed-progress.ts.
 //
-// 이 hook 이 소유하는 것은 표시 숫자뿐이다: 지금 값(value)과 지금까지 열린 상한(ceiling).
-// 호출하는 쪽이 이번 poll 의 서버 관측 단계로 상한만 넘긴다 — 상한이 올라가도 숫자를 그 자리로
-// 옮기지 않고 tick 마다 조금씩 올린다. 행·caption 은 호출하는 쪽이 서버 값으로 그리며, 이 숫자로
-// 단계나 완료를 판정하지 않는다.
+// 이 hook 이 소유하는 것은 표시 숫자뿐이다: 지금 값(value)과 이번 poll 의 상한(ceiling).
+// 호출하는 쪽이 이번 poll 에 화면에 진행 중으로 그린 단계로 상한만 넘긴다 — 상한이 올라가도 숫자를 그 자리로
+// 옮기지 않고 tick 마다 조금씩 올린다. 상한이 내려가면(병렬 섹션에서 앞 단계만 running 으로 남는 등) 숫자를
+// 내리지 않고 그 자리에 둔다 — 행이 말하는 단계보다 숫자만 계속 앞서 가지 않게 하기 위해서다(10/22 (3)).
+// 행·caption 은 호출하는 쪽이 서버 값으로 그리며, 이 숫자로 단계나 완료를 판정하지 않는다.
 //
 // isCompleted 는 page.tsx 가 실제 완료(currentStep 전환) 응답을 받은 뒤에만 true 로 넘긴다. 그때만
 // 현재 값 → 100 으로 올린다. 저장은 lib/processing/displayed-progress-storage.ts 참고.
@@ -58,7 +59,7 @@ export function useDisplayedProgress({
 }: {
   /** sessionStorage 키(n2DisplayedProgressKey · n4DisplayedProgressKey) */
   persistKey: string;
-  /** 이번 poll 에서 관측한 단계가 여는 상한(0~99). 이전보다 낮으면 무시한다. */
+  /** 이번 poll 에서 화면에 진행 중으로 그린 단계가 여는 상한(0~99). 지금 값보다 낮으면 숫자는 그대로 머문다. */
   ceiling: number;
   /** 서버가 실패를 알리면 true — 증가를 멈춘다 */
   isFrozen: boolean;
@@ -67,14 +68,14 @@ export function useDisplayedProgress({
 }): number {
   const [state, setState] = useState<ProgressState>(() => {
     const stored = readDisplayedProgress(persistKey, Date.now());
-    return { value: stored?.value ?? 0, ceiling: Math.max(stored?.ceiling ?? 0, ceiling), completionFrom: null };
+    return { value: stored?.value ?? 0, ceiling, completionFrom: null };
   });
   const [completionElapsedMs, setCompletionElapsedMs] = useState(0);
 
-  // 새 상한이 더 높으면 연다(숫자는 그대로). 완료 표시 시작 값을 잡는다. 렌더 중 조건부 setState —
+  // 이번 poll 의 상한으로 바꾼다(숫자는 그대로). 완료 표시 시작 값을 잡는다. 렌더 중 조건부 setState —
   // React 가 권장하는 "이전 값에서 state 조정" 패턴이라 effect 로 한 번 더 렌더하지 않는다.
   let current = state;
-  if (ceiling > current.ceiling) current = { ...current, ceiling };
+  if (ceiling !== current.ceiling) current = { ...current, ceiling };
   if (isCompleted && current.completionFrom === null) current = { ...current, completionFrom: current.value };
   if (current !== state) setState(current);
 
