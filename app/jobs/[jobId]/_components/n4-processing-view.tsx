@@ -43,8 +43,9 @@ import { hasProcessingFailure, useDisplayedProgress } from './processing/use-dis
 // running) 섹션이 병렬로 진행되면 여러 단계가 함께 running 이다. 이전에는 행·caption 은 가장 앞 running
 // 하나, 상한은 시작된(running·done) 가장 뒤 단계로 열어 "01 진행 중 · 47%" 처럼 둘이 따로 놀았다.
 // - N4 key 가 둘 이상 오는 응답: running 인 단계 행을 모두 진행 중으로 둔다(서버가 실제로 running 이라고 한
-//   단계뿐이다). 가장 앞 running 보다 앞 단계만 완료로 보고, 그 뒤의 done(예: render=done)은 완료로 그리지
-//   않는다 — 지금 생성된 시도들의 집계일 뿐 이후 render 가 다시 생길 수 있다.
+//   단계뿐이다). 가장 앞 running 보다 앞 단계 중 서버가 done 이라고 명시한 단계만 완료로 본다 — 응답에 없는
+//   단계(key 없음)는 완료로 추정하지 않고 대기로 둔다. 가장 앞 running 뒤의 done(예: render=done)은 완료로
+//   그리지 않는다 — 지금 생성된 시도들의 집계일 뿐 이후 render 가 다시 생길 수 있다.
 // - key 가 하나뿐인 호환(sparse) 응답·running 이 없는 응답은 위 resolveN4ObservedStage 순서 규칙 그대로다.
 // - 표시 % 상한은 화면에 진행 중으로 그린 단계 중 가장 뒤 단계로 연다 — done 은 상한을 열지 않는다. 행과
 //   숫자가 같은 상태를 말하고, 숫자는 그 단계 하한으로 뛰지 않고 현재 값에서 오른다.
@@ -105,16 +106,18 @@ const OVERLAY_CAPTION_BY_N4_STAGE: Record<N4ObservedStage, { title: string; desc
 };
 
 /** 여러 단계가 함께 running 일 때 — 하나의 단계만 지금 작업이라고 단정하지 않는다(Figma 에 없는 상태, 최소 보완). */
-const N4_PARALLEL_CAPTION = { title: '여러 번역 작업 함께 처리 중', description: '섹션별 번역·검증·이미지 적용을 함께 진행하고 있습니다.' };
+const N4_PARALLEL_CAPTION = { title: '여러 번역 작업을 함께 처리 중', description: '섹션별 번역·검증·이미지 적용을 함께 진행하고 있습니다.' };
 
 /**
- * 실제 완료(currentStep=N5) 응답 뒤 완료 표시 동안의 문구 — Figma 에 별도 완료 상태가 없어 기존 슬롯(상태 태그·
+ * 실제 완료(currentStep=N5) 응답 뒤 완료 표시 동안의 문구 — Figma 에 별도 완료 상태가 없어 기존 슬롯(상태 태그·visual headline·
  * GIF caption·LOG·progress 안내) 안에서만 최소한으로 바꾼다. 완료 표시 동안 "진행중"·"…하고 있습니다"·
  * "완료되면 이동합니다"가 남아 100%·5행 완료와 서로 다른 말을 하지 않게 한다.
  */
 const N4_COMPLETION_CAPTION = { title: '번역 완료', description: '검수 화면으로 이동합니다.' };
 const N4_COMPLETION_COPY = {
   statusTag: '완료',
+  headline: '번역 작업이 완료되었습니다.',
+  visualDescription: '번역 결과를 반영해 검수 화면으로 이동합니다.',
   logHeading: '번역 완료',
   logDescription: '번역과 이미지 적용이 완료되었습니다.',
   progressHint: '검수 화면으로 이동합니다.',
@@ -173,8 +176,9 @@ function resolveN4Presentation(
     const stateOf = (key: N4ObservedStage): ProcessingStep['state'] => {
       const status = statusOf(key);
       if (status === 'running') return 'active';
-      // 가장 앞 running 보다 앞 단계는 끝난 것으로 본다(호환 응답과 같은 가정). 그 뒤의 done 은 완료가 아니다.
-      if (N4_OBSERVED_STAGE_ORDER.indexOf(key) < firstRunningIndex && status !== 'pending' && status !== 'failed') return 'done';
+      // 서버가 done 이라고 명시한 앞 단계만 완료다. 응답에 없는 단계(undefined)·pending·failed 는 대기, 가장 앞
+      // running 뒤의 done 은 완료가 아니다.
+      if (status === 'done' && N4_OBSERVED_STAGE_ORDER.indexOf(key) < firstRunningIndex) return 'done';
       return 'pending';
     };
     const render = stateOf('render');
@@ -230,8 +234,10 @@ export function N4ProcessingView({
       visual={{
         // N2/N4 공용 GIF — 별도 복사본을 만들지 않는다.
         src: '/process/ai-processing.gif',
-        headline: N4_HEADLINE,
-        description: '확정한 섹션의 원문을 지우고 번역한 뒤, 원래 레이아웃에 맞게 다시 구성합니다.',
+        headline: isCompleted ? N4_COMPLETION_COPY.headline : N4_HEADLINE,
+        description: isCompleted
+          ? N4_COMPLETION_COPY.visualDescription
+          : '확정한 섹션의 원문을 지우고 번역한 뒤, 원래 레이아웃에 맞게 다시 구성합니다.',
         overlayTopLabel: 'SOURCE  →  LOCALIZED',
         overlayBottomTitle: caption.title,
         overlayBottomDescription: caption.description,

@@ -100,13 +100,15 @@ function resolveOverlayCaption(stage: keyof typeof FIVE_STEP_STATES_BY_COARSE_ST
 }
 
 /**
- * 실제 완료(currentStep=N3) 응답 뒤 완료 표시 동안의 문구 — Figma 에 별도 완료 상태가 없어 기존 슬롯(상태 태그·
+ * 실제 완료(currentStep=N3) 응답 뒤 완료 표시 동안의 문구 — Figma 에 별도 완료 상태가 없어 기존 슬롯(상태 태그·visual headline·
  * GIF caption·LOG·progress 안내) 안에서만 최소한으로 바꾼다. 완료 표시 동안 "진행중"·"…하고 있습니다"·
  * "끝나면 이동합니다"가 남아 100%·5행 완료와 서로 다른 말을 하지 않게 한다.
  */
 const N2_COMPLETION_CAPTION = { title: '분석 완료', description: '섹션 확인 단계로 이동합니다.' };
 const N2_COMPLETION_COPY = {
   statusTag: '완료',
+  headline: '이미지 분석이 완료되었습니다.',
+  visualDescription: '분석 결과를 정리해 섹션 확인 단계로 이동합니다.',
   logHeading: '분석 완료',
   logDescription: '이미지 분석이 완료되었습니다.',
   progressHint: '섹션 확인 단계로 이동합니다.',
@@ -330,8 +332,10 @@ export function N2AnalysisView({
       visual={{
         // 공용 GIF — N2/N4가 같은 자산을 쓴다(별도 복사본 금지).
         src: '/process/ai-processing.gif',
-        headline: isFailed ? FAILED_HEADLINE : HEADLINE_FALLBACK,
-        description: '텍스트만 추출하지 않고, 번역에 필요한 섹션과 판단 근거를 함께 정리합니다.',
+        headline: isFailed ? FAILED_HEADLINE : isCompleted ? N2_COMPLETION_COPY.headline : HEADLINE_FALLBACK,
+        description: isCompleted
+          ? N2_COMPLETION_COPY.visualDescription
+          : '텍스트만 추출하지 않고, 번역에 필요한 섹션과 판단 근거를 함께 정리합니다.',
         overlayTopLabel: 'SCAN  ·  STRUCTURE  ·  CONTEXT',
         overlayBottomTitle: caption.title,
         overlayBottomDescription: caption.description,

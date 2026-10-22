@@ -22,6 +22,9 @@ export interface DomSnap {
   cap: string;
   /** 패널 좌상단 상태 태그(진행중·완료·분석 실패) */
   tag: string;
+  /** 왼쪽 visual 영역 큰 headline 과 그 아래 설명 */
+  headline: string;
+  visualDescription: string;
   /** LOG 제목(지금 처리하는 일 · 분석 완료 …) */
   heading: string;
   line: string;
@@ -70,9 +73,12 @@ export async function recordProcessing(page: Page): Promise<ProcessingRecord> {
       const cap = Array.from(document.querySelectorAll('p')).find((p) => p.className.includes('text-[#ff6a38]'))?.textContent?.trim() ?? '';
       const line = document.querySelector('[data-testid="processing-log-description"]')?.textContent?.replace(/\s+/g, ' ').trim() ?? '';
       const tag = document.querySelector('div[class*="bg-[#f5f5f5]"] > p')?.textContent?.trim() ?? '';
+      const headlineEl = document.querySelector('p[class*="text-[28px]"]');
+      const headline = headlineEl?.textContent?.trim() ?? '';
+      const visualDescription = headlineEl?.nextElementSibling?.textContent?.trim() ?? '';
       const heading = document.querySelector('h2')?.textContent?.trim() ?? '';
       const hint = bar?.nextElementSibling?.textContent?.trim() ?? '';
-      const entry = { h1, pct: bar ? Number(bar.getAttribute('aria-valuenow')) : null, rows, cap, tag, heading, line, hint };
+      const entry = { h1, pct: bar ? Number(bar.getAttribute('aria-valuenow')) : null, rows, cap, tag, headline, visualDescription, heading, line, hint };
       const key = JSON.stringify(entry);
       if (key === last) return;
       last = key;
@@ -177,7 +183,7 @@ export function expectCompletionCopy(
   rec: ProcessingRecord,
   title: string,
   nextStep: string,
-  copy: { heading: string; line: string; hint: string },
+  copy: { headline: string; visualDescription: string; heading: string; line: string; hint: string },
   context: string,
   from = 0,
 ) {
@@ -189,6 +195,7 @@ export function expectCompletionCopy(
   for (const d of before) {
     expect(d.tag, `완료 전 상태 태그\n${context}`).not.toBe('완료');
     expect(d.heading, `완료 전 LOG 제목\n${context}`).not.toBe(copy.heading);
+    expect(d.headline, `완료 전 headline\n${context}`).not.toBe(copy.headline);
     expect(d.rows, `완료 전 5행 전부 완료 금지\n${context}`).not.toBe('DDDDD');
   }
   const at100 = during.filter((d) => d.pct === 100);
@@ -196,6 +203,8 @@ export function expectCompletionCopy(
   for (const d of during) {
     expect(d.tag, `완료 표시 중 상태 태그\n${context}`).toBe('완료');
     expect(d.rows, `완료 표시 중 5행\n${context}`).toBe('DDDDD');
+    expect(d.headline, `완료 표시 중 headline\n${context}`).toBe(copy.headline);
+    expect(d.visualDescription, `완료 표시 중 visual 설명\n${context}`).toBe(copy.visualDescription);
     expect(d.heading, `완료 표시 중 LOG 제목\n${context}`).toBe(copy.heading);
     expect(d.line, `완료 표시 중 LOG 설명\n${context}`).toBe(copy.line);
     expect(d.hint, `완료 표시 중 안내\n${context}`).toBe(copy.hint);

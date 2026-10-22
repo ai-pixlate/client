@@ -623,7 +623,13 @@ test.describe('N2 로딩 표현', () => {
     const completion = onScreen(rec.dom, N2_TITLE).filter((d) => d.t >= first100At && d.t < leftAt);
     expect(completion.every((d) => d.rows === 'DDDDD'), timeline).toBe(true);
   });
-  const N2_COMPLETION_COPY = { heading: '분석 완료', line: '이미지 분석이 완료되었습니다.', hint: '섹션 확인 단계로 이동합니다.' };
+  const N2_COMPLETION_COPY = {
+    headline: '이미지 분석이 완료되었습니다.',
+    visualDescription: '분석 결과를 정리해 섹션 확인 단계로 이동합니다.',
+    heading: '분석 완료',
+    line: '이미지 분석이 완료되었습니다.',
+    hint: '섹션 확인 단계로 이동합니다.',
+  };
 
   test('M-1. N3 응답 뒤 완료 표시 동안 상태 태그·LOG·안내가 모두 완료를 말하고, 그 전에는 완료라고 하지 않는다', async ({ page }) => {
     const rec = await recordProcessing(page);
@@ -638,6 +644,7 @@ test.describe('N2 로딩 표현', () => {
     expect(new Set(processing.map((d) => d.tag)), timeline).toEqual(new Set(['진행중']));
     expect(new Set(processing.map((d) => d.heading)), timeline).toEqual(new Set(['지금 처리하는 일']));
     expect(new Set(processing.map((d) => d.hint)), timeline).toEqual(new Set(['분석이 끝나면 섹션 확인 단계로 자동 이동합니다.']));
+    expect(new Set(processing.map((d) => d.headline)), timeline).toEqual(new Set(['상세페이지의 구조와 문맥을 읽고 있습니다.']));
   });
 
   test('M-2. script 없는 기본 mock 도 analyze → finalize → judge → N3 를 계약 값으로 보여 준다(수동 QA 흐름)', async ({ page }) => {
