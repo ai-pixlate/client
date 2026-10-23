@@ -312,9 +312,10 @@ export function N2AnalysisView({
       : detail
         ? resolveDetailCaption(detail)
         : resolveOverlayCaption(coarseStage);
-  // 서버가 analysisProgress 로 대기·재시도 대기라고 알린 동안만 숫자를 그 자리에 둔다(running 이 오면 그 값에서
-  // 이어서 오른다). analysisProgress 가 없는 레거시 응답에서는 대기를 추정하지 않는다.
-  const isProgressPaused = detail?.status === 'waiting' || detail?.status === 'retrying';
+  // 서버가 analysisProgress 로 대기·재시도 대기·실패라고 알린 동안만 숫자를 그 자리에 둔다(running 이 오면 그 값에서
+  // 이어서 오른다). status=failed 는 표시 % 정지일 뿐 전체 실패 판정(isFailed)에 쓰지 않는다. analysisProgress 가 없는
+  // 레거시 응답에서는 대기를 추정하지 않는다.
+  const isProgressPaused = detail?.status === 'waiting' || detail?.status === 'retrying' || detail?.status === 'failed';
   const progressPercent = useDisplayedProgress({
     persistKey: n2DisplayedProgressKey(jobId),
     ceiling: resolveDisplayCeiling(detail, coarseStage),
