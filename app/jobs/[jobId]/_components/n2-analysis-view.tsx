@@ -312,11 +312,14 @@ export function N2AnalysisView({
       : detail
         ? resolveDetailCaption(detail)
         : resolveOverlayCaption(coarseStage);
+  // 서버가 analysisProgress 로 대기·재시도 대기라고 알린 동안만 숫자를 그 자리에 둔다(running 이 오면 그 값에서
+  // 이어서 오른다). analysisProgress 가 없는 레거시 응답에서는 대기를 추정하지 않는다.
+  const isProgressPaused = detail?.status === 'waiting' || detail?.status === 'retrying';
   const progressPercent = useDisplayedProgress({
     persistKey: n2DisplayedProgressKey(jobId),
     ceiling: resolveDisplayCeiling(detail, coarseStage),
-    // 전체 분석 실패만 멈춘다 — LOCAL_JUDGE_FAILED 부분 제외는 N3 로 넘어가는 정상 흐름이다
-    isFrozen: isFailed,
+    // 실패로 멈추는 것은 전체 분석 실패뿐이다 — LOCAL_JUDGE_FAILED 부분 제외는 N3 로 넘어가는 정상 흐름이다
+    isFrozen: isFailed || isProgressPaused,
     isCompleted,
   });
   const failedItems = (status.items ?? []).filter((i) => i.status === 'failed');

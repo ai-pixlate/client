@@ -11,6 +11,7 @@ import {
   processingSnaps,
   recordProcessing,
   type DomSnap,
+  type ProcessingRecord,
 } from './helpers/processing-recorder';
 
 // ─────────────────────────────────────────────────────────────────
@@ -672,5 +673,224 @@ test.describe('N2 로딩 표현', () => {
     expectSmoothProcessing(snaps, timeline);
     expectCompletionPresentation(rec, N2_TITLE, 'N3', timeline);
     expectCompletionCopy(rec, N2_TITLE, 'N3', N2_COMPLETION_COPY, timeline);
+  });
+});
+
+// ── PR #41 BE 리뷰: analysisProgress.status 가 waiting·retrying 이면 표시 % 를 그 자리에 둔다 ──
+// 서버가 "대기"라고 말하는 동안 숫자만 계속 오르면 5단계 행(전부 대기)·caption(대기 중)과 다른 말을 한다.
+// 멈춤은 일시정지다 — running 으로 돌아오면 그 숫자에서 이어서 오르고, 초기화·floor 점프·감소가 없다.
+// 부분 판정 실패(LOCAL_JUDGE_FAILED)나 analysisProgress 없는 레거시 응답은 멈추지 않는다.
+test.describe('N2 대기·재시도 동안 표시 % 일시정지', () => {
+  test.setTimeout(60_000);
+  const N2_TITLE = '이미지 분석';
+  const S1 = { sourceIndex: 1, sourceImageId: 701 };
+  const ocr = analyzingTick(analyze('running', 'ocr', { ...S1, regionIndex: 1, regionCountInSource: 2 }, { done: 0, known: 2, totalFixed: false }));
+  const analyzePaused = (status: 'waiting' | 'retrying') => ({
+    progress: 0,
+    stages: stages('pending', 'pending', 'pending'),
+    items: [{ ...item(9011, 'ocr', 'job', 'pending'), uiStatus: status, retryCount: status === 'retrying' ? 1 : 0 }],
+    analysisProgress: analyze(status, null, null, null),
+  });
+  const judgeTick = (status: 'waiting' | 'retrying' | 'running') => ({
+    progress: 0.5,
+    stages: stages('done', 'running', 'pending'),
+    items: [item(9001, 'ocr', 'job', 'done'), item(9002, 'section', 'section', status === 'running' ? 'running' : 'pending')],
+    analysisProgress: judgePhase(status, {
+      total: 5,
+      done: 0,
+      excluded: 0,
+      running: status === 'running' ? 2 : 0,
+      waiting: status === 'retrying' ? 1 : status === 'running' ? 3 : 5,
+      retrying: status === 'retrying' ? 4 : 0,
+      failed: 0,
+      cancelled: 0,
+    }),
+  });
+  const N3_ADVANCE = { progress: 1, stages: stages('done', 'done', 'done'), items: [item(9001, 'ocr', 'job', 'done')], advance: true };
+  const repeat = <T,>(tick: T, n: number) => Array.from({ length: n }, () => tick);
+
+  /**
+   * GIF caption 이 같은 연속 구간 — 같은 poll 상태를 화면이 그리고 있던 동안의 표시 %. DOM 기록은 바뀔 때만
+   * 남으므로(숫자가 멈추면 새 기록이 없다) 구간 끝은 다음 구간 시작, 마지막 구간은 N3 응답(없으면 마지막 N2 poll) 시각이다.
+   * polls 는 그 구간 동안 받은 poll 수 — 같은 상태가 여러 poll 반복돼도 숫자가 그대로인지 보려고 센다.
+   */
+  type Segment = { cap: string; rows: string; pcts: number[]; from: number; to: number; polls: number };
+  function segmentsOf(rec: ProcessingRecord): Segment[] {
+    const snaps = processingSnaps(rec, N2_TITLE, 'N3');
+    const n2Polls = rec.polls.filter((p) => p.currentStep === 'N2');
+    const out: Segment[] = [];
+    for (const s of snaps) {
+      const last = out.at(-1);
+      if (last && last.cap === s.cap) {
+        if (last.pcts.at(-1) !== s.pct) last.pcts.push(s.pct!);
+      } else out.push({ cap: s.cap, rows: s.rows, pcts: [s.pct!], from: s.t, to: s.t, polls: 0 });
+    }
+    const endAt = rec.polls.find((p) => p.currentStep === 'N3')?.t ?? n2Polls.at(-1)?.t ?? 0;
+    out.forEach((seg, i) => {
+      seg.to = out[i + 1]?.from ?? Math.max(seg.from, endAt);
+      seg.polls = n2Polls.filter((p) => p.t > seg.from && p.t <= seg.to).length;
+    });
+    return out;
+  }
+  const describeSegments = (segs: Segment[]) =>
+    segs.map((s) => `${s.cap} [${s.rows}] ${((s.to - s.from) / 1000).toFixed(1)}s·poll ${s.polls}회: ${s.pcts.join(' → ')}`).join('\n');
+  const segment = (segs: Segment[], cap: string, context: string) => {
+    const found = segs.find((s) => s.cap === cap);
+    expect(found, `"${cap}" 구간\n${context}`).toBeDefined();
+    return found!;
+  };
+  /** 일시정지 구간: 들어올 때 숫자를 유지하고(직전 running 의 마지막 tick 과 같은 렌더에 묶일 수 있어 +1 까지), 그 뒤로 그대로다 */
+  function expectHeld(paused: Segment, before: Segment, context: string) {
+    const entry = paused.pcts[0] - before.pcts.at(-1)!;
+    expect(entry, `일시정지 진입 시 숫자 유지\n${context}`).toBeGreaterThanOrEqual(0);
+    expect(entry, `일시정지 진입 시 숫자 유지\n${context}`).toBeLessThanOrEqual(1);
+    expect(paused.pcts, `일시정지 동안 숫자 고정\n${context}`).toHaveLength(1);
+    // poll 여러 번(2초 간격)에 걸쳐 같은 상태가 반복돼도 증가 timer 가 다시 살아나지 않는다
+    expect(paused.to - paused.from, `일시정지 구간 관측 시간\n${context}`).toBeGreaterThan(2_500);
+    expect(paused.polls, `일시정지 구간 poll 반복\n${context}`).toBeGreaterThanOrEqual(1);
+  }
+  /** running 재개: 멈춘 숫자에서 tick 단위로 이어서 오른다(초기화·floor 점프 없음) */
+  function expectResumed(resumed: Segment, paused: Segment, context: string) {
+    const entry = resumed.pcts[0] - paused.pcts.at(-1)!;
+    expect(entry, `재개 시 숫자 초기화·점프 없음\n${context}`).toBeGreaterThanOrEqual(0);
+    expect(entry, `재개 시 숫자 초기화·점프 없음\n${context}`).toBeLessThanOrEqual(1);
+    expect(resumed.pcts.at(-1)!, `재개 뒤 증가\n${context}`).toBeGreaterThan(paused.pcts.at(-1)!);
+  }
+
+  const singlePauseCases = [
+    { name: 'P-1. analyze waiting', tick: analyzePaused('waiting'), cap: '분석 대기 중', rows: 'PPPPP' },
+    { name: 'P-2. analyze retrying', tick: analyzePaused('retrying'), cap: '분석 재시도 대기 중', rows: 'PPPPP' },
+    { name: 'P-3. judge waiting', tick: judgeTick('waiting'), cap: '영역별 판정 대기 중', rows: 'DDDPP' },
+    { name: 'P-4. judge retrying', tick: judgeTick('retrying'), cap: '영역별 판정 재시도 대기 중', rows: 'DDDPP' },
+  ];
+  for (const c of singlePauseCases) {
+    test(`${c.name}: 여러 poll 동안 표시 % 가 오르지 않는다`, async ({ page }) => {
+      const rec = await recordProcessing(page);
+      await setup(page, [ocr, ocr, ...repeat(c.tick, 4)]);
+      await expect(page.getByText(c.cap, { exact: true })).toBeVisible({ timeout: 15_000 });
+      await page.waitForTimeout(5_000);
+
+      const timeline = formatTimeline(rec);
+      const segs = segmentsOf(rec);
+      const context = `${describeSegments(segs)}\n${timeline}`;
+      console.log(`${c.name}\n${describeSegments(segs)}`);
+      const running = segment(segs, '이미지 구조 분석 중', context);
+      const paused = segment(segs, c.cap, context);
+      expect(running.pcts.at(-1)!, `일시정지 전 숫자가 올라 있어야 한다\n${context}`).toBeGreaterThanOrEqual(10);
+      expect(paused.rows, context).toBe(c.rows);
+      expectHeld(paused, running, context);
+      expectSmoothProcessing(processingSnaps(rec, N2_TITLE, 'N3'), timeline);
+    });
+  }
+
+  test('P-5. running → waiting → retrying → running: 멈춘 숫자를 유지하고 재개 때 그 숫자에서 이어서 오른다', async ({ page }) => {
+    const rec = await recordProcessing(page);
+    await setup(page, [ocr, ocr, analyzePaused('waiting'), analyzePaused('waiting'), analyzePaused('retrying'), analyzePaused('retrying'), ocr, ocr, ocr]);
+    await expect(page.getByText('분석 재시도 대기 중', { exact: true })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('이미지 구조 분석 중', { exact: true })).toBeVisible({ timeout: 10_000 });
+    await page.waitForTimeout(3_000);
+
+    const timeline = formatTimeline(rec);
+    const snaps = processingSnaps(rec, N2_TITLE, 'N3');
+    const segs = segmentsOf(rec);
+    const context = `${describeSegments(segs)}\n${timeline}`;
+    console.log(`P-5\n${describeSegments(segs)}`);
+    expect(segs.map((s) => s.cap), context).toEqual(['이미지 구조 분석 중', '분석 대기 중', '분석 재시도 대기 중', '이미지 구조 분석 중']);
+    const [running, waiting, retrying, resumed] = segs;
+    expectHeld(waiting, running, context);
+    // waiting → retrying 전환: 초기화·증가 없이 같은 숫자
+    expect(retrying.pcts, `retrying 동안 waiting 숫자 그대로\n${context}`).toEqual(waiting.pcts);
+    expect(retrying.to - retrying.from, context).toBeGreaterThan(2_500);
+    expect(retrying.polls, context).toBeGreaterThanOrEqual(1);
+    expectResumed(resumed, retrying, context);
+    expectSmoothProcessing(snaps, timeline);
+  });
+
+  test('P-6. analyze running → judge waiting 으로 상한이 99 로 열려도 숫자는 그대로이고, judge running 에서 그 숫자부터 오른다', async ({ page }) => {
+    const rec = await recordProcessing(page);
+    await setup(page, [ocr, ocr, judgeTick('waiting'), judgeTick('waiting'), judgeTick('running'), judgeTick('running')]);
+    await expect(page.getByText('영역별 판정 중', { exact: true })).toBeVisible({ timeout: 20_000 });
+    await page.waitForTimeout(3_000);
+
+    const timeline = formatTimeline(rec);
+    const snaps = processingSnaps(rec, N2_TITLE, 'N3');
+    const segs = segmentsOf(rec);
+    const context = `${describeSegments(segs)}\n${timeline}`;
+    console.log(`P-6\n${describeSegments(segs)}`);
+    expect(segs.map((s) => s.cap), context).toEqual(['이미지 구조 분석 중', '영역별 판정 대기 중', '영역별 판정 중']);
+    const [running, waiting, judging] = segs;
+    expectHeld(waiting, running, context);
+    expect(judging.rows, context).toBe('DDDAA');
+    expectResumed(judging, waiting, context);
+    expectSmoothProcessing(snaps, timeline);
+  });
+
+  test('P-7. 부분 판정 실패(LOCAL_JUDGE_FAILED)가 있어도 judge running 이면 숫자가 계속 오르고 N3 로 넘어간다', async ({ page }) => {
+    const partial = {
+      progress: 0.5,
+      stages: stages('done', 'failed', 'pending'),
+      items: [
+        item(9001, 'ocr', 'job', 'done'),
+        item(9002, 'section', 'section', 'done'),
+        item(9004, 'section', 'section', 'failed', 'LOCAL_JUDGE_FAILED'),
+        item(9005, 'section', 'section', 'running'),
+      ],
+      analysisProgress: judgePhase('running', { total: 5, done: 2, excluded: 0, running: 1, waiting: 1, retrying: 0, failed: 1, cancelled: 0 }),
+    };
+    const rec = await recordProcessing(page);
+    await setup(page, [ocr, ...repeat(partial, 3), N3_ADVANCE]);
+    await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 25_000 });
+
+    const timeline = formatTimeline(rec);
+    const snaps = processingSnaps(rec, N2_TITLE, 'N3');
+    const segs = segmentsOf(rec);
+    const context = `${describeSegments(segs)}\n${timeline}`;
+    console.log(`P-7\n${describeSegments(segs)}`);
+    const judging = segment(segs, '영역별 판정 중', context);
+    expect(judging.pcts.at(-1)!, `부분 실패여도 증가\n${context}`).toBeGreaterThan(judging.pcts[0] + 5);
+    for (const s of snaps) expect(s.tag, context).toBe('진행중');
+    expectSmoothProcessing(snaps, timeline);
+    expectCompletionPresentation(rec, N2_TITLE, 'N3', timeline);
+  });
+
+  test('P-8. waiting 으로 멈춘 낮은 숫자에서 N3 가 오면 그 숫자에서 100 까지 오르는 완료 표시 뒤 N3 로 넘어간다', async ({ page }) => {
+    const rec = await recordProcessing(page);
+    await setup(page, [ocr, ocr, analyzePaused('waiting'), analyzePaused('waiting'), N3_ADVANCE]);
+    await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 25_000 });
+
+    const timeline = formatTimeline(rec);
+    const snaps = processingSnaps(rec, N2_TITLE, 'N3');
+    const segs = segmentsOf(rec);
+    const context = `${describeSegments(segs)}\n${timeline}`;
+    const waiting = segment(segs, '분석 대기 중', context);
+    expectHeld(waiting, segment(segs, '이미지 구조 분석 중', context), context);
+    const held = waiting.pcts[0];
+    expectSmoothProcessing(snaps, timeline);
+
+    const { donePollAt, leftAt } = expectCompletionPresentation(rec, N2_TITLE, 'N3', timeline);
+    const completion = onScreen(rec.dom, N2_TITLE)
+      .filter((d) => d.t >= donePollAt && d.t < leftAt)
+      .map((d) => d.pct!)
+      .filter((p, i, arr) => p !== arr[i - 1]);
+    console.log(`P-8\n${describeSegments(segs)}\nN3 completion: ${held} → ${completion.join(' → ')}`);
+    expect(completion.at(-1), context).toBe(100);
+    for (let i = 0; i < completion.length; i += 1) {
+      expect(completion[i], `완료 표시는 멈춘 숫자에서 시작해 줄지 않는다\n${context}`).toBeGreaterThanOrEqual(i === 0 ? held : completion[i - 1]);
+    }
+  });
+
+  test('P-9. analysisProgress 없는 레거시 응답은 대기 상태를 추정하지 않고 기존처럼 숫자가 오른다', async ({ page }) => {
+    const rec = await recordProcessing(page);
+    const legacy = { progress: 0, stages: stages('running', 'pending', 'pending'), items: [item(9001, 'ocr', 'job', 'running')] };
+    await setup(page, repeat(legacy, 3));
+    await page.waitForTimeout(4_000);
+
+    const timeline = formatTimeline(rec);
+    const snaps = processingSnaps(rec, N2_TITLE, 'N3');
+    const segs = segmentsOf(rec);
+    console.log(`P-9\n${describeSegments(segs)}`);
+    expect(segs.map((s) => s.cap), timeline).toEqual(['텍스트 영역 인식 중']);
+    expect(snaps.at(-1)!.pct!, timeline).toBeGreaterThan(snaps[0].pct! + 10);
+    expectSmoothProcessing(snaps, timeline);
   });
 });
