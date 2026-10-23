@@ -1,0 +1,15 @@
+# FE 컨테이너 하나만 실행한다. 백엔드는 외부 AWS ALB(HTTP:80)를 사용한다.
+# 사용: docker compose up --build   →  http://localhost:3001
+services:
+  frontend:
+    build:
+      context: .
+      args:
+        # build-time 값: rewrites 대상과 client 번들에 굳는다.
+        BACKEND_ORIGIN: ${BACKEND_ORIGIN:-http://pixlate-alb-1174579949.ap-northeast-2.elb.amazonaws.com}
+        NEXT_PUBLIC_API_MOCKING: ${NEXT_PUBLIC_API_MOCKING:-disabled}
+    environment:
+      # runtime 참고용(next start 시점에는 이미 굳은 값이 쓰인다).
+      BACKEND_ORIGIN: ${BACKEND_ORIGIN:-http://pixlate-alb-1174579949.ap-northeast-2.elb.amazonaws.com}
+    ports:
+      - "3001:3000"

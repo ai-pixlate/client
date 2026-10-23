@@ -12,6 +12,13 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 - 모든 응답과 설명은 한국어로 작성한다.
 
+## Naming
+
+- 공식 브랜드 표기는 항상 `pix/ate`를 사용한다.
+- 코드·파일·시스템 식별자는 `pixlate`를 사용한다.
+- `Pix/ate`, `pixate`, `pix_ate`, `pix-ate` 등의 변형을 새로 만들지 않는다.
+- 상세 정본: `docs/pixlate-naming-convention.md`
+
 ## Git Remote
 
 - `origin`: https://github.com/ai-pixlate/client.git — 팀 공식 repository. pull/push/PR 기준.

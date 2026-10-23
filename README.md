@@ -1,10 +1,10 @@
-# Pix/ate — Frontend
+# pix/ate — Frontend
 
 AI 상세페이지 로컬라이제이션 서비스의 프론트엔드입니다.
 
 - **MVP 마일스톤** 2026-09-30 (중간발표)
 - **최종 마일스톤** 2026-12-11 (최종발표)
-- **기준 문서** [docs/reference/requirements.xlsx](docs/reference/requirements.xlsx) — 버전은 계속 바뀌므로 여기서 고정하지 않습니다. 현재 버전은 [docs/reference/README.md](docs/reference/README.md) 참고.
+- **기준 문서** [docs/reference/requirements.xlsx](docs/reference/requirements.xlsx) — 버전은 계속 바뀌므로 여기서 고정하지 않습니다. 현재 버전은 requirements.xlsx 내부 문서정보(00_문서정보 시트)를 기준으로 확인합니다.
 
 ## Requirements
 
@@ -37,9 +37,18 @@ http://localhost:3000 에서 확인합니다.
 
 ## 환경 변수
 
-현재 이 스파이크 단계에서는 필요한 환경 변수가 없습니다 (API·외부 서비스 미연동, 모두 mock).
-실제 API가 붙으면 `.env.example`에 필요한 키를 추가하고 여기 표로 정리합니다.
-Secret은 절대 Git에 커밋하지 않습니다 (`.env`, `.env.local`은 `.gitignore` 처리됨).
+```bash
+cp .env.example .env.local
+```
+
+후 필요에 따라 값을 조정합니다.
+
+| 변수 | 값 | 설명 |
+|---|---|---|
+| `NEXT_PUBLIC_API_MOCKING` | `enabled` / 미설정(또는 그 외 값) | `enabled`면 MSW(Mock Service Worker)를 사용합니다. 미설정 또는 그 외 값이면 실제 backend를 사용합니다(`NODE_ENV`와는 무관합니다). |
+| `NEXT_PUBLIC_DEV_SELLER_EMAIL` | 이메일 문자열 | 실백엔드 개발 세션 로그인용 이메일입니다. 미설정 시 코드 기본값을 사용합니다. |
+
+Secret(JWT, access token, password 등)은 절대 Git에 커밋하지 않습니다 (`.env`, `.env.local`은 `.gitignore` 처리됨).
 
 ## 명령어
 
@@ -50,7 +59,12 @@ Secret은 절대 Git에 커밋하지 않습니다 (`.env`, `.env.local`은 `.git
 | `npm run lint` | 코드 검사 |
 | `npm run typecheck` | 타입 검사 (`tsc --noEmit`) |
 | `npm run verify:coords` | **좌표 변환 자동 검증** (브라우저 불필요) |
+| `npm run verify:n5-adapter` | N5 Adapter(OpenAPI DTO → ViewModel) 자동 검증 (브라우저 불필요) |
+| `npm run verify:msw-flag` | `isApiMockingEnabled()`(MSW on/off SSOT)가 `NEXT_PUBLIC_API_MOCKING` 값 조합에서 `NODE_ENV`와 무관하게 정확히 동작하는지 자동 검증 (브라우저 불필요) |
+| `npm run verify:displayed-progress` | N2·N4 처리 화면 표시 %(관측 단계는 상한만 염·점프·감소 없음·처리 중 100 없음·실패 시 멈춤·완료 응답 뒤 100 표시) 순수 계산 자동 검증 (브라우저 불필요) |
+| `npm run generate:openapi-types` | 최신 OpenAPI 계약(`ai-pixlate.github.io/server/openapi.yaml`)에서 타입 재생성 → `lib/api/generated/openapi.d.ts` (직접 수정 금지, 재실행으로만 갱신) |
 | `npm run make:ruler` | 스파이크용 눈금 테스트 이미지 재생성 |
+| `npm run make:n5-section-fixtures` | N5 실제 계약(v3.4.2, 섹션별 원문/렌더 이미지) mock fixture 이미지 재생성 |
 
 ---
 
@@ -130,7 +144,7 @@ scripts/
   make-ruler.mjs           눈금 이미지 생성 (외부 라이브러리 미사용)
 public/spike/       생성된 눈금 이미지
 docs/fe-spike-01/   결과 보고서·좌표 규약·에러 매트릭스·ERD 선행 확인
-docs/reference/     PM 원본 문서 사본 (요구사항정의서·실행계획 등). 버전은 docs/reference/README.md 에서 관리
+docs/reference/     PM 원본 문서 로컬 사본 보관 위치. requirements.xlsx만 Git에서 추적하고, 그 외 파일은 .gitignore 처리됨
 ```
 
 ## 문서

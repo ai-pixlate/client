@@ -1,0 +1,46 @@
+Pix/ate 프로젝트 요구사항
+
+최종 마일스톤
+- 2026-12-11 (최종발표)
+
+기준 문서
+- docs/reference/requirements.xlsx
+- 버전은 계속 바뀌므로 여기서 고정하지 않습니다.
+- 현재 버전은 docs/reference/README.md 참고.
+
+Requirements
+
+Node
+- 20.9 이상
+- Next.js 16 요구사항
+- package.json의 engines 참고
+
+패키지 매니저
+- npm
+- package-lock.json 하나만 사용합니다.
+- 다른 lock file을 추가하지 마세요.
+
+기술 스택
+
+프레임워크
+- Next.js 16 (App Router)
+
+언어
+- TypeScript (strict)
+
+스타일
+- Tailwind CSS v4
+- 스타일 시스템은 이것 하나만 사용
+
+서버 데이터
+- TanStack Query
+
+클라이언트 상태
+- 기본은 useState / useReducer
+- 복잡한 에디터 상태만 Zustand
+
+폼
+- React Hook Form + Zod
+
+라이브러리 원칙
+- 같은 역할의 라이브러리를 중복해서 설치하지 않습니다.

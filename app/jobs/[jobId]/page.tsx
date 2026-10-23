@@ -1,300 +1,55 @@
 'use client';
 
-import { use, useState } from 'react';
+import { use, useEffect, useState } from 'react';
+import Link from 'next/link';
 
-import {
-  useJobStatusQuery,
-  useSectionsQuery,
-  useUpdateSectionBucketMutation,
-  useAdvanceJobStepMutation,
-} from '@/lib/queries/pixate';
-import type { JobStatusResponse, Section } from '@/lib/api/types';
+import { useJobTasksQuery } from '@/lib/queries/pixlate';
+import type { ApiJobTaskStatus } from '@/lib/api/job-schema';
+import { COMPLETION_PRESENTATION_MS } from '@/lib/processing/displayed-progress';
+import { N2AnalysisView } from './_components/n2-analysis-view';
+import { N3View } from './_components/n3/n3-view';
 import { N4ProcessingView } from './_components/n4-processing-view';
-import { N5ReviewView } from './_components/n5-review-view';
+import { N5View } from './_components/n5/n5-view';
 import { N6ResultView } from './_components/n6-result-view';
 
 // ─────────────────────────────────────────────────────────────────
-// processingSubStep → 사용자 안내 문구
-// TODO: 백엔드 파이프라인 명세 확정 후 키 목록을 union으로 좁힐 것
+// N2 — 분석 진행 화면은 ./_components/n2-analysis-view.tsx로 분리됨
+// (Figma 660:4139 기준 StepNav + 분석 비주얼/ANALYSIS LOG 2단 레이아웃)
+//
+// N3 — 섹션 확인 화면은 ./_components/n3/n3-view.tsx로 분리됨
+// (Figma node 540:3119 기준 2버킷 drag & drop 레이아웃)
 // ─────────────────────────────────────────────────────────────────
-const SUBSTEP_LABELS: Record<string, string> = {
-  ocr: '이미지에서 텍스트를 읽고 있습니다.',
-  section_decomposition: '상세페이지의 내용을 섹션으로 나누고 있습니다.',
-  verdict: '규제 및 현지 적합성을 확인하고 있습니다.',
-  inpainting: '원본 텍스트 영역을 정리하고 있습니다.',
-  translation: '텍스트를 번역하고 있습니다.',
-  compliance_check: '번역 결과의 규제 적합성을 확인하고 있습니다.',
-  render: '최종 이미지를 생성하고 있습니다.',
-};
-const SUBSTEP_FALLBACK = '이미지를 분석하고 있습니다.';
 
 // ─────────────────────────────────────────────────────────────────
-// N2 — 분석 진행 화면
+// 처리 화면 완료 표시 — N2 → N3, N4 → N5. mock/실서버 공통.
+//
+// 실제 완료는 서버 currentStep 전환뿐이다. 서버는 마지막 단계를 끝낸 바로 그 응답에서 currentStep 을
+// 바꿔 줄 수 있어서(2초 polling 사이에 끝나는 단계는 화면에 남지 않는다) 그대로 교체하면 30% 같은 중간
+// 숫자에서 갑자기 다음 화면이 된다. 그래서 처리 화면이 떠 있던 중에 정상 완료 전환 응답을 받으면, 그
+// 응답을 받은 뒤에만 같은 처리 화면을 COMPLETION_PRESENTATION_MS 동안 유지한다 — 숫자를 현재 값에서
+// 100 까지 올리고(isCompleted) 5단계 전부 완료를 잠깐 보여 준 다음 다음 화면으로 넘어간다.
+// 서버 작업을 기다리는 지연이 아니라 이미 끝난 결과를 보여 주는 시간이다. 정상 완료가 아닌 전환(N2 → N1
+// 복귀 등)은 붙잡지 않고 바로 이동한다. currentStep 정본, polling, task 상태는 바꾸지 않는다.
+//
+// 10/22 — mock 전용 N2 최소 체류(7초)와 경과 시간으로 만든 mock 표시 progress 를 없앴다. 서버가 이미
+// 끝냈는데 화면만 붙잡고 %·5단계를 시간으로 흘려보내는 것이었고, 실서버에서는 status.progress 를 그대로
+// 보여 줘 N3 직전 숫자가 낮았다. 이제 N2·N4 모두 표시 % 는 처리 화면이 관측 단계 상한 안에서 따로 만든다.
 // ─────────────────────────────────────────────────────────────────
-function N2View({ status }: { status: JobStatusResponse }) {
-  const data = status;
-
-  const subStepLabel = SUBSTEP_LABELS[data.processingSubStep] ?? SUBSTEP_FALLBACK;
-
-  return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-10 px-6">
-      {/* 스피너 */}
-      <div className="flex h-20 w-20 items-center justify-center rounded-full bg-blue-50">
-        <svg
-          className="h-10 w-10 animate-spin text-blue-500"
-          fill="none"
-          viewBox="0 0 24 24"
-          aria-hidden="true"
-        >
-          <circle
-            className="opacity-25"
-            cx="12"
-            cy="12"
-            r="10"
-            stroke="currentColor"
-            strokeWidth="4"
-          />
-          <path
-            className="opacity-75"
-            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-            fill="currentColor"
-          />
-        </svg>
-      </div>
-
-      {/* 진행률 */}
-      <div className="w-full max-w-sm space-y-3">
-        <div className="flex items-center justify-between text-sm">
-          <span className="text-gray-600">{subStepLabel}</span>
-          <span className="font-semibold tabular-nums text-blue-600">{data.progress}%</span>
-        </div>
-        <div
-          className="h-2 w-full overflow-hidden rounded-full bg-gray-100"
-          role="progressbar"
-          aria-valuenow={data.progress}
-          aria-valuemin={0}
-          aria-valuemax={100}
-        >
-          <div
-            className="h-full rounded-full bg-blue-500 transition-[width] duration-500 ease-out"
-            style={{ width: `${data.progress}%` }}
-          />
-        </div>
-      </div>
-
-      <p className="text-xs text-gray-400">완료되면 자동으로 다음 단계로 이동합니다.</p>
-
-      {/* 부분 실패 알림 */}
-      {data.failedItems.length > 0 && (
-        <div className="w-full max-w-sm rounded-lg border border-orange-200 bg-orange-50 p-4">
-          <p className="mb-2 text-sm font-medium text-orange-700">일부 항목을 처리하지 못했습니다</p>
-          <ul className="space-y-1">
-            {data.failedItems.map((item) => (
-              <li key={item.id} className="text-xs text-orange-600">
-                {item.id} — {item.reason}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────
-// N3 — 섹션 카드
-// ─────────────────────────────────────────────────────────────────
-function SectionCard({
-  section,
-  onToggle,
-  isDisabled,
-  isMutating,
-}: {
-  section: Section;
-  onToggle: () => void;
-  isDisabled: boolean;
-  isMutating: boolean;
-}) {
-  const [imgFailed, setImgFailed] = useState(false);
-  const isExcluded = section.bucket === 'exclude';
-
-  return (
-    <article
-      className={`rounded-xl border bg-white p-4 shadow-sm transition-opacity duration-200 ${
-        isExcluded ? 'opacity-50' : 'opacity-100'
-      }`}
-    >
-      <div className="flex gap-4">
-        {/* 썸네일 */}
-        <div className="relative h-[72px] w-[72px] shrink-0 overflow-hidden rounded-lg bg-gray-100">
-          {!imgFailed ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={section.thumbnailUrl}
-              alt={`섹션 ${section.sectionOrder} 미리보기`}
-              className="h-full w-full object-cover"
-              onError={() => setImgFailed(true)}
-            />
-          ) : (
-            <div className="flex h-full w-full flex-col items-center justify-center gap-1">
-              <div className="h-6 w-6 rounded bg-gray-200" />
-              <span className="text-[10px] text-gray-400">이미지 없음</span>
-            </div>
-          )}
-        </div>
-
-        {/* 본문 */}
-        <div className="flex min-w-0 flex-1 flex-col gap-2">
-          {/* 헤더: 섹션 번호 + 상태 뱃지 + 버튼 */}
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-semibold text-gray-800">
-                섹션 {section.sectionOrder}
-              </span>
-              <span
-                className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${
-                  isExcluded
-                    ? 'bg-gray-100 text-gray-500'
-                    : 'bg-emerald-100 text-emerald-700'
-                }`}
-              >
-                {isExcluded ? '제외됨' : '포함'}
-              </span>
-            </div>
-
-            <button
-              type="button"
-              onClick={onToggle}
-              disabled={isDisabled}
-              className={`shrink-0 rounded-lg border px-3 py-1 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
-                isExcluded
-                  ? 'border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100 active:bg-blue-200'
-                  : 'border-gray-300 bg-white text-gray-600 hover:bg-gray-50 active:bg-gray-100'
-              }`}
-            >
-              {isMutating ? '처리 중…' : isExcluded ? '되살리기' : '제외'}
-            </button>
-          </div>
-
-          {/* 자동 제외 이유 */}
-          {section.exclusionReason && (
-            <p className="text-xs text-gray-500">{section.exclusionReason}</p>
-          )}
-
-          {/* 판정 결과 (규제/로컬라이제이션 경고) */}
-          {section.verdicts.length > 0 && (
-            <ul className="space-y-1.5">
-              {section.verdicts.map((v) => (
-                <li
-                  key={v.verdictId}
-                  className="rounded-md border border-yellow-200 bg-yellow-50 px-3 py-2"
-                >
-                  <p className="text-xs font-medium text-yellow-800">⚠ {v.problemText}</p>
-                  <p className="mt-0.5 text-xs leading-relaxed text-yellow-700">{v.basis}</p>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </div>
-    </article>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────
-// N3 — 섹션 확인 화면
-// ─────────────────────────────────────────────────────────────────
-function N3View({ jobId }: { jobId: string }) {
-  const { data, isLoading, isError, error } = useSectionsQuery(jobId);
-  const mutation = useUpdateSectionBucketMutation(jobId);
-  const advanceMutation = useAdvanceJobStepMutation(jobId);
-  const [pendingSectionId, setPendingSectionId] = useState<string | null>(null);
-
-  if (isLoading) {
-    return (
-      <div className="flex flex-1 items-center justify-center">
-        <span className="text-sm text-gray-400">섹션 목록을 불러오는 중...</span>
-      </div>
-    );
-  }
-
-  if (isError) {
-    return (
-      <div className="flex flex-1 items-center justify-center">
-        <p className="text-sm text-red-500">
-          {error instanceof Error ? error.message : '오류가 발생했습니다.'}
-        </p>
-      </div>
-    );
-  }
-
-  if (!data) return null;
-
-  const includedCount = data.sections.filter((s) => s.bucket === 'include').length;
-
-  return (
-    <>
-      {/* 섹션 목록 (스크롤 영역) */}
-      <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-2xl space-y-3 px-6 py-6">
-          <p className="text-sm text-gray-500">
-            전체 {data.sections.length}개 섹션 중{' '}
-            <span className="font-semibold text-gray-800">{includedCount}개</span> 포함됩니다.
-          </p>
-
-          {data.sections.map((section) => (
-            <SectionCard
-              key={section.sectionId}
-              section={section}
-              isDisabled={mutation.isPending}
-              isMutating={mutation.isPending && pendingSectionId === section.sectionId}
-              onToggle={() => {
-                setPendingSectionId(section.sectionId);
-                mutation.mutate(
-                  {
-                    sectionId: section.sectionId,
-                    bucket: section.bucket === 'include' ? 'exclude' : 'include',
-                    stage: 'N3',
-                  },
-                  { onSettled: () => setPendingSectionId(null) },
-                );
-              }}
-            />
-          ))}
-        </div>
-      </div>
-
-      {/* 하단 액션 바 */}
-      <div className="shrink-0 border-t bg-white px-6 py-4">
-        <div className="mx-auto flex max-w-2xl justify-between">
-          <p className="text-sm text-gray-500">
-            확인이 끝나면 번역을 시작하세요.
-          </p>
-          <button
-            type="button"
-            disabled={advanceMutation.isPending}
-            onClick={() => advanceMutation.mutate()}
-            className="rounded-lg bg-blue-500 px-5 py-2 text-sm font-medium text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {advanceMutation.isPending ? '번역 시작 중...' : '번역 시작 →'}
-          </button>
-        </div>
-      </div>
-    </>
-  );
-}
+const COMPLETION_TRANSITIONS: Record<string, string> = { N2: 'N3', N4: 'N5' };
 
 // ─────────────────────────────────────────────────────────────────
 // 페이지 루트
 // ─────────────────────────────────────────────────────────────────
 
 const STEP_META: Record<string, { label: string; desc: string }> = {
+  N1: { label: 'N1', desc: '정보 입력' },
   N2: { label: 'N2', desc: '이미지 분석' },
   N3: { label: 'N3', desc: '섹션 확인' },
   N4: { label: 'N4', desc: '번역 처리' },
   N5: { label: 'N5', desc: '검수' },
   N6: { label: 'N6', desc: '최종 결과' },
 };
+const STEP_META_FALLBACK = STEP_META.N2;
 
 export default function Page({
   params,
@@ -303,57 +58,97 @@ export default function Page({
 }) {
   const { jobId } = use(params);
 
-  // status polling은 페이지에서 한 번만 실행하고, currentStep으로 화면을 분기한다.
-  // N2View / N4ProcessingView는 이 결과를 status props로 전달받아 재사용한다.
-  const statusQuery = useJobStatusQuery(jobId, { polling: true });
+  // tasks polling(GET /jobs/:jobId/tasks)은 페이지에서 한 번만 실행하고,
+  // currentStep으로 화면을 분기한다. N2View / N4ProcessingView는 이 결과를
+  // status props로 전달받아 재사용한다. currentStep/userFacingStatus는 서버
+  // 응답 그대로 쓴다 — 여기서 다시 계산하지 않는다.
+  const tasksQuery = useJobTasksQuery(jobId, { polling: true });
+  const currentStep = tasksQuery.data?.currentStep;
 
-  const currentStep = statusQuery.data?.currentStep;
-  const meta = STEP_META[currentStep ?? 'N2'];
+  // 완료 표시(위 COMPLETION_TRANSITIONS 주석) — 렌더 중 조건부 setState("이전 값에서 state 조정" 패턴)로
+  // 전환 순간을 잡고, 시간이 지나면 effect 의 timer 로 푼다.
+  const [shownStep, setShownStep] = useState(currentStep);
+  const [completion, setCompletion] = useState<{ step: 'N2' | 'N4'; status: ApiJobTaskStatus } | null>(null);
+  if (currentStep !== shownStep) {
+    setShownStep(currentStep);
+    if ((shownStep === 'N2' || shownStep === 'N4') && COMPLETION_TRANSITIONS[shownStep] === currentStep && tasksQuery.data) {
+      setCompletion({ step: shownStep, status: tasksQuery.data });
+    }
+  }
+  useEffect(() => {
+    if (!completion) return;
+    const timer = setTimeout(() => setCompletion(null), COMPLETION_PRESENTATION_MS);
+    return () => clearTimeout(timer);
+  }, [completion]);
+  const displayStep = completion?.step ?? currentStep;
+  // N2 전체 분석 실패 SSOT — currentStep=N2 && jobStatus=failed 뿐이다. failedCount·stages·progress·
+  // analysisProgress.status 는 보지 않는다(LOCAL_JUDGE_FAILED 부분 제외는 실패가 아니다).
+  const isN2Failed = !completion && currentStep === 'N2' && tasksQuery.data?.jobStatus === 'failed';
+  const meta = (displayStep && STEP_META[displayStep]) || STEP_META_FALLBACK;
 
   return (
     <div className="flex h-screen flex-col bg-gray-50">
-      {/* 상단 헤더 */}
-      <header className="flex h-14 shrink-0 items-center gap-4 border-b bg-white px-6 shadow-sm">
-        <a
-          href="/"
-          className="text-sm text-gray-500 transition-colors hover:text-gray-700"
-        >
-          ← 뒤로
-        </a>
-        <div className="h-4 w-px bg-gray-200" />
-        <div className="flex items-center gap-2">
-          <span className="rounded bg-blue-100 px-2 py-0.5 text-xs font-bold text-blue-700">
-            {meta.label}
-          </span>
-          <span className="text-sm font-medium text-gray-700">{meta.desc}</span>
-        </div>
-      </header>
+      {/* 상단 헤더 — N2/N3/N4/N5/N6는 Figma 기준 자체 헤더(StepNav+나가기)를 가지므로 숨긴다 */}
+      {displayStep !== 'N2' &&
+        displayStep !== 'N3' &&
+        displayStep !== 'N4' &&
+        displayStep !== 'N5' &&
+        displayStep !== 'N6' && (
+        <header className="flex h-14 shrink-0 items-center gap-4 border-b bg-white px-6 shadow-sm">
+          <Link
+            href="/"
+            className="text-sm text-gray-500 transition-colors hover:text-gray-700"
+          >
+            ← 뒤로
+          </Link>
+          <div className="h-4 w-px bg-gray-200" />
+          <div className="flex items-center gap-2">
+            <span className="rounded bg-blue-100 px-2 py-0.5 text-xs font-bold text-blue-700">
+              {meta.label}
+            </span>
+            <span className="text-sm font-medium text-gray-700">{meta.desc}</span>
+          </div>
+        </header>
+      )}
 
       {/* 본문 */}
       <div className="flex flex-1 flex-col overflow-hidden">
-        {statusQuery.isLoading && (
+        {tasksQuery.isLoading && (
           <div className="flex flex-1 items-center justify-center">
             <span className="text-sm text-gray-400">작업 상태를 확인하고 있습니다.</span>
           </div>
         )}
 
-        {statusQuery.isError && (
+        {tasksQuery.isError && (
           <div className="flex flex-1 items-center justify-center">
             <p className="text-sm text-red-500">
-              {statusQuery.error instanceof Error
-                ? statusQuery.error.message
+              {tasksQuery.error instanceof Error
+                ? tasksQuery.error.message
                 : '오류가 발생했습니다.'}
             </p>
           </div>
         )}
 
-        {statusQuery.data && (
+        {tasksQuery.data && (
           <>
-            {currentStep === 'N2' && <N2View status={statusQuery.data} />}
-            {currentStep === 'N3' && <N3View jobId={jobId} />}
-            {currentStep === 'N4' && <N4ProcessingView status={statusQuery.data} />}
-            {currentStep === 'N5' && <N5ReviewView jobId={jobId} />}
-            {currentStep === 'N6' && <N6ResultView jobId={jobId} />}
+            {displayStep === 'N2' && (
+              <N2AnalysisView
+                jobId={jobId}
+                status={completion?.status ?? tasksQuery.data}
+                isCompleted={completion?.step === 'N2'}
+                isFailed={isN2Failed}
+              />
+            )}
+            {displayStep === 'N3' && <N3View jobId={jobId} />}
+            {displayStep === 'N4' && (
+              <N4ProcessingView
+                jobId={jobId}
+                status={completion?.status ?? tasksQuery.data}
+                isCompleted={completion?.step === 'N4'}
+              />
+            )}
+            {displayStep === 'N5' && <N5View jobId={jobId} />}
+            {displayStep === 'N6' && <N6ResultView jobId={jobId} />}
           </>
         )}
       </div>
