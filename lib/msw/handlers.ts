@@ -168,7 +168,7 @@ let jobState: ApiJob = { ...mockN5Job, currentStep: 'N2', userFacingStatus: 'ana
 let jobProcessingPollCount = 0;
 
 /**
- * N4 진행 polling index — N2의 jobProcessingPollCount(단일 stage, 2-poll)와
+ * N4 진행 polling index — N2의 jobProcessingPollCount(N2_DEFAULT_SCHEDULE 인덱스)와
  * 다르게 N4는 실제 계약(inpaint→translate→verify→render) 4단계를 순서대로
  * 최소 한 번씩 지나가야 해서 별도 카운터를 둔다. N4_POLL_SCHEDULE의 인덱스다.
  */
@@ -321,11 +321,101 @@ function takeMockFlag(flag: string): boolean {
  * 이 아래 별도 로직 — N4_PROCESSING_STAGES/advanceN4Processing 참고.)
  */
 const N2_PROCESSING_STAGE = {
-  key: 'analyze',
-  label: '이미지를 분석하고 있습니다',
   next: 'N3' as const,
   nextUserFacingStatus: 'section_review' as const,
 };
+
+const n2Stage = (key: 'ocr' | 'section' | 'verify', status: 'pending' | 'running' | 'done') => ({ key, label: key, status });
+
+/**
+ * 기본 mock N2 poll 순서 — server 315816e docs/openapi.yaml JobTaskStatus·AnalysisProgress 계약 값.
+ * 10/22 (2) — 이전 기본 mock 은 단일 'analyze' stage 만 주고 analysisProgress 가 없어, 수동 QA 화면(01 만 진행
+ * 중이다가 끝남)이 e2e script 로 보는 화면(analyze 묶음 → finalize → judge)과 달랐다. 이제 기본 흐름도 같은
+ * 계약 상태를 poll 마다 차례로 돌려준다. FE 에 시간을 끄는 장치를 두지 않고 mock 서버가 상태를 돌려줄 뿐이다.
+ * - 원본은 GET /jobs/:jobId/source-images fixture(mockN3SourceImages) 2장, 영역은 N3 섹션 fixture
+ *   (원본 1 에 3개 · 원본 2 에 2개, 합 5개)와 맞춘다.
+ * - 2초 polling 이라 사이 activity(원본 1 merge · 원본 2 split·ocr)는 응답에 남지 않는다 — 실서버도 그렇다.
+ * - progress 는 계약대로 분석 시도가 끝날 때까지 0, 채택 뒤 done/(1 + 영역 수).
+ * - null 가능 필드는 계약상 해당 없는 곳에서 null 이다(가짜 0 을 채우지 않는다).
+ * 마지막 항목 다음 poll 에서 N3 로 넘긴다(약 10초).
+ */
+const N2_DEFAULT_SCHEDULE: { progress: number; total: number; done: number; stages: MockJobProcessingTick['stages']; analysisProgress: ApiAnalysisProgress }[] = [
+  {
+    progress: 0,
+    total: 1,
+    done: 0,
+    stages: [n2Stage('ocr', 'running'), n2Stage('section', 'pending'), n2Stage('verify', 'pending')],
+    analysisProgress: {
+      phase: 'analyze',
+      status: 'running',
+      sourceTotal: 2,
+      activity: 'split',
+      current: { sourceIndex: 1, sourceImageId: 1, regionIndex: null, regionCountInSource: null },
+      regions: null,
+      judge: null,
+    },
+  },
+  {
+    progress: 0,
+    total: 1,
+    done: 0,
+    stages: [n2Stage('ocr', 'running'), n2Stage('section', 'pending'), n2Stage('verify', 'pending')],
+    analysisProgress: {
+      phase: 'analyze',
+      status: 'running',
+      sourceTotal: 2,
+      activity: 'ocr',
+      current: { sourceIndex: 1, sourceImageId: 1, regionIndex: 2, regionCountInSource: 3 },
+      regions: { done: 1, known: 3, totalFixed: false },
+      judge: null,
+    },
+  },
+  {
+    progress: 0,
+    total: 1,
+    done: 0,
+    stages: [n2Stage('ocr', 'running'), n2Stage('section', 'pending'), n2Stage('verify', 'pending')],
+    analysisProgress: {
+      phase: 'analyze',
+      status: 'running',
+      sourceTotal: 2,
+      activity: 'merge',
+      current: { sourceIndex: 2, sourceImageId: 2, regionIndex: 2, regionCountInSource: 2 },
+      regions: { done: 4, known: 5, totalFixed: true },
+      judge: null,
+    },
+  },
+  {
+    progress: 0,
+    total: 1,
+    done: 0,
+    stages: [n2Stage('ocr', 'running'), n2Stage('section', 'pending'), n2Stage('verify', 'pending')],
+    analysisProgress: {
+      phase: 'analyze',
+      status: 'running',
+      sourceTotal: 2,
+      activity: 'finalize',
+      current: null,
+      regions: { done: 5, known: 5, totalFixed: true },
+      judge: null,
+    },
+  },
+  {
+    progress: 0.5,
+    total: 6,
+    done: 3,
+    stages: [n2Stage('ocr', 'done'), n2Stage('section', 'running'), n2Stage('verify', 'pending')],
+    analysisProgress: {
+      phase: 'judge',
+      status: 'running',
+      sourceTotal: 2,
+      activity: null,
+      current: null,
+      regions: { done: 5, known: 5, totalFixed: true },
+      judge: { total: 5, done: 2, excluded: 0, running: 2, waiting: 1, retrying: 0, failed: 0, cancelled: 0 },
+    },
+  },
+];
 
 /** N2/N4 job 단계 진행 mock 이 GET /tasks 에 돌려주는 한 번의 진행 값. */
 type MockJobProcessingTick = {
@@ -335,7 +425,7 @@ type MockJobProcessingTick = {
   stages: { key: string; label: string; status: 'pending' | 'running' | 'done' | 'failed' }[];
   /** 실패 시나리오 flag·N2 e2e script 에서만 채운다 — 정상 흐름은 항상 비어 있다. */
   items?: ApiJobAsyncTaskItem[];
-  /** N2 e2e script 에서만 채운다. 없으면 응답에 속성 자체를 싣지 않는다(미구현 서버·레거시 작업과 같다). */
+  /** 기본 N2 흐름·N2 e2e script 에서 채운다. 없으면 응답에 속성 자체를 싣지 않는다(미구현 서버·레거시 작업과 같다). */
   analysisProgress?: ApiAnalysisProgress;
 };
 
@@ -396,9 +486,7 @@ function advanceN2Processing(): MockJobProcessingTick {
 
   jobProcessingPollCount += 1;
 
-  if (jobProcessingPollCount < 2) {
-    return { progress: 0.5, total: 1, done: 0, stages: [{ ...N2_PROCESSING_STAGE, status: 'running' }] };
-  }
+  if (jobProcessingPollCount <= N2_DEFAULT_SCHEDULE.length) return N2_DEFAULT_SCHEDULE[jobProcessingPollCount - 1];
 
   jobState = {
     ...jobState,
@@ -407,7 +495,8 @@ function advanceN2Processing(): MockJobProcessingTick {
     status: 'review',
   };
   jobProcessingPollCount = 0;
-  return { progress: 1, total: 1, done: 1, stages: [{ ...N2_PROCESSING_STAGE, status: 'done' }] };
+  // N3 전환 응답 — analysisProgress 는 currentStep=N3 이라 응답에서 빠진다(GET /tasks 핸들러)
+  return { progress: 1, total: 6, done: 6, stages: [n2Stage('ocr', 'done'), n2Stage('section', 'done'), n2Stage('verify', 'done')] };
 }
 
 /**

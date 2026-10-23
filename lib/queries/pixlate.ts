@@ -27,6 +27,11 @@ import {
   saveJob,
 } from '@/lib/api/pixlate';
 import type { ApiJobPatch } from '@/lib/api/job-schema';
+import {
+  clearDisplayedProgress,
+  n2DisplayedProgressKey,
+  n4DisplayedProgressKey,
+} from '@/lib/processing/displayed-progress-storage';
 import type { ApiBlockPatch, ApiConfirmRequest, ApiJobTaskStatus, ApiTextBlock } from '@/lib/api/n5-schema';
 import type { ApiExportRequest, ApiExportArtifactType } from '@/lib/api/n6-schema';
 import type { ApiSection, ApiSectionBucket, ApiSectionList, ApiSectionPatch } from '@/lib/api/n3-schema';
@@ -106,6 +111,8 @@ export function usePatchJobMutation() {
 export function useAnalyzeJobMutation() {
   return useMutation({
     mutationFn: (jobId: string) => analyzeJob(jobId),
+    // 새 N2 실행 — 이전 실행이 남긴 표시 % 를 이어받지 않는다(displayed-progress-storage.ts)
+    onSuccess: (_data, jobId) => clearDisplayedProgress(n2DisplayedProgressKey(jobId)),
   });
 }
 
@@ -164,6 +171,8 @@ export function useSectionProceedMutation(jobId: string) {
   return useMutation({
     mutationFn: () => proceedSections(jobId),
     onSuccess: () => {
+      // 새 N4 실행 — 이전 실행이 남긴 표시 % 를 이어받지 않는다(displayed-progress-storage.ts)
+      clearDisplayedProgress(n4DisplayedProgressKey(jobId));
       queryClient.invalidateQueries({ queryKey: pixlateKeys.tasks(jobId) });
     },
   });

@@ -2,6 +2,18 @@ import { test, expect, type Page } from '@playwright/test';
 
 import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 
+import {
+  expectCompletionCopy,
+  expectCompletionPresentation,
+  expectSmoothProcessing,
+  formatTimeline,
+  onScreen,
+  processingSnaps,
+  recordProcessing,
+  type DomSnap,
+  type ProcessingRecord,
+} from './helpers/processing-recorder';
+
 // ─────────────────────────────────────────────────────────────────
 // N2 analysisProgress(선택 속성) 상세 진행 — server commit 315816e docs/openapi.yaml 기준.
 //
@@ -10,7 +22,9 @@ import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 // - analysisProgress 유무와 관계없이 Figma 660:4139 의 5단계 목록(순서 고정)이 항상 있고,
 //   상세 값은 기존 동적 문구(GIF 하단 caption·ANALYSIS LOG 설명 줄)에 들어감 — 별도 상세 패널 없음
 // - analysisProgress 가 있으면 5단계 행 상태도 같은 poll 값으로 정해 문구와 모순되지 않음
-//   (원본마다 01 → 02 → 03 → 다시 01, judge 는 04·05 를 가르지 않음, waiting/retrying 은 진행 중 아님)
+//   (analyze running 은 01~03 함께 진행 중 — 원본마다 split/ocr/merge 가 반복돼도 행이 돌아가지 않고 실제
+//   작업은 LOG 설명 줄에만 보임, judge 는 04·05 를 가르지 않음, waiting/retrying 은 진행 중 아님)
+// - 표시 % 는 phase 가 상한만 열고 점프·감소 없이 오르며, N3 응답 뒤에만 100 을 보여 주고 넘어감
 // - null 은 정보 없음(0·완료·이전 값으로 채우지 않음), 재시도 때 이전 시도 detail 이 남지 않음
 // - 원본마다 split → ocr → merge 가 반복돼도 지금 poll 의 서버 값만 보임
 // - 전체 실패는 currentStep=N2 && jobStatus=failed 뿐, LOCAL_JUDGE_FAILED 부분 제외는 N3 정상 전환
@@ -167,7 +181,7 @@ test.describe('N2 analysisProgress 상세 진행', () => {
     await expectFigmaFiveRows(page);
     await expect(page.getByTestId('n2-analysis-detail')).toHaveCount(0);
     await expect(logCaption(page)).toHaveText('원본 2장 중 1번째 · 영역을 나누는 중');
-    await expect(page.getByText('영역 나누는 중', { exact: true })).toBeVisible();
+    await expect(page.getByText('이미지 구조 분석 중', { exact: true })).toBeVisible();
 
     await expect(logCaption(page)).toHaveText('판정 대상 5개 · 완료 2 · 자동 제외 1 · 진행 중 1 · 대기 1', { timeout: 20_000 });
     await expect(page.getByText('영역별 판정 중', { exact: true })).toBeVisible();
@@ -330,14 +344,13 @@ test.describe('N2 analysisProgress 상세 진행', () => {
     expect(Object.values(rows.at(-1)!), JSON.stringify(rows)).not.toContain('진행 중');
   });
 
-  test('H. analysisProgress 를 보이다 N3 로 넘어가면 600ms 완료 표시를 거쳐 N3 로 이동한다', async ({ page }) => {
+  test('H. analysisProgress 를 보이다 N3 로 넘어가면 완료 표시를 거쳐 N3 로 이동한다', async ({ page }) => {
     const judging = {
       progress: 0.5,
       stages: stages('done', 'running', 'pending'),
       items: [item(9001, 'ocr', 'job', 'done'), item(9002, 'section', 'section', 'running')],
       analysisProgress: judgePhase('running', { total: 3, done: 1, excluded: 0, running: 1, waiting: 1, retrying: 0, failed: 0, cancelled: 0 }),
     };
-    // mock N2 최소 체류(7초)가 지난 뒤에 N3 응답이 오도록 poll 수를 잡는다
     const responses = await setup(page, [
       judging,
       judging,
@@ -442,25 +455,23 @@ test.describe('N2 analysisProgress 상세 진행', () => {
     analysisProgress: judgePhase(status, judge),
   });
   const S1 = { sourceIndex: 1, sourceImageId: 701 };
-  const S2 = { sourceIndex: 2, sourceImageId: 702 };
-  const splitTick = (source: typeof S1) => analyzingTick(analyze('running', 'split', { ...source, regionIndex: null, regionCountInSource: null }, null));
   const ocrTick = (source: typeof S1) => analyzingTick(analyze('running', 'ocr', { ...source, regionIndex: 1, regionCountInSource: 2 }, { done: 0, known: 2, totalFixed: false }));
   const mergeTick = (source: typeof S1) => analyzingTick(analyze('running', 'merge', { ...source, regionIndex: 1, regionCountInSource: 2 }, { done: 0, known: 2, totalFixed: false }));
 
   const singleStateCases: { name: string; tick: unknown; title: string; line: RegExp | string; rows: Record<string, string> }[] = [
     {
-      name: 'K-1. ocr: 텍스트 추출 중이면 02 만 진행 중',
+      name: 'K-1. ocr: 실제 작업(텍스트 추출)은 LOG 에, 행은 01~03 분석 묶음 진행 중',
       tick: ocrTick(S1),
-      title: '텍스트 추출 중',
+      title: '이미지 구조 분석 중',
       line: '원본 2장 중 1번째 · 영역 2개 중 1번째 텍스트 추출 중',
-      rows: rowsOf(P, A, P, P, P),
+      rows: rowsOf(A, A, A, P, P),
     },
     {
-      name: 'K-2. merge: 병합·역할 분석 중이면 03 만 진행 중',
+      name: 'K-2. merge: 실제 작업(병합·역할 분석)은 LOG 에, 행은 01~03 분석 묶음 진행 중',
       tick: mergeTick(S1),
-      title: '병합·역할 분석 중',
+      title: '이미지 구조 분석 중',
       line: '원본 2장 중 1번째 · 영역 2개 중 1번째 병합·역할 분석 중',
-      rows: rowsOf(P, P, A, P, P),
+      rows: rowsOf(A, A, A, P, P),
     },
     {
       name: 'K-3. finalize: 01~03 완료, 04·05 대기',
@@ -499,7 +510,7 @@ test.describe('N2 analysisProgress 상세 진행', () => {
     });
   }
 
-  test('K-6. judge running: 01~03 완료, 04·05 진행 중이고 이전 02·03 진행 중이 남지 않는다', async ({ page }) => {
+  test('K-6. judge running: 01~03 완료, 04·05 진행 중이고 이전 01~03 진행 중이 남지 않는다', async ({ page }) => {
     await setup(page, [
       ocrTick(S1),
       mergeTick(S1),
@@ -509,27 +520,9 @@ test.describe('N2 analysisProgress 상세 진행', () => {
     await expect(page.getByText('영역별 판정 중', { exact: true })).toBeVisible();
     await expectRows(page, rowsOf(D, D, D, A, A));
     expectInOrder((await rowsLog(page)).map((r) => JSON.stringify(r)), [
-      JSON.stringify(rowsOf(P, A, P, P, P)),
-      JSON.stringify(rowsOf(P, P, A, P, P)),
+      JSON.stringify(rowsOf(A, A, A, P, P)),
       JSON.stringify(rowsOf(D, D, D, A, A)),
     ]);
-  });
-
-  test('K-7. 여러 원본: source1 split → ocr → merge → source2 split 이면 행도 01 → 02 → 03 → 다시 01 이다', async ({ page }) => {
-    await setup(page, [splitTick(S1), ocrTick(S1), mergeTick(S1), splitTick(S2)]);
-    await expect(logCaption(page)).toHaveText('원본 2장 중 2번째 · 영역을 나누는 중', { timeout: 15_000 });
-    await expect(page.getByText('영역 나누는 중', { exact: true })).toBeVisible();
-    // 03 뒤에도 01 이 완료로 남거나 02·03 진행 중이 남지 않는다
-    await expectRows(page, rowsOf(A, P, P, P, P));
-    const log = (await rowsLog(page)).map((r) => JSON.stringify(r));
-    expectInOrder(log, [
-      JSON.stringify(rowsOf(A, P, P, P, P)),
-      JSON.stringify(rowsOf(P, A, P, P, P)),
-      JSON.stringify(rowsOf(P, P, A, P, P)),
-      JSON.stringify(rowsOf(A, P, P, P, P)),
-    ]);
-    // analyze 단계에서는 한 번에 한 행만 진행 중이다
-    for (const r of await rowsLog(page)) expect(Object.values(r).filter((v) => v === A).length, JSON.stringify(r)).toBeLessThanOrEqual(1);
   });
 
   test('K-8. analyze running 인데 activity=null 이거나 waiting 이면 진행 중 행을 추정하지 않는다', async ({ page }) => {
@@ -540,5 +533,506 @@ test.describe('N2 analysisProgress 상세 진행', () => {
     await expect(page.getByText('이미지 분석 중', { exact: true })).toBeVisible();
     await expectRows(page, rowsOf(P, P, P, P, P));
     for (const r of await rowsLog(page)) expect(Object.values(r), JSON.stringify(r)).not.toContain(A);
+  });
+});
+
+// ── 로딩 표현 안정화: 실제 세부 작업(LOG) · 5단계 presentation · 표시 % · 실제 완료(N3) 를 분리 ──
+test.describe('N2 로딩 표현', () => {
+  test.setTimeout(60_000);
+  const N2_TITLE = '이미지 분석';
+  const S1 = { sourceIndex: 1, sourceImageId: 701 };
+  const S2 = { sourceIndex: 2, sourceImageId: 702 };
+  const split = (s: typeof S1) => analyzingTick(analyze('running', 'split', { ...s, regionIndex: null, regionCountInSource: null }, null));
+  const ocr = (s: typeof S1) => analyzingTick(analyze('running', 'ocr', { ...s, regionIndex: 1, regionCountInSource: 2 }, { done: 0, known: 2, totalFixed: false }));
+  const merge = (s: typeof S1) => analyzingTick(analyze('running', 'merge', { ...s, regionIndex: 2, regionCountInSource: 2 }, { done: 1, known: 2, totalFixed: false }));
+  const finalize = analyzingTick(analyze('running', 'finalize', null, { done: 4, known: 4, totalFixed: true }));
+  const judging = (status: 'waiting' | 'running' | 'retrying', done = 0) => ({
+    progress: 0.4,
+    stages: stages('done', 'running', 'pending'),
+    items: [item(9001, 'ocr', 'job', 'done')],
+    analysisProgress: judgePhase(status, { total: 4, done, excluded: 0, running: status === 'running' ? 2 : 0, waiting: 4 - done, retrying: status === 'retrying' ? 1 : 0, failed: 0, cancelled: 0 }),
+  });
+  const rowSequence = (snaps: DomSnap[]) => snaps.map((s) => s.rows).filter((r, i, arr) => r !== arr[i - 1]);
+
+  test('L-1. 여러 원본의 split → ocr → merge 반복에도 01~03 행이 왕복하지 않고, 실제 작업은 LOG 에 순서대로 보인다', async ({ page }) => {
+    const rec = await recordProcessing(page);
+    await setup(page, [split(S1), ocr(S1), merge(S1), split(S2), ocr(S2), merge(S2)]);
+    await expect(logCaption(page)).toHaveText('원본 2장 중 2번째 · 영역 2개 중 2번째 병합·역할 분석 중', { timeout: 20_000 });
+    await page.waitForTimeout(1_000);
+
+    const timeline = formatTimeline(rec);
+    const snaps = processingSnaps(rec, N2_TITLE, 'N3');
+    // analyze 동안 01~03 은 원본별로 반복되는 "이미지 분석 묶음"이다 — 03 → 01 → 02 처럼 오가지 않는다
+    expect(rowSequence(snaps), timeline).toEqual(['AAAPP']);
+    expect(new Set(snaps.map((s) => s.cap)), timeline).toEqual(new Set(['이미지 구조 분석 중']));
+    expectInOrder(await detailLog(page), [
+      '원본 2장 중 1번째 · 영역을 나누는 중',
+      '원본 2장 중 1번째 · 영역 2개 중 1번째 텍스트 추출 중',
+      '원본 2장 중 1번째 · 영역 2개 중 2번째 병합·역할 분석 중',
+      '원본 2장 중 2번째 · 영역을 나누는 중',
+      '원본 2장 중 2번째 · 영역 2개 중 1번째 텍스트 추출 중',
+      '원본 2장 중 2번째 · 영역 2개 중 2번째 병합·역할 분석 중',
+    ]);
+    expectSmoothProcessing(snaps, timeline);
+    // analyze 동안 표시 % 상한은 69
+    for (const s of snaps) expect(s.pct!, timeline).toBeLessThanOrEqual(69);
+  });
+
+  test('L-2. finalize 에서 01~03 완료로 바뀌고 % 는 줄거나 뛰지 않는다', async ({ page }) => {
+    const rec = await recordProcessing(page);
+    await setup(page, [ocr(S1), merge(S1), finalize, finalize]);
+    await expect(logCaption(page)).toHaveText('원본 2장 · 분석 결과를 정리하는 중', { timeout: 15_000 });
+    await page.waitForTimeout(1_500);
+
+    const timeline = formatTimeline(rec);
+    const snaps = processingSnaps(rec, N2_TITLE, 'N3');
+    expect(rowSequence(snaps), timeline).toEqual(['AAAPP', 'DDDPP']);
+    expect(snaps.at(-1)!.cap, timeline).toBe('분석 결과 정리 중');
+    expectSmoothProcessing(snaps, timeline);
+    for (const s of snaps) expect(s.pct!, timeline).toBeLessThanOrEqual(79);
+  });
+
+  test('L-3. judge waiting → retrying → running 문구와 04·05 를 그대로 보이고, phase 가 바뀌어도 % 는 현재 값에서 계속 오른다', async ({ page }) => {
+    const rec = await recordProcessing(page);
+    await setup(page, [merge(S1), judging('waiting'), judging('retrying'), judging('running', 1), judging('running', 2), judging('running', 3)]);
+    await expect(page.getByText('영역별 판정 중', { exact: true })).toBeVisible({ timeout: 20_000 });
+    await page.waitForTimeout(3_000);
+
+    const timeline = formatTimeline(rec);
+    const snaps = processingSnaps(rec, N2_TITLE, 'N3');
+    expect(rowSequence(snaps), timeline).toEqual(['AAAPP', 'DDDPP', 'DDDAA']);
+    const caps = snaps.map((s) => s.cap).filter((c, i, arr) => c !== arr[i - 1]);
+    expect(caps, timeline).toEqual(['이미지 구조 분석 중', '영역별 판정 대기 중', '영역별 판정 재시도 대기 중', '영역별 판정 중']);
+    expectSmoothProcessing(snaps, timeline);
+    // judge running 에 들어간 뒤에도 숫자가 멈추지 않고 오른다
+    const firstRunning = snaps.find((s) => s.rows === 'DDDAA')!;
+    expect(snaps.at(-1)!.pct!, timeline).toBeGreaterThan(firstRunning.pct!);
+  });
+
+  test('L-4. 낮은 % 에서 바로 currentStep=N3 가 와도 100 까지 오르는 완료 표시를 보고 N3 로 넘어간다', async ({ page }) => {
+    const rec = await recordProcessing(page);
+    await setup(page, [ocr(S1), merge(S1), { progress: 1, stages: stages('done', 'done', 'done'), items: [item(9001, 'ocr', 'job', 'done')], advance: true }]);
+    await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 20_000 });
+
+    const timeline = formatTimeline(rec);
+    const snaps = processingSnaps(rec, N2_TITLE, 'N3');
+    // currentStep=N2 동안은 100 이 없고, 그때 숫자는 아직 낮다(급히 끝난 서버)
+    expectSmoothProcessing(snaps, timeline);
+    expect(snaps.at(-1)!.pct!, timeline).toBeLessThan(60);
+    const { first100At, leftAt } = expectCompletionPresentation(rec, N2_TITLE, 'N3', timeline);
+    // 완료 표시 동안 5단계는 전부 완료다
+    const completion = onScreen(rec.dom, N2_TITLE).filter((d) => d.t >= first100At && d.t < leftAt);
+    expect(completion.every((d) => d.rows === 'DDDDD'), timeline).toBe(true);
+  });
+  const N2_COMPLETION_COPY = {
+    headline: '이미지 분석이 완료되었습니다.',
+    visualDescription: '분석 결과를 정리해 섹션 확인 단계로 이동합니다.',
+    heading: '분석 완료',
+    line: '이미지 분석이 완료되었습니다.',
+    hint: '섹션 확인 단계로 이동합니다.',
+  };
+
+  test('M-1. N3 응답 뒤 완료 표시 동안 상태 태그·LOG·안내가 모두 완료를 말하고, 그 전에는 완료라고 하지 않는다', async ({ page }) => {
+    const rec = await recordProcessing(page);
+    await setup(page, [ocr(S1), merge(S1), { progress: 1, stages: stages('done', 'done', 'done'), items: [item(9001, 'ocr', 'job', 'done')], advance: true }]);
+    await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 20_000 });
+
+    const timeline = formatTimeline(rec);
+    expectCompletionPresentation(rec, N2_TITLE, 'N3', timeline);
+    expectCompletionCopy(rec, N2_TITLE, 'N3', N2_COMPLETION_COPY, timeline);
+    // 처리 중에는 기존 문구 그대로다
+    const processing = processingSnaps(rec, N2_TITLE, 'N3');
+    expect(new Set(processing.map((d) => d.tag)), timeline).toEqual(new Set(['진행중']));
+    expect(new Set(processing.map((d) => d.heading)), timeline).toEqual(new Set(['지금 처리하는 일']));
+    expect(new Set(processing.map((d) => d.hint)), timeline).toEqual(new Set(['분석이 끝나면 섹션 확인 단계로 자동 이동합니다.']));
+    expect(new Set(processing.map((d) => d.headline)), timeline).toEqual(new Set(['상세페이지의 구조와 문맥을 읽고 있습니다.']));
+  });
+
+  test('M-2. script 없는 기본 mock 도 analyze → finalize → judge → N3 를 계약 값으로 보여 준다(수동 QA 흐름)', async ({ page }) => {
+    test.setTimeout(60_000);
+    const rec = await recordProcessing(page);
+    await setup(page, []);
+    await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 30_000 });
+
+    const timeline = formatTimeline(rec);
+    const snaps = processingSnaps(rec, N2_TITLE, 'N3');
+    // 01 만 진행 중이다가 끝나는 레거시 표시가 아니라 analyze 묶음 → finalize → judge 다
+    expect(rowSequence(snaps), timeline).toEqual(['AAAPP', 'DDDPP', 'DDDAA']);
+    const caps = snaps.map((d) => d.cap).filter((c, i, arr) => c !== arr[i - 1]);
+    expect(caps, timeline).toEqual(['이미지 구조 분석 중', '분석 결과 정리 중', '영역별 판정 중']);
+    // 실제 세부 작업은 LOG 설명 줄에서 바뀐다
+    const lines = snaps.map((d) => d.line).filter((l, i, arr) => l !== arr[i - 1]);
+    expect(lines.some((l) => l.endsWith('영역을 나누는 중')), timeline).toBe(true);
+    expect(lines.some((l) => l.endsWith('텍스트 추출 중')), timeline).toBe(true);
+    expect(lines.some((l) => l.endsWith('병합·역할 분석 중')), timeline).toBe(true);
+    expect(lines.some((l) => l.startsWith('판정 대상')), timeline).toBe(true);
+    // 서버(mock) 응답도 계약 값이다 — analyze 동안 analysisProgress 가 있고, N3 응답에는 없다
+    const n2Polls = rec.polls.filter((p) => p.currentStep === 'N2');
+    expect(n2Polls.every((p) => p.ap !== null), timeline).toBe(true);
+    expect(rec.polls.find((p) => p.currentStep === 'N3')?.ap, timeline).toBeNull();
+    expectSmoothProcessing(snaps, timeline);
+    expectCompletionPresentation(rec, N2_TITLE, 'N3', timeline);
+    expectCompletionCopy(rec, N2_TITLE, 'N3', N2_COMPLETION_COPY, timeline);
+  });
+});
+
+// ── PR #41 BE 리뷰: analysisProgress.status 가 waiting·retrying 이면 표시 % 를 그 자리에 둔다 ──
+// 서버가 "대기"라고 말하는 동안 숫자만 계속 오르면 5단계 행(전부 대기)·caption(대기 중)과 다른 말을 한다.
+// 멈춤은 일시정지다 — running 으로 돌아오면 그 숫자에서 이어서 오르고, 초기화·floor 점프·감소가 없다.
+// BE 2차 리뷰: analysisProgress.status=failed 도 표시 % 만 멈춘다 — 전체 실패 판정(currentStep=N2 && jobStatus=failed)은
+// 그대로다. 영역 제외(LOCAL_JUDGE_FAILED → judge.excluded)나 analysisProgress 없는 레거시 응답은 멈추지 않는다.
+// 테스트 구분:
+// - [정상 계약] LOCAL_JUDGE_FAILED: 그 영역만 제외(judge.excluded)되고 다른 판정이 있으면 상세 status 는 running 이다.
+// - [방어] 상세 status=failed && jobStatus≠failed: 운영 정상 계약 예시가 아니다. 계약상 상세 failed 는 대표 분석 실행의
+//   실패 종료이므로 jobStatus=failed 와 함께 와야 한다. 두 값이 불일치하게 들어와도 FE 가 전체 실패로 오판하지 않고
+//   표시 % 만 멈추는지 확인한다(이 조합이 실제 운영에서 관측된 것은 아니다).
+test.describe('N2 대기·재시도·failed 동안 표시 % 일시정지', () => {
+  test.setTimeout(60_000);
+  const N2_TITLE = '이미지 분석';
+  const S1 = { sourceIndex: 1, sourceImageId: 701 };
+  const ocr = analyzingTick(analyze('running', 'ocr', { ...S1, regionIndex: 1, regionCountInSource: 2 }, { done: 0, known: 2, totalFixed: false }));
+  const analyzePaused = (status: 'waiting' | 'retrying') => ({
+    progress: 0,
+    stages: stages('pending', 'pending', 'pending'),
+    items: [{ ...item(9011, 'ocr', 'job', 'pending'), uiStatus: status, retryCount: status === 'retrying' ? 1 : 0 }],
+    analysisProgress: analyze(status, null, null, null),
+  });
+  const judgeTick = (status: 'waiting' | 'retrying' | 'running') => ({
+    progress: 0.5,
+    stages: stages('done', 'running', 'pending'),
+    items: [item(9001, 'ocr', 'job', 'done'), item(9002, 'section', 'section', status === 'running' ? 'running' : 'pending')],
+    analysisProgress: judgePhase(status, {
+      total: 5,
+      done: 0,
+      excluded: 0,
+      running: status === 'running' ? 2 : 0,
+      waiting: status === 'retrying' ? 1 : status === 'running' ? 3 : 5,
+      retrying: status === 'retrying' ? 4 : 0,
+      failed: 0,
+      cancelled: 0,
+    }),
+  });
+  const N3_ADVANCE = { progress: 1, stages: stages('done', 'done', 'done'), items: [item(9001, 'ocr', 'job', 'done')], advance: true };
+  const repeat = <T,>(tick: T, n: number) => Array.from({ length: n }, () => tick);
+  type JudgeCounts = Parameters<typeof judgePhase>[1];
+  const judgeSum = (j: JudgeCounts) => j.done + j.excluded + j.running + j.waiting + j.retrying + j.failed + j.cancelled;
+  /**
+   * LOCAL_JUDGE_FAILED: 한 영역의 local judge 실패 → 서버가 그 영역을 제외 → judge 집계는 excluded 로 센다(failed 아님).
+   * job 전체는 계속 진행하고 N3 로 넘어갈 수 있다. analysisProgress.status=failed 와는 다른 개념이다.
+   */
+  const LOCAL_JUDGE_EXCLUDED_JUDGE: JudgeCounts = { total: 5, done: 2, excluded: 1, running: 1, waiting: 1, retrying: 0, failed: 0, cancelled: 0 };
+  const LOCAL_JUDGE_EXCLUDED_TICK = {
+    progress: 0.5,
+    stages: stages('done', 'failed', 'pending'),
+    items: [
+      item(9001, 'ocr', 'job', 'done'),
+      item(9002, 'section', 'section', 'done'),
+      item(9004, 'section', 'section', 'failed', 'LOCAL_JUDGE_FAILED'),
+      item(9005, 'section', 'section', 'running'),
+    ],
+    analysisProgress: judgePhase('running', LOCAL_JUDGE_EXCLUDED_JUDGE),
+  };
+  const LOCAL_JUDGE_EXCLUDED_LINE = '판정 대상 5개 · 완료 2 · 자동 제외 1 · 진행 중 1 · 대기 1';
+  /**
+   * [방어] 불일치 응답 fixture — analysisProgress.status=failed 인데 jobStatus 는 failed 가 아니다(fail 플래그 없음).
+   * 운영 정상 계약 예시가 아니며 LOCAL_JUDGE_FAILED 흐름도 아니다. FE 가 전체 실패로 오판하지 않는지 보려는 값이다.
+   */
+  const analyzeFailed = {
+    progress: 0,
+    stages: stages('failed', 'pending', 'pending'),
+    items: [{ ...item(9013, 'ocr', 'job', 'failed', 'OCR_FAILED'), retryCount: 2 }],
+    analysisProgress: analyze('failed', null, null, null),
+  };
+  const judgeFailed = {
+    progress: 0.75,
+    stages: stages('done', 'failed', 'pending'),
+    items: [item(9001, 'ocr', 'job', 'done'), item(9002, 'section', 'section', 'done'), item(9104, 'section', 'section', 'failed', 'REGULATORY_JUDGE_FAILED')],
+    analysisProgress: judgePhase('failed', { total: 5, done: 2, excluded: 0, running: 0, waiting: 0, retrying: 0, failed: 1, cancelled: 2 }),
+  };
+  /** 전체 실패 화면이 아니다 — 상태 태그·headline·실패 제목이 처리 중 그대로 */
+  async function expectNotWholeFailure(page: Page, snaps: DomSnap[], context: string) {
+    for (const s of snaps) {
+      expect(s.tag, `전체 실패 아님\n${context}`).toBe('진행중');
+      expect(s.hint, `전체 실패 아님\n${context}`).toBe('분석이 끝나면 섹션 확인 단계로 자동 이동합니다.');
+    }
+    await expect(page.getByText('이미지 분석에 실패했습니다')).toHaveCount(0);
+    await expect(page.getByText('분석 실패', { exact: true })).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: N2_TITLE })).toBeVisible();
+  }
+
+  /**
+   * GIF caption 이 같은 연속 구간 — 같은 poll 상태를 화면이 그리고 있던 동안의 표시 %. DOM 기록은 바뀔 때만
+   * 남으므로(숫자가 멈추면 새 기록이 없다) 구간 끝은 다음 구간 시작, 마지막 구간은 N3 응답(없으면 마지막 N2 poll) 시각이다.
+   * polls 는 그 구간 동안 받은 poll 수 — 같은 상태가 여러 poll 반복돼도 숫자가 그대로인지 보려고 센다.
+   */
+  type Segment = { cap: string; rows: string; pcts: number[]; from: number; to: number; polls: number };
+  function segmentsOf(rec: ProcessingRecord): Segment[] {
+    const snaps = processingSnaps(rec, N2_TITLE, 'N3');
+    const n2Polls = rec.polls.filter((p) => p.currentStep === 'N2');
+    const out: Segment[] = [];
+    for (const s of snaps) {
+      const last = out.at(-1);
+      if (last && last.cap === s.cap) {
+        if (last.pcts.at(-1) !== s.pct) last.pcts.push(s.pct!);
+      } else out.push({ cap: s.cap, rows: s.rows, pcts: [s.pct!], from: s.t, to: s.t, polls: 0 });
+    }
+    const endAt = rec.polls.find((p) => p.currentStep === 'N3')?.t ?? n2Polls.at(-1)?.t ?? 0;
+    out.forEach((seg, i) => {
+      seg.to = out[i + 1]?.from ?? Math.max(seg.from, endAt);
+      seg.polls = n2Polls.filter((p) => p.t > seg.from && p.t <= seg.to).length;
+    });
+    return out;
+  }
+  const describeSegments = (segs: Segment[]) =>
+    segs.map((s) => `${s.cap} [${s.rows}] ${((s.to - s.from) / 1000).toFixed(1)}s·poll ${s.polls}회: ${s.pcts.join(' → ')}`).join('\n');
+  const segment = (segs: Segment[], cap: string, context: string) => {
+    const found = segs.find((s) => s.cap === cap);
+    expect(found, `"${cap}" 구간\n${context}`).toBeDefined();
+    return found!;
+  };
+  /** 일시정지 구간: 들어올 때 숫자를 유지하고(직전 running 의 마지막 tick 과 같은 렌더에 묶일 수 있어 +1 까지), 그 뒤로 그대로다 */
+  function expectHeld(paused: Segment, before: Segment, context: string) {
+    const entry = paused.pcts[0] - before.pcts.at(-1)!;
+    expect(entry, `일시정지 진입 시 숫자 유지\n${context}`).toBeGreaterThanOrEqual(0);
+    expect(entry, `일시정지 진입 시 숫자 유지\n${context}`).toBeLessThanOrEqual(1);
+    expect(paused.pcts, `일시정지 동안 숫자 고정\n${context}`).toHaveLength(1);
+    // poll 여러 번(2초 간격)에 걸쳐 같은 상태가 반복돼도 증가 timer 가 다시 살아나지 않는다
+    expect(paused.to - paused.from, `일시정지 구간 관측 시간\n${context}`).toBeGreaterThan(2_500);
+    expect(paused.polls, `일시정지 구간 poll 반복\n${context}`).toBeGreaterThanOrEqual(1);
+  }
+  /** running 재개: 멈춘 숫자에서 tick 단위로 이어서 오른다(초기화·floor 점프 없음) */
+  function expectResumed(resumed: Segment, paused: Segment, context: string) {
+    const entry = resumed.pcts[0] - paused.pcts.at(-1)!;
+    expect(entry, `재개 시 숫자 초기화·점프 없음\n${context}`).toBeGreaterThanOrEqual(0);
+    expect(entry, `재개 시 숫자 초기화·점프 없음\n${context}`).toBeLessThanOrEqual(1);
+    expect(resumed.pcts.at(-1)!, `재개 뒤 증가\n${context}`).toBeGreaterThan(paused.pcts.at(-1)!);
+  }
+
+  const singlePauseCases = [
+    { name: 'P-1. analyze waiting', tick: analyzePaused('waiting'), cap: '분석 대기 중', rows: 'PPPPP' },
+    { name: 'P-2. analyze retrying', tick: analyzePaused('retrying'), cap: '분석 재시도 대기 중', rows: 'PPPPP' },
+    { name: 'P-3. judge waiting', tick: judgeTick('waiting'), cap: '영역별 판정 대기 중', rows: 'DDDPP' },
+    { name: 'P-4. judge retrying', tick: judgeTick('retrying'), cap: '영역별 판정 재시도 대기 중', rows: 'DDDPP' },
+  ];
+  for (const c of singlePauseCases) {
+    test(`${c.name}: 여러 poll 동안 표시 % 가 오르지 않는다`, async ({ page }) => {
+      const rec = await recordProcessing(page);
+      await setup(page, [ocr, ocr, ...repeat(c.tick, 4)]);
+      await expect(page.getByText(c.cap, { exact: true })).toBeVisible({ timeout: 15_000 });
+      await page.waitForTimeout(5_000);
+
+      const timeline = formatTimeline(rec);
+      const segs = segmentsOf(rec);
+      const context = `${describeSegments(segs)}\n${timeline}`;
+      console.log(`${c.name}\n${describeSegments(segs)}`);
+      const running = segment(segs, '이미지 구조 분석 중', context);
+      const paused = segment(segs, c.cap, context);
+      expect(running.pcts.at(-1)!, `일시정지 전 숫자가 올라 있어야 한다\n${context}`).toBeGreaterThanOrEqual(10);
+      expect(paused.rows, context).toBe(c.rows);
+      expectHeld(paused, running, context);
+      expectSmoothProcessing(processingSnaps(rec, N2_TITLE, 'N3'), timeline);
+    });
+  }
+
+  test('P-5. running → waiting → retrying → running: 멈춘 숫자를 유지하고 재개 때 그 숫자에서 이어서 오른다', async ({ page }) => {
+    const rec = await recordProcessing(page);
+    await setup(page, [ocr, ocr, analyzePaused('waiting'), analyzePaused('waiting'), analyzePaused('retrying'), analyzePaused('retrying'), ocr, ocr, ocr]);
+    await expect(page.getByText('분석 재시도 대기 중', { exact: true })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('이미지 구조 분석 중', { exact: true })).toBeVisible({ timeout: 10_000 });
+    await page.waitForTimeout(3_000);
+
+    const timeline = formatTimeline(rec);
+    const snaps = processingSnaps(rec, N2_TITLE, 'N3');
+    const segs = segmentsOf(rec);
+    const context = `${describeSegments(segs)}\n${timeline}`;
+    console.log(`P-5\n${describeSegments(segs)}`);
+    expect(segs.map((s) => s.cap), context).toEqual(['이미지 구조 분석 중', '분석 대기 중', '분석 재시도 대기 중', '이미지 구조 분석 중']);
+    const [running, waiting, retrying, resumed] = segs;
+    expectHeld(waiting, running, context);
+    // waiting → retrying 전환: 초기화·증가 없이 같은 숫자
+    expect(retrying.pcts, `retrying 동안 waiting 숫자 그대로\n${context}`).toEqual(waiting.pcts);
+    expect(retrying.to - retrying.from, context).toBeGreaterThan(2_500);
+    expect(retrying.polls, context).toBeGreaterThanOrEqual(1);
+    expectResumed(resumed, retrying, context);
+    expectSmoothProcessing(snaps, timeline);
+  });
+
+  test('P-6. analyze running → judge waiting 으로 상한이 99 로 열려도 숫자는 그대로이고, judge running 에서 그 숫자부터 오른다', async ({ page }) => {
+    const rec = await recordProcessing(page);
+    await setup(page, [ocr, ocr, judgeTick('waiting'), judgeTick('waiting'), judgeTick('running'), judgeTick('running')]);
+    await expect(page.getByText('영역별 판정 중', { exact: true })).toBeVisible({ timeout: 20_000 });
+    await page.waitForTimeout(3_000);
+
+    const timeline = formatTimeline(rec);
+    const snaps = processingSnaps(rec, N2_TITLE, 'N3');
+    const segs = segmentsOf(rec);
+    const context = `${describeSegments(segs)}\n${timeline}`;
+    console.log(`P-6\n${describeSegments(segs)}`);
+    expect(segs.map((s) => s.cap), context).toEqual(['이미지 구조 분석 중', '영역별 판정 대기 중', '영역별 판정 중']);
+    const [running, waiting, judging] = segs;
+    expectHeld(waiting, running, context);
+    expect(judging.rows, context).toBe('DDDAA');
+    expectResumed(judging, waiting, context);
+    expectSmoothProcessing(snaps, timeline);
+  });
+
+  test('P-7·P-14. [정상 계약] LOCAL_JUDGE_FAILED 로 한 영역이 제외(excluded)돼도 다른 judge 가 running 이면 04·05 진행 중·숫자 증가를 유지하고 N3 로 넘어간다', async ({ page }) => {
+    const rec = await recordProcessing(page);
+    await setup(page, [ocr, ...repeat(LOCAL_JUDGE_EXCLUDED_TICK, 3), N3_ADVANCE]);
+    await expect(logCaption(page)).toHaveText(LOCAL_JUDGE_EXCLUDED_LINE, { timeout: 10_000 });
+    await expectRows(page, rowsOf(D, D, D, A, A));
+    await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 25_000 });
+
+    const timeline = formatTimeline(rec);
+    const snaps = processingSnaps(rec, N2_TITLE, 'N3');
+    const segs = segmentsOf(rec);
+    const context = `${describeSegments(segs)}\n${timeline}`;
+    console.log(`P-7·P-14\n${describeSegments(segs)}`);
+    const judging = segment(segs, '영역별 판정 중', context);
+    expect(judging.pcts.at(-1)!, `부분 실패여도 증가\n${context}`).toBeGreaterThan(judging.pcts[0] + 5);
+    for (const s of snaps) expect(s.tag, context).toBe('진행중');
+    expect(judging.rows, context).toBe('DDDAA');
+    expectSmoothProcessing(snaps, timeline);
+    expectCompletionPresentation(rec, N2_TITLE, 'N3', timeline);
+  });
+
+  test('P-8. waiting 으로 멈춘 낮은 숫자에서 N3 가 오면 그 숫자에서 100 까지 오르는 완료 표시 뒤 N3 로 넘어간다', async ({ page }) => {
+    const rec = await recordProcessing(page);
+    await setup(page, [ocr, ocr, analyzePaused('waiting'), analyzePaused('waiting'), N3_ADVANCE]);
+    await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 25_000 });
+
+    const timeline = formatTimeline(rec);
+    const snaps = processingSnaps(rec, N2_TITLE, 'N3');
+    const segs = segmentsOf(rec);
+    const context = `${describeSegments(segs)}\n${timeline}`;
+    const waiting = segment(segs, '분석 대기 중', context);
+    expectHeld(waiting, segment(segs, '이미지 구조 분석 중', context), context);
+    const held = waiting.pcts[0];
+    expectSmoothProcessing(snaps, timeline);
+
+    const { donePollAt, leftAt } = expectCompletionPresentation(rec, N2_TITLE, 'N3', timeline);
+    const completion = onScreen(rec.dom, N2_TITLE)
+      .filter((d) => d.t >= donePollAt && d.t < leftAt)
+      .map((d) => d.pct!)
+      .filter((p, i, arr) => p !== arr[i - 1]);
+    console.log(`P-8\n${describeSegments(segs)}\nN3 completion: ${held} → ${completion.join(' → ')}`);
+    expect(completion.at(-1), context).toBe(100);
+    for (let i = 0; i < completion.length; i += 1) {
+      expect(completion[i], `완료 표시는 멈춘 숫자에서 시작해 줄지 않는다\n${context}`).toBeGreaterThanOrEqual(i === 0 ? held : completion[i - 1]);
+    }
+  });
+
+  test('P-10. [방어] 상세 analyze failed 와 jobStatus 가 불일치해도 전체 실패로 오판하지 않고, 여러 poll 동안 표시 % 만 그 자리에 둔다', async ({ page }) => {
+    const rec = await recordProcessing(page);
+    const responses = await setup(page, [ocr, ocr, ...repeat(analyzeFailed, 4)]);
+    await expect(logCaption(page)).toHaveText('원본 2장 · 실패', { timeout: 15_000 });
+    await page.waitForTimeout(5_000);
+
+    const timeline = formatTimeline(rec);
+    const snaps = processingSnaps(rec, N2_TITLE, 'N3');
+    const segs = segmentsOf(rec);
+    const context = `${describeSegments(segs)}\n${timeline}`;
+    console.log(`P-10\n${describeSegments(segs)}`);
+    expect(segs.map((s) => s.cap), context).toEqual(['이미지 구조 분석 중', '이미지 분석 중']);
+    const [running, failed] = segs;
+    expect(running.pcts.at(-1)!, context).toBeGreaterThanOrEqual(10);
+    expect(failed.rows, context).toBe('PPPPP');
+    expectHeld(failed, running, context);
+    await expectNotWholeFailure(page, snaps, context);
+    // 화면을 임의로 넘기지 않고 polling 도 계속한다(전체 실패만 polling 을 멈춘다)
+    expect(responses.every((r) => r.currentStep === 'N2' && r.jobStatus !== 'failed'), context).toBe(true);
+    expectSmoothProcessing(snaps, timeline);
+  });
+
+  test('P-11. [방어] judge running → 상세 judge failed 와 jobStatus 가 불일치해도 전체 실패로 오판하지 않고 표시 % 만 그 자리에 둔다', async ({ page }) => {
+    const rec = await recordProcessing(page);
+    await setup(page, [ocr, judgeTick('running'), judgeTick('running'), ...repeat(judgeFailed, 4)]);
+    await expect(page.getByText('영역별 판정 중단', { exact: true })).toBeVisible({ timeout: 15_000 });
+    await page.waitForTimeout(5_000);
+
+    const timeline = formatTimeline(rec);
+    const snaps = processingSnaps(rec, N2_TITLE, 'N3');
+    const segs = segmentsOf(rec);
+    const context = `${describeSegments(segs)}\n${timeline}`;
+    console.log(`P-11\n${describeSegments(segs)}`);
+    expect(segs.map((s) => s.cap), context).toEqual(['이미지 구조 분석 중', '영역별 판정 중', '영역별 판정 중단']);
+    const [, judging, failed] = segs;
+    expect(failed.rows, context).toBe('DDDPP');
+    expectHeld(failed, judging, context);
+    await expectNotWholeFailure(page, snaps, context);
+    expectSmoothProcessing(snaps, timeline);
+  });
+
+  test('P-12. [방어] 상세 failed 와 jobStatus 가 불일치한 running → failed → running: failed 동안 숫자를 유지하고 running 에서 그 숫자부터 이어서 오른다', async ({ page }) => {
+    const rec = await recordProcessing(page);
+    await setup(page, [ocr, ocr, analyzeFailed, analyzeFailed, ocr, ocr]);
+    await expect(logCaption(page)).toHaveText('원본 2장 · 실패', { timeout: 15_000 });
+    await expect(page.getByText('이미지 구조 분석 중', { exact: true })).toBeVisible({ timeout: 10_000 });
+    await page.waitForTimeout(3_000);
+
+    const timeline = formatTimeline(rec);
+    const snaps = processingSnaps(rec, N2_TITLE, 'N3');
+    const segs = segmentsOf(rec);
+    const context = `${describeSegments(segs)}\n${timeline}`;
+    console.log(`P-12\n${describeSegments(segs)}`);
+    expect(segs.map((s) => s.cap), context).toEqual(['이미지 구조 분석 중', '이미지 분석 중', '이미지 구조 분석 중']);
+    const [running, failed, resumed] = segs;
+    expectHeld(failed, running, context);
+    expectResumed(resumed, failed, context);
+    await expectNotWholeFailure(page, snaps, context);
+    expectSmoothProcessing(snaps, timeline);
+  });
+
+  test('P-13. [정상 계약] LOCAL_JUDGE_FAILED fixture 의 judge 집계는 서버 계약대로 excluded 로 세고 failed 에 남기지 않는다', async ({ page }) => {
+    const j = LOCAL_JUDGE_EXCLUDED_JUDGE;
+    expect(LOCAL_JUDGE_EXCLUDED_TICK.items.some((i) => i.errorCode === 'LOCAL_JUDGE_FAILED')).toBe(true);
+    expect(j.excluded, JSON.stringify(j)).toBeGreaterThan(0);
+    expect(j.failed, JSON.stringify(j)).toBe(0);
+    expect(judgeSum(j), `total = done+excluded+running+waiting+retrying+failed+cancelled ${JSON.stringify(j)}`).toBe(j.total);
+    // 화면 LOG 에도 자동 제외로 보이고 실패 개수는 없다
+    await setup(page, [LOCAL_JUDGE_EXCLUDED_TICK]);
+    await expect(logCaption(page)).toHaveText(LOCAL_JUDGE_EXCLUDED_LINE, { timeout: 10_000 });
+    await expect(logCaption(page)).not.toContainText('실패');
+  });
+
+  test('P-15. [방어] 상세 failed 와 jobStatus 가 불일치해 멈춘 낮은 숫자에서 N3 가 오면 그 숫자에서 100 까지 오르는 완료 표시 뒤 N3 로 넘어간다', async ({ page }) => {
+    const rec = await recordProcessing(page);
+    await setup(page, [ocr, ocr, judgeFailed, judgeFailed, N3_ADVANCE]);
+    await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 25_000 });
+
+    const timeline = formatTimeline(rec);
+    const snaps = processingSnaps(rec, N2_TITLE, 'N3');
+    const segs = segmentsOf(rec);
+    const context = `${describeSegments(segs)}\n${timeline}`;
+    const failed = segment(segs, '영역별 판정 중단', context);
+    expectHeld(failed, segment(segs, '이미지 구조 분석 중', context), context);
+    const held = failed.pcts[0];
+    // failed 만으로 100 을 만들지 않는다 — 100 은 N3 응답 뒤에만(expectSmoothProcessing·expectCompletionPresentation)
+    expectSmoothProcessing(snaps, timeline);
+    const { donePollAt, leftAt } = expectCompletionPresentation(rec, N2_TITLE, 'N3', timeline);
+    const completion = onScreen(rec.dom, N2_TITLE)
+      .filter((d) => d.t >= donePollAt && d.t < leftAt)
+      .map((d) => d.pct!)
+      .filter((p, i, arr) => p !== arr[i - 1]);
+    console.log(`P-15\n${describeSegments(segs)}\nN3 completion: ${held} → ${completion.join(' → ')}`);
+    expect(completion.at(-1), context).toBe(100);
+    for (let i = 0; i < completion.length; i += 1) {
+      expect(completion[i], `완료 표시는 멈춘 숫자에서 시작해 줄지 않는다\n${context}`).toBeGreaterThanOrEqual(i === 0 ? held : completion[i - 1]);
+    }
+  });
+
+  test('P-9. analysisProgress 없는 레거시 응답은 대기 상태를 추정하지 않고 기존처럼 숫자가 오른다', async ({ page }) => {
+    const rec = await recordProcessing(page);
+    const legacy = { progress: 0, stages: stages('running', 'pending', 'pending'), items: [item(9001, 'ocr', 'job', 'running')] };
+    await setup(page, repeat(legacy, 3));
+    await page.waitForTimeout(4_000);
+
+    const timeline = formatTimeline(rec);
+    const snaps = processingSnaps(rec, N2_TITLE, 'N3');
+    const segs = segmentsOf(rec);
+    console.log(`P-9\n${describeSegments(segs)}`);
+    expect(segs.map((s) => s.cap), timeline).toEqual(['텍스트 영역 인식 중']);
+    expect(snaps.at(-1)!.pct!, timeline).toBeGreaterThan(snaps[0].pct! + 10);
+    expectSmoothProcessing(snaps, timeline);
   });
 });
