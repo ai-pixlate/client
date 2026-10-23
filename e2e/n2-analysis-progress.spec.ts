@@ -681,6 +681,11 @@ test.describe('N2 로딩 표현', () => {
 // 멈춤은 일시정지다 — running 으로 돌아오면 그 숫자에서 이어서 오르고, 초기화·floor 점프·감소가 없다.
 // BE 2차 리뷰: analysisProgress.status=failed 도 표시 % 만 멈춘다 — 전체 실패 판정(currentStep=N2 && jobStatus=failed)은
 // 그대로다. 영역 제외(LOCAL_JUDGE_FAILED → judge.excluded)나 analysisProgress 없는 레거시 응답은 멈추지 않는다.
+// 테스트 구분:
+// - [정상 계약] LOCAL_JUDGE_FAILED: 그 영역만 제외(judge.excluded)되고 다른 판정이 있으면 상세 status 는 running 이다.
+// - [방어] 상세 status=failed && jobStatus≠failed: 운영 정상 계약 예시가 아니다. 계약상 상세 failed 는 대표 분석 실행의
+//   실패 종료이므로 jobStatus=failed 와 함께 와야 한다. 두 값이 불일치하게 들어와도 FE 가 전체 실패로 오판하지 않고
+//   표시 % 만 멈추는지 확인한다(이 조합이 실제 운영에서 관측된 것은 아니다).
 test.describe('N2 대기·재시도·failed 동안 표시 % 일시정지', () => {
   test.setTimeout(60_000);
   const N2_TITLE = '이미지 분석';
@@ -728,7 +733,10 @@ test.describe('N2 대기·재시도·failed 동안 표시 % 일시정지', () =>
     analysisProgress: judgePhase('running', LOCAL_JUDGE_EXCLUDED_JUDGE),
   };
   const LOCAL_JUDGE_EXCLUDED_LINE = '판정 대상 5개 · 완료 2 · 자동 제외 1 · 진행 중 1 · 대기 1';
-  /** analysisProgress.status=failed 이지만 jobStatus 는 failed 가 아니다(fail 플래그 없음) — 전체 실패가 아니다 */
+  /**
+   * [방어] 불일치 응답 fixture — analysisProgress.status=failed 인데 jobStatus 는 failed 가 아니다(fail 플래그 없음).
+   * 운영 정상 계약 예시가 아니며 LOCAL_JUDGE_FAILED 흐름도 아니다. FE 가 전체 실패로 오판하지 않는지 보려는 값이다.
+   */
   const analyzeFailed = {
     progress: 0,
     stages: stages('failed', 'pending', 'pending'),
@@ -868,7 +876,7 @@ test.describe('N2 대기·재시도·failed 동안 표시 % 일시정지', () =>
     expectSmoothProcessing(snaps, timeline);
   });
 
-  test('P-7·P-14. LOCAL_JUDGE_FAILED 로 한 영역이 제외(excluded)돼도 다른 judge 가 running 이면 04·05 진행 중·숫자 증가를 유지하고 N3 로 넘어간다', async ({ page }) => {
+  test('P-7·P-14. [정상 계약] LOCAL_JUDGE_FAILED 로 한 영역이 제외(excluded)돼도 다른 judge 가 running 이면 04·05 진행 중·숫자 증가를 유지하고 N3 로 넘어간다', async ({ page }) => {
     const rec = await recordProcessing(page);
     await setup(page, [ocr, ...repeat(LOCAL_JUDGE_EXCLUDED_TICK, 3), N3_ADVANCE]);
     await expect(logCaption(page)).toHaveText(LOCAL_JUDGE_EXCLUDED_LINE, { timeout: 10_000 });
@@ -914,7 +922,7 @@ test.describe('N2 대기·재시도·failed 동안 표시 % 일시정지', () =>
     }
   });
 
-  test('P-10. analyze failed(jobStatus≠failed): 전체 실패가 아니고, 여러 poll 동안 표시 % 만 그 자리에 둔다', async ({ page }) => {
+  test('P-10. [방어] 상세 analyze failed 와 jobStatus 가 불일치해도 전체 실패로 오판하지 않고, 여러 poll 동안 표시 % 만 그 자리에 둔다', async ({ page }) => {
     const rec = await recordProcessing(page);
     const responses = await setup(page, [ocr, ocr, ...repeat(analyzeFailed, 4)]);
     await expect(logCaption(page)).toHaveText('원본 2장 · 실패', { timeout: 15_000 });
@@ -936,7 +944,7 @@ test.describe('N2 대기·재시도·failed 동안 표시 % 일시정지', () =>
     expectSmoothProcessing(snaps, timeline);
   });
 
-  test('P-11. judge running → judge failed(jobStatus≠failed): 전체 실패가 아니고 표시 % 만 그 자리에 둔다', async ({ page }) => {
+  test('P-11. [방어] judge running → 상세 judge failed 와 jobStatus 가 불일치해도 전체 실패로 오판하지 않고 표시 % 만 그 자리에 둔다', async ({ page }) => {
     const rec = await recordProcessing(page);
     await setup(page, [ocr, judgeTick('running'), judgeTick('running'), ...repeat(judgeFailed, 4)]);
     await expect(page.getByText('영역별 판정 중단', { exact: true })).toBeVisible({ timeout: 15_000 });
@@ -955,7 +963,7 @@ test.describe('N2 대기·재시도·failed 동안 표시 % 일시정지', () =>
     expectSmoothProcessing(snaps, timeline);
   });
 
-  test('P-12. running → failed → running: failed 동안 숫자를 유지하고 running 에서 그 숫자부터 이어서 오른다', async ({ page }) => {
+  test('P-12. [방어] 상세 failed 와 jobStatus 가 불일치한 running → failed → running: failed 동안 숫자를 유지하고 running 에서 그 숫자부터 이어서 오른다', async ({ page }) => {
     const rec = await recordProcessing(page);
     await setup(page, [ocr, ocr, analyzeFailed, analyzeFailed, ocr, ocr]);
     await expect(logCaption(page)).toHaveText('원본 2장 · 실패', { timeout: 15_000 });
@@ -975,7 +983,7 @@ test.describe('N2 대기·재시도·failed 동안 표시 % 일시정지', () =>
     expectSmoothProcessing(snaps, timeline);
   });
 
-  test('P-13. LOCAL_JUDGE_FAILED fixture 의 judge 집계는 서버 계약대로 excluded 로 세고 failed 에 남기지 않는다', async ({ page }) => {
+  test('P-13. [정상 계약] LOCAL_JUDGE_FAILED fixture 의 judge 집계는 서버 계약대로 excluded 로 세고 failed 에 남기지 않는다', async ({ page }) => {
     const j = LOCAL_JUDGE_EXCLUDED_JUDGE;
     expect(LOCAL_JUDGE_EXCLUDED_TICK.items.some((i) => i.errorCode === 'LOCAL_JUDGE_FAILED')).toBe(true);
     expect(j.excluded, JSON.stringify(j)).toBeGreaterThan(0);
@@ -987,7 +995,7 @@ test.describe('N2 대기·재시도·failed 동안 표시 % 일시정지', () =>
     await expect(logCaption(page)).not.toContainText('실패');
   });
 
-  test('P-15. failed 로 멈춘 낮은 숫자에서 N3 가 오면 그 숫자에서 100 까지 오르는 완료 표시 뒤 N3 로 넘어간다', async ({ page }) => {
+  test('P-15. [방어] 상세 failed 와 jobStatus 가 불일치해 멈춘 낮은 숫자에서 N3 가 오면 그 숫자에서 100 까지 오르는 완료 표시 뒤 N3 로 넘어간다', async ({ page }) => {
     const rec = await recordProcessing(page);
     await setup(page, [ocr, ocr, judgeFailed, judgeFailed, N3_ADVANCE]);
     await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 25_000 });
