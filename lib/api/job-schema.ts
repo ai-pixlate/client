@@ -24,3 +24,20 @@ export type ApiJobStatus = components['schemas']['JobStatus'];
 
 /** 비동기 트리거(analyze/sections proceed 등) 202 공용 응답 */
 export type ApiAcceptedTask = components['schemas']['AcceptedTask'];
+
+/** N1 입력값 세팅/수정 (PATCH /jobs/{jobId}, draft-first) */
+export type ApiJobPatch = components['schemas']['JobPatch'];
+
+/** N1 셀러 선택 규제 분류 (job.regulatory_class) */
+export type ApiRegulatoryClass = components['schemas']['RegulatoryClass'];
+
+/** 원본 업로드 결과 — 파일별 성공/실패 + 현재 원본 목록 (POST /jobs/{jobId}/source-images) */
+export type ApiSourceImageUploadResult = components['schemas']['SourceImageUploadResult'];
+
+/**
+ * N2 분석 세부 진행 (JobTaskStatus.analysisProgress, 선택 속성). 정본은 server commit 315816e 의
+ * docs/openapi.yaml 이다 — 게시된 Swagger 에 아직 없을 수 있어, generated 타입도 그 고정본에서
+ * 만들었다(게시본으로 재생성하면 이 타입이 빠질 수 있으니 반영 여부를 먼저 확인한다).
+ * 속성이 없으면 기존 progress·stages·items 로 표시한다. 퍼센트는 제공하지 않는다.
+ */
+export type ApiAnalysisProgress = components['schemas']['AnalysisProgress'];

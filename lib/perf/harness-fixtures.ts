@@ -43,7 +43,7 @@ export function buildN3Sections(count: number): Section[] {
       renderImageKey: PLACEHOLDER_THUMB,
       bucket: isSectionExcluded ? 'exclude' : 'include',
       // Section.exclusionReason이 ExclusionReasonCode로 좁혀져 값만 유효 코드로 맞춤. harness 로직 변경 아님.
-      exclusionReason: isSectionExcluded ? 'auto_local_irrelevant' : null,
+      exclusionReason: isSectionExcluded ? 'auto_local' : null,
       excludedStage: isSectionExcluded ? 'N3' : null,
       bbox: { x: 0, y: (order - 1) * 600, width: 1000, height: 600 },
       verdicts: hasVerdict

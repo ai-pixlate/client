@@ -1,4 +1,4 @@
-import { type Page, expect } from '@playwright/test';
+import { type Page, expect, test } from '@playwright/test';
 
 import { MOCK_BRAND_ID, MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 
@@ -27,6 +27,8 @@ const TINY_PNG_BASE64 =
  * basic-flow.spec.ts의 몫). 여기서는 오직 "N5까지 도달"만 책임진다.
  */
 export async function reachN5(page: Page): Promise<void> {
+  // 기본 mock N2(poll 6회 · 약 10초)와 N4(poll 9회 · 약 18초)를 지나므로 그만큼 테스트 시간을 늘린다
+  test.info().setTimeout(test.info().timeout + 30_000);
   await page.goto(`/jobs/new?brandId=${MOCK_BRAND_ID}`);
 
   await page.getByPlaceholder('상품 이름을 입력해주세요').fill('E2E 테스트 상품');
@@ -54,9 +56,9 @@ export async function reachN5(page: Page): Promise<void> {
   await expect(page).toHaveURL(new RegExp(`/jobs/${MOCK_JOB_ID}$`));
 
   // N3 고유 UI가 나타날 때까지 대기 (고정 sleep 대신 polling 완료를 기다림).
-  // mock 환경 N2 최소 체류(7초, app/jobs/[jobId]/page.tsx)를 감안한 여유
-  // 타임아웃.
-  await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 10_000 });
+  // 기본 mock N2(analyze → finalize → judge, poll 6회)와 N3 전환 전 완료 표시(app/jobs/[jobId]/page.tsx)를 감안한
+  // 여유 타임아웃.
+  await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 30_000 });
 
   await page.getByRole('button', { name: '번역 시작' }).click();
   // N4는 N2와 같은 ProcessingStageLayout을 공유하는 Figma(660:4221) 기준

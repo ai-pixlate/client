@@ -1,7 +1,7 @@
 /**
  * pix/ate N1~N6 Mock fixture 데이터
  *
- * - job_mock_001 하나를 기준으로 N2~N6 전 화면을 재사용합니다.
+ * - job 1(MOCK_JOB_ID '1') 하나를 기준으로 N2~N6 전 화면을 재사용합니다.
  * - detail 이미지 2장만 사용합니다. thumbnail fixture는 파이프라인 미확정으로 제외합니다.
  * - 이미지 URL은 실제 파일 없이 placeholder 경로를 사용합니다.
  *   실제 파일을 public/mock/에 넣으면 곧바로 연결됩니다.
@@ -18,7 +18,9 @@ import type { ApiDeliverable, ApiDeliverableList, ApiValidationDetail } from '@/
 // 공통 ID 상수
 // ─────────────────────────────────────────────
 
-export const MOCK_JOB_ID = 'job_mock_001';
+// 실제 계약의 Job.id는 number(int64)다 — MSW POST /jobs는 id: 1을 주고, FE는 createJob
+// 경계에서 String(id)로 바꿔 router/API path에 쓴다. mockN5Job.id(1)와 같은 값이다.
+export const MOCK_JOB_ID = '1';
 export const MOCK_BRAND_ID = 'brand_mock_001';
 
 // SRC_A/SRC_B는 N3 mockSectionsResponse/mockN3VerdictContractSections 등이
@@ -132,7 +134,7 @@ export const mockSectionsResponse: SectionsResponse = {
       bucket: 'exclude',
       // 카카오톡 상담 안내 — 미국(도착 시장)에서 의미 없는 채널이라 자동 제외.
       // 표시 문구는 코드값 그대로 노출하지 않고 EXCLUSION_REASON_LABELS를 거친다.
-      exclusionReason: 'auto_local_irrelevant',
+      exclusionReason: 'auto_local',
       // N3에서 자동 제외된 섹션. N5 화면에 표시되지 않음.
       excludedStage: 'N3',
       bbox: { x: 0, y: 1100, width: 1000, height: 200 },
@@ -295,7 +297,7 @@ export const mockN3VerdictContractSections: Section[] = [
     imageKey: '/mock/vc-local-irrelevant-original.jpg',
     renderImageKey: '/mock/vc-local-irrelevant-render.jpg',
     bucket: 'exclude',
-    exclusionReason: 'auto_local_irrelevant',
+    exclusionReason: 'auto_local',
     excludedStage: 'N3',
     bbox: { x: 0, y: 0, width: 1000, height: 300 },
     verdicts: [
@@ -397,16 +399,15 @@ export const mockN6Deliverables: ApiDeliverable[] = [
 ];
 
 /**
- * N6 산출물 구성요소 상태 — Figma(643:5523) N6 저장 화면 기준: images/
- * content.csv/HTML 3행은 전부 선택 가능한 흰 배경 체크박스로 나오고,
- * PSD 한 행만 "12월 제공 예정"으로 비활성이다(html은 API-FIN-02가
- * should(🟡)로 표시한 9월 계약이지만, 이 mock의 happy path 완료 상태는
- * html도 이미 생성된 것으로 둔다 — psd만 항상 isActive=false).
+ * N6 산출물 구성요소 상태 — BE release/1.0.0 계약 기준: 1.0.0 에서 만드는
+ * 구성요소는 csv·images 뿐이라 html·psd 는 항상 isActive=false 다(html·psd 는
+ * 생성기가 없어 릴리즈 범위 밖, 2026-10-14 결정). POST /export 도 csv·images 만
+ * 받는다(아래 lib/msw/handlers.ts 참고).
  */
 export const mockN6Components: NonNullable<ApiDeliverableList['components']> = [
   { artifactId: null, type: 'images', status: 'generated', isGenerated: true, isActive: true, failedCount: 0, retryAction: null },
   { artifactId: null, type: 'csv', status: 'generated', isGenerated: true, isActive: true, failedCount: 0, retryAction: null },
-  { artifactId: null, type: 'html', status: 'generated', isGenerated: true, isActive: true, failedCount: 0, retryAction: null },
+  { artifactId: null, type: 'html', status: 'pending', isGenerated: false, isActive: false, failedCount: 0, retryAction: null },
   { artifactId: null, type: 'psd', status: 'pending', isGenerated: false, isActive: false, failedCount: 0, retryAction: null },
 ];
 
