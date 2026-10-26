@@ -1,5 +1,7 @@
 import type { ApiJobTaskStatus } from '@/lib/api/job-schema';
+import { n4DisplayedProgressKey } from '@/lib/processing/displayed-progress-storage';
 import { ProcessingStageLayout, type ProcessingStep } from './processing/processing-stage-layout';
+import { hasProcessingFailure, useDisplayedProgress } from './processing/use-displayed-progress';
 
 // ─────────────────────────────────────────────────────────────────
 // N4 — 번역 중 (Figma node 660:4221 "N4 번역중")
@@ -18,196 +20,208 @@ import { ProcessingStageLayout, type ProcessingStep } from './processing/process
 // - inpaint          → 01 한글 지우고 배경 채우기
 // - translate         → 02 번역 · 용어 맞춤
 // - verify            → 03 규제 기준 확인
-// - render(전반부)     → 04 글자 수, 줄바꿈 조정
-// - render(후반부)     → 05 이미지 합성
+// - render            → 04 글자 수, 줄바꿈 조정 + 05 이미지 합성(두 행이 함께)
 //
-// coarse stage가 4개인데 화면은 5단계라, render 하나를 04/05로 나눠야
-// 한다(둘이 동시에 active면 안 된다 — Figma 예시는 04만 진행 중, 05는
-// 대기다). API의 stages[]는 key/label/status만 있고 per-stage progress가
-// 없다(lib/api/generated/openapi.d.ts JobTaskStatus 확인) — progress는
-// JobTaskStatus 최상위 필드 하나뿐이라 job 전체 기준 global 값이다. 그래서
-// render 내부를 04/05로 가르는 유일한 신호는 이 global progress뿐이고,
-// "50%를 임의로 박는" 게 아니라 이미 아래 fallback에서 쓰는 것과 같은
-// "coarse 4단계 동일 비중" 가정을 그대로 연장해 render의 global 구간
-// [0.75, 1.0)의 중간값(0.875)을 04/05 경계로 쓴다.
+// 10/22 — 서버 관측 상태 · 설명 행 · 표시 숫자를 분리했다(PR #40 N4 리뷰).
+// - 서버에서 실제로 구분되는 N4 단계는 inpaint/translate/verify/render 4개뿐이다
+//   (resolveN4ObservedStage). 행과 caption 은 매 poll 이 값으로만 그린다 — 이전에 보여 준
+//   단계를 유지하지 않는다(섹션마다 단계가 달라 서버 관측이 뒤로 갈 수 있다).
+// - render 하나를 화면의 04·05 두 행이 함께 설명한다. 서버 계약에 04/05 substage 가 없으므로
+//   둘 중 하나만 진행 중으로 고르거나 04 → 05 순서·최소 체류를 만들지 않는다. global
+//   progress(job 전체 값)로 render 내부를 가르지 않는다(이전 0.875 경계 제거).
+// - N4 전체 완료는 서버 currentStep=N5 뿐이다. render=done·progress=1 은 지금 생성된 render
+//   시도들의 집계일 뿐이라 N4 처리 중에는 '완료'·100% 를 만들지 않는다. N5 응답을 받은 뒤에만
+//   page.tsx 가 이 화면을 isCompleted 로 잠깐 유지해 100% 와 5행 완료를 보여 주고 N5 로 넘긴다.
 //
-// 지금 mock(lib/msw/handlers.ts N4_PROCESSING_STAGES/advanceN4Processing)은
-// 실제 계약대로 inpaint→translate→verify→render 4단계를 순서대로 최소
-// 한 번씩 running→done으로 보내도록 고쳤다(2단계 작업 참고) — render는
-// 04/05를 모두 보여주기 위해 running을 두 번(progress 0.8 → 04, 0.9 →
-// 05) 보낸다. stages가 완전히 비어 있거나 전혀 다른 key만 오는 경우(다른
-// mock/실제 배포 전환기)를 대비해 progress 기반 fallback도 별도로 둔다.
+// 10/22 (2) — 표시 % 는 관측 단계가 상한만 연다(lib/processing/displayed-progress.ts).
+// - 단계가 바뀌어도 다음 구간 하한으로 뛰지 않고 현재 값에서 tick 마다 조금씩 오른다. 이전의 90초
+//   구간 채우기·서버 progress 하한은 쓰지 않는다(2초 polling 에 수 초 만에 끝나는 처리에서 5 → 25 → 50
+//   처럼 뛰거나, 01 구간 19 에 묶여 있다가 N5 로 넘어갔다).
+// - 2초 polling 사이에 지나간 단계는 관측하지 못할 수 있다 — 그 단계를 화면에 재생하지 않는다.
 //
-// 9/23 — GIF 하단 caption을 5단계 각각의 고정 문구로 추가했다(N2와 같은
-// 방식). N4는 presentation stage가 이미 5개 화면 항목 중 정확히 하나만
-// active이므로(위 주석) 별도 재분할 없이 steps에서 active 하나를 그대로
-// 찾아 caption에 쓴다 — progress%로 caption을 따로 추론하지 않는다.
+// 10/22 (3) — 병렬 섹션 정합(resolveN4Presentation). stages 는 task_type 집계라(하나라도 running 이면
+// running) 섹션이 병렬로 진행되면 여러 단계가 함께 running 이다. 이전에는 행·caption 은 가장 앞 running
+// 하나, 상한은 시작된(running·done) 가장 뒤 단계로 열어 "01 진행 중 · 47%" 처럼 둘이 따로 놀았다.
+// - N4 key 가 둘 이상 오는 응답: running 인 단계 행을 모두 진행 중으로 둔다(서버가 실제로 running 이라고 한
+//   단계뿐이다). 가장 앞 running 보다 앞 단계 중 서버가 done 이라고 명시한 단계만 완료로 본다 — 응답에 없는
+//   단계(key 없음)는 완료로 추정하지 않고 대기로 둔다. 가장 앞 running 뒤의 done(예: render=done)은 완료로
+//   그리지 않는다 — 지금 생성된 시도들의 집계일 뿐 이후 render 가 다시 생길 수 있다.
+// - key 가 하나뿐인 호환(sparse) 응답·running 이 없는 응답은 위 resolveN4ObservedStage 순서 규칙 그대로다.
+// - 표시 % 상한은 화면에 진행 중으로 그린 단계 중 가장 뒤 단계로 연다 — done 은 상한을 열지 않는다. 행과
+//   숫자가 같은 상태를 말하고, 숫자는 그 단계 하한으로 뛰지 않고 현재 값에서 오른다.
+// - 여러 단계가 함께 진행 중이면 caption 은 하나의 단계만 지금 작업이라고 말하지 않는 병렬 문구다.
+//
+// stages가 완전히 비어 있거나 전혀 다른 key만 오는 경우(다른 mock/실제 배포 전환기)를 대비한
+// progress 기반 coarse fallback 은 남긴다(4단계까지만, render 내부는 나누지 않는다).
 // ─────────────────────────────────────────────────────────────────
 
 const N4_HEADLINE = '번역과 배경 복원을 함께 진행하고 있습니다.';
 const N4_AUTO_ADVANCE_NOTICE = '완료되면 검수 화면으로 자동 이동합니다.';
 const N4_PAUSE_BUTTON_TITLE = '번역 중단 기능은 아직 제공되지 않습니다.';
 
-// 9/23 재조정 — 흰색 description은 Figma처럼 한 줄이어야 한다(processing-
-// stage-layout.tsx의 whitespace-nowrap 처리 참고). 이전 문구는 Figma 원본
-// 분량보다 길어 실측상 줄바꿈이 났다 — 뜻은 유지하되 분량만 Figma 수준으로
-// 줄였다(font-size를 줄이거나 컨테이너를 늘리는 방식으로 우회하지 않는다).
-const FIVE_STEP_META: {
-  no: string;
-  label: string;
-  /** GIF 하단 주황 title — 이 step이 active일 때만 보인다. */
-  visualTitle: string;
-  visualDescription: string;
-}[] = [
-  {
-    no: '01',
-    label: '한글 지우고 배경 채우기',
-    visualTitle: '원문 제거·배경 복원 중',
-    visualDescription: '원문을 지우고 주변 배경을 자연스럽게 복원하고 있습니다.',
-  },
-  {
-    no: '02',
-    label: '번역 · 용어 맞춤',
-    visualTitle: '번역·용어 맞춤 중',
-    visualDescription: '번역문과 제품·브랜드 용어를 맞추고 있습니다.',
-  },
-  {
-    no: '03',
-    label: '규제 기준 확인',
-    visualTitle: '규제 기준 확인 중',
-    visualDescription: '번역문이 대상 국가의 규제 기준에 맞는지 확인합니다.',
-  },
-  {
-    no: '04',
-    label: '글자 수, 줄바꿈 조정',
-    visualTitle: '문장 길이·줄바꿈 조정 중',
-    visualDescription: '번역문을 원래 디자인 안에 맞게 조정하고 있습니다.',
-  },
-  {
-    no: '05',
-    label: '이미지 합성',
-    visualTitle: '최종 이미지 합성 중',
-    visualDescription: '조정된 번역문을 원래 위치에 합성하고 있습니다.',
-  },
+const FIVE_STEP_META: { no: string; label: string }[] = [
+  { no: '01', label: '한글 지우고 배경 채우기' },
+  { no: '02', label: '번역 · 용어 맞춤' },
+  { no: '03', label: '규제 기준 확인' },
+  { no: '04', label: '글자 수, 줄바꿈 조정' },
+  { no: '05', label: '이미지 합성' },
 ];
 
-// render를 04(전반부)/05(후반부)로 쪼갠 6개 presentation 상태. 5개 화면
-// 항목 중 어느 시점에도 active는 정확히 하나뿐이다.
-type N4PresentationStage = 'inpaint' | 'translate' | 'verify' | 'render_04' | 'render_05' | 'done';
+/** 서버 stages[] 로 실제 구분할 수 있는 N4 단계 — 04/05 substage 나 'done' 은 없다. */
+type N4ObservedStage = 'inpaint' | 'translate' | 'verify' | 'render';
 
-const FIVE_STEP_STATES_BY_N4_PRESENTATION_STAGE: Record<N4PresentationStage, ProcessingStep['state'][]> = {
+const N4_OBSERVED_STAGE_ORDER: readonly N4ObservedStage[] = ['inpaint', 'translate', 'verify', 'render'];
+
+// render 는 04·05 두 행이 함께 설명한다(둘 다 진행 중). 처리 중에는 5행 전부 완료가 없다 — 그건 N5 응답 뒤
+// 완료 표시(ALL_DONE)뿐이다.
+const FIVE_STEP_STATES_BY_N4_STAGE: Record<N4ObservedStage, ProcessingStep['state'][]> = {
   inpaint: ['active', 'pending', 'pending', 'pending', 'pending'],
   translate: ['done', 'active', 'pending', 'pending', 'pending'],
   verify: ['done', 'done', 'active', 'pending', 'pending'],
-  render_04: ['done', 'done', 'done', 'active', 'pending'],
-  render_05: ['done', 'done', 'done', 'done', 'active'],
-  done: ['done', 'done', 'done', 'done', 'done'],
+  render: ['done', 'done', 'done', 'active', 'active'],
 };
 
 /**
- * API 계약값이 아니다 — N4 global progress를 coarse 4단계가 동일 비중으로
- * 차지한다고 가정한 FE presentation heuristic이다(서버는 render 내부
- * substage를 별도로 주지 않는다).
- *
- * render coarse stage의 global progress 구간 [0.75, 1.0) 중간값 — "coarse
- * 4단계 동일 비중" 가정을 render 내부 04/05 분리에도 그대로 연장한 값이다
- * (아래 resolveN4PresentationProgressFallback의 0.75 경계 + 그 폭 0.25의
- * 절반). N2 값을 옮긴 게 아니라 이 파일 안에서 스스로 정합적인 값이다.
+ * 관측 단계가 여는 표시 % 상한. UX 표시 전용 값이며 서버 처리율이 아니다(서버는 단계 안의 진행을 주지
+ * 않는다). render 는 04/05 를 나누지 않는 한 구간이고 N4 처리 중 최대 99 다.
  */
-const RENDER_SUBSTAGE_SPLIT = 0.875;
-
-function resolveRenderSubstage(progress: number | undefined): 'render_04' | 'render_05' {
-  return (progress ?? 0) >= RENDER_SUBSTAGE_SPLIT ? 'render_05' : 'render_04';
-}
+const DISPLAY_CEILING_BY_N4_STAGE: Record<N4ObservedStage, number> = {
+  inpaint: 19,
+  translate: 39,
+  verify: 59,
+  render: 99,
+};
 
 /**
- * 실제 inpaint/translate/verify/render stage가 하나도 없을 때만 쓰는
- * progress 기반 fallback. coarse 단계가 4개이므로 0~1 구간을 4등분한다
- * (N2는 3구간이라 0.3/0.7이라는 다른 임계값을 썼다 — 그 값을 그대로
- * 옮기면 근거 없는 복사가 된다. N4는 4구간이니 0.25 간격으로 균등
- * 분할하는 것이 가장 단순하고 방어 가능한 기준이다). 마지막 구간
- * (render)도 화면 5단계와 맞도록 RENDER_SUBSTAGE_SPLIT으로 다시 04/05를
- * 나눈다. 실제 BE stage가 하나라도 있으면 resolveN4PresentationStage가
- * 이 함수를 아예 호출하지 않는다 — 항상 실제 stage key가 우선이다.
+ * GIF 하단 caption — 서버 관측 단계마다 하나. render 는 04·05 중 하나를 고르지 않고 render 전체를
+ * 설명하는 문구를 쓴다.
+ * 9/23 재조정 — 흰색 description은 Figma처럼 한 줄이어야 한다(processing-stage-layout.tsx의
+ * whitespace-nowrap 처리 참고). 뜻은 유지하되 분량만 Figma 수준으로 줄였다.
  */
-function resolveN4PresentationProgressFallback(progress: number | undefined): N4PresentationStage {
+const OVERLAY_CAPTION_BY_N4_STAGE: Record<N4ObservedStage, { title: string; description: string }> = {
+  inpaint: { title: '원문 제거·배경 복원 중', description: '원문을 지우고 주변 배경을 자연스럽게 복원하고 있습니다.' },
+  translate: { title: '번역·용어 맞춤 중', description: '번역문과 제품·브랜드 용어를 맞추고 있습니다.' },
+  verify: { title: '규제 기준 확인 중', description: '번역문이 대상 국가의 규제 기준에 맞는지 확인합니다.' },
+  render: { title: '번역 결과 이미지 적용 중', description: '번역문을 디자인에 맞게 조정하고 이미지에 반영합니다.' },
+};
+
+/** 여러 단계가 함께 running 일 때 — 하나의 단계만 지금 작업이라고 단정하지 않는다(Figma 에 없는 상태, 최소 보완). */
+const N4_PARALLEL_CAPTION = { title: '여러 번역 작업을 함께 처리 중', description: '섹션별 번역·검증·이미지 적용을 함께 진행하고 있습니다.' };
+
+/**
+ * 실제 완료(currentStep=N5) 응답 뒤 완료 표시 동안의 문구 — Figma 에 별도 완료 상태가 없어 기존 슬롯(상태 태그·visual headline·
+ * GIF caption·LOG·progress 안내) 안에서만 최소한으로 바꾼다. 완료 표시 동안 "진행중"·"…하고 있습니다"·
+ * "완료되면 이동합니다"가 남아 100%·5행 완료와 서로 다른 말을 하지 않게 한다.
+ */
+const N4_COMPLETION_CAPTION = { title: '번역 완료', description: '검수 화면으로 이동합니다.' };
+const N4_COMPLETION_COPY = {
+  statusTag: '완료',
+  headline: '번역 작업이 완료되었습니다.',
+  visualDescription: '번역 결과를 반영해 검수 화면으로 이동합니다.',
+  logHeading: '번역 완료',
+  logDescription: '번역과 이미지 적용이 완료되었습니다.',
+  progressHint: '검수 화면으로 이동합니다.',
+};
+const ALL_DONE: ProcessingStep['state'][] = ['done', 'done', 'done', 'done', 'done'];
+
+/**
+ * API 계약값이 아니다 — 실제 inpaint/translate/verify/render stage가 하나도 없을 때만 쓰는
+ * progress 기반 coarse fallback. coarse 단계가 4개이므로 0~1 구간을 4등분한다. render 내부(04/05)는
+ * 나누지 않는다. 실제 BE stage가 하나라도 있으면 resolveN4ObservedStage가 이 함수를 호출하지 않는다.
+ */
+function resolveN4ProgressFallback(progress: number | undefined): N4ObservedStage {
   const p = progress ?? 0;
-  if (p >= 0.75) return resolveRenderSubstage(p);
+  if (p >= 0.75) return 'render';
   if (p >= 0.5) return 'verify';
   if (p >= 0.25) return 'translate';
   return 'inpaint';
 }
 
-function resolveN4PresentationStage(
-  stages: ApiJobTaskStatus['stages'],
-  progress: number | undefined,
-): N4PresentationStage {
-  const find = (key: string) => stages?.find((s) => s.key?.toLowerCase() === key);
-  const inpaint = find('inpaint');
-  const translate = find('translate');
-  const verify = find('verify');
-  const render = find('render');
+/**
+ * 이번 poll 의 stages 에서 지금 처리 중인 N4 단계를 고른다. 섹션마다 단계가 달라 여러 stage 가
+ * 동시에 running 이거나 일부 render 가 이미 done 일 수 있다.
+ * 1. running 이 있으면 그중 가장 앞 단계 — render=done 을 running 보다 우선하지 않는다.
+ * 2. failed 가 있으면 그중 가장 앞 단계(멈춘 곳).
+ * 3. 그 외에는 마지막 done 다음 단계(render 가 done 이어도 render 에 머문다 — 완료는 N5 전환뿐).
+ * 4. 실제 stage 는 있지만 모두 pending 이면 보수적으로 inpaint.
+ */
+function resolveN4ObservedStage(stages: ApiJobTaskStatus['stages'], progress: number | undefined): N4ObservedStage {
+  const statusOf = (key: N4ObservedStage) => stages?.find((s) => s.key?.toLowerCase() === key)?.status;
+  const observed = N4_OBSERVED_STAGE_ORDER.filter((key) => statusOf(key) !== undefined);
+  if (observed.length === 0) return resolveN4ProgressFallback(progress);
 
-  if (!inpaint && !translate && !verify && !render) {
-    return resolveN4PresentationProgressFallback(progress);
-  }
-
-  if (render?.status === 'done') return 'done';
-  // render가 진행 중이라는 것만으로는 04/05를 구분할 수 없다 — stages에
-  // stage-local progress가 없으므로 global progress로 04/05를 가른다.
-  if (render?.status === 'running') return resolveRenderSubstage(progress);
-  if (verify?.status === 'running') return 'verify';
-  if (translate?.status === 'running') return 'translate';
-  if (inpaint?.status === 'running') return 'inpaint';
-  // verify가 막 끝난 시점(render의 첫 poll이 아직 안 왔을 수 있음)도
-  // 같은 이유로 progress로 04/05를 추정한다.
-  if (verify?.status === 'done') return resolveRenderSubstage(progress);
-  if (translate?.status === 'done') return 'verify';
-  if (inpaint?.status === 'done') return 'translate';
-  // 실제 stage는 있지만(예: 전부 pending) 아직 뭐가 진행 중인지 알 수
-  // 없는 애매한 경우 — 모르는 진행을 완료로 부풀리지 않도록 보수적 기본값.
+  const running = observed.find((key) => statusOf(key) === 'running');
+  if (running) return running;
+  const failed = observed.find((key) => statusOf(key) === 'failed');
+  if (failed) return failed;
+  const lastDone = [...observed].reverse().find((key) => statusOf(key) === 'done');
+  if (lastDone) return N4_OBSERVED_STAGE_ORDER[Math.min(N4_OBSERVED_STAGE_ORDER.indexOf(lastDone) + 1, N4_OBSERVED_STAGE_ORDER.length - 1)];
   return 'inpaint';
 }
 
-function buildFiveSteps(states: ProcessingStep['state'][]): ProcessingStep[] {
-  return FIVE_STEP_META.map((step, i) => ({ no: step.no, label: step.label, state: states[i] }));
-}
-
 /**
- * GIF 하단 caption — steps(오른쪽 로그, 위에서 이미 계산한 바로 그 배열)에서
- * active인 항목을 그대로 찾아 쓴다. progress%를 다시 보고 추론하지 않는다.
- * active가 하나도 없으면(presentation stage 'done') "완료 중" 같은 문구를
- * 새로 만들지 않고 마지막 step(05)의 caption을 그대로 유지한다.
- *
- * 9/23 N2 재검토 후 명확히 남기는 주석 — N4는 "active 시각 항목이 항상
- * 정확히 하나"라는 전제가 이미 성립해서(위 FIVE_STEP_STATES_BY_N4_
- * PRESENTATION_STAGE 참고, render_04/render_05 어느 쪽이든 다른 하나는 항상
- * pending) 그 하나를 caption에 그대로 재사용할 수 있다. 이 전제 자체
- * (render를 04/05로 가르는 RENDER_SUBSTAGE_SPLIT=0.875 및 그 해석 로직)는
- * 이번 caption 작업 이전부터 있던 기존 FE presentation 규칙이며, 이번
- * 작업에서 threshold 값도 stage 해석 로직도 바꾸지 않았다 — caption은 그
- * 결과값(steps)을 읽기만 한다. backend가 render를 04/05 두 stage로
- * 나눠 주는 것이 아니라는 점도 그대로다(OpenAPI 계약엔 여전히 coarse
- * render 하나뿐). N2는 이 전제(단일 active) 자체가 성립하지 않아(같은
- * coarse stage에 시각 항목 2개가 동시 active) 이 함수와 같은 방식을 쓰지
- * 않고 coarse stage 값을 caption에 직접 매핑한다
- * (n2-analysis-view.tsx의 resolveOverlayCaption 참고, 서로 다른 접근이다).
+ * 이번 poll 의 5행 상태와, 화면에 진행 중으로 그린 단계(가장 앞 → 뒤 순서). 위 10/22 (3) 주석 참고.
+ * activeStages 는 행·caption·표시 % 상한이 함께 쓰는 하나의 값이다.
  */
-function resolveActiveVisualCaption(steps: ProcessingStep[]): { title: string; description: string } {
-  const activeIndex = steps.findIndex((s) => s.state === 'active');
-  const meta = FIVE_STEP_META[activeIndex >= 0 ? activeIndex : FIVE_STEP_META.length - 1];
-  return { title: meta.visualTitle, description: meta.visualDescription };
+function resolveN4Presentation(
+  stages: ApiJobTaskStatus['stages'],
+  progress: number | undefined,
+): { rows: ProcessingStep['state'][]; activeStages: N4ObservedStage[] } {
+  const statusOf = (key: N4ObservedStage) => stages?.find((s) => s.key?.toLowerCase() === key)?.status;
+  const observed = N4_OBSERVED_STAGE_ORDER.filter((key) => statusOf(key) !== undefined);
+  const running = observed.filter((key) => statusOf(key) === 'running');
+
+  if (observed.length >= 2 && running.length > 0) {
+    const firstRunningIndex = N4_OBSERVED_STAGE_ORDER.indexOf(running[0]);
+    const stateOf = (key: N4ObservedStage): ProcessingStep['state'] => {
+      const status = statusOf(key);
+      if (status === 'running') return 'active';
+      // 서버가 done 이라고 명시한 앞 단계만 완료다. 응답에 없는 단계(undefined)·pending·failed 는 대기, 가장 앞
+      // running 뒤의 done 은 완료가 아니다.
+      if (status === 'done' && N4_OBSERVED_STAGE_ORDER.indexOf(key) < firstRunningIndex) return 'done';
+      return 'pending';
+    };
+    const render = stateOf('render');
+    return { rows: [stateOf('inpaint'), stateOf('translate'), stateOf('verify'), render, render], activeStages: running };
+  }
+
+  const stage = resolveN4ObservedStage(stages, progress);
+  return { rows: FIVE_STEP_STATES_BY_N4_STAGE[stage], activeStages: [stage] };
 }
 
-export function N4ProcessingView({ status }: { status: ApiJobTaskStatus }) {
-  // page.tsx가 넘기는 mock 표시 progressOverride는 N2 전용이라(5절 참고,
-  // 이번 단계에서 N4로 확장하지 않는다) status.progress를 그대로 쓴다 —
-  // stages가 비어 있을 때, 그리고 render 내부 04/05를 가를 때 이 값을 쓴다.
-  const presentationStage = resolveN4PresentationStage(status.stages, status.progress);
-  const steps = buildFiveSteps(FIVE_STEP_STATES_BY_N4_PRESENTATION_STAGE[presentationStage]);
-  const caption = resolveActiveVisualCaption(steps);
-  const progressPercent = Math.round((status.progress ?? 0) * 100);
+function buildFiveSteps(states: ProcessingStep['state'][]): ProcessingStep[] {
+  return FIVE_STEP_META.map((step, i) => ({ ...step, state: states[i] }));
+}
+
+export function N4ProcessingView({
+  jobId,
+  status,
+  isCompleted = false,
+}: {
+  jobId: string;
+  status: ApiJobTaskStatus;
+  /**
+   * 서버가 이미 N4 를 끝냈다(currentStep=N5 응답) — page.tsx 가 N5 로 넘어가기 직전 완료 표시를 하는
+   * 동안만 true 로 넘긴다. 그때 status 는 그 N5 응답이다.
+   */
+  isCompleted?: boolean;
+}) {
+  // 행·caption·표시 % 상한은 이번 poll 의 서버 관측(진행 중으로 그린 단계)으로만 정한다. status.progress 는
+  // stages 가 비어 있을 때의 coarse fallback 에만 쓴다 — 숫자는 hook 이 그 상한 안에서 따로 올린다.
+  const { rows, activeStages } = resolveN4Presentation(status.stages, status.progress);
   const failedItems = (status.items ?? []).filter((i) => i.status === 'failed');
+  const displayedProgress = useDisplayedProgress({
+    persistKey: n4DisplayedProgressKey(jobId),
+    ceiling: Math.max(...activeStages.map((stage) => DISPLAY_CEILING_BY_N4_STAGE[stage])),
+    isFrozen: !isCompleted && hasProcessingFailure(status),
+    isCompleted,
+  });
+  const steps = buildFiveSteps(isCompleted ? ALL_DONE : rows);
+  const caption = isCompleted
+    ? N4_COMPLETION_CAPTION
+    : activeStages.length > 1
+      ? N4_PARALLEL_CAPTION
+      : OVERLAY_CAPTION_BY_N4_STAGE[activeStages[0]];
 
   return (
     <ProcessingStageLayout
@@ -216,24 +230,26 @@ export function N4ProcessingView({ status }: { status: ApiJobTaskStatus }) {
         title: '번역 중',
         description: '확정한 섹션을 번역하고 이미지에 적용하고 있습니다.',
       }}
-      statusTagLabel="진행중"
+      statusTagLabel={isCompleted ? N4_COMPLETION_COPY.statusTag : '진행중'}
       visual={{
         // N2/N4 공용 GIF — 별도 복사본을 만들지 않는다.
         src: '/process/ai-processing.gif',
-        headline: N4_HEADLINE,
-        description: '확정한 섹션의 원문을 지우고 번역한 뒤, 원래 레이아웃에 맞게 다시 구성합니다.',
+        headline: isCompleted ? N4_COMPLETION_COPY.headline : N4_HEADLINE,
+        description: isCompleted
+          ? N4_COMPLETION_COPY.visualDescription
+          : '확정한 섹션의 원문을 지우고 번역한 뒤, 원래 레이아웃에 맞게 다시 구성합니다.',
         overlayTopLabel: 'SOURCE  →  LOCALIZED',
         overlayBottomTitle: caption.title,
         overlayBottomDescription: caption.description,
       }}
       log={{
         sectionLabel: 'TRANSLATION LOG',
-        heading: '지금 처리하는 일',
-        description: '번역문을 원래 디자인 안에 다시 맞추고 있습니다.',
+        heading: isCompleted ? N4_COMPLETION_COPY.logHeading : '지금 처리하는 일',
+        description: isCompleted ? N4_COMPLETION_COPY.logDescription : '번역문을 원래 디자인 안에 다시 맞추고 있습니다.',
       }}
       steps={steps}
-      progressPercent={progressPercent}
-      progressHint={N4_AUTO_ADVANCE_NOTICE}
+      progressPercent={displayedProgress}
+      progressHint={isCompleted ? N4_COMPLETION_COPY.progressHint : N4_AUTO_ADVANCE_NOTICE}
       pauseButtonTitle={N4_PAUSE_BUTTON_TITLE}
       failedItems={failedItems}
     />

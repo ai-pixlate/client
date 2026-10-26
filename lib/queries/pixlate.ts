@@ -5,6 +5,10 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   createJob,
   analyzeJob,
+  uploadSourceImages,
+  deleteSourceImage,
+  reorderSourceImages,
+  patchJob,
   getSections,
   updateSectionBucket,
   proceedSections,
@@ -20,13 +24,17 @@ import {
   getValidation,
   createExport,
   getExportDownload,
-  getExportDownloadByType,
   saveJob,
   getLibrary,
   getMasterCountries,
   getMasterLanguages,
 } from '@/lib/api/pixlate';
-import type { CreateJobRequest } from '@/lib/api/types';
+import type { ApiJobPatch } from '@/lib/api/job-schema';
+import {
+  clearDisplayedProgress,
+  n2DisplayedProgressKey,
+  n4DisplayedProgressKey,
+} from '@/lib/processing/displayed-progress-storage';
 import type { ApiBlockPatch, ApiConfirmRequest, ApiJobTaskStatus, ApiTextBlock } from '@/lib/api/n5-schema';
 import type { ApiExportRequest, ApiExportArtifactType } from '@/lib/api/n6-schema';
 import type { ApiSection, ApiSectionBucket, ApiSectionList, ApiSectionPatch } from '@/lib/api/n3-schema';
@@ -73,13 +81,44 @@ export const pixlateKeys = {
 
 export function useCreateJobMutation() {
   return useMutation({
-    mutationFn: (payload: CreateJobRequest) => createJob(payload),
+    mutationFn: ({ brandId, idempotencyKey }: { brandId: string; idempotencyKey?: string }) =>
+      createJob(brandId, { idempotencyKey }),
+  });
+}
+
+// N1 원본 업로드·삭제·재정렬과 N1 값 세팅도 createJob 이후에야 jobId를 알 수 있어
+// useAnalyzeJobMutation처럼 mutate 시점에 jobId를 받는다.
+
+export function useUploadSourceImagesMutation() {
+  return useMutation({
+    mutationFn: ({ jobId, files }: { jobId: string; files: File[] }) => uploadSourceImages(jobId, files),
+  });
+}
+
+export function useDeleteSourceImageMutation() {
+  return useMutation({
+    mutationFn: ({ jobId, sourceImageId }: { jobId: string; sourceImageId: number }) =>
+      deleteSourceImage(jobId, sourceImageId),
+  });
+}
+
+export function useReorderSourceImagesMutation() {
+  return useMutation({
+    mutationFn: ({ jobId, order }: { jobId: string; order: number[] }) => reorderSourceImages(jobId, order),
+  });
+}
+
+export function usePatchJobMutation() {
+  return useMutation({
+    mutationFn: ({ jobId, payload }: { jobId: string; payload: ApiJobPatch }) => patchJob(jobId, payload),
   });
 }
 
 export function useAnalyzeJobMutation() {
   return useMutation({
     mutationFn: (jobId: string) => analyzeJob(jobId),
+    // 새 N2 실행 — 이전 실행이 남긴 표시 % 를 이어받지 않는다(displayed-progress-storage.ts)
+    onSuccess: (_data, jobId) => clearDisplayedProgress(n2DisplayedProgressKey(jobId)),
   });
 }
 
@@ -118,6 +157,8 @@ export function useJobTasksQuery(jobId: string, options: { polling?: boolean } =
       ? (query) => {
           const data = query.state.data;
           if (!data) return 2_000; // 첫 응답 대기 중
+          // N2 전체 분석 실패(currentStep=N2 && jobStatus=failed)는 종료 상태라 폴링을 멈춘다
+          if (data.currentStep === 'N2' && data.jobStatus === 'failed') return false;
           if (data.currentStep === 'N2' || data.currentStep === 'N4') return 2_000;
           if (data.currentStep === 'N6') return hasActiveN6RenderTask(data) ? 2_000 : false;
           return false;
@@ -136,6 +177,8 @@ export function useSectionProceedMutation(jobId: string) {
   return useMutation({
     mutationFn: () => proceedSections(jobId),
     onSuccess: () => {
+      // 새 N4 실행 — 이전 실행이 남긴 표시 % 를 이어받지 않는다(displayed-progress-storage.ts)
+      clearDisplayedProgress(n4DisplayedProgressKey(jobId));
       queryClient.invalidateQueries({ queryKey: pixlateKeys.tasks(jobId) });
     },
   });
@@ -338,13 +381,19 @@ export function useExportDownloadMutation(jobId: string) {
 }
 
 /**
- * N6 행별 개별 다운로드 (exportDownloadByType) — export 묶음 생성 없이
- * images|csv|html 구성요소 하나만 바로 presigned URL로 받는다. psd는 호출부가
- * 애초에 disabled라 이 mutation을 쓰지 않는다.
+ * N6 행별 개별 다운로드 — 계약상 타입별 다운로드(GET /export/download)는 "이미 만든
+ * 구성요소"만 돌려준다(미생성 404). 그래서 먼저 POST /export 로 그 구성요소 하나를 만들고
+ * 응답 artifactId 로 GET /exports/{artifactId}/download 를 부른다. 생성이 실패하거나
+ * 응답에 artifactId 가 없으면 예외로 끝나 다운로드 조회는 하지 않는다.
+ * psd는 호출부가 애초에 disabled라 이 mutation을 쓰지 않는다.
  */
-export function useExportDownloadByTypeMutation(jobId: string) {
+export function useExportComponentDownloadMutation(jobId: string) {
   return useMutation({
-    mutationFn: (artifactType: ApiExportArtifactType) => getExportDownloadByType(jobId, artifactType),
+    mutationFn: async (artifactType: ApiExportArtifactType) => {
+      const created = await createExport(jobId, { components: [artifactType as string] });
+      if (created.artifactId == null) throw new Error('내보내기 산출물이 만들어지지 않았습니다');
+      return getExportDownload(jobId, created.artifactId);
+    },
   });
 }
 

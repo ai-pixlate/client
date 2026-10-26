@@ -4,6 +4,8 @@ import { use, useEffect, useState } from 'react';
 import Link from 'next/link';
 
 import { useJobTasksQuery } from '@/lib/queries/pixlate';
+import type { ApiJobTaskStatus } from '@/lib/api/job-schema';
+import { COMPLETION_PRESENTATION_MS } from '@/lib/processing/displayed-progress';
 import { N2AnalysisView } from './_components/n2-analysis-view';
 import { N3View } from './_components/n3/n3-view';
 import { N4ProcessingView } from './_components/n4-processing-view';
@@ -19,18 +21,21 @@ import { N6ResultView } from './_components/n6-result-view';
 // ─────────────────────────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────────
-// N2 최소 체류 시간 — mock 환경(NEXT_PUBLIC_API_MOCKING=enabled) 전용.
-// mock 서버는 poll 2회(약 4초) 만에 N2 task를 끝내버려 화면을 확인할
-// 여유조차 없어, 화면 구성 확인 목적으로만 최소 7초를 보장한다. 서버가
-// 이미 다음 단계로 넘어갔어도(task 완료) 이 시간 전에는 화면을 넘기지
-// 않고, 반대로 서버가 7초보다 오래 걸리면 기존처럼 task 완료 시점까지
-// 그대로 기다린다 — 즉 "task 완료"와 "최소 체류 충족" 둘 다 필요하다.
-// 실서버/mock 비활성 환경에서는 이 게이트를 아예 타지 않는다(기존 동작
-// 그대로). polling 주기(2초)나 mock의 task 완료 로직 자체는 건드리지
-// 않는다.
+// 처리 화면 완료 표시 — N2 → N3, N4 → N5. mock/실서버 공통.
+//
+// 실제 완료는 서버 currentStep 전환뿐이다. 서버는 마지막 단계를 끝낸 바로 그 응답에서 currentStep 을
+// 바꿔 줄 수 있어서(2초 polling 사이에 끝나는 단계는 화면에 남지 않는다) 그대로 교체하면 30% 같은 중간
+// 숫자에서 갑자기 다음 화면이 된다. 그래서 처리 화면이 떠 있던 중에 정상 완료 전환 응답을 받으면, 그
+// 응답을 받은 뒤에만 같은 처리 화면을 COMPLETION_PRESENTATION_MS 동안 유지한다 — 숫자를 현재 값에서
+// 100 까지 올리고(isCompleted) 5단계 전부 완료를 잠깐 보여 준 다음 다음 화면으로 넘어간다.
+// 서버 작업을 기다리는 지연이 아니라 이미 끝난 결과를 보여 주는 시간이다. 정상 완료가 아닌 전환(N2 → N1
+// 복귀 등)은 붙잡지 않고 바로 이동한다. currentStep 정본, polling, task 상태는 바꾸지 않는다.
+//
+// 10/22 — mock 전용 N2 최소 체류(7초)와 경과 시간으로 만든 mock 표시 progress 를 없앴다. 서버가 이미
+// 끝냈는데 화면만 붙잡고 %·5단계를 시간으로 흘려보내는 것이었고, 실서버에서는 status.progress 를 그대로
+// 보여 줘 N3 직전 숫자가 낮았다. 이제 N2·N4 모두 표시 % 는 처리 화면이 관측 단계 상한 안에서 따로 만든다.
 // ─────────────────────────────────────────────────────────────────
-const N2_MOCK_MIN_DWELL_MS = 7000;
-const IS_MOCK_ENABLED = process.env.NEXT_PUBLIC_API_MOCKING === 'enabled';
+const COMPLETION_TRANSITIONS: Record<string, string> = { N2: 'N3', N4: 'N5' };
 
 // ─────────────────────────────────────────────────────────────────
 // 페이지 루트
@@ -58,79 +63,37 @@ export default function Page({
   // status props로 전달받아 재사용한다. currentStep/userFacingStatus는 서버
   // 응답 그대로 쓴다 — 여기서 다시 계산하지 않는다.
   const tasksQuery = useJobTasksQuery(jobId, { polling: true });
-  const rawCurrentStep = tasksQuery.data?.currentStep;
+  const currentStep = tasksQuery.data?.currentStep;
 
-  // N2 진입 시점(서버가 처음으로 currentStep==='N2'를 응답한 시점)을
-  // 한 번만 기록한다 — 이미 N2를 지나 시작된 job에는 적용하지 않는다.
-  const [n2EnteredAt, setN2EnteredAt] = useState<number | null>(null);
-  const [n2DwellElapsed, setN2DwellElapsed] = useState(false);
-
-  useEffect(() => {
-    if (IS_MOCK_ENABLED && rawCurrentStep === 'N2' && n2EnteredAt === null) {
-      setN2EnteredAt(Date.now());
+  // 완료 표시(위 COMPLETION_TRANSITIONS 주석) — 렌더 중 조건부 setState("이전 값에서 state 조정" 패턴)로
+  // 전환 순간을 잡고, 시간이 지나면 effect 의 timer 로 푼다.
+  const [shownStep, setShownStep] = useState(currentStep);
+  const [completion, setCompletion] = useState<{ step: 'N2' | 'N4'; status: ApiJobTaskStatus } | null>(null);
+  if (currentStep !== shownStep) {
+    setShownStep(currentStep);
+    if ((shownStep === 'N2' || shownStep === 'N4') && COMPLETION_TRANSITIONS[shownStep] === currentStep && tasksQuery.data) {
+      setCompletion({ step: shownStep, status: tasksQuery.data });
     }
-  }, [rawCurrentStep, n2EnteredAt]);
-
-  // 위 effect와 별개로, n2EnteredAt이 정해진 그 순간에만 타이머를 한 번
-  // 건다 — rawCurrentStep이 이후 바뀌어도(N3로 전환) 이 effect가 다시
-  // 실행되며 타이머가 취소되지 않도록 의존성을 n2EnteredAt만으로 둔다.
-  useEffect(() => {
-    if (n2EnteredAt === null) return;
-    const remaining = N2_MOCK_MIN_DWELL_MS - (Date.now() - n2EnteredAt);
-    if (remaining <= 0) {
-      setN2DwellElapsed(true);
-      return;
-    }
-    const timer = setTimeout(() => setN2DwellElapsed(true), remaining);
-    return () => clearTimeout(timer);
-  }, [n2EnteredAt]);
-
-  // task는 끝났지만(rawCurrentStep이 N2를 벗어남) 최소 체류 시간이 아직
-  // 안 지났으면 N2 화면을 그대로 유지한다. 두 조건이 모두 만족되면(=
-  // n2DwellElapsed) 실제 서버 상태를 그대로 반영한다.
-  const currentStep =
-    IS_MOCK_ENABLED && n2EnteredAt !== null && !n2DwellElapsed && rawCurrentStep !== 'N2'
-      ? 'N2'
-      : rawCurrentStep;
-  const meta = (currentStep && STEP_META[currentStep]) || STEP_META_FALLBACK;
-
-  // N2 mock progress 동기화 — mock 서버는 실제로는 poll 2회(약 4초) 만에
-  // task를 끝내버려서, 위 7초 체류 게이트가 화면을 붙잡고 있는 동안
-  // status.progress는 이미 한참 전에 도달한 값(0.5 고정 등)에 머문다.
-  // 그대로 두면 "진행률은 안 움직이는데 화면만 붙잡혀 있다가 갑자기
-  // N3로 넘어간다" 같은 부자연스러운 인상을 준다. mock에서만, 서버가
-  // 원본으로 보낸 값은 건드리지 않고 화면에 보여줄 값만 별도로 계산한다
-  // (progressOverride) — 실서버/mock 비활성에서는 항상 undefined라
-  // N2AnalysisView가 기존처럼 status.progress를 그대로 쓴다.
-  //
-  // 100ms tick으로 elapsed를 다시 계산해 progress bar가 폴링 주기(2초)에
-  // 맞춰 뚝뚝 끊기지 않고 부드럽게 움직이게 한다 — dwell이 끝나면(화면이
-  // N2를 벗어나거나 곧 벗어날 시점) tick을 멈춰 불필요한 타이머를 남기지
-  // 않는다.
-  const [, forceMockProgressTick] = useState(0);
-  useEffect(() => {
-    if (!IS_MOCK_ENABLED || n2EnteredAt === null || n2DwellElapsed) return;
-    const interval = setInterval(() => forceMockProgressTick((t) => t + 1), 150);
-    return () => clearInterval(interval);
-  }, [n2EnteredAt, n2DwellElapsed]);
-
-  let mockN2Progress: number | undefined;
-  if (IS_MOCK_ENABLED && n2EnteredAt !== null) {
-    const elapsedRatio = Math.min(1, (Date.now() - n2EnteredAt) / N2_MOCK_MIN_DWELL_MS);
-    const serverCompleted = rawCurrentStep !== 'N2';
-    // 서버가 끝났고 7초도 다 찼을 때만 100% — 그 전에는 어느 쪽이든
-    // 99%에서 멈춰 기다린다("100%인데 화면이 안 넘어가는 상태" 방지).
-    mockN2Progress = serverCompleted && elapsedRatio >= 1 ? 1 : Math.min(0.99, elapsedRatio);
   }
+  useEffect(() => {
+    if (!completion) return;
+    const timer = setTimeout(() => setCompletion(null), COMPLETION_PRESENTATION_MS);
+    return () => clearTimeout(timer);
+  }, [completion]);
+  const displayStep = completion?.step ?? currentStep;
+  // N2 전체 분석 실패 SSOT — currentStep=N2 && jobStatus=failed 뿐이다. failedCount·stages·progress·
+  // analysisProgress.status 는 보지 않는다(LOCAL_JUDGE_FAILED 부분 제외는 실패가 아니다).
+  const isN2Failed = !completion && currentStep === 'N2' && tasksQuery.data?.jobStatus === 'failed';
+  const meta = (displayStep && STEP_META[displayStep]) || STEP_META_FALLBACK;
 
   return (
     <div className="flex h-screen flex-col bg-gray-50">
       {/* 상단 헤더 — N2/N3/N4/N5/N6는 Figma 기준 자체 헤더(StepNav+나가기)를 가지므로 숨긴다 */}
-      {currentStep !== 'N2' &&
-        currentStep !== 'N3' &&
-        currentStep !== 'N4' &&
-        currentStep !== 'N5' &&
-        currentStep !== 'N6' && (
+      {displayStep !== 'N2' &&
+        displayStep !== 'N3' &&
+        displayStep !== 'N4' &&
+        displayStep !== 'N5' &&
+        displayStep !== 'N6' && (
         <header className="flex h-14 shrink-0 items-center gap-4 border-b bg-white px-6 shadow-sm">
           <Link
             href="/"
@@ -168,11 +131,24 @@ export default function Page({
 
         {tasksQuery.data && (
           <>
-            {currentStep === 'N2' && <N2AnalysisView status={tasksQuery.data} progressOverride={mockN2Progress} />}
-            {currentStep === 'N3' && <N3View jobId={jobId} />}
-            {currentStep === 'N4' && <N4ProcessingView status={tasksQuery.data} />}
-            {currentStep === 'N5' && <N5View jobId={jobId} />}
-            {currentStep === 'N6' && <N6ResultView jobId={jobId} />}
+            {displayStep === 'N2' && (
+              <N2AnalysisView
+                jobId={jobId}
+                status={completion?.status ?? tasksQuery.data}
+                isCompleted={completion?.step === 'N2'}
+                isFailed={isN2Failed}
+              />
+            )}
+            {displayStep === 'N3' && <N3View jobId={jobId} />}
+            {displayStep === 'N4' && (
+              <N4ProcessingView
+                jobId={jobId}
+                status={completion?.status ?? tasksQuery.data}
+                isCompleted={completion?.step === 'N4'}
+              />
+            )}
+            {displayStep === 'N5' && <N5View jobId={jobId} />}
+            {displayStep === 'N6' && <N6ResultView jobId={jobId} />}
           </>
         )}
       </div>

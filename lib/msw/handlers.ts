@@ -16,7 +16,7 @@ import { mockN5Job, mockN5Blocks, mockN5PreviewSections, buildMockN5Preview } fr
 import { mockLibraryCards } from '@/lib/mock-api/library-fixtures';
 import { mockMasterCountries, mockMasterLanguages } from '@/lib/mock-api/master-fixtures';
 import type { ApiJob, ApiJobAsyncTaskItem, ApiTextBlock } from '@/lib/api/n5-schema';
-import type { ApiAcceptedTask } from '@/lib/api/job-schema';
+import type { ApiAcceptedTask, ApiAnalysisProgress, ApiJobPatch, ApiSourceImageUploadResult } from '@/lib/api/job-schema';
 import type {
   ApiExcludedStage,
   ApiExclusionReason,
@@ -170,7 +170,7 @@ let jobState: ApiJob = { ...mockN5Job, currentStep: 'N2', userFacingStatus: 'ana
 let jobProcessingPollCount = 0;
 
 /**
- * N4 진행 polling index — N2의 jobProcessingPollCount(단일 stage, 2-poll)와
+ * N4 진행 polling index — N2의 jobProcessingPollCount(N2_DEFAULT_SCHEDULE 인덱스)와
  * 다르게 N4는 실제 계약(inpaint→translate→verify→render) 4단계를 순서대로
  * 최소 한 번씩 지나가야 해서 별도 카운터를 둔다. N4_POLL_SCHEDULE의 인덱스다.
  */
@@ -310,6 +310,30 @@ function isN6RenderDone(): boolean {
  */
 let n6ExportArtifactIdCounter = 70000;
 const n6ExportArtifactState = new Map<number, { artifactType: ApiExportResponse['artifactType']; components: string[] }>();
+/** POST /export 로 한 번이라도 만든 구성요소(타입별 개별 다운로드 GET /export/download 가 조회한다). */
+const n6GeneratedComponents = new Set<string>();
+/** e2e 가 page 에서 true 로 두면 다음 POST /export 한 번이 500 으로 실패한다(MSW 핸들러는 페이지 쪽에서 돈다). */
+export const MOCK_EXPORT_FAIL_ONCE_FLAG = '__pixlateMockExportFailOnce';
+/** e2e 전용 — 다음 POST /export 한 번이 201 이지만 artifactId 없이 응답한다(다운로드 조회를 이어가지 않는지 확인용). */
+export const MOCK_EXPORT_NO_ARTIFACT_ID_ONCE_FLAG = '__pixlateMockExportNoArtifactIdOnce';
+/** e2e 전용 — 다음 GET /exports/:artifactId/download 한 번이 404 로 실패한다. */
+export const MOCK_EXPORT_DOWNLOAD_NOT_FOUND_ONCE_FLAG = '__pixlateMockExportDownloadNotFoundOnce';
+/**
+ * e2e 전용 — 다음 presigned 파일 GET(/mock/download/...) 한 번이 네트워크 오류로 끝난다.
+ * 실제 환경에서 S3 CORS 가 막혀 FE fetch 가 실패하는 경우를 흉내 낸다(브라우저는 CORS 실패를
+ * 네트워크 오류(TypeError)로만 알려 준다).
+ */
+export const MOCK_PRESIGNED_FETCH_FAIL_ONCE_FLAG = '__pixlateMockPresignedFetchFailOnce';
+/** BE release/1.0.0 에서 POST /export 가 만드는 구성요소. html·psd 가 섞이면 아무것도 만들지 않고 400 이다. */
+const N6_EXPORTABLE_COMPONENTS = ['csv', 'images'];
+
+/** e2e 가 page 에서 켠 1회 주입 플래그를 읽고 바로 끈다. */
+function takeMockFlag(flag: string): boolean {
+  const flags = globalThis as Record<string, unknown>;
+  if (!flags[flag]) return false;
+  flags[flag] = false;
+  return true;
+}
 
 /**
  * N2 진행 중(processing) 단계에서 다음 단계로 넘어갈 조건 — 오늘(N1→N6
@@ -320,23 +344,172 @@ const n6ExportArtifactState = new Map<number, { artifactType: ApiExportResponse[
  * 이 아래 별도 로직 — N4_PROCESSING_STAGES/advanceN4Processing 참고.)
  */
 const N2_PROCESSING_STAGE = {
-  key: 'analyze',
-  label: '이미지를 분석하고 있습니다',
   next: 'N3' as const,
   nextUserFacingStatus: 'section_review' as const,
 };
 
-function advanceN2Processing(): {
+const n2Stage = (key: 'ocr' | 'section' | 'verify', status: 'pending' | 'running' | 'done') => ({ key, label: key, status });
+
+/**
+ * 기본 mock N2 poll 순서 — server 315816e docs/openapi.yaml JobTaskStatus·AnalysisProgress 계약 값.
+ * 10/22 (2) — 이전 기본 mock 은 단일 'analyze' stage 만 주고 analysisProgress 가 없어, 수동 QA 화면(01 만 진행
+ * 중이다가 끝남)이 e2e script 로 보는 화면(analyze 묶음 → finalize → judge)과 달랐다. 이제 기본 흐름도 같은
+ * 계약 상태를 poll 마다 차례로 돌려준다. FE 에 시간을 끄는 장치를 두지 않고 mock 서버가 상태를 돌려줄 뿐이다.
+ * - 원본은 GET /jobs/:jobId/source-images fixture(mockN3SourceImages) 2장, 영역은 N3 섹션 fixture
+ *   (원본 1 에 3개 · 원본 2 에 2개, 합 5개)와 맞춘다.
+ * - 2초 polling 이라 사이 activity(원본 1 merge · 원본 2 split·ocr)는 응답에 남지 않는다 — 실서버도 그렇다.
+ * - progress 는 계약대로 분석 시도가 끝날 때까지 0, 채택 뒤 done/(1 + 영역 수).
+ * - null 가능 필드는 계약상 해당 없는 곳에서 null 이다(가짜 0 을 채우지 않는다).
+ * 마지막 항목 다음 poll 에서 N3 로 넘긴다(약 10초).
+ */
+const N2_DEFAULT_SCHEDULE: { progress: number; total: number; done: number; stages: MockJobProcessingTick['stages']; analysisProgress: ApiAnalysisProgress }[] = [
+  {
+    progress: 0,
+    total: 1,
+    done: 0,
+    stages: [n2Stage('ocr', 'running'), n2Stage('section', 'pending'), n2Stage('verify', 'pending')],
+    analysisProgress: {
+      phase: 'analyze',
+      status: 'running',
+      sourceTotal: 2,
+      activity: 'split',
+      current: { sourceIndex: 1, sourceImageId: 1, regionIndex: null, regionCountInSource: null },
+      regions: null,
+      judge: null,
+    },
+  },
+  {
+    progress: 0,
+    total: 1,
+    done: 0,
+    stages: [n2Stage('ocr', 'running'), n2Stage('section', 'pending'), n2Stage('verify', 'pending')],
+    analysisProgress: {
+      phase: 'analyze',
+      status: 'running',
+      sourceTotal: 2,
+      activity: 'ocr',
+      current: { sourceIndex: 1, sourceImageId: 1, regionIndex: 2, regionCountInSource: 3 },
+      regions: { done: 1, known: 3, totalFixed: false },
+      judge: null,
+    },
+  },
+  {
+    progress: 0,
+    total: 1,
+    done: 0,
+    stages: [n2Stage('ocr', 'running'), n2Stage('section', 'pending'), n2Stage('verify', 'pending')],
+    analysisProgress: {
+      phase: 'analyze',
+      status: 'running',
+      sourceTotal: 2,
+      activity: 'merge',
+      current: { sourceIndex: 2, sourceImageId: 2, regionIndex: 2, regionCountInSource: 2 },
+      regions: { done: 4, known: 5, totalFixed: true },
+      judge: null,
+    },
+  },
+  {
+    progress: 0,
+    total: 1,
+    done: 0,
+    stages: [n2Stage('ocr', 'running'), n2Stage('section', 'pending'), n2Stage('verify', 'pending')],
+    analysisProgress: {
+      phase: 'analyze',
+      status: 'running',
+      sourceTotal: 2,
+      activity: 'finalize',
+      current: null,
+      regions: { done: 5, known: 5, totalFixed: true },
+      judge: null,
+    },
+  },
+  {
+    progress: 0.5,
+    total: 6,
+    done: 3,
+    stages: [n2Stage('ocr', 'done'), n2Stage('section', 'running'), n2Stage('verify', 'pending')],
+    analysisProgress: {
+      phase: 'judge',
+      status: 'running',
+      sourceTotal: 2,
+      activity: null,
+      current: null,
+      regions: { done: 5, known: 5, totalFixed: true },
+      judge: { total: 5, done: 2, excluded: 0, running: 2, waiting: 1, retrying: 0, failed: 0, cancelled: 0 },
+    },
+  },
+];
+
+/** N2/N4 job 단계 진행 mock 이 GET /tasks 에 돌려주는 한 번의 진행 값. */
+type MockJobProcessingTick = {
   progress: number;
   total: number;
   done: number;
-  stages: { key: string; label: string; status: 'running' | 'done' }[];
-} {
+  stages: { key: string; label: string; status: 'pending' | 'running' | 'done' | 'failed' }[];
+  /** 실패 시나리오 flag·N2 e2e script 에서만 채운다 — 정상 흐름은 항상 비어 있다. */
+  items?: ApiJobAsyncTaskItem[];
+  /** 기본 N2 흐름·N2 e2e script 에서 채운다. 없으면 응답에 속성 자체를 싣지 않는다(미구현 서버·레거시 작업과 같다). */
+  analysisProgress?: ApiAnalysisProgress;
+};
+
+/**
+ * e2e 전용 — 이 값(배열)이 있으면 N2 poll 마다 앞에서 하나씩 꺼내 그대로 응답한다.
+ * stage key·순서는 테스트가 정한다(mock 은 어떤 key 도 가정하지 않는다). `advance: true`
+ * 인 항목을 응답하는 poll 에서 job 을 N3 로 넘긴다 — 서버가 마지막 stage 를 끝내자마자
+ * currentStep=N3 를 돌려주는 상황을 재현하기 위한 것이다. `advanceTo: 'N1'` 이면 같은 poll 에서
+ * job 을 N1(draft)로 돌려 N2 중단 복귀를 재현한다(생략 시 N3). `fail: true` 면 그 poll 에서 job 을
+ * N2 그대로 jobStatus=failed 로 바꾼다(분석 실패 종료). `items`·`analysisProgress` 는 그대로 응답에
+ * 싣는다 — analysisProgress 를 생략한 tick 은 속성 없는 응답이 된다.
+ */
+const MOCK_N2_SCRIPT_FLAG = '__pixlateMockN2Script';
+
+type MockN2ScriptTick = {
+  progress: number;
+  stages: { key: string; label: string; status: 'pending' | 'running' | 'done' | 'failed' }[];
+  items?: ApiJobAsyncTaskItem[];
+  analysisProgress?: ApiAnalysisProgress;
+  advance?: boolean;
+  advanceTo?: 'N1' | 'N3';
+  fail?: boolean;
+};
+
+function takeN2ScriptTick(): MockN2ScriptTick | null {
+  const script = (globalThis as Record<string, unknown>)[MOCK_N2_SCRIPT_FLAG];
+  if (!Array.isArray(script) || script.length === 0) return null;
+  return (script.length > 1 ? script.shift() : script[0]) as MockN2ScriptTick;
+}
+
+function advanceN2Processing(): MockJobProcessingTick {
+  const scripted = takeN2ScriptTick();
+  if (scripted) {
+    if (scripted.advance) {
+      (globalThis as Record<string, unknown>)[MOCK_N2_SCRIPT_FLAG] = undefined;
+      jobState =
+        scripted.advanceTo === 'N1'
+          ? { ...jobState, currentStep: 'N1', userFacingStatus: 'draft', status: 'draft' }
+          : {
+              ...jobState,
+              currentStep: N2_PROCESSING_STAGE.next,
+              userFacingStatus: N2_PROCESSING_STAGE.nextUserFacingStatus,
+              status: 'review',
+            };
+      jobProcessingPollCount = 0;
+    } else if (scripted.fail) {
+      jobState = { ...jobState, status: 'failed', userFacingStatus: 'failed' };
+    }
+    return {
+      progress: scripted.progress,
+      total: scripted.stages.length,
+      done: 0,
+      stages: scripted.stages,
+      items: scripted.items,
+      analysisProgress: scripted.analysisProgress,
+    };
+  }
+
   jobProcessingPollCount += 1;
 
-  if (jobProcessingPollCount < 2) {
-    return { progress: 0.5, total: 1, done: 0, stages: [{ ...N2_PROCESSING_STAGE, status: 'running' }] };
-  }
+  if (jobProcessingPollCount <= N2_DEFAULT_SCHEDULE.length) return N2_DEFAULT_SCHEDULE[jobProcessingPollCount - 1];
 
   jobState = {
     ...jobState,
@@ -345,7 +518,8 @@ function advanceN2Processing(): {
     status: 'review',
   };
   jobProcessingPollCount = 0;
-  return { progress: 1, total: 1, done: 1, stages: [{ ...N2_PROCESSING_STAGE, status: 'done' }] };
+  // N3 전환 응답 — analysisProgress 는 currentStep=N3 이라 응답에서 빠진다(GET /tasks 핸들러)
+  return { progress: 1, total: 6, done: 6, stages: [n2Stage('ocr', 'done'), n2Stage('section', 'done'), n2Stage('verify', 'done')] };
 }
 
 /**
@@ -354,13 +528,11 @@ function advanceN2Processing(): {
  * 2-poll로 줘서 inpaint/verify/render(04·05) 화면을 mock에서 확인할 방법이
  * 없었다 — 4단계를 순서대로 최소 한 번씩 running→done으로 흘려보낸다.
  *
- * render는 화면 04(글자 수·줄바꿈 조정)·05(이미지 합성) 두 항목을 만들어야
- * 해서 running을 두 번(전반부→04, 후반부→05) 보낸다 — 그 외 3단계는 N2와
- * 같은 1-running-then-done 패턴이다. progress는 poll마다 커지는 누적값이고
- * (JobTaskStatus.progress는 stage-local이 아니라 job 전체 global 값 —
- * lib/api/generated/openapi.d.ts의 JobTaskStatus.progress에는 stage별 필드가
- * 없고 최상위 progress 하나뿐이다), N4TranslationView의 render 04/05 분기
- * 임계값(0.875)과 같은 "4단계 동일 비중" 가정으로 구간을 나눴다.
+ * render는 running을 두 번 보낸다(render 가 여러 poll 동안 이어지는 경우). 화면은
+ * render 를 04·05 두 행으로 함께 설명할 뿐 04/05 를 나누지 않는다(n4-processing-view.tsx).
+ * 그 외 3단계는 N2와 같은 1-running-then-done 패턴이다. progress는 poll마다 커지는
+ * 누적값이다(JobTaskStatus.progress는 stage-local이 아니라 job 전체 global 값).
+ * 섹션마다 단계가 다른 응답(예: translate=running·render=done)은 아래 N4 script 로 재현한다.
  */
 const N4_PROCESSING_STAGES: { key: string; label: string }[] = [
   { key: 'inpaint', label: '한글을 지우고 배경을 복원하고 있습니다' },
@@ -380,19 +552,85 @@ const N4_POLL_SCHEDULE: { stageIndex: number; status: 'running' | 'done'; progre
   { stageIndex: 1, status: 'done', progress: 0.5 }, // translate 완료 → 03 active로 승격
   { stageIndex: 2, status: 'running', progress: 0.55 }, // verify 진행 중 → 03 active
   { stageIndex: 2, status: 'done', progress: 0.75 }, // verify 완료 → render(04) active로 승격
-  { stageIndex: 3, status: 'running', progress: 0.8 }, // render 전반부(<0.875) → 04 active
-  { stageIndex: 3, status: 'running', progress: 0.9 }, // render 후반부(>=0.875) → 05 active
-  { stageIndex: 3, status: 'done', progress: 1 }, // render 완료 → N5로 전환
+  { stageIndex: 3, status: 'running', progress: 0.8 }, // render 진행 중 → 04·05 active
+  { stageIndex: 3, status: 'running', progress: 0.9 }, // render 계속 진행 중 → 04·05 active
+  { stageIndex: 3, status: 'done', progress: 1 }, // render 완료와 같은 poll 에서 N5로 전환
 ];
 
-function advanceN4Processing(): {
+/** e2e 전용 — 켜져 있으면 N4 의 현재 stage 를 failed 로 돌려주고 진행을 멈춘다. */
+const MOCK_N4_FAIL_FLAG = '__pixlateMockN4Fail';
+
+/**
+ * e2e 전용 — 이 값(배열)이 있으면 N4 poll 마다 앞에서 하나씩 꺼내 그대로 응답한다(N2 script 와
+ * 같은 방식, 마지막 항목은 계속 반복). stage key·status·progress 는 테스트가 정한다 — 섹션마다
+ * 단계가 다른 응답(translate=running·render=done)을 재현하기 위한 것이다. `advance: true` 인 항목을
+ * 응답하는 poll 에서 job 을 N5 로 넘기고, `fail: true` 면 그 poll 에서 job 을 N4 그대로
+ * jobStatus=failed 로 바꾼다. 정상 흐름(값 없음)에는 영향이 없다.
+ */
+const MOCK_N4_SCRIPT_FLAG = '__pixlateMockN4Script';
+
+type MockN4ScriptTick = {
   progress: number;
-  total: number;
-  done: number;
-  stages: { key: string; label: string; status: 'running' | 'done' }[];
-} {
+  stages: { key: string; label: string; status: 'pending' | 'running' | 'done' | 'failed' }[];
+  items?: ApiJobAsyncTaskItem[];
+  advance?: boolean;
+  fail?: boolean;
+};
+
+function takeN4ScriptTick(): MockN4ScriptTick | null {
+  const script = (globalThis as Record<string, unknown>)[MOCK_N4_SCRIPT_FLAG];
+  if (!Array.isArray(script) || script.length === 0) return null;
+  return (script.length > 1 ? script.shift() : script[0]) as MockN4ScriptTick;
+}
+
+function mockFailedJobTaskItem(taskType: ApiJobAsyncTaskItem['taskType'], errorCode: string): ApiJobAsyncTaskItem {
+  return {
+    taskId: 9001,
+    taskType,
+    unitType: 'job',
+    unitId: jobState.id,
+    status: 'failed',
+    uiStatus: 'failed',
+    retryCount: 3,
+    maxRetry: 3,
+    retryable: false,
+    errorCode,
+    revision: null,
+  };
+}
+
+function advanceN4Processing(): MockJobProcessingTick {
+  const scripted = takeN4ScriptTick();
+  if (scripted) {
+    if (scripted.advance) {
+      (globalThis as Record<string, unknown>)[MOCK_N4_SCRIPT_FLAG] = undefined;
+      jobState = { ...jobState, currentStep: N4_NEXT_STEP, userFacingStatus: N4_NEXT_USER_FACING_STATUS, status: 'review' };
+      n4PollIndex = 0;
+    } else if (scripted.fail) {
+      jobState = { ...jobState, status: 'failed', userFacingStatus: 'failed' };
+    }
+    return {
+      progress: scripted.progress,
+      total: N4_PROCESSING_STAGES.length,
+      done: 0,
+      stages: scripted.stages,
+      items: scripted.items,
+    };
+  }
+
   const tick = N4_POLL_SCHEDULE[Math.min(n4PollIndex, N4_POLL_SCHEDULE.length - 1)];
   const stageMeta = N4_PROCESSING_STAGES[tick.stageIndex];
+
+  if ((globalThis as Record<string, unknown>)[MOCK_N4_FAIL_FLAG]) {
+    // 진행을 멈추고(n4PollIndex 그대로) 현재 stage 를 failed 로 보고한다.
+    return {
+      progress: tick.progress,
+      total: N4_PROCESSING_STAGES.length,
+      done: tick.stageIndex,
+      stages: [{ ...stageMeta, status: 'failed' }],
+      items: [mockFailedJobTaskItem(stageMeta.key as ApiJobAsyncTaskItem['taskType'], 'MOCK_STAGE_FAILED')],
+    };
+  }
   const isLastTick = n4PollIndex >= N4_POLL_SCHEDULE.length - 1;
 
   n4PollIndex += 1;
@@ -412,12 +650,7 @@ function advanceN4Processing(): {
   };
 }
 
-function advanceJobProcessing(): {
-  progress: number;
-  total: number;
-  done: number;
-  stages: { key: string; label: string; status: 'running' | 'done' }[];
-} {
+function advanceJobProcessing(): MockJobProcessingTick {
   const step = jobState.currentStep;
   if (step === 'N2') return advanceN2Processing();
   if (step === 'N4') return advanceN4Processing();
@@ -437,6 +670,40 @@ function badRequest(message: string) {
   return HttpResponse.json({ code: 'INVALID_REQUEST', message }, { status: 400 });
 }
 
+/** 실제 공통 Error 계약 형태({ error: { code, message, retryable, traceId } }) — N1 draft-first handler용 */
+function contractError(status: number, code: string, message: string) {
+  return HttpResponse.json({ error: { code, message, retryable: false, traceId: 'mock-trace' } }, { status });
+}
+
+// ─────────────────────────────────────────────
+// N1 draft-first mock 상태 (POST /jobs → source-images → PATCH /jobs/:jobId → reorder → analyze)
+//
+// jobState(N2~N6 진행 상태)와 분리한다 — jobState의 리셋 기준값은 위 설명대로 N2다.
+// 이 상태는 N1 화면 안에서만 쓰이며, GET /jobs/:jobId/source-images는 N3 fixture를
+// 그대로 돌려준다(N3 섹션이 fixture sourceImageId를 참조하기 때문).
+// ─────────────────────────────────────────────
+
+/** 이 이름을 포함한 파일은 첫 업로드만 실패한다 — 개별 재시도 E2E 재현용(mock 전용 규칙) */
+export const MOCK_UPLOAD_FAIL_ONCE_MARKER = '__fail_once__';
+
+interface MockN1Draft {
+  patch: ApiJobPatch;
+  sourceImages: ApiSourceImage[];
+  nextSourceImageId: number;
+  failedOnce: Set<string>;
+}
+
+let n1Draft: MockN1Draft | null = null;
+
+/** 계약: JPG·PNG만 허용 (그 외는 파일별 UNSUPPORTED_FORMAT 실패) */
+function isAcceptedSourceImage(file: File): boolean {
+  return file.type === 'image/png' || file.type === 'image/jpeg';
+}
+
+function sortedDraftImages(draft: MockN1Draft): ApiSourceImage[] {
+  return [...draft.sourceImages].sort((a, b) => (a.uploadOrder ?? 0) - (b.uploadOrder ?? 0));
+}
+
 // ─────────────────────────────────────────────
 // handlers
 // ─────────────────────────────────────────────
@@ -451,44 +718,131 @@ export const handlers = [
   }),
 
   // ──────────────────────────────────────────
-  // N1 — job 생성. 경로는 실제 OpenAPI(POST /jobs)로 맞췄다 — mock 전용
-  // /api 프리픽스를 쓰지 않는다(오늘 경로 정리, 이전엔 /api/jobs였다).
-  //
-  // Mock에서는 항상 MOCK_JOB_ID를 반환합니다.
-  // 실제 백엔드는 별도 job ID를 생성합니다. 실제 계약(JobCreate)은 brandId만
-  // 받는 draft-first 흐름(POST /jobs → PATCH로 N1값 세팅 → analyze)이지만,
-  // N1 화면 자체를 이 흐름으로 다시 만드는 건 오늘 범위 밖이라 기존 한 번에
-  // 받는 payload/검증은 그대로 둔다 — 대신 job 진행 상태(jobState)만
-  // 리셋해서, 이후 analyze/tasks polling이 실제로 이어지게 한다.
-  //
-  // productName/productCode(오늘 계약 보정): 실제 JobCreate/Job 스키마의
-  // productName은 이 엔드포인트 자체에서는 optional이고 analyze 게이트에서
-  // 필수로 걸린다 — 하지만 이 mock은 targetCountry/targetLanguage처럼
-  // "N1 폼이 이미 필수로 받는 값"을 이 시점에 함께 검증하는 기존 패턴을
-  // 그대로 따른다(다른 필드와 다른 규칙을 새로 만들지 않는다). productCode는
-  // 실제 계약대로 선택값이라 없어도 통과시키고 null로 저장한다.
+  // N1 — draft 생성 (API-JOB-02). 실제 계약(JobCreate)대로 brandId만 받고
+  // 201 Job(status=draft, currentStep=N1)을 돌려준다. 식별자는 Job.id(number)다.
+  // Mock에서는 항상 id=1(MOCK_JOB_ID '1')이며, 같은 Idempotency-Key 재요청도 같은 job을 준다.
   // ──────────────────────────────────────────
   http.post('/jobs', async ({ request }) => {
-    const body = await request.json() as Record<string, unknown>;
-
-    if (!body.brandId) return badRequest('brandId가 필요합니다');
-    if (!body.productName) return badRequest('productName이 필요합니다');
-    if (!body.targetCountry) return badRequest('targetCountry가 필요합니다');
-    if (!body.targetLanguage) return badRequest('targetLanguage가 필요합니다');
-    if (!Array.isArray(body.sourceImages) || body.sourceImages.length === 0) {
-      return badRequest('sourceImages가 1개 이상 필요합니다');
-    }
+    const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+    if (!body?.brandId) return contractError(400, 'VALIDATION_ERROR', 'brandId가 필요합니다');
 
     // 새 job 생성 시 이전 브라우저 테스트에서 진행됐던 mock 상태를 다시 시작
     // (리셋 기준값이 N2인 이유는 위 jobState 선언부 주석 참고)
     resetJobState();
+    n1Draft = { patch: {}, sourceImages: [], nextSourceImageId: 101, failedOnce: new Set() };
+
+    const draft: ApiJob = {
+      ...jobState,
+      id: Number(MOCK_JOB_ID),
+      status: 'draft',
+      currentStep: 'N1',
+      userFacingStatus: 'draft',
+      productName: null,
+      productCode: null,
+    };
+    return HttpResponse.json(draft, { status: 201 });
+  }),
+
+  // ──────────────────────────────────────────
+  // N1 — 원본 업로드 (API-SRC-02, multipart `files`). 파일별 성공/실패를 results[]에
+  // 담고, 한 파일이 실패해도 나머지는 적재한다. sourceImages는 현재 job 원본 전체다.
+  // ──────────────────────────────────────────
+  http.post('/jobs/:jobId/source-images', async ({ params, request }) => {
+    const jobId = params.jobId as string;
+    if (jobId !== MOCK_JOB_ID || !n1Draft) return contractError(404, 'NOT_FOUND', `Job '${jobId}' not found`);
+    const draft = n1Draft;
+
+    const form = await request.formData();
+    const files = form.getAll('files').filter((v): v is File => typeof v !== 'string');
+    if (files.length === 0) return contractError(400, 'VALIDATION_ERROR', 'files가 필요합니다');
+
+    const results: NonNullable<ApiSourceImageUploadResult['results']> = files.map((file) => {
+      if (!isAcceptedSourceImage(file)) {
+        return { fileName: file.name, ok: false, sourceImageId: null, errorCode: 'UNSUPPORTED_FORMAT' };
+      }
+      if (file.name.includes(MOCK_UPLOAD_FAIL_ONCE_MARKER) && !draft.failedOnce.has(file.name)) {
+        draft.failedOnce.add(file.name);
+        return { fileName: file.name, ok: false, sourceImageId: null, errorCode: 'INTERNAL_ERROR' };
+      }
+      const id = draft.nextSourceImageId++;
+      const uploadOrder = draft.sourceImages.reduce((max, img) => Math.max(max, img.uploadOrder ?? 0), 0) + 1;
+      draft.sourceImages.push({
+        id,
+        uploadOrder,
+        imageType: 'detail',
+        fileUrl: `/mock/n1/source-${id}.png`,
+        width: 860,
+        height: 1200,
+        createdAt: new Date().toISOString(),
+      });
+      return { fileName: file.name, ok: true, sourceImageId: id, errorCode: null };
+    });
+
+    const response: ApiSourceImageUploadResult = { results, sourceImages: sortedDraftImages(draft) };
+    return HttpResponse.json(response);
+  }),
+
+  // N1 — 원본 순서 재정렬 (API-SRC-03). order는 현재 원본 sourceImageId 전체여야 한다.
+  http.patch('/jobs/:jobId/source-images/reorder', async ({ params, request }) => {
+    const jobId = params.jobId as string;
+    if (jobId !== MOCK_JOB_ID || !n1Draft) return contractError(404, 'NOT_FOUND', `Job '${jobId}' not found`);
+    const draft = n1Draft;
+    const { order } = await request.json() as { order?: unknown };
+    const ids = draft.sourceImages.map((img) => img.id);
+    if (
+      !Array.isArray(order) ||
+      order.length !== ids.length ||
+      new Set(order).size !== order.length ||
+      !order.every((id) => ids.includes(id as number))
+    ) {
+      return contractError(400, 'VALIDATION_ERROR', 'order는 현재 원본 sourceImageId 전체여야 합니다');
+    }
+    draft.sourceImages = draft.sourceImages.map((img) => ({ ...img, uploadOrder: order.indexOf(img.id) + 1 }));
+    return HttpResponse.json(sortedDraftImages(draft));
+  }),
+
+  // N1 — 원본 삭제 (API-SRC-04, 204)
+  http.delete('/jobs/:jobId/source-images/:sourceImageId', ({ params }) => {
+    const jobId = params.jobId as string;
+    if (jobId !== MOCK_JOB_ID || !n1Draft) return contractError(404, 'NOT_FOUND', `Job '${jobId}' not found`);
+    const sourceImageId = Number(params.sourceImageId);
+    const before = n1Draft.sourceImages.length;
+    n1Draft.sourceImages = n1Draft.sourceImages.filter((img) => img.id !== sourceImageId);
+    if (n1Draft.sourceImages.length === before) return contractError(404, 'NOT_FOUND', `Source image '${sourceImageId}' not found`);
+    return new HttpResponse(null, { status: 204 });
+  }),
+
+  // ──────────────────────────────────────────
+  // N1 — 입력값 세팅 (PATCH /jobs/:jobId, JobPatch 부분 갱신). draft 단계에서만 허용.
+  // productName/productCode는 N5 헤더가 읽으므로 jobState에도 반영한다.
+  // ──────────────────────────────────────────
+  http.patch('/jobs/:jobId', async ({ params, request }) => {
+    const jobId = params.jobId as string;
+    if (jobId !== MOCK_JOB_ID) return contractError(404, 'NOT_FOUND', `Job '${jobId}' not found`);
+    if (!n1Draft) return contractError(409, 'INVALID_STATE', 'draft 단계에서만 수정할 수 있습니다');
+    const patch = await request.json() as ApiJobPatch;
+    n1Draft.patch = { ...n1Draft.patch, ...patch };
     jobState = {
       ...jobState,
-      productName: body.productName as string,
-      productCode: (body.productCode as string | undefined) ?? null,
+      productName: n1Draft.patch.productName ?? null,
+      productCode: n1Draft.patch.productCode ?? null,
     };
-
-    return HttpResponse.json({ jobId: MOCK_JOB_ID }, { status: 201 });
+    const { productName, productCode, targetCountry, regulatoryClass, targetLanguage, specType, keywords, imageType } = n1Draft.patch;
+    const response: ApiJob = {
+      ...jobState,
+      status: 'draft',
+      currentStep: 'N1',
+      userFacingStatus: 'draft',
+      productName: productName ?? null,
+      productCode: productCode ?? null,
+      targetCountry: targetCountry ?? null,
+      regulatoryClass: regulatoryClass ?? null,
+      targetLanguage: targetLanguage ?? null,
+      specType: specType ?? undefined,
+      keywords: keywords ?? [],
+      imageType: imageType ?? null,
+    };
+    return HttpResponse.json(response);
   }),
 
   // ──────────────────────────────────────────
@@ -501,6 +855,11 @@ export const handlers = [
   http.post('/jobs/:jobId/analyze', ({ params }) => {
     const jobId = params.jobId as string;
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
+    // 실제 analyze 게이트: draft · 원본 존재 · product_name
+    if (!n1Draft) return contractError(409, 'INVALID_STATE', 'draft 작업이 아닙니다');
+    if (n1Draft.sourceImages.length === 0) return contractError(400, 'VALIDATION_ERROR', '원본 이미지가 필요합니다');
+    if (!n1Draft.patch.productName) return contractError(400, 'VALIDATION_ERROR', 'productName이 필요합니다');
+    n1Draft = null;
 
     jobState = { ...jobState, currentStep: 'N2', userFacingStatus: 'analyzing', status: 'processing' };
     jobProcessingPollCount = 0;
@@ -810,6 +1169,9 @@ export const handlers = [
     }
 
     const jobProgress = advanceJobProcessing();
+    // 실패 시나리오 flag·N2 e2e script 에서만 job 단계 item 이 붙는다(정상 흐름은 빈 배열).
+    const jobItems = jobProgress.items ?? [];
+    const allItems = [...items, ...jobItems];
     // n6 render item(job 단위)과 n5 rerender item(block 단위) 둘 다 여기 속한다
     // — N2/N4 job 단계 진행(advanceJobProcessing)과는 별도 진행률 소스라 있으면
     // 이쪽을 우선한다(과거 이름 hasN5Items를 오늘 N6 항목도 포함하도록 재사용).
@@ -822,9 +1184,13 @@ export const handlers = [
       progress: hasTaskItems ? items.filter((i) => i.status === 'done').length / items.length : jobProgress.progress,
       total: hasTaskItems ? items.length : jobProgress.total,
       done: hasTaskItems ? items.filter((i) => i.status === 'done').length : jobProgress.done,
-      failedCount: items.filter((i) => i.status === 'failed').length,
+      failedCount: allItems.filter((i) => i.status === 'failed').length,
       stages: jobProgress.stages,
-      items,
+      items: allItems,
+      // 계약: currentStep=N2 일 때만 싣고, 그 밖에는 속성을 생략한다(null 을 보내지 않는다)
+      ...(jobState.currentStep === 'N2' && jobProgress.analysisProgress
+        ? { analysisProgress: jobProgress.analysisProgress }
+        : {}),
     });
   }),
 
@@ -950,11 +1316,32 @@ export const handlers = [
     if (components.length === 0) {
       return badRequest('components가 1개 이상 필요합니다');
     }
+    // 계약(BE release/1.0.0): 지원하지 않는 구성요소(html·psd 등)가 하나라도 있으면 전체 400
+    const unsupported = components.filter((c) => !N6_EXPORTABLE_COMPONENTS.includes(c));
+    if (unsupported.length > 0) {
+      return contractError(400, 'VALIDATION_ERROR', `unsupported export components: ${unsupported.join(', ')}`);
+    }
+
+    // e2e 전용 실패 주입 — 한 번만 500(생성 실패 시 다운로드를 이어가지 않는지 확인용)
+    const failFlags = globalThis as { [MOCK_EXPORT_FAIL_ONCE_FLAG]?: boolean };
+    if (failFlags[MOCK_EXPORT_FAIL_ONCE_FLAG]) {
+      failFlags[MOCK_EXPORT_FAIL_ONCE_FLAG] = false;
+      return HttpResponse.json(
+        { error: { code: 'INTERNAL_ERROR', message: 'mock export failure', retryable: true, details: {}, traceId: 'mock' } },
+        { status: 500 },
+      );
+    }
 
     const artifactId = n6ExportArtifactIdCounter++;
-    const artifactType: ApiExportResponse['artifactType'] = 'zip';
+    // 계약(API-FIN-04): 둘 이상이면 zip 하나, 하나면 그 구성요소(csv·images)를 돌려준다
+    const artifactType = (components.length > 1 ? 'zip' : components[0]) as ApiExportResponse['artifactType'];
     n6ExportArtifactState.set(artifactId, { artifactType, components });
+    for (const c of components) n6GeneratedComponents.add(c);
+    if (components.length > 1) n6GeneratedComponents.add('zip');
 
+    if (takeMockFlag(MOCK_EXPORT_NO_ARTIFACT_ID_ONCE_FLAG)) {
+      return HttpResponse.json({ artifactType, components }, { status: 201 });
+    }
     const response: ApiExportResponse = { artifactId, artifactType, components };
     return HttpResponse.json(response, { status: 201 });
   }),
@@ -971,8 +1358,9 @@ export const handlers = [
     const artifactId = Number(params.artifactId);
     const artifact = n6ExportArtifactState.get(artifactId);
     if (!artifact) return notFound(`Export artifact '${artifactId}' not found`);
+    if (takeMockFlag(MOCK_EXPORT_DOWNLOAD_NOT_FOUND_ONCE_FLAG)) return notFound(`Export artifact '${artifactId}' not found`);
 
-    const fileName = artifact.artifactType === 'zip' ? 'export.zip' : `export.${artifact.artifactType}`;
+    const fileName = artifact.artifactType === 'csv' ? 'export.csv' : 'export.zip'; // images 단독도 zip 묶음(BE 와 같음)
     return HttpResponse.json({
       url: `/mock/download/${fileName}?token=mock-presigned-${artifactId}`,
       fileName,
@@ -994,9 +1382,12 @@ export const handlers = [
     if (!['zip', 'images', 'csv', 'html'].includes(artifactType)) {
       return badRequest("artifactType은 'zip'|'images'|'csv'|'html'이어야 합니다");
     }
-    if (!isN6RenderDone()) return notFound(`'${artifactType}' 구성요소가 아직 생성되지 않았습니다`);
+    // 계약(exportDownloadByType): export_artifact 에 이미 만든 구성요소만 — 미생성은 404
+    if (!isN6RenderDone() || !n6GeneratedComponents.has(artifactType)) {
+      return notFound(`'${artifactType}' 구성요소가 아직 생성되지 않았습니다`);
+    }
 
-    const fileName = artifactType === 'zip' ? 'export.zip' : `export.${artifactType}`;
+    const fileName = artifactType === 'csv' || artifactType === 'html' ? `export.${artifactType}` : 'export.zip';
     return HttpResponse.json({
       url: `/mock/download/${fileName}?token=mock-presigned-bytype-${artifactType}-${Date.now()}`,
       fileName,
@@ -1052,4 +1443,16 @@ export const handlers = [
   // ──────────────────────────────────────────
   http.get('/master/countries', () => HttpResponse.json(mockMasterCountries)),
   http.get('/master/languages', () => HttpResponse.json(mockMasterLanguages)),
+
+  // ──────────────────────────────────────────
+  // presigned 다운로드 URL(mock) — 실제로는 S3 객체다. 위 download 응답의 url 이 이 경로를
+  // 가리킨다. N6 폴더 직접 저장(FE fetch)을 mock 에서 확인할 수 있도록 작은 더미 바이트를
+  // 돌려준다(실제 zip/csv 내용 아님). <a href> 다운로드도 같은 응답을 받는다.
+  // ──────────────────────────────────────────
+  http.get('/mock/download/:fileName', ({ params }) => {
+    if (takeMockFlag(MOCK_PRESIGNED_FETCH_FAIL_ONCE_FLAG)) return HttpResponse.error();
+    const fileName = params.fileName as string;
+    const contentType = fileName.endsWith('.csv') ? 'text/csv' : 'application/zip';
+    return new HttpResponse(`pixlate mock artifact: ${fileName}`, { headers: { 'Content-Type': contentType } });
+  }),
 ];
