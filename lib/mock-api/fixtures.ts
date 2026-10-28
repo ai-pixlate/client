@@ -181,6 +181,17 @@ export const mockSectionsResponse: SectionsResponse = {
           alternativeExpression: null,
           evidenceUrl: null,
         },
+        // 12월 판정(channel_policy)이 서버에서 섞여 와도 9월 N3 화면에는 보이지 않아야 한다 —
+        // e2e/n3-real-data-defense.spec.ts의 비노출 검증용. 계약 enum 값(VerdictType·VerdictStatus) 그대로다.
+        {
+          verdictId: 'vrd_05_channel',
+          verdictType: 'channel_policy',
+          verdictStatus: 'policy',
+          problemText: '구매 후기 캡처',
+          basis: '선택한 채널에서 제한될 수 있는 유형입니다.',
+          alternativeExpression: null,
+          evidenceUrl: null,
+        },
       ],
       warningBadge: null,
       originalVerdict: null,

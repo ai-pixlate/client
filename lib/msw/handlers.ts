@@ -897,6 +897,29 @@ export const handlers = [
   }),
 
   // ──────────────────────────────────────────
+  // N3 — 섹션 상세(API-SEC-02). 계약상 판정 근거 전체를 준다. 목록과 같은
+  // 인메모리 bucket 상태로 조립한다.
+  // ──────────────────────────────────────────
+  http.get('/jobs/:jobId/sections/:sectionId', ({ params }) => {
+    const jobId = params.jobId as string;
+    if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
+
+    const sectionIdNum = Number(params.sectionId);
+    const sec = mockSectionsResponse.sections.find((s) => toNumericId(s.sectionId) === sectionIdNum);
+    if (!sec) return notFound(`Section '${params.sectionId}' not found`);
+
+    const state = sectionState.get(sec.sectionId);
+    return HttpResponse.json(
+      toWireSection(
+        sec,
+        state?.bucket ?? sec.bucket,
+        state?.exclusionReason ?? sec.exclusionReason,
+        state?.excludedStage ?? sec.excludedStage,
+      ),
+    );
+  }),
+
+  // ──────────────────────────────────────────
   // N3 / N5 — 섹션 bucket 변경 (포함 / 제외 전환). 2단계: 실제 계약대로
   // sectionId는 path의 숫자, body는 { action: 'restore' | 'exclude' }다 —
   // 이전 mock의 { bucket } body는 실제 계약에 없다. restore=include로

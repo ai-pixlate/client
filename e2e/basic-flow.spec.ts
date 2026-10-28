@@ -1,4 +1,4 @@
-import { test, expect, type Page, type Locator } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 
 import { MOCK_BRAND_ID, MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 
@@ -17,29 +17,6 @@ async function selectFirstValidOption(page: Page, index: number) {
 // 1x1 투명 PNG — repository에 binary fixture를 추가하지 않기 위해 메모리에서 생성한다.
 const TINY_PNG_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
-
-// N3 — 썸네일/가운데 상세 보기를 다른 bucket 영역(BG)으로 drag & drop한다.
-// 개별 썸네일이 아니라 영역 경계선 기준으로 drop이 판단되므로
-// source 중심 → target 영역 중심으로만 이동하면 된다.
-async function dragBetweenZones(page: Page, source: Locator, targetZone: Locator) {
-  const sourceBox = await source.boundingBox();
-  const targetBox = await targetZone.boundingBox();
-  if (!sourceBox || !targetBox) {
-    throw new Error('drag source 또는 target 영역의 위치를 찾을 수 없습니다');
-  }
-
-  const startX = sourceBox.x + sourceBox.width / 2;
-  const startY = sourceBox.y + sourceBox.height / 2;
-  const endX = targetBox.x + targetBox.width / 2;
-  const endY = targetBox.y + targetBox.height / 2;
-
-  await page.mouse.move(startX, startY);
-  await page.mouse.down();
-  // 활성화 거리(4px)를 넘기고 중간 지점을 거쳐 target 영역까지 이동 — 실제 pointer 이벤트로 처리되어야 하므로 step을 나눈다.
-  await page.mouse.move(startX + (endX - startX) / 2, startY + (endY - startY) / 2, { steps: 8 });
-  await page.mouse.move(endX, endY, { steps: 8 });
-  await page.mouse.up();
-}
 
 test('N1에서 N5 검수 화면까지 기본 작업 흐름을 완료한다', async ({ page }) => {
   const pageErrors: Error[] = [];
@@ -85,46 +62,33 @@ test('N1에서 N5 검수 화면까지 기본 작업 흐름을 완료한다', asy
   // N3 고유 UI가 나타날 때까지 대기 (고정 sleep 대신 polling 완료를 기다림).
   // 기본 mock N2(analyze → finalize → judge, poll 6회)와 N3 전환 전 완료 표시(app/jobs/[jobId]/page.tsx)를
   // 감안해 여유를 둔 타임아웃을 쓴다.
-  await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({
+  await expect(page.getByRole('button', { name: '이대로 진행' })).toBeVisible({
     timeout: 30_000,
   });
 
-  // ── N3: 섹션 확인 (2버킷 drag & drop) ───────────────────────
-  // fixture: 삭제 후보(exclude) 3개(sec_02/sec_03/sec_05 — sec_02/05는
-  // verdictType='regulatory'라 기본 bucket이 exclude다), 번역 대상(include) 2개
-  await expect(page.locator('[data-testid^="n3-thumb-exclude-"]')).toHaveCount(3);
-  await expect(page.locator('[data-testid^="n3-thumb-include-"]')).toHaveCount(2);
+  // ── N3: 섹션 확인 (sectionOrder 단일 목록 + 카드 버튼) ─────────
+  // fixture: 제외 3개(sec_02/sec_03/sec_05 — sec_02/05는 verdictType='regulatory'라
+  // 기본 bucket이 exclude다), 포함 2개
+  await expect(page.locator('[data-testid^="n3-section-card-"][data-bucket="exclude"]')).toHaveCount(3);
+  await expect(page.locator('[data-testid^="n3-section-card-"][data-bucket="include"]')).toHaveCount(2);
 
-  const excludeZone = page.locator('[data-testid="n3-exclude-zone"]');
-  const includeZone = page.locator('[data-testid="n3-include-zone"]');
+  // ── N3: interaction — 포함 섹션 하나를 [제외하기]로 뺐다가 [번역하기]로 되살린다 ──
+  const includeCard = page.locator('[data-testid^="n3-section-card-"][data-bucket="include"]').first();
+  const movedSectionId = (await includeCard.getAttribute('data-testid'))!.replace('n3-section-card-', '');
+  const movedCard = page.getByTestId(`n3-section-card-${movedSectionId}`);
 
-  // ── N3: interaction — 번역 섹션 하나를 삭제 영역으로 이동했다가 복원 ──
-  const includeThumb = page.locator('[data-testid^="n3-thumb-include-"]').first();
-  const movedSectionId = (await includeThumb.getAttribute('data-testid'))!.replace(
-    'n3-thumb-include-',
-    '',
-  );
+  await page.getByTestId(`n3-section-action-${movedSectionId}`).click();
+  await expect(movedCard).toHaveAttribute('data-bucket', 'exclude');
+  await expect(page.locator('[data-testid^="n3-section-card-"][data-bucket="exclude"]')).toHaveCount(4);
 
-  await dragBetweenZones(page, includeThumb, excludeZone);
-  await expect(page.locator(`[data-testid="n3-thumb-exclude-${movedSectionId}"]`)).toBeVisible();
-  await expect(page.locator('[data-testid^="n3-thumb-exclude-"]')).toHaveCount(4);
-  await expect(page.locator('[data-testid^="n3-thumb-include-"]')).toHaveCount(1);
-
-  // 방금 이동한 섹션이 가운데 원본 뷰포트에 activeSection으로 표시된다(3단계
-  // UI 재구성: 뷰포트는 SourceImage 전체를 보여줄 뿐 더 이상 section별
-  // drag source가 아니다 — 삭제 nav 썸네일이 유일한 drag source다) — 그
-  // 상태에서 다시 번역 영역으로 되돌린다.
-  await expect(page.getByTestId('n3-source-viewport')).toBeVisible();
-  const excludeThumb = page.locator(`[data-testid="n3-thumb-exclude-${movedSectionId}"]`);
-  await dragBetweenZones(page, excludeThumb, includeZone);
-  await expect(page.locator(`[data-testid="n3-thumb-include-${movedSectionId}"]`)).toBeVisible();
-  await expect(page.locator('[data-testid^="n3-thumb-exclude-"]')).toHaveCount(3);
-  await expect(page.locator('[data-testid^="n3-thumb-include-"]')).toHaveCount(2);
+  await page.getByTestId(`n3-section-action-${movedSectionId}`).click();
+  await expect(movedCard).toHaveAttribute('data-bucket', 'include');
+  await expect(page.locator('[data-testid^="n3-section-card-"][data-bucket="include"]')).toHaveCount(2);
 
   // ── N3 → N4 ───────────────────────────────────────────────
   // N4는 N2와 같은 ProcessingStageLayout을 공유하는 Figma(660:4221) 기준
   // 실제 화면이다(placeholder였던 "번역을 진행하고 있습니다" 문구는 폐기).
-  await page.getByRole('button', { name: '번역 시작' }).click();
+  await page.getByRole('button', { name: '이대로 진행' }).click();
   await expect(page.getByRole('heading', { name: '번역 중' })).toBeVisible();
   await expect(page.getByText('확정한 섹션을 번역하고 이미지에 적용하고 있습니다.')).toBeVisible();
   await expect(page.getByText('한글 지우고 배경 채우기')).toBeVisible();

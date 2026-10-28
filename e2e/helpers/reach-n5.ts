@@ -58,9 +58,9 @@ export async function reachN5(page: Page): Promise<void> {
   // N3 고유 UI가 나타날 때까지 대기 (고정 sleep 대신 polling 완료를 기다림).
   // 기본 mock N2(analyze → finalize → judge, poll 6회)와 N3 전환 전 완료 표시(app/jobs/[jobId]/page.tsx)를 감안한
   // 여유 타임아웃.
-  await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole('button', { name: '이대로 진행' })).toBeVisible({ timeout: 30_000 });
 
-  await page.getByRole('button', { name: '번역 시작' }).click();
+  await page.getByRole('button', { name: '이대로 진행' }).click();
   // N4는 N2와 같은 ProcessingStageLayout을 공유하는 Figma(660:4221) 기준
   // 실제 화면이다(placeholder였던 "번역을 진행하고 있습니다" 문구는 폐기).
   await expect(page.getByRole('heading', { name: '번역 중' })).toBeVisible();

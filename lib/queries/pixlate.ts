@@ -9,6 +9,7 @@ import {
   deleteSourceImage,
   reorderSourceImages,
   patchJob,
+  getSectionDetail,
   getSections,
   updateSectionBucket,
   proceedSections,
@@ -58,6 +59,8 @@ export const pixlateKeys = {
   job: (jobId: string) => ['pixlate', 'job', jobId] as const,
   tasks: (jobId: string) => ['pixlate', 'job', jobId, 'tasks'] as const,
   sections: (jobId: string) => ['pixlate', 'job', jobId, 'sections'] as const,
+  // sections 아래에 둔다 — bucket 변경 뒤 sections invalidate가 상세까지 함께 갱신한다
+  sectionDetail: (jobId: string, sectionId: number) => ['pixlate', 'job', jobId, 'sections', sectionId] as const,
   sourceImages: (jobId: string) => ['pixlate', 'job', jobId, 'source-images'] as const,
   n5Blocks: (jobId: string) => ['pixlate', 'job', jobId, 'n5-blocks'] as const,
   n5Preview: (jobId: string) => ['pixlate', 'job', jobId, 'n5-preview'] as const,
@@ -193,6 +196,15 @@ export function useSectionsQuery(jobId: string) {
     queryKey: pixlateKeys.sections(jobId),
     queryFn: () => getSections(jobId),
     enabled: !!jobId,
+  });
+}
+
+/** 선택한 섹션 1개의 상세(판정 근거). 카드마다 호출하지 않는다(N+1 금지) — N3 가운데 패널 전용. */
+export function useSectionDetailQuery(jobId: string, sectionId: number | null) {
+  return useQuery({
+    queryKey: pixlateKeys.sectionDetail(jobId, sectionId ?? -1),
+    queryFn: () => getSectionDetail(jobId, sectionId!),
+    enabled: !!jobId && sectionId != null,
   });
 }
 

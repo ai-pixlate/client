@@ -55,8 +55,8 @@ async function reachN4(page: Page): Promise<void> {
   await page.getByRole('button', { name: '다음' }).click();
   await page.waitForURL(new RegExp(`/jobs/${MOCK_JOB_ID}$`));
   // 기본 mock N2 는 analyze → finalize → judge 를 poll 마다 보여 준 뒤 N3 로 간다(약 11초)
-  await page.getByRole('button', { name: '번역 시작' }).waitFor({ state: 'visible', timeout: 30_000 });
-  await page.getByRole('button', { name: '번역 시작' }).click();
+  await page.getByRole('button', { name: '이대로 진행' }).waitFor({ state: 'visible', timeout: 30_000 });
+  await page.getByRole('button', { name: '이대로 진행' }).click();
 }
 
 async function readProgress(page: Page): Promise<number> {

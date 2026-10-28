@@ -17,7 +17,7 @@ import {
   type Point,
   type Size,
 } from '@/lib/n5/viewport';
-import { ZoomControls, FitControls, PlacementToolbar } from './n5-toolbar';
+import { ZoomControls, FitControls, PlacementToolbar, UndoRedoControls } from './n5-toolbar';
 
 // ─────────────────────────────────────────────────────────────────
 // N5 — 캔버스형 viewport (Figma 544:3168 "N5 검수" 기준)
@@ -939,6 +939,13 @@ export function N5Viewport({
               onSelectTextTool={handleSelectTextTool}
               onSelectSectionTool={handleSelectSectionTool}
             />
+          </div>
+
+          {/* Figma 544:3168 「After」(1512:23333) — 캔버스 좌하단 독립 그룹. 캔버스 왼쪽 24px(viewport
+              padding과 같은 값), 화면 아래 31px. viewport 기준이라 우측 검수 패널 폭과 무관하다.
+              동작이 없는 표시 전용이라 viewport의 pointer·pan·zoom 처리에는 연결하지 않는다. */}
+          <div data-testid="n5-undo-redo-wrap" className="absolute bottom-[31px] left-6 z-10">
+            <UndoRedoControls />
           </div>
 
           <div
