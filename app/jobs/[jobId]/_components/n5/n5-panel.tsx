@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { ApiRequestError } from '@/lib/api/pixlate';
@@ -17,6 +17,13 @@ import {
 } from '@/lib/n5/adapter';
 import type { BlockViewModel, PreviewSectionViewModel, SignalBadge } from '@/lib/n5/adapter';
 import type { N5ViewMode } from '@/lib/n5/viewport';
+import {
+  FAILED_DRAFT_CONFIRM_DESCRIPTION,
+  failedDraftConfirmTitle,
+  isFailedDraft,
+  updateFailedDraftIds,
+} from '@/lib/n5/failed-drafts';
+import { useModalDialog } from '@/app/_components/use-modal-dialog';
 import {
   pixlateKeys,
   usePatchN5BlockMutation,
@@ -236,10 +243,13 @@ function TranslationEditor({
   jobId,
   block,
   onSelect,
+  onFailedDraftChange,
 }: {
   jobId: string;
   block: BlockViewModel;
   onSelect: () => void;
+  /** 저장하지 못한 번역문 여부가 바뀔 때(마운트 포함) 상위 집계에 알린다(lib/n5/failed-drafts.ts) */
+  onFailedDraftChange: (blockId: number, hasFailedDraft: boolean) => void;
 }) {
   const queryClient = useQueryClient();
   const patchMutation = usePatchN5BlockMutation(jobId);
@@ -252,6 +262,17 @@ function TranslationEditor({
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const isDirty = draft !== syncedText;
+
+  // 마지막 저장 시도가 실패했는지(409 포함) — 저장하지 못한 번역문 집계 전용이다. 오류 표시·409 UI는
+  // 기존 saveError/conflictLatest 그대로 쓴다. 초안이 서버값과 같아지면 실패 상태를 끝낸다(다음 편집은
+  // 저장 시도 전 일반 편집으로 센다).
+  const [lastSaveFailed, setLastSaveFailed] = useState(false);
+  if (lastSaveFailed && !isDirty) setLastSaveFailed(false);
+  const hasFailedDraft = isFailedDraft({ lastSaveFailed, isDirty });
+  // unmount 때 집계에서 빼지 않는다 — 저장에 성공한 것이 아니다(정리 함수를 두지 않는다).
+  useEffect(() => {
+    onFailedDraftChange(block.id, hasFailedDraft);
+  }, [block.id, hasFailedDraft, onFailedDraftChange]);
 
   // block.revision이 이 draft가 마지막으로 맞춰졌던 값과 달라졌는데 편집
   // 중(dirty)이 아니면 render 도중 바로 맞춘다 — React의 "prop이 바뀌면 state를
@@ -303,7 +324,9 @@ function TranslationEditor({
       setSyncedText(draft);
       setSyncedRevision(response.block?.revision ?? block.revision);
       setRerenderTaskId(getRerenderTaskId(response));
+      setLastSaveFailed(false);
     } catch (err) {
+      setLastSaveFailed(true);
       if (err instanceof ApiRequestError && err.status === 409) {
         const parsed = parseApiError(err.body);
         if (parsed && isRevisionConflict(parsed)) {
@@ -422,6 +445,7 @@ function BlockRow({
   isSelected,
   onSelect,
   rowRef,
+  onFailedDraftChange,
 }: {
   jobId: string;
   block: BlockViewModel;
@@ -431,6 +455,7 @@ function BlockRow({
   isSelected: boolean;
   onSelect: () => void;
   rowRef: (el: HTMLLIElement | null) => void;
+  onFailedDraftChange: (blockId: number, hasFailedDraft: boolean) => void;
 }) {
   return (
     <li ref={rowRef}>
@@ -479,7 +504,12 @@ function BlockRow({
         ) : (
           <>
             {block.editable ? (
-              <TranslationEditor jobId={jobId} block={block} onSelect={onSelect} />
+              <TranslationEditor
+                jobId={jobId}
+                block={block}
+                onSelect={onSelect}
+                onFailedDraftChange={onFailedDraftChange}
+              />
             ) : (
               <ReadOnlyTranslation text={block.translatedText} />
             )}
@@ -547,6 +577,33 @@ export function N5Panel({
   // 로드된 sections로 미리 계산한다 — 실패가 확실한 요청을 막을 뿐, FE가
   // 새 조건을 지어내는 게 아니다(lib/n5/adapter.ts의 areAllSectionsExcluded 참고).
   const allSectionsExcluded = areAllSectionsExcluded(sections);
+
+  // 저장하지 못한 번역문이 있는 blockId 집계(PM 확정 10/29). 이 칸들이 있어도 [저장하러 가기]를 막지 않고
+  // 확인창을 띄운다. 확정이 성공해 N5 를 떠날 때 이 컴포넌트와 함께 정리된다 — [계속]을 눌렀다고
+  // 지우지 않는다(확정 요청이 실패하면 초안·집계가 그대로 남아야 한다).
+  const [failedDraftIds, setFailedDraftIds] = useState<ReadonlySet<number>>(() => new Set());
+  const handleFailedDraftChange = useCallback((blockId: number, hasFailedDraft: boolean) => {
+    setFailedDraftIds((ids) => updateFailedDraftIds(ids, blockId, hasFailedDraft));
+  }, []);
+  const [isFailedDraftConfirmOpen, setIsFailedDraftConfirmOpen] = useState(false);
+  const confirmButtonRef = useRef<HTMLButtonElement>(null);
+  const closeFailedDraftConfirm = useCallback(() => setIsFailedDraftConfirmOpen(false), []);
+
+  function handleConfirmClick() {
+    if (confirmMutation.isPending) return;
+    if (failedDraftIds.size > 0) {
+      setIsFailedDraftConfirmOpen(true);
+      return;
+    }
+    void handleConfirm();
+  }
+
+  // [계속] — 실패한 초안을 다시 저장하지 않는다(서버는 그 초안을 모른다). 기존 확정만 실행하고,
+  // 이 선택을 서버 기록·이력에 남기지 않는다.
+  function handleFailedDraftContinue() {
+    setIsFailedDraftConfirmOpen(false);
+    void handleConfirm();
+  }
 
   async function handleConfirm() {
     if (confirmMutation.isPending) return; // 중복 confirm 방지
@@ -680,6 +737,7 @@ export function N5Panel({
                       if (el) blockRowRefs.current.set(block.id, el);
                       else blockRowRefs.current.delete(block.id);
                     }}
+                    onFailedDraftChange={handleFailedDraftChange}
                   />
                 ))}
               </ul>
@@ -699,16 +757,88 @@ export function N5Panel({
             모든 섹션이 제외되어 있어 저장할 수 없습니다. 최소 1개 섹션을 포함해 주세요.
           </p>
         )}
+        {/* 저장하지 못한 번역문은 disabled 조건에 넣지 않는다(PM 확정) — 확인창으로만 알린다 */}
         <button
+          ref={confirmButtonRef}
           type="button"
           data-testid="n5-confirm-button"
           disabled={allSectionsExcluded || confirmMutation.isPending}
           title={allSectionsExcluded ? '모든 섹션이 제외되어 있어 확정할 수 없습니다.' : undefined}
-          onClick={handleConfirm}
+          onClick={handleConfirmClick}
           className="w-full rounded-md bg-[#171717] px-8 py-3.5 text-[14px] font-medium tracking-[-0.42px] text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
         >
           {confirmMutation.isPending ? '저장하는 중…' : '저장하러 가기'}
         </button>
+      </div>
+      {isFailedDraftConfirmOpen && (
+        <FailedDraftConfirmDialog
+          count={failedDraftIds.size}
+          onCancel={closeFailedDraftConfirm}
+          onContinue={handleFailedDraftContinue}
+          returnFocusRef={confirmButtonRef}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * 저장하지 못한 번역문 확인창. N5 전용 Figma 프레임이 없어 M1 보관함 다운로드 모달(Figma 1056:9744)의
+ * dim·모달·제목/설명·footer 버튼 값과 동작(useModalDialog: 배경 inert, focus trap, Escape=취소,
+ * 닫히면 [저장하러 가기]로 포커스 복귀)을 그대로 쓴다. 닫기 X·dim 클릭 닫기는 그 모달처럼 두지 않는다.
+ */
+function FailedDraftConfirmDialog({
+  count,
+  onCancel,
+  onContinue,
+  returnFocusRef,
+}: {
+  count: number;
+  onCancel: () => void;
+  onContinue: () => void;
+  returnFocusRef: RefObject<HTMLButtonElement | null>;
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useModalDialog(dialogRef, { onClose: onCancel, returnFocusRef });
+
+  return (
+    <div data-testid="n5-failed-draft-dim" className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(23,23,23,0.4)]">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="n5-failed-draft-title"
+        aria-describedby="n5-failed-draft-description"
+        tabIndex={-1}
+        data-testid="n5-failed-draft-confirm"
+        className="flex w-[420px] max-w-[calc(100vw-32px)] flex-col items-center gap-8 rounded-[8px] border border-[#eaeaea] bg-white px-5 pt-8 pb-5 shadow-[0_8px_12px_rgba(0,0,0,0.08)] outline-none"
+      >
+        <div className="flex w-full flex-col items-center gap-2 text-center leading-[normal]">
+          <h2 id="n5-failed-draft-title" className="text-[20px] leading-[24px] font-semibold tracking-[-0.4px] text-[#171717]">
+            {failedDraftConfirmTitle(count)}
+          </h2>
+          <p id="n5-failed-draft-description" className="text-[14px] leading-[17px] tracking-[-0.14px] text-[#707070]">
+            {FAILED_DRAFT_CONFIRM_DESCRIPTION}
+          </p>
+        </div>
+        <div className="flex w-full items-center gap-3">
+          <button
+            type="button"
+            onClick={onCancel}
+            data-testid="n5-failed-draft-cancel"
+            className="flex h-[45px] min-w-0 flex-1 items-center justify-center rounded-[6px] border border-[#eaeaea] bg-white px-8"
+          >
+            <span className="px-3 text-[14px] leading-[17px] font-medium tracking-[-0.42px] whitespace-nowrap text-[#171717]">취소</span>
+          </button>
+          <button
+            type="button"
+            onClick={onContinue}
+            data-testid="n5-failed-draft-continue"
+            className="flex h-[45px] min-w-0 flex-1 items-center justify-center rounded-[6px] bg-[#171717] px-8"
+          >
+            <span className="px-3 text-[14px] leading-[17px] font-medium tracking-[-0.42px] whitespace-nowrap text-white">계속</span>
+          </button>
+        </div>
       </div>
     </div>
   );
