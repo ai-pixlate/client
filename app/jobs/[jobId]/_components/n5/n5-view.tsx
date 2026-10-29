@@ -81,6 +81,17 @@ function N5Loaded({
     setRevealRequestSeq((seq) => seq + 1);
   }
 
+  // 섹션 제외 저장 성공 — 그 섹션 안에 선택(섹션 또는 블록)이 있으면 비운다. 제외된 섹션은
+  // 캔버스에 블록 표시·선택 태그를 그리지 않으므로, 선택만 남으면 보이지 않는 선택이 된다.
+  // 저장 응답을 기다린 뒤 불리므로 그 사이 바뀐 선택을 보도록 함수형 갱신을 쓴다.
+  // 우측 패널의 블록 목록 자체는 바꾸지 않는다(제외 섹션 블록 표시 정책은 이번 범위 밖).
+  function handleSectionExcluded(sectionId: number) {
+    setSelectedSectionId((current) => (current === sectionId ? null : current));
+    setSelectedBlockId((current) =>
+      current != null && blocks.find((block) => block.id === current)?.sectionId === sectionId ? null : current,
+    );
+  }
+
   return (
     <div className="flex h-full w-full bg-white">
       {/* 좌측 rail — 나가기 버튼 + StepNav. Figma(544:3168) 실측: 나가기
@@ -128,6 +139,7 @@ function N5Loaded({
           Figma 실측(52px, 1920 기준 2.708vw)을 상한으로 쓴다. */}
       <div className="flex h-full min-h-0 min-w-0 flex-1 gap-[clamp(20px,2.708vw,52px)] pr-[clamp(45px,3.125vw,60px)] pl-[clamp(0px,calc(6.25vw_-_80px),40px)]">
         <N5Viewport
+          jobId={jobId}
           preview={preview}
           blocks={blocks}
           viewMode={viewMode}
@@ -136,6 +148,7 @@ function N5Loaded({
           revealRequestSeq={revealRequestSeq}
           onSelectBlock={handleSelectBlock}
           onSelectSection={handleSelectSection}
+          onSectionExcluded={handleSectionExcluded}
         />
         <N5Panel
           jobId={jobId}

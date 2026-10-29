@@ -126,20 +126,31 @@ export const mockN5PreviewSections = [
   },
 ];
 
-export const mockN5PreviewHeight =
-  mockN5PreviewSections
-    .filter((s) => s.bucket === 'include')
-    .reduce((sum, s) => sum + s.height, 0) * N5_SCALE;
+export type MockN5PreviewSection = Omit<(typeof mockN5PreviewSections)[number], 'bucket' | 'excludedStage'> & {
+  bucket: 'include' | 'exclude';
+  excludedStage: 'N3' | 'N5' | null;
+};
 
-export function buildMockN5Preview() {
+/**
+ * sections — 현재 bucket/excludedStage 가 반영된 목록(MSW 가 SEC-03 PATCH 로 바꾼 상태).
+ * 생략하면 fixture 초기값. displayTop·previewHeight 는 서버처럼 include 만 누적해 다시 계산한다
+ * (초기값 그대로면 fixture 에 손으로 채운 값과 같다).
+ */
+export function buildMockN5Preview(sections: readonly MockN5PreviewSection[] = mockN5PreviewSections) {
+  let cursor = 0;
+  const withDisplayTop = sections.map((s) => {
+    const section = { ...s, displayTop: cursor };
+    if (s.bucket === 'include') cursor += s.height;
+    return section;
+  });
   return {
     maxOriginalWidth: N5_MAX_ORIGINAL_WIDTH,
-    originalHeight: mockN5PreviewHeight / N5_SCALE,
+    originalHeight: cursor,
     previewWidth: N5_MAX_ORIGINAL_WIDTH * N5_SCALE,
-    previewHeight: mockN5PreviewHeight,
+    previewHeight: cursor * N5_SCALE,
     scale: N5_SCALE,
     align: 'left' as const,
-    sections: mockN5PreviewSections,
+    sections: withDisplayTop,
   };
 }
 

@@ -297,6 +297,15 @@ export function areAllSectionsExcluded(sections: PreviewSectionViewModel[]): boo
   return sections.every((section) => section.bucket === 'exclude');
 }
 
+/**
+ * N5 [되돌리기] 가능 여부. SEC-03 계약: "N5에서 excludedStage=N3 조작 시 409 INVALID_STATE" —
+ * 서버가 거절하는 바로 그 조건만 옮긴다(새 판단 규칙을 만들지 않는다). CFM-03 계약상
+ * N3 제외 섹션은 프리뷰에 오지 않지만, 오더라도 N5 에서 포함으로 바꾸는 버튼을 내지 않는다.
+ */
+export function canRestoreSectionInN5(section: Pick<PreviewSectionViewModel, 'render' | 'excludedStage'>): boolean {
+  return section.render.status === 'excluded' && section.excludedStage !== 'N3';
+}
+
 /* ------------------------------------------------------------------ *
  * 7. POST /jobs/{jobId}/confirm — acknowledgedWarnings 구성
  *

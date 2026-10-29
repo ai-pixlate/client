@@ -18,6 +18,8 @@
  * 그 값을 고르는 것과 409 처리는 이 모듈 밖(저장 orchestration)의 책임이다.
  */
 
+import type { N5SaveNotice } from './messages';
+
 /** FE 내부 조작 종류 — API 계약과 무관하다 */
 export type N5EditKind =
   | 'translation'
@@ -92,14 +94,8 @@ export function clearHistory(): N5History {
 
 export type N5SaveOperation = 'edit' | 'undo' | 'redo';
 
-export type N5SaveNotice = 'edit-failed' | 'undo-failed' | 'redo-failed';
-
-/** PM 확정 문구(10/29). 화면마다 복제하지 않고 여기서만 관리한다 */
-export const N5_SAVE_NOTICE_MESSAGES: Record<N5SaveNotice, string> = {
-  'undo-failed': '실행 취소를 하지 못했습니다. 현재 상태를 유지합니다.',
-  'redo-failed': '재실행을 못했습니다. 현재 상태를 유지합니다.',
-  'edit-failed': '변경사항을 저장하지 못했습니다. 마지막으로 저장된 상태로 돌아갑니다.',
-};
+/** 안내 종류. 문구는 lib/n5/messages.ts 의 N5_SAVE_NOTICE_MESSAGES 에서 고른다 */
+export type { N5SaveNotice };
 
 export interface N5EditSession {
   history: N5History;

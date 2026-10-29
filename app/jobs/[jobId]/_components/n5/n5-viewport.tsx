@@ -2,7 +2,10 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
+import { canRestoreSectionInN5 } from '@/lib/n5/adapter';
 import type { BlockViewModel, PreviewSectionViewModel, PreviewViewModel } from '@/lib/n5/adapter';
+import { N5_SAVE_NOTICE_MESSAGES } from '@/lib/n5/messages';
+import { useUpdateSectionBucketMutation } from '@/lib/queries/pixlate';
 import { getBlockDisplayRect, getBlockHitRect, type DisplayRect } from '@/lib/n5/coordinates';
 import {
   ZOOM_BUTTON_STEP,
@@ -99,7 +102,10 @@ interface CanvasSlice {
   width: number;
   originalUrl: string | null;
   render: PreviewSectionViewModel['render'];
+  /** 서버 bucket/excludedStage 파생(render.status==='excluded') — 제외 여부의 정본 */
   isExcluded: boolean;
+  /** N5 [되돌리기] 가능 여부. N3 에서 제외된 섹션은 false(canRestoreSectionInN5) */
+  canRestore: boolean;
 }
 
 /**
@@ -117,6 +123,7 @@ function buildSectionSlices(sections: PreviewSectionViewModel[], scale: number):
     originalUrl: section.originalUrl,
     render: section.render,
     isExcluded: section.render.status === 'excluded',
+    canRestore: canRestoreSectionInN5(section),
   }));
 }
 
@@ -270,7 +277,8 @@ function ImageLayer({
   blockIndexById,
   mode,
   selectionTool,
-  excludedSectionIds,
+  pendingSectionIds,
+  failedSectionId,
   onExcludeSection,
   onRestoreSection,
   scale,
@@ -289,8 +297,10 @@ function ImageLayer({
    *  그 block이 아니라 소속 section만 선택한다(block 선택은 유지/해제하지
    *  않고, 애초에 block 클릭 자체를 section 클릭으로 취급한다). */
   selectionTool: 'text' | 'section';
-  /** F-CFM-14 — 로컬로 제외 처리된 sectionId 집합. slice 자체는 그대로 두고 위에 오버레이만 덮는다. */
-  excludedSectionIds: Set<number>;
+  /** SEC-03 저장 중인 sectionId — 그 섹션의 제외하기/되돌리기만 잠시 막는다(다른 섹션은 그대로). */
+  pendingSectionIds: ReadonlySet<number>;
+  /** 마지막 SEC-03 저장이 실패한 sectionId — 그 섹션 위에 실패 안내를 띄운다. */
+  failedSectionId: number | null;
   onExcludeSection: (sectionId: number) => void;
   onRestoreSection: (sectionId: number) => void;
   scale: number;
@@ -310,7 +320,8 @@ function ImageLayer({
             : slice.render.status === 'ready'
               ? slice.render.url
               : null;
-        const isExcluded = excludedSectionIds.has(slice.sectionId);
+        const isExcluded = slice.isExcluded;
+        const isSaving = pendingSectionIds.has(slice.sectionId);
         // renderedUrl===null(렌더 전)이고 제외도 아닌데 「번역 후」를 보고 있는
         // 경우 — 상위(N5View)가 이 상태면 번역 후 자체를 disabled 처리하므로
         // 실제로는 거의 도달하지 않지만, 방어적으로 안내 문구를 보여준다(빈
@@ -374,32 +385,49 @@ function ImageLayer({
                 className="absolute inset-0 flex items-center justify-center"
                 style={{ backgroundColor: 'rgba(23, 23, 23, 0.55)' }}
               >
-                <button
-                  type="button"
-                  data-testid={`n5-section-restore-${slice.sectionId}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onRestoreSection(slice.sectionId);
-                  }}
-                  className="rounded-full bg-white px-3 py-1.5 text-[12px] font-medium text-[#171717] shadow-[2px_2px_24px_0px_rgba(0,0,0,0.06)] hover:bg-gray-50"
-                >
-                  되돌리기
-                </button>
+                {/* N3 에서 제외된 섹션은 N5 에서 되살리지 않는다(SEC-03: 409 INVALID_STATE) — 버튼을 내지 않는다 */}
+                {slice.canRestore && (
+                  <button
+                    type="button"
+                    data-testid={`n5-section-restore-${slice.sectionId}`}
+                    disabled={isSaving}
+                    aria-busy={isSaving}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onRestoreSection(slice.sectionId);
+                    }}
+                    className="rounded-full bg-white px-3 py-1.5 text-[12px] font-medium text-[#171717] shadow-[2px_2px_24px_0px_rgba(0,0,0,0.06)] hover:bg-gray-50 disabled:cursor-not-allowed disabled:hover:bg-white"
+                  >
+                    되돌리기
+                  </button>
+                )}
               </div>
             ) : (
               <div className="absolute top-2 right-2 z-10">
                 <button
                   type="button"
                   data-testid={`n5-section-exclude-${slice.sectionId}`}
+                  disabled={isSaving}
+                  aria-busy={isSaving}
                   onClick={(e) => {
                     e.stopPropagation();
                     onExcludeSection(slice.sectionId);
                   }}
-                  className="rounded-full bg-white/90 px-3 py-1.5 text-[12px] font-medium text-[#171717] shadow-[2px_2px_24px_0px_rgba(0,0,0,0.06)] hover:bg-white"
+                  className="rounded-full bg-white/90 px-3 py-1.5 text-[12px] font-medium text-[#171717] shadow-[2px_2px_24px_0px_rgba(0,0,0,0.06)] hover:bg-white disabled:cursor-not-allowed disabled:hover:bg-white/90"
                 >
                   제외하기
                 </button>
               </div>
+            )}
+            {failedSectionId === slice.sectionId && (
+              // 저장 실패 안내 — 화면은 이미 마지막 저장 상태(서버 정본)다. 문구는 PM 확정값(lib/n5/messages.ts).
+              <p
+                role="alert"
+                data-testid={`n5-section-save-error-${slice.sectionId}`}
+                className="absolute right-2 bottom-2 left-2 z-10 rounded-[6px] border border-[#eaeaea] bg-white px-3 py-2 text-[11px] text-red-500"
+              >
+                {N5_SAVE_NOTICE_MESSAGES['edit-failed']}
+              </p>
             )}
           </div>
         );
@@ -432,6 +460,7 @@ interface Transform {
 const INITIAL_TRANSFORM: Transform = { zoom: 1, pan: { x: 0, y: 0 } };
 
 export function N5Viewport({
+  jobId,
   preview,
   blocks,
   viewMode,
@@ -440,7 +469,9 @@ export function N5Viewport({
   revealRequestSeq,
   onSelectBlock,
   onSelectSection,
+  onSectionExcluded,
 }: {
+  jobId: string;
   preview: PreviewViewModel;
   blocks: BlockViewModel[];
   /** 11일차부터 이 컴포넌트가 소유하지 않는다 — 토글 UI가 N5Panel로 이동했다. */
@@ -457,6 +488,8 @@ export function N5Viewport({
   revealRequestSeq: number;
   onSelectBlock: (block: BlockViewModel) => void;
   onSelectSection: (sectionId: number) => void;
+  /** 제외 저장 성공 — 상위가 그 섹션 안의 선택을 정리한다(제외된 섹션에 선택이 남지 않게). */
+  onSectionExcluded: (sectionId: number) => void;
 }) {
   const [transform, setTransform] = useState<Transform>(INITIAL_TRANSFORM);
   const [isSpaceHeld, setIsSpaceHeld] = useState(false);
@@ -485,31 +518,56 @@ export function N5Viewport({
     }
   }, [selectedBlockId, selectedSectionId, onSelectSection]);
 
-  // F-CFM-14 — N5에서 제외된 section의 회색 오버레이(sectionId 기준 로컬 state).
-  // 서버 render.status==='excluded'(bucket/excludedStage 파생)를 초기값으로만
-  // 씨드하고, 이후로는 서버와 왕복하지 않는다 — 제외하기/되돌리기 둘 다 이
-  // Set을 add/delete할 뿐이다.
-  const [excludedSectionIds, setExcludedSectionIds] = useState<Set<number>>(
-    () => new Set(preview.sections.filter((s) => s.render.status === 'excluded').map((s) => s.id)),
+  // F-CFM-14 — N5 섹션 제외·되돌리기는 SEC-03(PATCH /jobs/{jobId}/sections/{sectionId},
+  // N3·N5 공용)으로 저장한다. 제외 여부의 정본은 프리뷰 응답의 bucket/excludedStage
+  // (slice.isExcluded)뿐이고, 이 컴포넌트는 "저장 중"과 "마지막 실패"만 들고 있다.
+  //
+  // 저장이 끝난 뒤에 반영한다(낙관적 반영 안 함): 클릭 → 그 섹션 버튼만 잠금 → PATCH →
+  // 성공하면 응답 bucket 으로 프리뷰 캐시 갱신 + 프리뷰 재조회, 실패하면 화면은 손대지 않은
+  // 마지막 저장 상태 그대로 + 안내(재조회로 서버 정본과 다시 맞춘다).
+  //
+  // Undo/Redo 연결 지점(아직 연결하지 않음): 아래 saveSectionBucket 의 성공 분기에서
+  // pushCommitted({ kind: 'section-exclude' | 'section-restore', target: { type: 'section', id },
+  // before, after }) 를 부르면 된다 — 실패 분기는 이력에 넣지 않는다(lib/n5/history.ts).
+  const { mutateAsync: patchSectionBucket } = useUpdateSectionBucketMutation(jobId);
+  const [pendingSectionIds, setPendingSectionIds] = useState<ReadonlySet<number>>(() => new Set());
+  // 같은 tick 의 연속 클릭은 state 갱신 전에 들어오므로 ref 로 한 번 더 막는다
+  const pendingSectionIdsRef = useRef(new Set<number>());
+  const [failedSectionId, setFailedSectionId] = useState<number | null>(null);
+
+  const saveSectionBucket = useCallback(
+    async (sectionId: number, bucket: 'include' | 'exclude') => {
+      if (pendingSectionIdsRef.current.has(sectionId)) return;
+      pendingSectionIdsRef.current.add(sectionId);
+      setPendingSectionIds(new Set(pendingSectionIdsRef.current));
+      setFailedSectionId((prev) => (prev === sectionId ? null : prev));
+      try {
+        // mutateAsync — 섹션마다 따로 끝을 기다린다(mutate 의 호출별 콜백은 마지막 호출에만 불린다)
+        await patchSectionBucket({ sectionId, bucket });
+        if (bucket === 'exclude') onSectionExcluded(sectionId);
+      } catch {
+        setFailedSectionId(sectionId);
+      } finally {
+        pendingSectionIdsRef.current.delete(sectionId);
+        setPendingSectionIds(new Set(pendingSectionIdsRef.current));
+      }
+    },
+    [patchSectionBucket, onSectionExcluded],
   );
 
-  const handleExcludeSection = useCallback((sectionId: number) => {
-    setExcludedSectionIds((prev) => {
-      if (prev.has(sectionId)) return prev;
-      const next = new Set(prev);
-      next.add(sectionId);
-      return next;
-    });
-  }, []);
+  const handleExcludeSection = useCallback(
+    (sectionId: number) => {
+      void saveSectionBucket(sectionId, 'exclude');
+    },
+    [saveSectionBucket],
+  );
 
-  const handleRestoreSection = useCallback((sectionId: number) => {
-    setExcludedSectionIds((prev) => {
-      if (!prev.has(sectionId)) return prev;
-      const next = new Set(prev);
-      next.delete(sectionId);
-      return next;
-    });
-  }, []);
+  const handleRestoreSection = useCallback(
+    (sectionId: number) => {
+      void saveSectionBucket(sectionId, 'include');
+    },
+    [saveSectionBucket],
+  );
 
   const viewportRef = useRef<HTMLDivElement>(null);
   const spaceHeldRef = useRef(false);
@@ -523,9 +581,9 @@ export function N5Viewport({
     transformRef.current = transform;
   }, [transform]);
 
-  // excludedSectionIds는 일부러 이 의존성 배열에 넣지 않는다 — F-CFM-14
-  // 되돌리기는 오버레이 표시 여부만 바꿀 뿐, slices(위치/높이) 자체를
-  // 다시 계산하면 안 된다(스택 재배치 금지).
+  // F-CFM-14 — 제외·되돌리기 후 프리뷰가 다시 와도 slice 높이는 section.height × scale
+  // 그대로다(bucket 과 무관). 서버 displayTop(include 만 누적)은 쓰지 않고 모든 섹션을
+  // 순서대로 쌓으므로, 제외된 섹션도 같은 자리·같은 높이를 유지한다(스택 재배치 없음).
   const slices = useMemo(
     () => buildSectionSlices(preview.sections, preview.scale),
     [preview.sections, preview.scale],
@@ -969,7 +1027,8 @@ export function N5Viewport({
               blockIndexById={blockIndexById}
               mode={viewMode}
               selectionTool={selectionTool}
-              excludedSectionIds={excludedSectionIds}
+              pendingSectionIds={pendingSectionIds}
+              failedSectionId={failedSectionId}
               onExcludeSection={handleExcludeSection}
               onRestoreSection={handleRestoreSection}
               scale={preview.scale}

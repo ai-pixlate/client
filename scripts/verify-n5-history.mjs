@@ -7,7 +7,6 @@
 import {
   EMPTY_N5_HISTORY,
   INITIAL_N5_EDIT_SESSION,
-  N5_SAVE_NOTICE_MESSAGES,
   canRedo,
   canStartSave,
   canUndo,
@@ -24,6 +23,7 @@ import {
   resolveSaveSucceeded,
   setLocalValue,
 } from '../lib/n5/history.ts';
+import { N5_SAVE_NOTICE_MESSAGES } from '../lib/n5/messages.ts';
 
 let pass = 0;
 let fail = 0;

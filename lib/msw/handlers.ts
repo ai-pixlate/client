@@ -12,7 +12,13 @@ import {
   mockN6Components,
   mockN6Validation,
 } from '@/lib/mock-api/fixtures';
-import { mockN5Job, mockN5Blocks, mockN5PreviewSections, buildMockN5Preview } from '@/lib/mock-api/n5-fixtures';
+import {
+  mockN5Job,
+  mockN5Blocks,
+  mockN5PreviewSections,
+  buildMockN5Preview,
+  type MockN5PreviewSection,
+} from '@/lib/mock-api/n5-fixtures';
 import { mockLibraryCards } from '@/lib/mock-api/library-fixtures';
 import { mockMasterCountries, mockMasterLanguages } from '@/lib/mock-api/master-fixtures';
 import type { ApiJob, ApiJobAsyncTaskItem, ApiTextBlock } from '@/lib/api/n5-schema';
@@ -54,6 +60,35 @@ const sectionState = new Map<string, {
     { bucket: s.bucket, exclusionReason: s.exclusionReason, excludedStage: s.excludedStage },
   ])
 );
+
+/**
+ * N5 프리뷰 섹션의 현재 bucket/excludedStage — SEC-03(N3·N5 공용 PATCH)이 숫자 id 501~505
+ * 를 받으면 이 목록을 바꾸고, GET /preview 와 confirm 의 전 섹션 제외 검사가 이 목록을 읽는다.
+ * 위 sectionState(N3 fixture, 1~5)와 id 가 겹치지 않아 서로 영향을 주지 않는다.
+ */
+let n5PreviewSectionState: MockN5PreviewSection[] = mockN5PreviewSections.map((s) => ({ ...s }));
+
+/** N5 프리뷰 섹션 → SEC-03 응답 Section. 이 fixture 에 없는 판정·bbox 정보는 null/빈 배열로 둔다. */
+function toWireN5Section(section: MockN5PreviewSection): ApiSection {
+  const displayTop = buildMockN5Preview(n5PreviewSectionState).sections.find((s) => s.id === section.id)?.displayTop ?? null;
+  return {
+    id: section.id,
+    sectionOrder: section.sectionOrder,
+    sourceImageId: section.sourceImageId,
+    topOffset: null,
+    displayTop,
+    height: section.height,
+    bbox: null,
+    category: null,
+    bucket: section.bucket,
+    exclusionReason: null,
+    excludedStage: section.excludedStage,
+    inpaintStatus: null,
+    warningBadge: null,
+    verdicts: [],
+    signals: [],
+  };
+}
 
 /**
  * 2단계(API 계약 정합화): fixture 내부 문자열 id('sec_01', 'src_mock_001')를
@@ -184,6 +219,7 @@ function resetJobState() {
   n6RenderTaskState.clear();
   n6ExportArtifactState.clear();
   mockJobSavedAt = null;
+  n5PreviewSectionState = mockN5PreviewSections.map((s) => ({ ...s }));
 }
 
 /**
@@ -934,6 +970,25 @@ export const handlers = [
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
 
     const sectionIdNum = Number(params.sectionId);
+
+    // N5 프리뷰 섹션(501~505) — 계약: "N5에서 excludedStage=N3 조작 시 409 INVALID_STATE"
+    const n5Section = n5PreviewSectionState.find((s) => s.id === sectionIdNum);
+    if (n5Section) {
+      const n5Body = (await request.json()) as Record<string, unknown>;
+      if (n5Body.action !== 'restore' && n5Body.action !== 'exclude') {
+        return badRequest("action은 'restore' 또는 'exclude'여야 합니다");
+      }
+      if (jobState.currentStep === 'N5' && n5Section.excludedStage === 'N3') {
+        return contractError(409, 'INVALID_STATE', 'N3에서 제외된 섹션은 N5에서 변경할 수 없습니다');
+      }
+      const updated: MockN5PreviewSection =
+        n5Body.action === 'restore'
+          ? { ...n5Section, bucket: 'include', excludedStage: null }
+          : { ...n5Section, bucket: 'exclude', excludedStage: (jobState.currentStep as 'N3' | 'N5' | undefined) ?? null };
+      n5PreviewSectionState = n5PreviewSectionState.map((s) => (s.id === updated.id ? updated : s));
+      return HttpResponse.json(toWireN5Section(updated));
+    }
+
     const sec = mockSectionsResponse.sections.find((s) => toNumericId(s.sectionId) === sectionIdNum);
     if (!sec || !sectionState.has(sec.sectionId)) {
       return notFound(`Section '${params.sectionId}' not found`);
@@ -1037,7 +1092,7 @@ export const handlers = [
   http.get('/jobs/:jobId/preview', ({ params }) => {
     const jobId = params.jobId as string;
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
-    return HttpResponse.json(buildMockN5Preview());
+    return HttpResponse.json(buildMockN5Preview(n5PreviewSectionState));
   }),
 
   // ──────────────────────────────────────────
@@ -1229,7 +1284,7 @@ export const handlers = [
     const jobId = params.jobId as string;
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
 
-    const hasIncludedSection = mockN5PreviewSections.some((s) => s.bucket === 'include');
+    const hasIncludedSection = n5PreviewSectionState.some((s) => s.bucket === 'include');
     if (!hasIncludedSection) {
       return HttpResponse.json(
         {
