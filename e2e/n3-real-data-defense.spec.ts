@@ -39,7 +39,10 @@ async function reachN3(page: Page): Promise<void> {
   await selectFirstValidOption(page, 1); // 언어
 
   await page.getByRole('button', { name: '선택하기' }).click();
-  await page.getByRole('dialog', { name: '카테고리 선택' }).getByRole('button', { name: '바디/헤어' }).click();
+  await page.getByRole('dialog', { name: '카테고리 선택' }).getByRole('button', { name: '선케어' }).click();
+  await page.getByRole('dialog', { name: '카테고리 선택' }).getByRole('button', { name: '선크림' }).click();
+  await page.getByRole('dialog', { name: '카테고리 선택' }).getByRole('button', { name: '확인' }).click(); // PRD F-SRC-04 — [확인]으로 확정
+  await page.getByRole('checkbox', { name: /외부 AI 서비스로 전송됨을 확인했습니다/ }).check(); // F-ACC-04 책임 동의
 
   await selectFirstValidOption(page, 2); // 규제 분류
 

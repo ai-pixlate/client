@@ -19,7 +19,7 @@ test.describe('규제 분류 — OpenAPI RegulatoryClass 4종', () => {
     ]);
 
     const unknownHelper = page.getByText('잘 모름을 선택하면 화장품 기준으로 검사됩니다.');
-    const combinationHelper = page.getByText('복합 제품은 현재 OTC 기준으로 검사됩니다.');
+    const combinationHelper = page.getByText('복합 제품은 고른 OTC 종류와 같은 기준으로 검사합니다(화장품 규칙 포함).', { exact: false });
     await select.selectOption('cosmetic');
     await expect(unknownHelper).toHaveCount(0);
     await expect(combinationHelper).toHaveCount(0);

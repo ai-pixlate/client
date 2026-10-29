@@ -111,6 +111,13 @@ async function fillRequired(page: Page, regulatoryClass = 'cosmetic') {
   await page.getByRole('combobox').nth(0).selectOption('US');
   await page.getByRole('combobox').nth(1).selectOption('en');
   await page.getByRole('combobox').nth(2).selectOption(regulatoryClass);
+  // 카테고리(F-SRC-04 필수 — [확인]으로 확정)와 책임 동의(F-ACC-04)
+  await page.getByRole('button', { name: '선택하기' }).click();
+  const categoryModal = page.getByRole('dialog', { name: '카테고리 선택' });
+  await categoryModal.getByRole('button', { name: '선케어' }).click();
+  await categoryModal.getByRole('button', { name: '선크림' }).click();
+  await categoryModal.getByRole('button', { name: '확인' }).click();
+  await page.getByRole('checkbox', { name: /외부 AI 서비스로 전송됨을 확인했습니다/ }).check();
 }
 
 async function addFiles(page: Page, files: ReturnType<typeof png>[]) {

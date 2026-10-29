@@ -35,10 +35,13 @@ test('N1에서 N5 검수 화면까지 기본 작업 흐름을 완료한다', asy
   await selectFirstValidOption(page, 0); // 국가
   await selectFirstValidOption(page, 1); // 언어
 
-  // 카테고리 — "선택하기" → 모달(381:6293)에서 하위 데이터가 없는 최상위
-  // 항목("바디/헤어")을 눌러 즉시 선택·닫힘 처리한다.
+  // 카테고리 — "선택하기" → 모달(381:6293)에서
+  // 소분류가 없는 중분류("선케어 > 선크림")를 고른 뒤 [확인]으로 확정한다.
   await page.getByRole('button', { name: '선택하기' }).click();
-  await page.getByRole('dialog', { name: '카테고리 선택' }).getByRole('button', { name: '바디/헤어' }).click();
+  await page.getByRole('dialog', { name: '카테고리 선택' }).getByRole('button', { name: '선케어' }).click();
+  await page.getByRole('dialog', { name: '카테고리 선택' }).getByRole('button', { name: '선크림' }).click();
+  await page.getByRole('dialog', { name: '카테고리 선택' }).getByRole('button', { name: '확인' }).click(); // PRD F-SRC-04 — [확인]으로 확정
+  await page.getByRole('checkbox', { name: /외부 AI 서비스로 전송됨을 확인했습니다/ }).check(); // F-ACC-04 책임 동의
 
   await selectFirstValidOption(page, 2); // 규제 분류(인덱스가 3→2로 당겨졌다)
 
