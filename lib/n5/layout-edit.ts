@@ -10,12 +10,20 @@
  * 충돌 계산·자동 회피를 하지 않는다. 제품 최소 크기는 없고 0 이하 크기만 막는다.
  * 가운데선 snap 은 섹션 세로·가로 중앙선만 대상이다(다른 블록·가장자리·슬롯 snap 없음).
  *
- * 아직 값이 확정되지 않은 것은 인자로 받는다: [+][-] 한 번의 배율 변화량(step),
- * snap 판정 거리(tolerance). 상수로 박지 않는다.
+ * 계산 함수는 [+][-] 한 번의 배율 변화량(step)과 snap 판정 거리(tolerance)를 인자로 받는다.
+ * N5 제품에서 쓸 step 은 아래 N5_FONT_SCALE_STEP 하나로만 관리한다(화면마다 0.05 를 적지 않는다).
+ * snap tolerance 는 아직 미확정이라 상수가 없다.
  */
 
 import type { BoundingBox } from '../api/types';
 import type { Point, Size } from './viewport';
+
+/**
+ * [+][-] 한 번의 사용자 글자 배율 변화량 — PM 확정(10/29): 1.00 → 1.05 → 1.10 처럼 0.05 씩 더하고 뺀다.
+ * API 계약 값이 아니라 FE 제품 동작 상수다. 박스는 같은 비율(nextScale / currentScale)로 바뀌고
+ * 중심을 유지하며, 섹션을 넘으면 크기는 그대로 안쪽으로 민다(scaleBoxAndFont).
+ */
+export const N5_FONT_SCALE_STEP = 0.05;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
@@ -73,7 +81,7 @@ export function effectiveFontSize(baseFontSize: number, userScale: number): numb
 
 /**
  * [+][-] 한 번의 다음 배율. step 을 더하거나 빼고, 덧셈 오차(0.1+0.2 류)만 지운다 —
- * 특정 단위(예: 0.05)의 격자로 맞추지 않는다(step 은 아직 PM 확인 전 값이다).
+ * 특정 단위의 격자로 반올림하지 않는다. 제품에서는 step 에 N5_FONT_SCALE_STEP 을 넘긴다.
  */
 export function nextUserScale(currentScale: number, step: number, direction: 'increase' | 'decrease'): number {
   const raw = direction === 'increase' ? currentScale + step : currentScale - step;

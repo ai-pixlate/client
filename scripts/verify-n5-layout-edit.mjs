@@ -5,6 +5,7 @@
  */
 
 import {
+  N5_FONT_SCALE_STEP,
   canDecreaseScale,
   canIncreaseScale,
   clampBoxToSection,
@@ -34,7 +35,7 @@ const sameBox = (a, b) => a && b && near(a.x, b.x) && near(a.y, b.y) && near(a.w
 const show = (b) => JSON.stringify(b);
 const SECTION = { width: 400, height: 300 };
 const BOX = { x: 100, y: 100, width: 80, height: 40 };
-// 이 계산은 step 을 인자로 받는다 — 아래 0.05 는 시험용 값이지 제품 상수가 아니다
+// 계산 함수는 step 을 인자로 받는다 — 아래 [1]~[7] 은 인자 기반 시험, [8] 은 제품 상수(N5_FONT_SCALE_STEP) 시험
 const STEP = 0.05;
 
 console.log('\n[1] move — 위치만 섹션 안으로');
@@ -142,6 +143,33 @@ console.log('\n[4] snap — 섹션 중앙선만, tolerance 는 인자');
   const wide = snapBoxToSectionCenter({ x: 0, y: 0, width: 500, height: 40 }, SECTION, 1000);
   check('섹션보다 큰 축은 snap 하지 않는다', !wide.snappedX && wide.box.x === 0, show(wide));
   check('크기는 바꾸지 않는다', both.box.width === 80 && both.box.height === 40);
+}
+
+console.log('\n[8] 제품 step(N5_FONT_SCALE_STEP) — PM 확정 [+][-] 규칙');
+{
+  const P = N5_FONT_SCALE_STEP;
+  check('제품 step 은 0.05', P === 0.05);
+  check('1.00 → [+] → 1.05', nextUserScale(1, P, 'increase') === 1.05);
+  check('1.05 → [+] → 1.10', nextUserScale(1.05, P, 'increase') === 1.1);
+  check('1.10 → [-] → 1.05', nextUserScale(1.1, P, 'decrease') === 1.05);
+  check('0.05 에서는 다음 [-] 불가(배율 0 이하)', !canDecreaseScale({ box: BOX, currentScale: 0.05, step: P, section: SECTION }));
+  check('0.10 에서는 [-] 가능', canDecreaseScale({ box: BOX, currentScale: 0.1, step: P, section: SECTION }));
+
+  const up = scaleBoxAndFont({ box: BOX, currentScale: 1, nextScale: nextUserScale(1, P, 'increase'), section: SECTION });
+  check('박스도 1.05/1.00 비율로 확대 · 중심 유지', sameBox(up, { x: 98, y: 99, width: 84, height: 42 }), show(up));
+  const down = up && scaleBoxAndFont({ box: up, currentScale: 1.05, nextScale: nextUserScale(1.05, P, 'decrease'), section: SECTION });
+  check('확대 후 축소하면 원래 박스로 돌아온다', sameBox(down, BOX), show(down));
+
+  const edge = { x: 320, y: 100, width: 80, height: 40 };
+  const shifted = scaleBoxAndFont({ box: edge, currentScale: 1, nextScale: 1.05, section: SECTION });
+  check('경계를 넘으면 크기는 유지하고 안쪽으로 민다', sameBox(shifted, { x: 316, y: 99, width: 84, height: 42 }), show(shifted));
+
+  const wide = { x: 0, y: 0, width: 390, height: 100 };
+  check('다음 확대가 섹션 폭을 넘으면 [+] 불가(390 × 1.05 = 409.5 > 400)', !canIncreaseScale({ box: wide, currentScale: 1, step: P, section: SECTION }));
+  const fits = { x: 0, y: 0, width: 380, height: 100 };
+  check('다음 확대가 섹션 안이면 [+] 가능(380 × 1.05 = 399)', canIncreaseScale({ box: fits, currentScale: 1, step: P, section: SECTION }));
+  const tall = { x: 0, y: 0, width: 100, height: 290 };
+  check('다음 확대가 섹션 높이를 넘으면 [+] 불가(290 × 1.05 = 304.5 > 300)', !canIncreaseScale({ box: tall, currentScale: 1, step: P, section: SECTION }));
 }
 
 console.log(`\n결과: PASS ${pass} / FAIL ${fail}\n`);
