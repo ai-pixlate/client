@@ -666,9 +666,11 @@ function NewJobPageInner() {
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {/* 헤더 — X 버튼이 좌측 rail로 옮겨가면서, 여기는 이제 제목/설명 행만
             남는다(N1 Figma 재정합 1단계). */}
-        <div className="shrink-0 px-10 pt-10 pb-6">
+        {/* Figma(525:3023) 실측 — rail(x36·w44) 뒤 본문 좌우 여백 60(업로더 x140 · 패널 오른쪽 끝 1860),
+            제목 top 60(h24) → 국가·언어 행 top 108(h39) → 본문 top 162(gap 15). */}
+        <div className="shrink-0 px-[60px] pt-[60px] pb-[15px]">
           <div className="flex items-center gap-4">
-            <h1 className="text-[20px] font-semibold tracking-[-0.02em] text-[#171717]">이미지 입력</h1>
+            <h1 className="text-[20px] leading-[24px] font-semibold tracking-[-0.02em] text-[#171717]">이미지 입력</h1>
             <p className="text-[14px] tracking-[-0.01em] text-[#707070]">
               번역할 원본 이미지를 등록하고 작업 조건을 설정합니다.
             </p>
@@ -686,7 +688,7 @@ function NewJobPageInner() {
                 <select
                   value={targetCountry}
                   onChange={(e) => handleCountryChange(e.target.value)}
-                  className="w-full appearance-none rounded-[6px] border border-[#eaeaea] bg-white px-[14px] py-[10px] text-[14px] tracking-[-0.01em] text-[#707070] outline-none focus:border-[#ff6a38]"
+                  className="h-[39px] w-full appearance-none rounded-[6px] border border-[#eaeaea] bg-white px-[14px] text-[14px] tracking-[-0.01em] text-[#707070] outline-none focus:border-[#ff6a38]"
                 >
                   <option value="">선택하세요</option>
                   {COUNTRY_OPTIONS.map((o) => (
@@ -719,7 +721,7 @@ function NewJobPageInner() {
                 <select
                   value={targetLanguage}
                   onChange={(e) => setTargetLanguage(e.target.value)}
-                  className="w-full appearance-none rounded-[6px] border border-[#eaeaea] bg-white px-[14px] py-[10px] text-[14px] tracking-[-0.01em] text-[#707070] outline-none focus:border-[#ff6a38]"
+                  className="h-[39px] w-full appearance-none rounded-[6px] border border-[#eaeaea] bg-white px-[14px] text-[14px] tracking-[-0.01em] text-[#707070] outline-none focus:border-[#ff6a38]"
                 >
                   <option value="">선택하세요</option>
                   {LANGUAGE_OPTIONS.map((o) => (
@@ -737,7 +739,7 @@ function NewJobPageInner() {
         {/* 본문: 좌 FileUploader + 우 열(필드 패널 · 동의 체크 · 버튼). Figma(525:3023)
             실측 — 업로더 x140~1324 · 우측 열 x1344(gap 20), 버튼 bottom 1010(아래 70),
             업로더 bottom 1000. 우측 열은 패널만 스크롤되고 동의 체크와 버튼은 늘 보인다. */}
-        <div className="flex min-h-0 flex-1 gap-5 px-10 pb-[70px]">
+        <div className="flex min-h-0 flex-1 gap-5 px-[60px] pb-[70px]">
           {/* 좌측 — 업로드 영역 */}
           <div
             data-testid="n1-image-dropzone"

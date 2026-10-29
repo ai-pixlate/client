@@ -9,8 +9,9 @@ import type { ApiRegulatoryClass } from '@/lib/api/job-schema';
 //
 // 닫힘: 474×39 흰 배경 · #eaeaea border · radius 6 · 14px #171717 + Chevron Down 14.
 // 열림: 같은 트리거(위쪽 radius만) 아래로 39px 항목 4개 — 12px Light #707070, 좌우 border,
-// 마지막 항목만 아래 border·radius. Figma는 목록이 아래 내용을 밀어내지만, 열 때마다 OTC 종류·
-// 다음 블록이 흔들리지 않도록 목록은 트리거 아래에 겹쳐(absolute) 띄운다.
+// 마지막 항목만 아래 border·radius. Figma처럼 목록은 레이아웃 흐름 안에서 아래 내용(OTC 종류 등)을 밀어낸다.
+// 우측 패널만 스크롤되고 동의·[다음]은 패널 밖이라 가려지지 않는다. 열 때와 키보드로 항목을 옮길 때
+// 목록·항목이 패널 스크롤 영역 밖이면 보이는 위치까지 스크롤한다.
 // 선택·hover 상태는 Figma에 없어 카테고리 트리 창의 항목 패턴(선택 #f5f5f5 + orange, hover gray-50)을
 // 그대로 쓴다. 공용 dropdown primitive가 없어(다른 화면은 native select) N1 전용으로 둔다.
 //
@@ -51,6 +52,7 @@ export function RegulatoryClassDropdown({
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
   const rootRef = useRef<HTMLDivElement>(null);
+  const listboxRef = useRef<HTMLUListElement>(null);
   const listboxId = useId();
   const optionId = (index: number) => `${listboxId}-option-${index}`;
   const selectedIndex = options.findIndex((o) => o.value === value);
@@ -70,6 +72,16 @@ export function RegulatoryClassDropdown({
     onChange(options[index].value);
     closeList();
   };
+
+  // 패널이 낮아 목록이 스크롤 영역 아래로 잘리면 보이게 한다(흐름 배치라 주변이 밀린다)
+  useEffect(() => {
+    if (open) listboxRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || activeIndex < 0) return;
+    listboxRef.current?.children[activeIndex]?.scrollIntoView({ block: 'nearest' });
+  }, [open, activeIndex]);
 
   // 바깥 클릭으로 닫는다 — 트리거·목록 안의 클릭은 각자 처리한다
   useEffect(() => {
@@ -125,7 +137,7 @@ export function RegulatoryClassDropdown({
   };
 
   return (
-    <div ref={rootRef} className="relative">
+    <div ref={rootRef}>
       <button
         type="button"
         role="combobox"
@@ -150,10 +162,12 @@ export function RegulatoryClassDropdown({
       </button>
       {open && (
         <ul
+          ref={listboxRef}
           id={listboxId}
           role="listbox"
           aria-label="규제 분류"
-          className="absolute top-full right-0 left-0 z-20 overflow-hidden rounded-b-[6px] border-x border-b border-[#eaeaea] bg-white"
+          // 아래 border는 마지막 항목 안에 둔다 — Figma처럼 항목마다 39(목록 전체 4×39)
+          className="overflow-hidden rounded-b-[6px] border-x border-[#eaeaea] bg-white"
         >
           {options.map((option, index) => {
             const isSelected = index === selectedIndex;
@@ -168,7 +182,7 @@ export function RegulatoryClassDropdown({
                 onMouseDown={(e) => e.preventDefault()}
                 onMouseEnter={() => setActiveIndex(index)}
                 onClick={() => choose(index)}
-                className={`flex h-[39px] cursor-pointer items-center px-[14px] text-[12px] leading-[normal] font-light tracking-[-0.04em] ${
+                className={`flex h-[39px] cursor-pointer items-center border-[#eaeaea] px-[14px] last:border-b text-[12px] leading-[normal] font-light tracking-[-0.04em] ${
                   isSelected ? 'bg-[#f5f5f5] text-[#ff6a38]' : isActive ? 'bg-gray-50 text-[#707070]' : 'text-[#707070]'
                 }`}
               >
