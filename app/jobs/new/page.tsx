@@ -1,11 +1,12 @@
 'use client';
 
-import { Suspense, useMemo, useRef, useState } from 'react';
+import { Fragment, Suspense, useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
 import { useCreateJobMutation, useAnalyzeJobMutation, usePatchJobMutation } from '@/lib/queries/pixlate';
 import type { ApiRegulatoryClass } from '@/lib/api/job-schema';
 import { SourceImageUploadStatus } from './_components/source-image-upload-status';
+import { CATEGORY_TREE, type CategoryNode } from './_lib/category-tree';
 import { useSourceImageUploads } from './_lib/use-source-image-uploads';
 import { StepNav } from '../[jobId]/_components/step-nav';
 
@@ -54,71 +55,53 @@ const REGULATORY_CLASS_OPTIONS: { value: ApiRegulatoryClass; label: string }[] =
   { value: 'unknown', label: '잘 모름' },
 ];
 
-/** 선택값별 검사 기준 안내 (helper text) */
-const REGULATORY_CLASS_HELPER: Partial<Record<ApiRegulatoryClass, string>> = {
-  unknown: '잘 모름을 선택하면 화장품 기준으로 검사됩니다.',
-  combination: '복합 제품은 현재 OTC 기준으로 검사됩니다.',
+/**
+ * 선택값별 검사 기준 안내 (helper text). 복합 문구는 PRD v3.5.10 F-LNG-03 한계 고지(★초안) 그대로다 —
+ * PRD는 이 고지를 복합에만 두고 OTC 의약품에는 두지 않는다. Figma(525:3023) 문구와 다르면 PRD를 따른다.
+ */
+const REGULATORY_CLASS_HELPER: Partial<Record<ApiRegulatoryClass, string[]>> = {
+  unknown: ['잘 모름을 선택하면 화장품 기준으로 검사됩니다.'],
+  combination: [
+    '복합 제품은 고른 OTC 종류와 같은 기준으로 검사합니다(화장품 규칙 포함).',
+    '제품이 그 OTC 기준(성분 · 함량 · 시험)을 실제로 충족하는지는 확인하지 않습니다.',
+  ],
 };
 
-// ─────────────────────────────────────────────────────────────────
-// 카테고리 계층 — Figma 카테고리 선택 모달(381:6293)이 실제로 보여준 값만
-// 그대로 옮긴다. "화장품/향수 → 스킨케어 → 스킨/토너 → {토너,에센스 토너,패드}"
-// 경로만 4단계 전부(세분류까지) 문서화돼 있다. 나머지 형제 항목(바디/헤어,
-// 건강식품, 선케어, 팩/마스크, 클렌징, 에센스/세럼, 크림/젤/밤, 미스트)은
-// Figma에 라벨만 보이고 그 하위 트리는 어디에도 없다 — 임의로 하위 항목을
-// 지어내지 않는다. children이 없는 노드는 그 자체가 선택 가능한 leaf다
-// (더 드릴다운할 데이터가 없으므로 클릭 즉시 선택으로 처리한다).
-// TODO: 백엔드 카테고리 목록 API 연결 시 교체.
-// ─────────────────────────────────────────────────────────────────
-
-interface CategoryNode {
-  value: string;
-  label: string;
-  children?: CategoryNode[];
-}
-
-const CATEGORY_TREE: CategoryNode[] = [
-  {
-    value: 'cosmetics_perfume',
-    label: '화장품/향수',
-    children: [
-      {
-        value: 'skincare',
-        label: '스킨케어',
-        children: [
-          {
-            value: 'toner_type',
-            label: '스킨/토너',
-            children: [
-              { value: 'toner', label: '토너' },
-              { value: 'essence_toner', label: '에센스 토너' },
-              { value: 'pad', label: '패드' },
-            ],
-          },
-          { value: 'essence_serum', label: '에센스/세럼' },
-          { value: 'cream_gel_balm', label: '크림/젤/밤' },
-          { value: 'mist', label: '미스트' },
-        ],
-      },
-      { value: 'suncare', label: '선케어' },
-      { value: 'pack_mask', label: '팩/마스크' },
-      { value: 'cleansing', label: '클렌징' },
-    ],
-  },
-  { value: 'body_hair', label: '바디/헤어' },
-  { value: 'health_food', label: '건강식품' },
+/**
+ * OTC 종류 — PRD v3.5.10 F-LNG-03 · 용어집 「OTC 종류(monograph_key)」 미국 4종. 값은 용어집의 열쇠,
+ * 라벨은 Figma(525:3023) 태그 표기(한글 이름은 PRD v3.5.10 「비듬·지루성 피부염·건선」).
+ * BLOCKED — DATA CONTRACT: OpenAPI v3.4.2 JobPatch에 OTC 종류 필드가 없어 화면 선택만 하고 서버로 보내지 않는다.
+ */
+const OTC_TYPE_OPTIONS = [
+  { value: 'M020', label: '선크림 (Sunscreen)' },
+  { value: 'M006', label: '여드름 (Acne)' },
+  { value: 'M032', label: '비듬·지루성 피부염·건선 (Dandruff · Seborrheic Dermatitis · Psoriasis)' },
+  { value: 'M016', label: '피부보호제 (Skin Protectant)' },
 ];
 
-function findCategoryLabel(nodes: CategoryNode[], value: string): string | null {
-  for (const node of nodes) {
-    if (node.value === value) return node.label;
-    if (node.children) {
-      const found = findCategoryLabel(node.children, value);
-      if (found) return found;
-    }
-  }
-  return null;
+function requiresOtcType(regulatoryClass: ApiRegulatoryClass | ''): boolean {
+  return regulatoryClass === 'otc' || regulatoryClass === 'combination';
 }
+
+/** PRD v3.5.10 F-ACC-04 동의 체크 문구 — 고지를 겸하므로 고지 문장을 따로 두지 않는다. 줄바꿈 위치는 Figma(1170:6002) */
+const RESPONSIBILITY_CONSENT_LINES = [
+  '결과물에 쓰는 인증·시험 결과, 광고 문구, 인증 로고의 사용 권한과 그 책임이 사용자에게 있으며,',
+  '규제·현지 검사 결과는 참고용 권고이며, 올린 이미지와 문구가 외부 AI 서비스로 전송됨을 확인했습니다.',
+];
+
+/** PRD v3.5.10 F-SRC-08 툴팁 두 줄 — 버튼 상태와 관계없이 같다 */
+const CERTIFICATION_TOOLTIP_LINES = [
+  '사이즈 변경을 고르면 인증 마크를 올릴 수 있어요.',
+  '인증 및 시험 정보의 적용 가능 여부는 사용자가 최종 확인해야 합니다.',
+];
+
+// ─────────────────────────────────────────────────────────────────
+// 카테고리 계층 — 셀러 표시용 카테고리 엑셀(대분류·중분류·소분류 3단계)을
+// _lib/category-tree.ts로 옮겼다. children이 없는 노드가 선택 가능한 항목이다
+// (PRD v3.5.10 F-SRC-04 ② — 소분류가 없는 중분류는 그 중분류에서 고른다).
+// TODO: 임시 FE 데이터다. GET /master/categories(Category.id) 연결은 별도 작업 —
+// value는 경로 문자열이라 categoryId(int64)로 바꿔 보내지 않는다.
+// ─────────────────────────────────────────────────────────────────
 
 function findCategoryPath(nodes: CategoryNode[], value: string, path: CategoryNode[] = []): CategoryNode[] | null {
   for (const node of nodes) {
@@ -175,6 +158,26 @@ function CloseIcon({ size = 12 }: { size?: number }) {
   );
 }
 
+// Figma Card/Utility/Info 20(53:1759) — Glyph 박스 inset 15%(3~17) 안의 원 + i
+function InfoIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <circle cx="10" cy="10" r="7" stroke="#171717" strokeWidth="1.25" />
+      <path d="M10 9V13.5" stroke="#171717" strokeWidth="1.25" strokeLinecap="round" />
+      <circle cx="10" cy="6.75" r="0.75" fill="#171717" />
+    </svg>
+  );
+}
+
+// Figma Card/Action/Check 16(53:1166) — Glyph 박스 inset 30%/22.5% 안의 체크
+function CheckIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M3.6 8.2L6.6 11.1L12.4 4.9" stroke="#ff6a38" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 function ChevronRightIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
@@ -208,12 +211,13 @@ function FieldLabel({ children, required }: { children: React.ReactNode; require
 // ─────────────────────────────────────────────────────────────────
 // 카테고리 선택 모달 (Figma 381:6293 "카테고리 선택")
 //
-// Figma 프레임 자체엔 backdrop 딤(어둡게 가리기)·제목/설명·확인/닫기 버튼이
-// 보이지 않는다 — 흰 카드(drop-shadow) + 검색 입력 + 4단 목록뿐이다. 그
-// 카드를 그대로 옮기고, "확인" 버튼 대신 leaf(더 하위 데이터가 없는 노드)를
-// 클릭하면 즉시 선택·닫힘으로 처리했다 — Figma에 없는 버튼을 임의로 만들지
-// 않기 위한 최소 보완이다. backdrop은 화면을 어둡게 가리진 않되(Figma에
-// 없음), 바깥 영역 클릭 시 닫히는 투명 캐처로는 둔다.
+// Figma 프레임은 흰 카드(drop-shadow) + 검색 입력 + 단별 목록뿐이다. 단 수는
+// 데이터 정본(엑셀 B·C·D)에 맞춰 대분류·중분류·소분류 3단이다. PRD v3.5.10
+// F-SRC-04는 9월에 [선택하기] 트리 창 + [확인]이고 검색칸은 12월이라, 검색
+// 입력은 숨기고 [취소]·[확인]을 기존 Button 스타일로 보완했다. leaf를 눌러도
+// 창 안의 선택만 바뀌고, [확인]을 눌러야 N1 값이 바뀐다. 취소·바깥 클릭·Esc는
+// 선택 전 값을 그대로 둔다. backdrop은 화면을 어둡게 가리지 않는(Figma에 없음)
+// 투명 캐처다.
 // ─────────────────────────────────────────────────────────────────
 
 function CategoryColumn({
@@ -230,11 +234,11 @@ function CategoryColumn({
   showChevron: boolean;
 }) {
   return (
-    <div className="flex w-[277px] shrink-0 flex-col items-start">
-      <div className="flex w-full items-center px-4 py-2">
+    // 대분류 11종이 낮은 창에서 넘치면 단마다 따로 스크롤한다
+    <div className="flex min-h-0 w-[277px] shrink-0 flex-col items-start overflow-y-auto">
+      <div className="flex w-full shrink-0 items-center px-4 py-2">
         <p className="text-[12px] font-light tracking-[-0.04em] text-[#999]">{heading}</p>
       </div>
-      {items.length === 0 && <p className="px-4 py-[18px] text-[12px] text-[#999]">검색 결과가 없습니다.</p>}
       {items.map((item) => {
         const isSelected = item.value === selectedValue;
         return (
@@ -243,7 +247,7 @@ function CategoryColumn({
             type="button"
             onClick={() => onSelect(item)}
             aria-pressed={isSelected}
-            className={`flex w-full items-center justify-between px-4 py-[18px] text-left text-[14px] tracking-[-0.01em] transition-colors ${
+            className={`flex w-full shrink-0 items-center justify-between px-4 py-[18px] text-left text-[14px] tracking-[-0.01em] transition-colors ${
               isSelected ? 'bg-[#f5f5f5] text-[#ff6a38]' : 'text-[#707070] hover:bg-gray-50'
             }`}
           >
@@ -256,101 +260,76 @@ function CategoryColumn({
   );
 }
 
+const CATEGORY_COLUMN_HEADINGS = ['대분류', '중분류', '소분류'];
+
 function CategoryModal({
   currentValue,
   onClose,
-  onSelect,
+  onConfirm,
 }: {
   currentValue: string;
   onClose: () => void;
-  onSelect: (value: string) => void;
+  onConfirm: (value: string) => void;
 }) {
-  const initialPath = useMemo(() => findCategoryPath(CATEGORY_TREE, currentValue) ?? [], [currentValue]);
-  const [selectedL1, setSelectedL1] = useState<CategoryNode | null>(initialPath[0] ?? null);
-  const [selectedL2, setSelectedL2] = useState<CategoryNode | null>(initialPath[1] ?? null);
-  const [selectedL3, setSelectedL3] = useState<CategoryNode | null>(initialPath[2] ?? null);
-  const [search, setSearch] = useState('');
+  // 창 안의 임시 경로 — [확인] 전에는 N1 값(displayCategory)을 바꾸지 않는다
+  const [path, setPath] = useState<CategoryNode[]>(() => findCategoryPath(CATEGORY_TREE, currentValue) ?? []);
+  const last = path.at(-1);
+  const selectedLeaf = last && !last.children ? last : null;
 
-  const commit = (node: CategoryNode) => {
-    onSelect(node.value);
-    onClose();
-  };
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
 
-  const query = search.trim().toLowerCase();
-  const filterItems = (nodes: CategoryNode[]) =>
-    query ? nodes.filter((n) => n.label.toLowerCase().includes(query)) : nodes;
+  const columnItems = (depth: number) => (depth === 0 ? CATEGORY_TREE : (path[depth - 1]?.children ?? []));
 
   return (
     <div className="fixed inset-0 z-50" onClick={onClose} role="presentation">
       <div
         role="dialog"
+        aria-modal="true"
         aria-label="카테고리 선택"
         onClick={(e) => e.stopPropagation()}
         className="absolute top-1/2 left-1/2 flex w-[1203px] max-w-[calc(100vw-48px)] -translate-x-1/2 -translate-y-1/2 flex-col items-start gap-3 rounded-[5px] bg-white px-7 py-5 drop-shadow-[2px_2px_12px_rgba(0,0,0,0.06)]"
       >
-        {/* 다른 모든 텍스트 입력(상품명/상품코드/핵심키워드 등)과 같은 focus
-            처리(Design Direction §8: "Focus에서 Orange Accent")를 그대로
-            재사용한다 — 이 검색 입력만 border를 감싼 div에 올려두고
-            focus 스타일을 빠뜨렸던 것을 다른 input들과 같은 패턴(직접
-            border+focus:border-[#ff6a38])으로 맞췄다. */}
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="카테고리명 검색"
-          className="w-[150px] rounded-[6px] border border-[#eaeaea] bg-white px-4 py-2.5 text-[14px] text-[#707070] outline-none placeholder:text-[#707070] focus:border-[#ff6a38]"
-        />
+        <div className="flex max-h-[min(680px,calc(100vh-160px))] w-full items-stretch gap-1.5 overflow-x-auto">
+          {CATEGORY_COLUMN_HEADINGS.map((heading, depth) => (
+            <Fragment key={heading}>
+              {depth > 0 && <div className="w-px shrink-0 self-stretch bg-[#eaeaea]" />}
+              <CategoryColumn
+                heading={heading}
+                items={columnItems(depth)}
+                selectedValue={path[depth]?.value ?? null}
+                showChevron={depth < CATEGORY_COLUMN_HEADINGS.length - 1}
+                onSelect={(node) => setPath((prev) => [...prev.slice(0, depth), node])}
+              />
+            </Fragment>
+          ))}
+        </div>
 
-        <div className="flex w-full items-stretch gap-1.5 overflow-x-auto">
-          <CategoryColumn
-            heading="대분류"
-            items={filterItems(CATEGORY_TREE)}
-            selectedValue={selectedL1?.value ?? null}
-            showChevron
-            onSelect={(node) => {
-              if (node.children) {
-                setSelectedL1(node);
-                setSelectedL2(null);
-                setSelectedL3(null);
-              } else {
-                commit(node);
-              }
+        <div className="flex w-full justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-[6px] border border-[#eaeaea] bg-white px-5 py-2.5 text-[14px] font-medium tracking-[-0.03em] text-[#171717] hover:bg-gray-50"
+          >
+            취소
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (!selectedLeaf) return;
+              onConfirm(selectedLeaf.value);
+              onClose();
             }}
-          />
-          <div className="w-px shrink-0 self-stretch bg-[#eaeaea]" />
-          <CategoryColumn
-            heading="중분류"
-            items={filterItems(selectedL1?.children ?? [])}
-            selectedValue={selectedL2?.value ?? null}
-            showChevron
-            onSelect={(node) => {
-              if (node.children) {
-                setSelectedL2(node);
-                setSelectedL3(null);
-              } else {
-                commit(node);
-              }
-            }}
-          />
-          <div className="w-px shrink-0 self-stretch bg-[#eaeaea]" />
-          <CategoryColumn
-            heading="소분류"
-            items={filterItems(selectedL2?.children ?? [])}
-            selectedValue={selectedL3?.value ?? null}
-            showChevron
-            onSelect={(node) => {
-              if (node.children) setSelectedL3(node);
-              else commit(node);
-            }}
-          />
-          <div className="w-px shrink-0 self-stretch bg-[#eaeaea]" />
-          <CategoryColumn
-            heading="세분류"
-            items={filterItems(selectedL3?.children ?? [])}
-            selectedValue={null}
-            showChevron={false}
-            onSelect={(node) => commit(node)}
-          />
+            disabled={!selectedLeaf}
+            className="rounded-[6px] bg-[#171717] px-5 py-2.5 text-[14px] font-medium tracking-[-0.03em] text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            확인
+          </button>
         </div>
       </div>
     </div>
@@ -392,6 +371,10 @@ function NewJobPageInner() {
   const [targetCountry, setTargetCountry] = useState('');
   const [targetLanguage, setTargetLanguage] = useState('');
   const [regulatoryClass, setRegulatoryClass] = useState<ApiRegulatoryClass | ''>('');
+  // OTC 종류 — 화면 선택 상태만 둔다(서버 저장 계약 없음, OTC_TYPE_OPTIONS 주석)
+  const [otcType, setOtcType] = useState<string | null>(null);
+  // F-ACC-04 동의 — 동의 시각은 작업 생성 시각이라(PRD) FE에서 따로 기록하지 않는다
+  const [hasAcceptedResponsibility, setHasAcceptedResponsibility] = useState(false);
   const [displayCategory, setDisplayCategory] = useState('');
   const [keywords, setKeywords] = useState<string[]>([]);
   const [keywordInput, setKeywordInput] = useState('');
@@ -413,7 +396,10 @@ function NewJobPageInner() {
 
   // ── 카테고리 선택 모달 (Figma 381:6293) ─────────────────────────
   const [categoryModalOpen, setCategoryModalOpen] = useState(false);
-  const selectedCategoryLabel = displayCategory ? findCategoryLabel(CATEGORY_TREE, displayCategory) : null;
+  // 메인 필드에는 확정한 경로 전체를 보인다(예: 스킨케어 > 크림 > 아이크림)
+  const selectedCategoryLabel = displayCategory
+    ? (findCategoryPath(CATEGORY_TREE, displayCategory)?.map((node) => node.label).join(' > ') ?? null)
+    : null;
 
   // ── 키워드 ──────────────────────────────────────────────────────
 
@@ -466,19 +452,32 @@ function NewJobPageInner() {
   // ── 유효성 검사 ──────────────────────────────────────────────────
 
   // 실제 OpenAPI JobCreate는 brandId만 required다(categoryId/productCode/
-  // keywords는 전부 optional). N1 폼은 productName/targetCountry/
-  // targetLanguage/regulatoryClass/이미지 1장 이상만 화면 자체 필수값으로
-  // 좁혀서 쓴다(기존 결정 유지) — displayCategory(카테고리)는 그 목록에
-  // 없었으므로 여기서 제거한다. productCode/keywords는 애초에 isValid에
-  // 없었다(이미 선택값으로 처리돼 있었다).
+  // keywords는 전부 optional). 화면 필수값은 PRD v3.5.10 N1 기준이다 —
+  // 카테고리(F-SRC-04 ① 미선택 시 진행 불가), OTC 의약품·복합의 OTC 종류
+  // (F-LNG-03 ⑦), 책임 동의(F-ACC-04). productCode/keywords는 선택값이다.
   const isValid =
     !!brandId &&
     !!productName &&
     !!targetCountry &&
     !!targetLanguage &&
     !!regulatoryClass &&
+    (!requiresOtcType(regulatoryClass) || !!otcType) &&
+    !!displayCategory &&
+    hasAcceptedResponsibility &&
     images.length > 0;
   const regulatoryClassHelper = regulatoryClass ? REGULATORY_CLASS_HELPER[regulatoryClass] : undefined;
+
+  // PRD F-LNG-03 ⑧ — 국가를 바꾸면 규제 분류와 OTC 종류를 다시 고른다
+  const handleCountryChange = (value: string) => {
+    setTargetCountry(value);
+    setRegulatoryClass('');
+    setOtcType(null);
+  };
+
+  const handleRegulatoryClassChange = (value: ApiRegulatoryClass | '') => {
+    setRegulatoryClass(value);
+    if (!requiresOtcType(value)) setOtcType(null);
+  };
 
   // ── 제출 ────────────────────────────────────────────────────────
   //
@@ -522,6 +521,7 @@ function NewJobPageInner() {
           specType: 'original',
           imageType: 'multi_section',
           // categoryId/consentId/channelSpecId: 실제 값(category master·consent 연동)이 아직 없어 보내지 않는다.
+          // OTC 종류도 JobPatch에 필드가 없어 보내지 않는다(BLOCKED — DATA CONTRACT, 화면에 안내).
           keywords,
         },
       });
@@ -608,7 +608,7 @@ function NewJobPageInner() {
               <div className="relative flex-1">
                 <select
                   value={targetCountry}
-                  onChange={(e) => setTargetCountry(e.target.value)}
+                  onChange={(e) => handleCountryChange(e.target.value)}
                   className="w-full appearance-none rounded-[6px] border border-[#eaeaea] bg-white px-[14px] py-[10px] text-[14px] tracking-[-0.01em] text-[#707070] outline-none focus:border-[#ff6a38]"
                 >
                   <option value="">선택하세요</option>
@@ -657,9 +657,10 @@ function NewJobPageInner() {
           </div>
         </div>
 
-        {/* 본문: 좌 FileUploader + 우 필드 패널. 아래 pb는 Figma 실측
-            (패널 bottom 932, 다음 버튼 top 965 → 33px)을 그대로 쓴다. */}
-        <div className="flex min-h-0 flex-1 gap-6 px-10 pb-[33px]">
+        {/* 본문: 좌 FileUploader + 우 열(필드 패널 · 동의 체크 · 버튼). Figma(525:3023)
+            실측 — 업로더 x140~1324 · 우측 열 x1344(gap 20), 버튼 bottom 1010(아래 70),
+            업로더 bottom 1000. 우측 열은 패널만 스크롤되고 동의 체크와 버튼은 늘 보인다. */}
+        <div className="flex min-h-0 flex-1 gap-5 px-10 pb-[70px]">
           {/* 좌측 — 업로드 영역 */}
           <div
             data-testid="n1-image-dropzone"
@@ -675,7 +676,7 @@ function NewJobPageInner() {
             // 확인). 안쪽 스크롤 wrapper(overflow-auto)가 실제 스크롤을
             // 담당하고, 이 div는 그 스크롤 영역이 자기 폭보다 좁아지는
             // 걸 허용만 하면 된다.
-            className={`flex min-w-0 flex-1 flex-col items-center justify-center gap-10 rounded-[8px] border transition-colors ${
+            className={`mb-2.5 flex min-w-0 flex-1 flex-col items-center justify-center gap-10 rounded-[8px] border transition-colors ${
               isDragOver ? 'border-[#ff6a38] bg-[#faf3ed]' : 'border-[#eaeaea] bg-white'
             }`}
           >
@@ -698,10 +699,9 @@ function NewJobPageInner() {
                     파일 선택
                   </label>
                 </div>
+                {/* 책임 고지는 하단 동의 체크(F-ACC-04)가 겸한다 — 여기에는 업로드 안내만 둔다 */}
                 <p className="max-w-xl text-center text-[12px] font-light tracking-[-0.04em] text-[#999]">
                   최대 1GB · 여러 파일을 한 번에 업로드할 수 있습니다.
-                  <br />
-                  인증·시험 정보의 적용 가능 여부를 사용자가 최종 확인해야 하며 문제 발생 시 플랫폼이 책임지지 않습니다.
                 </p>
               </div>
             ) : (
@@ -850,210 +850,321 @@ function NewJobPageInner() {
               실측 재현). overflow-y-auto를 다시 두되, 이번엔 "필요 이상
               공간을 만들어 생기는" 스크롤이 아니라 "실제 콘텐츠가 진짜
               가용 공간보다 클 때만" 나오는 안전장치다 — 평소 뷰포트에서는
-              나타나지 않는다. */}
-          <div className="flex min-h-0 w-[516px] shrink-0 flex-col gap-[55px] overflow-y-auto rounded-[8px] border border-[#eaeaea] p-5">
-            <div className="flex flex-col gap-3">
-              <div className="flex flex-col gap-1">
-                <FieldLabel required>상품명</FieldLabel>
-                <input
-                  type="text"
-                  value={productName}
-                  onChange={(e) => setProductName(e.target.value)}
-                  placeholder="상품 이름을 입력해주세요"
-                  className="w-full rounded-[6px] border border-[#eaeaea] px-4 py-2.5 text-[14px] tracking-[-0.01em] text-[#171717] outline-none placeholder:text-[#707070] focus:border-[#ff6a38]"
-                />
-              </div>
+              나타나지 않는다. 블록 간격은 최신 Figma(1170:7877) gap 52 · 첫 묶음 안 gap 16. */}
+          <div className="flex min-h-0 w-[516px] shrink-0 flex-col">
+            <div className="flex min-h-0 flex-1 flex-col gap-[52px] overflow-y-auto rounded-[8px] border border-[#eaeaea] p-5">
+              <div className="flex flex-col gap-4">
+                <div className="flex flex-col gap-1">
+                  <FieldLabel required>상품명</FieldLabel>
+                  <input
+                    type="text"
+                    value={productName}
+                    onChange={(e) => setProductName(e.target.value)}
+                    placeholder="상품 이름을 입력해주세요"
+                    className="w-full rounded-[6px] border border-[#eaeaea] px-4 py-2.5 text-[14px] tracking-[-0.01em] text-[#171717] outline-none placeholder:text-[#707070] focus:border-[#ff6a38]"
+                  />
+                </div>
 
-              <div className="flex flex-col gap-1">
-                <FieldLabel>상품코드</FieldLabel>
-                <input
-                  type="text"
-                  value={productCode}
-                  onChange={(e) => setProductCode(e.target.value)}
-                  placeholder="상품 코드를 입력해주세요"
-                  className="w-full rounded-[6px] border border-[#eaeaea] px-4 py-2.5 text-[14px] tracking-[-0.01em] text-[#171717] outline-none placeholder:text-[#707070] focus:border-[#ff6a38]"
-                />
-              </div>
+                <div className="flex flex-col gap-1">
+                  <FieldLabel>상품코드</FieldLabel>
+                  <input
+                    type="text"
+                    value={productCode}
+                    onChange={(e) => setProductCode(e.target.value)}
+                    placeholder="상품 코드를 입력해주세요"
+                    className="w-full rounded-[6px] border border-[#eaeaea] px-4 py-2.5 text-[14px] tracking-[-0.01em] text-[#171717] outline-none placeholder:text-[#707070] focus:border-[#ff6a38]"
+                  />
+                </div>
 
-              {/* 카테고리 — Figma(643:5824)는 검색 표시 입력(w-323) + "선택하기"
-                  버튼(w-108) 두 요소가 한 행에 나란히 있다. 버튼을 누르면
-                  카테고리 선택 모달(381:6293)이 뜬다 — 실제 값 변경은 모달의
-                  leaf 클릭으로만 일어나고, 이 표시 필드 자체는 읽기 전용이다. */}
-              <div className="flex flex-col gap-1">
-                <FieldLabel>카테고리</FieldLabel>
-                <div className="flex items-center gap-4">
-                  <div className="flex h-[39px] flex-1 items-center justify-between rounded-[6px] border border-[#eaeaea] bg-white px-[14px] py-[10px]">
-                    <span
-                      className={`truncate text-[14px] tracking-[-0.01em] ${
-                        selectedCategoryLabel ? 'text-[#171717]' : 'text-[#707070]'
-                      }`}
+                {/* 카테고리 — Figma(1170:7877)는 「검색하기」 필드 + 「선택하기」 버튼이 한
+                    행에 있다. 텍스트 검색은 12월(PRD F-SRC-04)이라, 두 요소 모두 같은
+                    카테고리 트리 창(381:6293)을 연다. 값은 창의 [확인]으로만 바뀐다. */}
+                <div className="flex flex-col gap-1">
+                  <FieldLabel required>카테고리</FieldLabel>
+                  <div className="flex items-center gap-4">
+                    <button
+                      type="button"
+                      onClick={() => setCategoryModalOpen(true)}
+                      aria-haspopup="dialog"
+                      data-testid="n1-category-field"
+                      className="flex h-[39px] min-w-0 flex-1 items-center justify-between gap-2 rounded-[6px] border border-[#eaeaea] bg-white px-[14px] py-[10px] text-left outline-none hover:bg-gray-50 focus-visible:border-[#ff6a38]"
                     >
-                      {selectedCategoryLabel ?? '검색 하기'}
-                    </span>
-                    <SearchIcon />
+                      <span
+                        title={selectedCategoryLabel ?? undefined}
+                        className={`truncate text-[14px] tracking-[-0.01em] ${
+                          selectedCategoryLabel ? 'text-[#171717]' : 'text-[#707070]'
+                        }`}
+                      >
+                        {selectedCategoryLabel ?? '검색하기'}
+                      </span>
+                      <SearchIcon />
+                    </button>
+                    {/* h-[37px]를 고정한 채 py-2.5(=line-height 21px과 합쳐 41px)를
+                        그대로 두면 실제 필요한 높이(41px)가 선언한 높이(37px)를
+                        넘어서 텍스트가 세로 중앙에서 어긋나 보였다(실측: 다른
+                        버튼과 달리 이 버튼만 고정 height를 썼는데 flex 정렬이
+                        없었다) — Figma 치수(w-108/h-37/py-10)는 그대로 두고
+                        flex items-center justify-center로 항상 정중앙에 오게
+                        고쳤다. */}
+                    <button
+                      type="button"
+                      onClick={() => setCategoryModalOpen(true)}
+                      className="flex h-[37px] w-[108px] shrink-0 items-center justify-center rounded-[6px] border border-[#eaeaea] bg-white px-5 py-2.5 text-[14px] font-medium tracking-[-0.03em] text-[#171717] hover:bg-gray-50"
+                    >
+                      선택하기
+                    </button>
                   </div>
-                  {/* h-[37px]를 고정한 채 py-2.5(=line-height 21px과 합쳐 41px)를
-                      그대로 두면 실제 필요한 높이(41px)가 선언한 높이(37px)를
-                      넘어서 텍스트가 세로 중앙에서 어긋나 보였다(실측: 다른
-                      버튼과 달리 이 버튼만 고정 height를 썼는데 flex 정렬이
-                      없었다) — Figma 치수(w-108/h-37/py-10)는 그대로 두고
-                      flex items-center justify-center로 항상 정중앙에 오게
-                      고쳤다. */}
+                </div>
+
+                {/* 규제 분류 — Figma(1170:7877 Field / 규제 분류): 라벨 아래 안내(12 Light #999) →
+                    select(gap 8) → OTC 종류 태그(gap 12). 안내 문구는 PRD 정본. */}
+                <div className="flex flex-col gap-3">
+                  <div className="flex flex-col gap-2">
+                    <div className="flex flex-col gap-1">
+                      <FieldLabel required>규제 분류</FieldLabel>
+                      {regulatoryClassHelper && (
+                        <p data-testid="n1-regulatory-helper" className="text-left text-[12px] font-light tracking-[-0.04em] text-[#999]">
+                          {regulatoryClassHelper.map((line, i) => (
+                            <Fragment key={line}>
+                              {i > 0 && <br />}
+                              {line}
+                            </Fragment>
+                          ))}
+                        </p>
+                      )}
+                    </div>
+                    <div className="relative">
+                      <select
+                        aria-label="규제 분류"
+                        value={regulatoryClass}
+                        onChange={(e) => handleRegulatoryClassChange(e.target.value as ApiRegulatoryClass | '')}
+                        className="w-full appearance-none rounded-[6px] border border-[#eaeaea] bg-white px-[14px] py-[10px] text-[14px] tracking-[-0.01em] text-[#707070] outline-none focus:border-[#ff6a38]"
+                      >
+                        <option value="">선택</option>
+                        {REGULATORY_CLASS_OPTIONS.map((o) => (
+                          <option key={o.value} value={o.value}>{o.label}</option>
+                        ))}
+                      </select>
+                      <div className="pointer-events-none absolute top-1/2 right-3.5 -translate-y-1/2">
+                        <ChevronDownIcon />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* OTC 종류 — OTC 의약품·복합일 때만(PRD F-LNG-03). Tag / flexible(406:6648) 단일 선택 —
+                      Selected는 orange border·text. 서버 저장 필드가 없어 아래 안내로 알린다. */}
+                  {requiresOtcType(regulatoryClass) && (
+                    <div className="flex flex-col gap-2">
+                      <div role="radiogroup" aria-label="OTC 종류" className="flex flex-wrap gap-1" data-testid="n1-otc-type">
+                        {OTC_TYPE_OPTIONS.map((o) => {
+                          const selected = otcType === o.value;
+                          return (
+                            <button
+                              key={o.value}
+                              type="button"
+                              role="radio"
+                              aria-checked={selected}
+                              onClick={() => setOtcType(o.value)}
+                              className={`flex h-7 items-center justify-center rounded-[6px] border bg-white px-2 text-[12px] leading-[14px] transition-colors ${
+                                selected ? 'border-[#ff6a38] text-[#ff6a38]' : 'border-[#eaeaea] text-[#171717] hover:bg-gray-50'
+                              }`}
+                            >
+                              {o.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <p data-testid="n1-otc-type-notice" className="text-[12px] font-light tracking-[-0.04em] text-[#999]">
+                        OTC 종류는 아직 작업에 저장되지 않습니다. 저장 기능이 준비되면 반영됩니다.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* 이미지 연속 여부 토글 — 9월 MVP는 이 입력 유형 선택 자체가 아직
+                  없다(12월 예정, imageType='multi_section' 고정 — 기존 결정
+                  유지). Figma는 이 토글을 필수(*) 입력으로 보여주는데 아직
+                  실제로 값을 바꿀 수 없는 상태라 디자인과 현재 계약이 충돌한다
+                  — 그대로 숨기지 않고, "출력 규격"의 나머지 옵션과 같은 방식
+                  (보여주되 비활성)으로 처리하고 보고에 남긴다. */}
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-2">
+                  <p className="text-[18px] font-medium tracking-[-0.03em] text-[#171717]">
+                    이미지 안에 여러 내용이 이어져 있나요?
+                  </p>
+                  <div
+                    role="switch"
+                    aria-checked={false}
+                    aria-disabled="true"
+                    title="9월 MVP는 다중 섹션 이미지 유형만 지원합니다."
+                    className="flex h-5 w-9 shrink-0 cursor-not-allowed items-center rounded-full border border-[#eaeaea] bg-[#f5f5f5] p-0.5 opacity-60"
+                  >
+                    <div className="size-4 rounded-full bg-white shadow-sm" />
+                  </div>
+                  <span className="text-[18px] font-medium tracking-[-0.03em] text-[#ff6a38]">*</span>
+                </div>
+                {/* Figma(673:7819)는 이 helper text를 라벨/토글과 같은 좌측
+                    기준선에 맞춘다 — 혼자 text-center로 떠 있던 것을 고쳤다. */}
+                <p className="text-left text-[12px] font-light tracking-[-0.04em] text-[#707070]">
+                  이미지 유형에 따라 분석 방식이 달라집니다.
+                </p>
+              </div>
+
+              {/* 결과물 규격 — Figma 기본값은 "사이트 맞춤" 탭이 활성이지만, 9월
+                  MVP는 원본 규격만 실제로 지원한다(기존 결정 유지, lib/api/types.ts
+                  SpecType 주석 참고). 디자인과 계약이 다시 충돌해 Figma의 활성
+                  탭을 그대로 베끼지 않고, 실제로 쓸 수 있는 "원본 사이즈"를
+                  활성으로 두고 나머지 두 탭은 비활성으로 보여준다. */}
+              <div className="flex flex-col gap-4">
+                {/* Figma(925:2573-2575) — 이 라벨의 asterisk만 18px Medium이다
+                    (다른 라벨의 asterisk는 16px 상속). FieldLabel 공용
+                    컴포넌트의 기본 16px 상속 asterisk와 다르므로 이 자리만
+                    직접 마크업한다. */}
+                <div className="flex items-center gap-2">
+                  <p className="text-[16px] tracking-[-0.03em] text-[#171717]">결과물 규격</p>
+                  <span className="text-[18px] font-medium tracking-[-0.03em] text-[#ff6a38]">*</span>
+                </div>
+                <div className="flex h-8 w-full items-center">
+                  <div className="flex-1 border-b border-[#eaeaea] pb-2 text-center">
+                    <span className="text-[16px] tracking-[-0.03em] text-[#171717]">원본 사이즈</span>
+                  </div>
+                  <div className="flex-1 cursor-not-allowed pb-2 text-center" title="준비 중입니다.">
+                    <span className="text-[16px] tracking-[-0.03em] text-[#999]">사이트 맞춤</span>
+                  </div>
+                  <div className="flex-1 cursor-not-allowed pb-2 text-center" title="준비 중입니다.">
+                    <span className="text-[16px] tracking-[-0.03em] text-[#999]">커스텀</span>
+                  </div>
+                </div>
+                <p className="text-[12px] font-light tracking-[-0.04em] text-[#999]">업로드된 이미지의 원본 크기를 유지합니다.</p>
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <FieldLabel>핵심 키워드</FieldLabel>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={keywordInput}
+                    onChange={(e) => setKeywordInput(e.target.value)}
+                    onKeyDown={handleKeywordKeyDown}
+                    placeholder="키워드를 입력해주세요."
+                    className="flex-1 rounded-[6px] border border-[#eaeaea] px-4 py-2.5 text-[14px] tracking-[-0.01em] text-[#171717] outline-none placeholder:text-[#707070] focus:border-[#ff6a38]"
+                  />
                   <button
                     type="button"
-                    onClick={() => setCategoryModalOpen(true)}
-                    className="flex h-[37px] w-[108px] shrink-0 items-center justify-center rounded-[6px] border border-[#eaeaea] bg-white px-5 py-2.5 text-[14px] font-medium tracking-[-0.03em] text-[#171717] hover:bg-gray-50"
+                    onClick={addKeyword}
+                    className="shrink-0 rounded-[6px] border border-[#eaeaea] px-4 py-2 text-[12px] font-medium text-[#171717] hover:bg-gray-50"
                   >
-                    선택하기
+                    추가
                   </button>
                 </div>
-              </div>
-
-              <div className="flex flex-col gap-1">
-                <FieldLabel required>규제 분류</FieldLabel>
-                <div className="relative">
-                  <select
-                    value={regulatoryClass}
-                    onChange={(e) => setRegulatoryClass(e.target.value as ApiRegulatoryClass | '')}
-                    className="w-full appearance-none rounded-[6px] border border-[#eaeaea] bg-white px-[14px] py-[10px] text-[14px] tracking-[-0.01em] text-[#707070] outline-none focus:border-[#ff6a38]"
-                  >
-                    <option value="">선택</option>
-                    {REGULATORY_CLASS_OPTIONS.map((o) => (
-                      <option key={o.value} value={o.value}>{o.label}</option>
+                <p className="text-[12px] font-light tracking-[-0.04em] text-[#707070]">
+                  번역 중 강조할 표현을 태그로 추가합니다.
+                </p>
+                {keywords.length > 0 && (
+                  <div className="mt-1 flex flex-wrap gap-1.5">
+                    {keywords.map((kw) => (
+                      <span
+                        key={kw}
+                        className="inline-flex items-center gap-1 rounded-[6px] border border-[#eaeaea] bg-[#f5f5f5] px-2.5 py-1 text-[12px] font-medium text-[#707070]"
+                      >
+                        {kw}
+                        <button
+                          type="button"
+                          onClick={() => removeKeyword(kw)}
+                          className="ml-0.5 text-[#999] hover:text-[#171717]"
+                          aria-label={`${kw} 삭제`}
+                        >
+                          ×
+                        </button>
+                      </span>
                     ))}
-                  </select>
-                  <div className="pointer-events-none absolute top-1/2 right-3.5 -translate-y-1/2">
-                    <ChevronDownIcon />
                   </div>
-                </div>
-                {regulatoryClassHelper && (
-                  <p className="text-left text-[12px] font-light tracking-[-0.04em] text-[#707070]">{regulatoryClassHelper}</p>
                 )}
               </div>
             </div>
 
-            {/* 이미지 연속 여부 토글 — 9월 MVP는 이 입력 유형 선택 자체가 아직
-                없다(12월 예정, imageType='multi_section' 고정 — 기존 결정
-                유지). Figma는 이 토글을 필수(*) 입력으로 보여주는데 아직
-                실제로 값을 바꿀 수 없는 상태라 디자인과 현재 계약이 충돌한다
-                — 그대로 숨기지 않고, "출력 규격"의 나머지 옵션과 같은 방식
-                (보여주되 비활성)으로 처리하고 보고에 남긴다. */}
-            <div className="flex flex-col gap-2">
-              <div className="flex items-center gap-2">
-                <p className="text-[18px] font-medium tracking-[-0.03em] text-[#171717]">
-                  이미지 안에 여러 내용이 이어져 있나요?
-                </p>
-                <div
-                  role="switch"
-                  aria-checked={false}
-                  aria-disabled="true"
-                  title="9월 MVP는 다중 섹션 이미지 유형만 지원합니다."
-                  className="flex h-5 w-9 shrink-0 cursor-not-allowed items-center rounded-full border border-[#eaeaea] bg-[#f5f5f5] p-0.5 opacity-60"
-                >
-                  <div className="size-4 rounded-full bg-white shadow-sm" />
-                </div>
-                <span className="text-[18px] font-medium tracking-[-0.03em] text-[#ff6a38]">*</span>
-              </div>
-              {/* Figma(673:7819)는 이 helper text를 라벨/토글과 같은 좌측
-                  기준선에 맞춘다 — 혼자 text-center로 떠 있던 것을 고쳤다. */}
-              <p className="text-left text-[12px] font-light tracking-[-0.04em] text-[#707070]">
-                이미지 유형에 따라 분석 방식이 달라집니다.
+            {(submitError != null || hasUploadFailed || uploadNotice) && (
+              <p role="alert" className="mt-3 shrink-0 text-sm text-red-500">
+                {hasUploadFailed
+                  ? '업로드에 실패한 파일이 있습니다. 다시 시도하거나 삭제한 뒤 진행해 주세요.'
+                  : uploadNotice ??
+                    (submitError instanceof Error ? submitError.message : '오류가 발생했습니다. 다시 시도해 주세요.')}
               </p>
-            </div>
+            )}
 
-            {/* 결과물 규격 — Figma 기본값은 "사이트 맞춤" 탭이 활성이지만, 9월
-                MVP는 원본 규격만 실제로 지원한다(기존 결정 유지, lib/api/types.ts
-                SpecType 주석 참고). 디자인과 계약이 다시 충돌해 Figma의 활성
-                탭을 그대로 베끼지 않고, 실제로 쓸 수 있는 "원본 사이즈"를
-                활성으로 두고 나머지 두 탭은 비활성으로 보여준다. */}
-            <div className="flex flex-col gap-4">
-              {/* Figma(925:2573-2575) — 이 라벨의 asterisk만 18px Medium이다
-                  (다른 라벨의 asterisk는 16px 상속). FieldLabel 공용
-                  컴포넌트의 기본 16px 상속 asterisk와 다르므로 이 자리만
-                  직접 마크업한다. */}
-              <div className="flex items-center gap-2">
-                <p className="text-[16px] tracking-[-0.03em] text-[#171717]">결과물 규격</p>
-                <span className="text-[18px] font-medium tracking-[-0.03em] text-[#ff6a38]">*</span>
-              </div>
-              <div className="flex h-8 w-full items-center">
-                <div className="flex-1 border-b border-[#eaeaea] pb-2 text-center">
-                  <span className="text-[16px] tracking-[-0.03em] text-[#171717]">원본 사이즈</span>
-                </div>
-                <div className="flex-1 cursor-not-allowed pb-2 text-center" title="준비 중입니다.">
-                  <span className="text-[16px] tracking-[-0.03em] text-[#999]">사이트 맞춤</span>
-                </div>
-                <div className="flex-1 cursor-not-allowed pb-2 text-center" title="준비 중입니다.">
-                  <span className="text-[16px] tracking-[-0.03em] text-[#999]">커스텀</span>
-                </div>
-              </div>
-              <p className="text-[12px] font-light tracking-[-0.04em] text-[#999]">업로드된 이미지의 원본 크기를 유지합니다.</p>
-            </div>
-
-            <div className="flex flex-col gap-1">
-              <FieldLabel>핵심 키워드</FieldLabel>
-              <div className="flex gap-2">
+            {/* 책임 동의 — PRD F-ACC-04, Figma Checkbox(1170:6002): 패널 아래 30 · [다음] 바로 위.
+                Checkbox / Compact(1063:5156) 18px 박스, Checked는 orange border + check. */}
+            <label className="mt-[30px] flex shrink-0 cursor-pointer items-center gap-2" data-testid="n1-consent">
+              <span className="relative flex size-5 shrink-0 items-center justify-center">
                 <input
-                  type="text"
-                  value={keywordInput}
-                  onChange={(e) => setKeywordInput(e.target.value)}
-                  onKeyDown={handleKeywordKeyDown}
-                  placeholder="키워드를 입력해주세요."
-                  className="flex-1 rounded-[6px] border border-[#eaeaea] px-4 py-2.5 text-[14px] tracking-[-0.01em] text-[#171717] outline-none placeholder:text-[#707070] focus:border-[#ff6a38]"
+                  type="checkbox"
+                  checked={hasAcceptedResponsibility}
+                  onChange={(e) => setHasAcceptedResponsibility(e.target.checked)}
+                  className="peer size-[18px] cursor-pointer appearance-none rounded-[4px] border border-[#eaeaea] bg-white outline-offset-2 checked:border-[#ff6a38] focus-visible:outline-2 focus-visible:outline-[#ff6a38]"
                 />
+                <span className="pointer-events-none absolute hidden peer-checked:block">
+                  <CheckIcon />
+                </span>
+              </span>
+              <span className="text-[12px] leading-[normal] font-light tracking-[-0.04em] text-[#707070]">
+                {RESPONSIBILITY_CONSENT_LINES[0]}
+                <br />
+                {RESPONSIBILITY_CONSENT_LINES[1]}
+              </span>
+            </label>
+
+            {/* 하단 버튼 — Figma(1089:10035): 인증 마크 업로드(Secondary + info) · 다음(Primary 148), gap 8.
+                인증 마크 업로드는 PRD F-SRC-08 12월 기능이고 9월은 원본 규격뿐이라 비활성이다(업로드 없음).
+                툴팁은 버튼 상태와 관계없이 hover·focus에 두 줄(PRD). 키보드로도 닿도록 disabled 대신
+                aria-disabled를 쓴다. 툴팁 위치는 Figma(1090:10048) — 버튼 왼쪽에서 64 · 버튼 위 3px 겹침, 화살표가 info를 가리킨다. */}
+            <div className="mt-6 flex shrink-0 items-center justify-end gap-2">
+              <div className="group relative">
                 <button
                   type="button"
-                  onClick={addKeyword}
-                  className="shrink-0 rounded-[6px] border border-[#eaeaea] px-4 py-2 text-[12px] font-medium text-[#171717] hover:bg-gray-50"
+                  aria-disabled="true"
+                  aria-describedby="n1-certification-tooltip"
+                  onClick={(e) => e.preventDefault()}
+                  data-testid="n1-certification-upload"
+                  className="flex h-[45px] cursor-not-allowed items-center justify-center rounded-[6px] border border-[#eaeaea] bg-white py-3.5 pr-6 pl-4 outline-none focus-visible:border-[#ff6a38]"
                 >
-                  추가
+                  <span className="flex items-center opacity-40">
+                    <span className="-mr-1 px-3 text-[14px] font-medium tracking-[-0.03em] text-[#171717]">인증 마크 업로드 하기</span>
+                    <InfoIcon />
+                  </span>
                 </button>
-              </div>
-              <p className="text-[12px] font-light tracking-[-0.04em] text-[#707070]">
-                번역 중 강조할 표현을 태그로 추가합니다.
-              </p>
-              {keywords.length > 0 && (
-                <div className="mt-1 flex flex-wrap gap-1.5">
-                  {keywords.map((kw) => (
-                    <span
-                      key={kw}
-                      className="inline-flex items-center gap-1 rounded-[6px] border border-[#eaeaea] bg-[#f5f5f5] px-2.5 py-1 text-[12px] font-medium text-[#707070]"
-                    >
-                      {kw}
-                      <button
-                        type="button"
-                        onClick={() => removeKeyword(kw)}
-                        className="ml-0.5 text-[#999] hover:text-[#171717]"
-                        aria-label={`${kw} 삭제`}
-                      >
-                        ×
-                      </button>
-                    </span>
+                <div
+                  id="n1-certification-tooltip"
+                  role="tooltip"
+                  className="invisible absolute bottom-[calc(100%-3px)] left-16 z-10 flex w-[193px] flex-col gap-1 rounded-[8px] break-keep border border-[#ff6a38] bg-white p-2.5 text-[12px] leading-[normal] font-light tracking-[-0.04em] text-[#ff6a38] group-focus-within:visible group-hover:visible"
+                >
+                  {CERTIFICATION_TOOLTIP_LINES.map((line) => (
+                    <p key={line}>- {line}</p>
                   ))}
+                  <svg
+                    width="12"
+                    height="11"
+                    viewBox="0 0 12 11"
+                    fill="none"
+                    aria-hidden="true"
+                    className="absolute top-[calc(100%-1px)] left-[90px]"
+                  >
+                    <path d="M0.5 0.5L6 10L11.5 0.5" fill="white" stroke="#ff6a38" />
+                    <path d="M1 0H11" stroke="white" strokeWidth="1.5" />
+                  </svg>
                 </div>
-              )}
+              </div>
+              <button
+                type="button"
+                onClick={handleSubmit}
+                disabled={!isValid || isSubmitting || isUploadBusy}
+                title={!isValid ? '필수 항목을 모두 입력해 주세요.' : undefined}
+                className="h-[45px] w-[148px] shrink-0 rounded-[6px] bg-[#171717] px-8 py-3.5 text-[14px] leading-[normal] font-medium tracking-[-0.03em] text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {isSubmitting ? '생성 중...' : '다음'}
+              </button>
             </div>
           </div>
-        </div>
-
-        {/* 하단 — 에러 메시지 + 다음 버튼 (Figma는 버튼만 우하단에 둔다) */}
-        <div className="flex shrink-0 items-center justify-end gap-4 px-10 pb-10">
-          {(submitError != null || hasUploadFailed || uploadNotice) && (
-            <p role="alert" className="flex-1 text-sm text-red-500">
-              {hasUploadFailed
-                ? '업로드에 실패한 파일이 있습니다. 다시 시도하거나 삭제한 뒤 진행해 주세요.'
-                : uploadNotice ??
-                  (submitError instanceof Error ? submitError.message : '오류가 발생했습니다. 다시 시도해 주세요.')}
-            </p>
-          )}
-          <button
-            type="button"
-            onClick={handleSubmit}
-            disabled={!isValid || isSubmitting || isUploadBusy}
-            title={!isValid ? '필수 항목을 모두 입력해 주세요.' : undefined}
-            className="w-[148px] shrink-0 rounded-[6px] bg-[#171717] px-8 py-3.5 text-[14px] font-medium tracking-[-0.03em] text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {isSubmitting ? '생성 중...' : '다음'}
-          </button>
         </div>
       </div>
 
@@ -1062,7 +1173,7 @@ function NewJobPageInner() {
         <CategoryModal
           currentValue={displayCategory}
           onClose={() => setCategoryModalOpen(false)}
-          onSelect={(value) => setDisplayCategory(value)}
+          onConfirm={(value) => setDisplayCategory(value)}
         />
       )}
 
