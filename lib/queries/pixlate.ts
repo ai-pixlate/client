@@ -29,6 +29,7 @@ import {
   getLibrary,
   getMasterCountries,
   getMasterLanguages,
+  getMasterCategories,
 } from '@/lib/api/pixlate';
 import type { ApiJobPatch } from '@/lib/api/job-schema';
 import {
@@ -70,6 +71,7 @@ export const pixlateKeys = {
   library: () => ['pixlate', 'library'] as const,
   masterCountries: () => ['pixlate', 'master', 'countries'] as const,
   masterLanguages: () => ['pixlate', 'master', 'languages'] as const,
+  masterCategories: () => ['pixlate', 'master', 'categories'] as const,
 };
 
 // ─────────────────────────────────────────────
@@ -449,6 +451,14 @@ export function useMasterLanguagesQuery() {
   return useQuery({
     queryKey: pixlateKeys.masterLanguages(),
     queryFn: getMasterLanguages,
+    staleTime: Infinity,
+  });
+}
+
+export function useMasterCategoriesQuery() {
+  return useQuery({
+    queryKey: pixlateKeys.masterCategories(),
+    queryFn: getMasterCategories,
     staleTime: Infinity,
   });
 }

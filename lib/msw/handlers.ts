@@ -21,6 +21,7 @@ import {
 } from '@/lib/mock-api/n5-fixtures';
 import { mockLibraryCards } from '@/lib/mock-api/library-fixtures';
 import { mockMasterCountries, mockMasterLanguages } from '@/lib/mock-api/master-fixtures';
+import { mockMasterCategories } from '@/lib/mock-api/category-fixtures';
 import type { ApiJob, ApiJobAsyncTaskItem, ApiTextBlock } from '@/lib/api/n5-schema';
 import type { ApiAcceptedTask, ApiAnalysisProgress, ApiJobPatch, ApiSourceImageUploadResult } from '@/lib/api/job-schema';
 import type {
@@ -863,7 +864,8 @@ export const handlers = [
       productName: n1Draft.patch.productName ?? null,
       productCode: n1Draft.patch.productCode ?? null,
     };
-    const { productName, productCode, targetCountry, regulatoryClass, targetLanguage, specType, keywords, imageType } = n1Draft.patch;
+    const { productName, productCode, targetCountry, regulatoryClass, targetLanguage, specType, categoryId, keywords, imageType } =
+      n1Draft.patch;
     const response: ApiJob = {
       ...jobState,
       status: 'draft',
@@ -875,6 +877,7 @@ export const handlers = [
       regulatoryClass: regulatoryClass ?? null,
       targetLanguage: targetLanguage ?? null,
       specType: specType ?? undefined,
+      categoryId: categoryId ?? null,
       keywords: keywords ?? [],
       imageType: imageType ?? null,
     };
@@ -1521,6 +1524,8 @@ export const handlers = [
   // ──────────────────────────────────────────
   http.get('/master/countries', () => HttpResponse.json(mockMasterCountries)),
   http.get('/master/languages', () => HttpResponse.json(mockMasterLanguages)),
+  // N1 카테고리 트리 (API-MST-04) — 실서버와 같은 Category 평면 배열
+  http.get('/master/categories', () => HttpResponse.json(mockMasterCategories)),
 
   // ──────────────────────────────────────────
   // presigned 다운로드 URL(mock) — 실제로는 S3 객체다. 위 download 응답의 url 이 이 경로를

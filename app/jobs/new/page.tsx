@@ -1,12 +1,25 @@
 'use client';
 
-import { Fragment, Suspense, useEffect, useRef, useState } from 'react';
+import { Fragment, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
-import { useCreateJobMutation, useAnalyzeJobMutation, usePatchJobMutation } from '@/lib/queries/pixlate';
+import {
+  useCreateJobMutation,
+  useAnalyzeJobMutation,
+  useMasterCategoriesQuery,
+  usePatchJobMutation,
+} from '@/lib/queries/pixlate';
 import type { ApiRegulatoryClass } from '@/lib/api/job-schema';
+import { RegulatoryClassDropdown, type RegulatoryClassOption } from './_components/regulatory-class-dropdown';
 import { SourceImageUploadStatus } from './_components/source-image-upload-status';
-import { CATEGORY_TREE, type CategoryNode } from './_lib/category-tree';
+import {
+  buildCategoryTree,
+  findCategoryPath,
+  formatCategoryPath,
+  isCategoryLeaf,
+  type CategoryNode,
+} from './_lib/category-tree';
+import { isN1Ready, requiresOtcType } from './_lib/n1-readiness';
 import { useSourceImageUploads } from './_lib/use-source-image-uploads';
 import { StepNav } from '../[jobId]/_components/step-nav';
 
@@ -46,13 +59,14 @@ const COUNTRY_RECOMMENDED_LANGUAGE: Partial<Record<string, string>> = {
   US: 'en',
 };
 
-// 규제 분류 — 미국 MVP 4종. 값은 OpenAPI RegulatoryClass enum 그대로다.
-// TODO: GET /master/regulatory-classes 연결 시 교체
-const REGULATORY_CLASS_OPTIONS: { value: ApiRegulatoryClass; label: string }[] = [
+// 규제 분류 — 미국 MVP 4종. 값은 OpenAPI RegulatoryClass enum 그대로 보내고, 라벨은 Figma(525:3023
+// dropdown open 1502:21358) 표기다. 화면 문자열을 API 값으로 보내지 않는다.
+// TODO: GET /master/regulatory-classes?country= 연결 시 교체
+const REGULATORY_CLASS_OPTIONS: RegulatoryClassOption[] = [
   { value: 'cosmetic', label: '화장품' },
-  { value: 'otc', label: 'OTC 의약품' },
+  { value: 'otc', label: 'OTC 화장품' },
   { value: 'combination', label: '화장품+OTC 복합' },
-  { value: 'unknown', label: '잘 모름' },
+  { value: 'unknown', label: '잘모름' },
 ];
 
 /**
@@ -79,10 +93,6 @@ const OTC_TYPE_OPTIONS = [
   { value: 'M016', label: '피부보호제 (Skin Protectant)' },
 ];
 
-function requiresOtcType(regulatoryClass: ApiRegulatoryClass | ''): boolean {
-  return regulatoryClass === 'otc' || regulatoryClass === 'combination';
-}
-
 /** PRD v3.5.10 F-ACC-04 동의 체크 문구 — 고지를 겸하므로 고지 문장을 따로 두지 않는다. 줄바꿈 위치는 Figma(1170:6002) */
 const RESPONSIBILITY_CONSENT_LINES = [
   '결과물에 쓰는 인증·시험 결과, 광고 문구, 인증 로고의 사용 권한과 그 책임이 사용자에게 있으며,',
@@ -94,26 +104,6 @@ const CERTIFICATION_TOOLTIP_LINES = [
   '사이즈 변경을 고르면 인증 마크를 올릴 수 있어요.',
   '인증 및 시험 정보의 적용 가능 여부는 사용자가 최종 확인해야 합니다.',
 ];
-
-// ─────────────────────────────────────────────────────────────────
-// 카테고리 계층 — 셀러 표시용 카테고리 엑셀(대분류·중분류·소분류 3단계)을
-// _lib/category-tree.ts로 옮겼다. children이 없는 노드가 선택 가능한 항목이다
-// (PRD v3.5.10 F-SRC-04 ② — 소분류가 없는 중분류는 그 중분류에서 고른다).
-// TODO: 임시 FE 데이터다. GET /master/categories(Category.id) 연결은 별도 작업 —
-// value는 경로 문자열이라 categoryId(int64)로 바꿔 보내지 않는다.
-// ─────────────────────────────────────────────────────────────────
-
-function findCategoryPath(nodes: CategoryNode[], value: string, path: CategoryNode[] = []): CategoryNode[] | null {
-  for (const node of nodes) {
-    const nextPath = [...path, node];
-    if (node.value === value) return nextPath;
-    if (node.children) {
-      const found = findCategoryPath(node.children, value, nextPath);
-      if (found) return found;
-    }
-  }
-  return null;
-}
 
 // ─────────────────────────────────────────────────────────────────
 // 공용 아이콘 — Figma glyph는 7일 만료 원격 asset이라 커밋 코드에 하드링크하지
@@ -208,28 +198,40 @@ function FieldLabel({ children, required }: { children: React.ReactNode; require
   );
 }
 
+// 필수값 오류 — Figma에 입력 오류 상태가 없어 프로젝트의 오류 문구 패턴(text-red-500 12px 한 줄)을 쓴다.
+// 문구로 알리므로 색만으로 상태를 전달하지 않는다. 해당 필드를 한 번 건드린 뒤에만 보인다.
+function FieldError({ id, children }: { id: string; children: React.ReactNode }) {
+  return (
+    <p id={id} className="text-[12px] tracking-[-0.01em] text-red-500">
+      {children}
+    </p>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────
 // 카테고리 선택 모달 (Figma 381:6293 "카테고리 선택")
 //
-// Figma 프레임은 흰 카드(drop-shadow) + 검색 입력 + 단별 목록뿐이다. 단 수는
-// 데이터 정본(엑셀 B·C·D)에 맞춰 대분류·중분류·소분류 3단이다. PRD v3.5.10
+// Figma 프레임은 흰 카드(drop-shadow) + 검색 입력 + 단별 목록뿐이다. 목록은
+// GET /master/categories 트리이고 대분류·중분류·소분류 3단으로 보인다. PRD v3.5.10
 // F-SRC-04는 9월에 [선택하기] 트리 창 + [확인]이고 검색칸은 12월이라, 검색
-// 입력은 숨기고 [취소]·[확인]을 기존 Button 스타일로 보완했다. leaf를 눌러도
+// 입력은 숨기고 [취소]·[확인]을 기존 Button 스타일로 보완했다. leaf(하위 없음 —
+// isCategoryLeaf)를 골라야만 [확인]이 열린다. leaf를 눌러도
 // 창 안의 선택만 바뀌고, [확인]을 눌러야 N1 값이 바뀐다. 취소·바깥 클릭·Esc는
 // 선택 전 값을 그대로 둔다. backdrop은 화면을 어둡게 가리지 않는(Figma에 없음)
-// 투명 캐처다.
+// 투명 캐처다. 불러오는 중·실패는 Figma에 없어 프로젝트 공통 한 줄 문구로 보완했다
+// (실패는 서버 재시도 여부와 무관하게 같은 GET을 다시 부르는 [다시 시도]만 둔다).
 // ─────────────────────────────────────────────────────────────────
 
 function CategoryColumn({
   heading,
   items,
-  selectedValue,
+  selectedId,
   onSelect,
   showChevron,
 }: {
   heading: string;
   items: CategoryNode[];
-  selectedValue: string | null;
+  selectedId: number | null;
   onSelect: (node: CategoryNode) => void;
   showChevron: boolean;
 }) {
@@ -240,10 +242,10 @@ function CategoryColumn({
         <p className="text-[12px] font-light tracking-[-0.04em] text-[#999]">{heading}</p>
       </div>
       {items.map((item) => {
-        const isSelected = item.value === selectedValue;
+        const isSelected = item.id === selectedId;
         return (
           <button
-            key={item.value}
+            key={item.id}
             type="button"
             onClick={() => onSelect(item)}
             aria-pressed={isSelected}
@@ -251,8 +253,8 @@ function CategoryColumn({
               isSelected ? 'bg-[#f5f5f5] text-[#ff6a38]' : 'text-[#707070] hover:bg-gray-50'
             }`}
           >
-            <span>{item.label}</span>
-            {showChevron && item.children && <ChevronRightIcon />}
+            <span>{item.name}</span>
+            {showChevron && !isCategoryLeaf(item) && <ChevronRightIcon />}
           </button>
         );
       })}
@@ -263,18 +265,26 @@ function CategoryColumn({
 const CATEGORY_COLUMN_HEADINGS = ['대분류', '중분류', '소분류'];
 
 function CategoryModal({
-  currentValue,
+  tree,
+  status,
+  onRetry,
+  currentId,
   onClose,
   onConfirm,
 }: {
-  currentValue: string;
+  tree: CategoryNode[];
+  status: 'pending' | 'error' | 'success';
+  onRetry: () => void;
+  currentId: number | null;
   onClose: () => void;
-  onConfirm: (value: string) => void;
+  onConfirm: (id: number) => void;
 }) {
-  // 창 안의 임시 경로 — [확인] 전에는 N1 값(displayCategory)을 바꾸지 않는다
-  const [path, setPath] = useState<CategoryNode[]>(() => findCategoryPath(CATEGORY_TREE, currentValue) ?? []);
+  // 창 안의 임시 경로 — [확인] 전에는 N1 값(categoryId)을 바꾸지 않는다
+  const [path, setPath] = useState<CategoryNode[]>(() =>
+    currentId !== null ? (findCategoryPath(tree, currentId) ?? []) : [],
+  );
   const last = path.at(-1);
-  const selectedLeaf = last && !last.children ? last : null;
+  const selectedLeaf = last && isCategoryLeaf(last) ? last : null;
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -284,7 +294,7 @@ function CategoryModal({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [onClose]);
 
-  const columnItems = (depth: number) => (depth === 0 ? CATEGORY_TREE : (path[depth - 1]?.children ?? []));
+  const columnItems = (depth: number) => (depth === 0 ? tree : (path[depth - 1]?.children ?? []));
 
   return (
     <div className="fixed inset-0 z-50" onClick={onClose} role="presentation">
@@ -295,20 +305,49 @@ function CategoryModal({
         onClick={(e) => e.stopPropagation()}
         className="absolute top-1/2 left-1/2 flex w-[1203px] max-w-[calc(100vw-48px)] -translate-x-1/2 -translate-y-1/2 flex-col items-start gap-3 rounded-[5px] bg-white px-7 py-5 drop-shadow-[2px_2px_12px_rgba(0,0,0,0.06)]"
       >
-        <div className="flex max-h-[min(680px,calc(100vh-160px))] w-full items-stretch gap-1.5 overflow-x-auto">
-          {CATEGORY_COLUMN_HEADINGS.map((heading, depth) => (
-            <Fragment key={heading}>
-              {depth > 0 && <div className="w-px shrink-0 self-stretch bg-[#eaeaea]" />}
-              <CategoryColumn
-                heading={heading}
-                items={columnItems(depth)}
-                selectedValue={path[depth]?.value ?? null}
-                showChevron={depth < CATEGORY_COLUMN_HEADINGS.length - 1}
-                onSelect={(node) => setPath((prev) => [...prev.slice(0, depth), node])}
-              />
-            </Fragment>
-          ))}
-        </div>
+        {status === 'success' && tree.length > 0 ? (
+          <div className="flex max-h-[min(680px,calc(100vh-160px))] w-full items-stretch gap-1.5 overflow-x-auto">
+            {CATEGORY_COLUMN_HEADINGS.map((heading, depth) => (
+              <Fragment key={heading}>
+                {depth > 0 && <div className="w-px shrink-0 self-stretch bg-[#eaeaea]" />}
+                <CategoryColumn
+                  heading={heading}
+                  items={columnItems(depth)}
+                  selectedId={path[depth]?.id ?? null}
+                  showChevron={depth < CATEGORY_COLUMN_HEADINGS.length - 1}
+                  onSelect={(node) => setPath((prev) => [...prev.slice(0, depth), node])}
+                />
+              </Fragment>
+            ))}
+          </div>
+        ) : (
+          <div className="flex min-h-[120px] w-full items-center justify-center gap-3" data-testid="n1-category-status">
+            {status === 'pending' && (
+              <p role="status" className="text-[14px] tracking-[-0.01em] text-[#707070]">
+                카테고리를 불러오는 중입니다.
+              </p>
+            )}
+            {status === 'error' && (
+              <>
+                <p role="alert" className="text-[12px] text-red-500">
+                  카테고리를 불러오지 못했습니다.
+                </p>
+                <button
+                  type="button"
+                  onClick={onRetry}
+                  className="rounded-[6px] border border-[#eaeaea] bg-white px-4 py-2 text-[12px] font-medium text-[#171717] hover:bg-gray-50"
+                >
+                  다시 시도
+                </button>
+              </>
+            )}
+            {status === 'success' && (
+              <p role="status" className="text-[14px] tracking-[-0.01em] text-[#707070]">
+                선택할 수 있는 카테고리가 없습니다.
+              </p>
+            )}
+          </div>
+        )}
 
         <div className="flex w-full justify-end gap-2">
           <button
@@ -322,7 +361,7 @@ function CategoryModal({
             type="button"
             onClick={() => {
               if (!selectedLeaf) return;
-              onConfirm(selectedLeaf.value);
+              onConfirm(selectedLeaf.id);
               onClose();
             }}
             disabled={!selectedLeaf}
@@ -373,9 +412,12 @@ function NewJobPageInner() {
   const [regulatoryClass, setRegulatoryClass] = useState<ApiRegulatoryClass | ''>('');
   // OTC 종류 — 화면 선택 상태만 둔다(서버 저장 계약 없음, OTC_TYPE_OPTIONS 주석)
   const [otcType, setOtcType] = useState<string | null>(null);
-  // F-ACC-04 동의 — 동의 시각은 작업 생성 시각이라(PRD) FE에서 따로 기록하지 않는다
+  // F-ACC-04 동의 — FE 진행 조건으로만 쓴다. 동의 시각·consentId·/consents 호출은 두지 않는다(PM 결정)
   const [hasAcceptedResponsibility, setHasAcceptedResponsibility] = useState(false);
-  const [displayCategory, setDisplayCategory] = useState('');
+  // category_master id(leaf). PATCH /jobs/{jobId}의 categoryId로 그대로 보낸다
+  const [categoryId, setCategoryId] = useState<number | null>(null);
+  // 필수값 오류는 해당 필드를 한 번 건드린 뒤에만 보인다(처음부터 모든 칸을 오류로 칠하지 않는다)
+  const [touched, setTouched] = useState({ productName: false, category: false, regulatoryClass: false });
   const [keywords, setKeywords] = useState<string[]>([]);
   const [keywordInput, setKeywordInput] = useState('');
   // 원본 이미지 — 파일별 업로드 상태(idle/uploading/done/failed)와 서버 sourceImageId는 hook이 소유한다.
@@ -396,10 +438,11 @@ function NewJobPageInner() {
 
   // ── 카테고리 선택 모달 (Figma 381:6293) ─────────────────────────
   const [categoryModalOpen, setCategoryModalOpen] = useState(false);
+  const categoriesQuery = useMasterCategoriesQuery();
+  const categoryTree = useMemo(() => buildCategoryTree(categoriesQuery.data ?? []), [categoriesQuery.data]);
   // 메인 필드에는 확정한 경로 전체를 보인다(예: 스킨케어 > 크림 > 아이크림)
-  const selectedCategoryLabel = displayCategory
-    ? (findCategoryPath(CATEGORY_TREE, displayCategory)?.map((node) => node.label).join(' > ') ?? null)
-    : null;
+  const selectedCategoryPath = categoryId !== null ? findCategoryPath(categoryTree, categoryId) : null;
+  const selectedCategoryLabel = selectedCategoryPath ? formatCategoryPath(selectedCategoryPath) : null;
 
   // ── 키워드 ──────────────────────────────────────────────────────
 
@@ -451,20 +494,23 @@ function NewJobPageInner() {
 
   // ── 유효성 검사 ──────────────────────────────────────────────────
 
-  // 실제 OpenAPI JobCreate는 brandId만 required다(categoryId/productCode/
-  // keywords는 전부 optional). 화면 필수값은 PRD v3.5.10 N1 기준이다 —
-  // 카테고리(F-SRC-04 ① 미선택 시 진행 불가), OTC 의약품·복합의 OTC 종류
-  // (F-LNG-03 ⑦), 책임 동의(F-ACC-04). productCode/keywords는 선택값이다.
-  const isValid =
-    !!brandId &&
-    !!productName &&
-    !!targetCountry &&
-    !!targetLanguage &&
-    !!regulatoryClass &&
-    (!requiresOtcType(regulatoryClass) || !!otcType) &&
-    !!displayCategory &&
-    hasAcceptedResponsibility &&
-    images.length > 0;
+  // 조건 정본은 _lib/n1-readiness.ts(isN1Ready) 한 곳이다.
+  const isValid = isN1Ready({
+    brandId,
+    productName,
+    targetCountry,
+    targetLanguage,
+    regulatoryClass,
+    otcType,
+    categoryId,
+    hasAcceptedResponsibility,
+    imageCount: images.length,
+  });
+  const showProductNameError = touched.productName && productName.trim() === '';
+  const showCategoryError = touched.category && categoryId === null;
+  const showRegulatoryClassError = touched.regulatoryClass && !regulatoryClass;
+  const markRegulatoryClassTouched = () =>
+    setTouched((prev) => (prev.regulatoryClass ? prev : { ...prev, regulatoryClass: true }));
   const regulatoryClassHelper = regulatoryClass ? REGULATORY_CLASS_HELPER[regulatoryClass] : undefined;
 
   // PRD F-LNG-03 ⑧ — 국가를 바꾸면 규제 분류와 OTC 종류를 다시 고른다
@@ -512,7 +558,7 @@ function NewJobPageInner() {
       await patchMutation.mutateAsync({
         jobId,
         payload: {
-          productName,
+          productName: productName.trim(),
           productCode: productCode.trim() || null,
           targetCountry,
           targetLanguage,
@@ -520,7 +566,9 @@ function NewJobPageInner() {
           // 9월 MVP: 결과물 규격은 원본 사이즈만, 이미지 유형은 다중 섹션만 지원한다(화면도 그 외 선택지를 비활성화).
           specType: 'original',
           imageType: 'multi_section',
-          // categoryId/consentId/channelSpecId: 실제 값(category master·consent 연동)이 아직 없어 보내지 않는다.
+          // GET /master/categories에서 고른 leaf id
+          categoryId,
+          // consentId/channelSpecId는 보내지 않는다(동의는 FE 진행 조건만 · 원본 규격은 채널 규격 없음).
           // OTC 종류도 JobPatch에 필드가 없어 보내지 않는다(BLOCKED — DATA CONTRACT, 화면에 안내).
           keywords,
         },
@@ -858,17 +906,23 @@ function NewJobPageInner() {
                   <FieldLabel required>상품명</FieldLabel>
                   <input
                     type="text"
+                    aria-label="상품명"
                     value={productName}
                     onChange={(e) => setProductName(e.target.value)}
+                    onBlur={() => setTouched((prev) => ({ ...prev, productName: true }))}
+                    aria-invalid={showProductNameError || undefined}
+                    aria-describedby={showProductNameError ? 'n1-product-name-error' : undefined}
                     placeholder="상품 이름을 입력해주세요"
                     className="w-full rounded-[6px] border border-[#eaeaea] px-4 py-2.5 text-[14px] tracking-[-0.01em] text-[#171717] outline-none placeholder:text-[#707070] focus:border-[#ff6a38]"
                   />
+                  {showProductNameError && <FieldError id="n1-product-name-error">상품명을 입력해 주세요.</FieldError>}
                 </div>
 
                 <div className="flex flex-col gap-1">
                   <FieldLabel>상품코드</FieldLabel>
                   <input
                     type="text"
+                    aria-label="상품코드"
                     value={productCode}
                     onChange={(e) => setProductCode(e.target.value)}
                     placeholder="상품 코드를 입력해주세요"
@@ -881,11 +935,14 @@ function NewJobPageInner() {
                     카테고리 트리 창(381:6293)을 연다. 값은 창의 [확인]으로만 바뀐다. */}
                 <div className="flex flex-col gap-1">
                   <FieldLabel required>카테고리</FieldLabel>
-                  <div className="flex items-center gap-4">
+                  {/* Figma Frame 62 — 행 폭 447(입력 323 · gap 16 · 버튼 108), 패널 content 474보다 좁다 */}
+                  <div className="flex w-[447px] max-w-full items-center gap-4">
                     <button
                       type="button"
                       onClick={() => setCategoryModalOpen(true)}
                       aria-haspopup="dialog"
+                      aria-label={`카테고리${selectedCategoryLabel ? `: ${selectedCategoryLabel}` : ''}`}
+                      aria-describedby={showCategoryError ? 'n1-category-error' : undefined}
                       data-testid="n1-category-field"
                       className="flex h-[39px] min-w-0 flex-1 items-center justify-between gap-2 rounded-[6px] border border-[#eaeaea] bg-white px-[14px] py-[10px] text-left outline-none hover:bg-gray-50 focus-visible:border-[#ff6a38]"
                     >
@@ -914,6 +971,7 @@ function NewJobPageInner() {
                       선택하기
                     </button>
                   </div>
+                  {showCategoryError && <FieldError id="n1-category-error">카테고리를 선택해 주세요.</FieldError>}
                 </div>
 
                 {/* 규제 분류 — Figma(1170:7877 Field / 규제 분류): 라벨 아래 안내(12 Light #999) →
@@ -933,22 +991,17 @@ function NewJobPageInner() {
                         </p>
                       )}
                     </div>
-                    <div className="relative">
-                      <select
-                        aria-label="규제 분류"
-                        value={regulatoryClass}
-                        onChange={(e) => handleRegulatoryClassChange(e.target.value as ApiRegulatoryClass | '')}
-                        className="w-full appearance-none rounded-[6px] border border-[#eaeaea] bg-white px-[14px] py-[10px] text-[14px] tracking-[-0.01em] text-[#707070] outline-none focus:border-[#ff6a38]"
-                      >
-                        <option value="">선택</option>
-                        {REGULATORY_CLASS_OPTIONS.map((o) => (
-                          <option key={o.value} value={o.value}>{o.label}</option>
-                        ))}
-                      </select>
-                      <div className="pointer-events-none absolute top-1/2 right-3.5 -translate-y-1/2">
-                        <ChevronDownIcon />
-                      </div>
-                    </div>
+                    <RegulatoryClassDropdown
+                      options={REGULATORY_CLASS_OPTIONS}
+                      value={regulatoryClass}
+                      onChange={handleRegulatoryClassChange}
+                      onClose={markRegulatoryClassTouched}
+                      invalid={showRegulatoryClassError}
+                      describedBy={showRegulatoryClassError ? 'n1-regulatory-class-error' : undefined}
+                    />
+                    {showRegulatoryClassError && (
+                      <FieldError id="n1-regulatory-class-error">규제 분류를 선택해 주세요.</FieldError>
+                    )}
                   </div>
 
                   {/* OTC 종류 — OTC 의약품·복합일 때만(PRD F-LNG-03). Tag / flexible(406:6648) 단일 선택 —
@@ -1171,9 +1224,15 @@ function NewJobPageInner() {
       {/* 카테고리 선택 모달 (Figma 381:6293) */}
       {categoryModalOpen && (
         <CategoryModal
-          currentValue={displayCategory}
-          onClose={() => setCategoryModalOpen(false)}
-          onConfirm={(value) => setDisplayCategory(value)}
+          tree={categoryTree}
+          status={categoriesQuery.status}
+          onRetry={() => void categoriesQuery.refetch()}
+          currentId={categoryId}
+          onClose={() => {
+            setCategoryModalOpen(false);
+            setTouched((prev) => ({ ...prev, category: true }));
+          }}
+          onConfirm={(id) => setCategoryId(id)}
         />
       )}
 

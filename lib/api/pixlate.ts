@@ -13,7 +13,7 @@ import type {
   ApiLibraryCard,
   ApiExportArtifactType,
 } from '@/lib/api/n6-schema';
-import type { ApiCountry, ApiLanguage } from '@/lib/api/master-schema';
+import type { ApiCategory, ApiCountry, ApiLanguage } from '@/lib/api/master-schema';
 
 // ─────────────────────────────────────────────
 // 공통 fetch 헬퍼
@@ -391,4 +391,9 @@ export function getMasterCountries(): Promise<ApiCountry[]> {
 
 export function getMasterLanguages(): Promise<ApiLanguage[]> {
   return apiFetch<ApiLanguage[]>('/master/languages');
+}
+
+/** N1 카테고리 트리 (API-MST-04). 평면 노드 배열 — 트리 구성은 app/jobs/new/_lib/category-tree.ts */
+export function getMasterCategories(): Promise<ApiCategory[]> {
+  return apiFetch<ApiCategory[]>('/master/categories');
 }
