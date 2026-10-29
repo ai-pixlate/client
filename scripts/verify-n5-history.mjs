@@ -15,6 +15,7 @@ import {
   commitUndo,
   committedValue,
   displayedValue,
+  n5EditFailurePolicy,
   peekRedo,
   peekUndo,
   pushCommitted,
@@ -103,10 +104,15 @@ console.log('\n[5] 저장 결과 상태 전이');
   s = reduceN5EditSession(s, { type: 'edit-succeeded', command: drag });
   check('끌기 결과는 1건만 push', s.history.entries.length === 1 && s.history.entries[0] === drag && s.inFlight === null);
 
-  // 일반 저장 실패: 이력 변화 없음 + 안내
+  // 일반 저장 실패(박스·섹션): 이력 변화 없음 + 되돌림 안내
   const before = s.history;
-  s = reduceN5EditSession(reduceN5EditSession(s, { type: 'save-started', operation: 'edit' }), { type: 'edit-failed' });
+  s = reduceN5EditSession(reduceN5EditSession(s, { type: 'save-started', operation: 'edit' }), { type: 'edit-failed', kind: 'box-move' });
   check('저장 실패한 조작은 이력에 없다', s.history === before && s.notice === 'edit-failed' && s.inFlight === null);
+
+  // 번역문 저장 실패: 이력 변화 없음 + 되돌림 안내를 내지 않는다(초안 유지)
+  const t = reduceN5EditSession(reduceN5EditSession(s, { type: 'save-started', operation: 'edit' }), { type: 'edit-failed', kind: 'translation' });
+  check('번역문 저장 실패도 이력 불변', t.history === before && t.inFlight === null);
+  check('번역문 저장 실패에는 "마지막 저장 상태로" 안내를 내지 않는다', t.notice === null);
 
   // 실행 취소 실패: pointer·이력 그대로
   s = reduceN5EditSession(reduceN5EditSession(s, { type: 'save-started', operation: 'undo' }), { type: 'undo-failed' });
@@ -137,13 +143,21 @@ console.log('\n[6] 대상별 화면 값 — 저장 실패 시 마지막 저장 �
   check('저장 성공 → 저장 값이 새 기준', ok.committed.x === 30 && ok.local === null);
 }
 
+console.log('\n[6-1] 실패 정책 — 번역문만 초안 유지');
+{
+  check('번역문 → preserve-draft', n5EditFailurePolicy('translation') === 'preserve-draft');
+  for (const kind of ['box-move', 'box-resize', 'font-scale', 'section-exclude', 'section-restore']) {
+    check(`${kind} → rollback-to-committed`, n5EditFailurePolicy(kind) === 'rollback-to-committed');
+  }
+}
+
 console.log('\n[7] 명령에 revision 을 담지 않는다 · 안내 문구');
 {
   const keys = Object.keys(pushCommitted(EMPTY_N5_HISTORY, A).entries[0]).sort().join(',');
   check('명령 필드는 kind·target·before·after 뿐', keys === 'after,before,kind,target', keys);
   check('실행 취소 실패 문구', N5_SAVE_NOTICE_MESSAGES['undo-failed'] === '실행 취소를 하지 못했습니다. 현재 상태를 유지합니다.');
-  check('다시 실행 실패 문구', N5_SAVE_NOTICE_MESSAGES['redo-failed'] === '재실행을 못했습니다. 현재 상태를 유지합니다.');
-  check('일반 저장 실패 문구', N5_SAVE_NOTICE_MESSAGES['edit-failed'] === '변경사항을 저장하지 못했습니다. 마지막으로 저장된 상태로 돌아갑니다.');
+  check('다시 실행 실패 문구', N5_SAVE_NOTICE_MESSAGES['redo-failed'] === '재실행하지 못했습니다. 현재 상태를 유지합니다.');
+  check('일반 저장 실패 문구', N5_SAVE_NOTICE_MESSAGES['edit-failed'] === '변경 사항을 저장하지 못했습니다. 마지막으로 저장된 상태로 돌아갑니다.');
 }
 
 console.log(`\n결과: PASS ${pass} / FAIL ${fail}\n`);

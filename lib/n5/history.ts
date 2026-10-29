@@ -8,7 +8,10 @@
  *   sessionStorage 에 저장하지 않는다(이 모듈은 in-memory 값만 다룬다).
  * - 서버 저장에 성공한 사용자 조작만 이력에 넣는다. 끌기·크기 조절은 손을 놓은 뒤 저장 성공 1회가
  *   1단계(snap 포함), [+][-] 는 한 번 누르고 저장 성공 1회가 1단계다.
- * - 일반 저장 실패: 이력 변화 없음, 화면은 마지막 저장 성공 값으로 되돌림, 안내.
+ * - 일반 저장 실패: 이력 변화 없음. 화면 처리는 조작 종류마다 다르다(n5EditFailurePolicy) —
+ *   박스 조정·섹션 제외·되돌리기는 마지막 저장 성공 값으로 되돌리고 안내, 번역문은 입력한 초안을
+ *   그대로 둔다(편집 중 상태 유지). 실제로 화면 값을 되돌리거나 초안을 지키는 것은 이 모듈 밖
+ *   (UI·저장 orchestration)의 일이다 — 이 엔진은 "실패 = 이력 불변"만 보장한다.
  * - 실행 취소·다시 실행 저장 실패: 이력·pointer·화면 모두 그대로, 안내만.
  *
  * 실행 취소·다시 실행은 "저장 성공 뒤에 pointer 를 옮긴다". 버튼을 누를 때 pointer 를 먼저 옮기지 않으므로
@@ -49,6 +52,17 @@ export interface N5History {
 }
 
 export const EMPTY_N5_HISTORY: N5History = { entries: [], pointer: 0 };
+
+/**
+ * 일반 저장 실패 때 화면을 어떻게 둘지 — FE 내부 개념(PM 확정 10/29).
+ * - 'rollback-to-committed': 마지막 저장 성공 값으로 되돌린다(resolveSaveFailed) + 'edit-failed' 안내.
+ * - 'preserve-draft': 사용자가 입력한 초안·편집 중 상태를 그대로 둔다. 번역문 수정만 해당한다.
+ */
+export type N5EditFailurePolicy = 'rollback-to-committed' | 'preserve-draft';
+
+export function n5EditFailurePolicy(kind: N5EditKind): N5EditFailurePolicy {
+  return kind === 'translation' ? 'preserve-draft' : 'rollback-to-committed';
+}
 
 export function canUndo(history: N5History): boolean {
   return history.pointer > 0;
@@ -109,7 +123,7 @@ export const INITIAL_N5_EDIT_SESSION: N5EditSession = { history: EMPTY_N5_HISTOR
 export type N5EditEvent =
   | { type: 'save-started'; operation: N5SaveOperation }
   | { type: 'edit-succeeded'; command: N5EditCommand }
-  | { type: 'edit-failed' }
+  | { type: 'edit-failed'; kind: N5EditKind }
   | { type: 'undo-succeeded'; command: N5EditCommand }
   | { type: 'undo-failed' }
   | { type: 'redo-succeeded'; command: N5EditCommand }
@@ -128,7 +142,13 @@ export function reduceN5EditSession(session: N5EditSession, event: N5EditEvent):
     case 'edit-succeeded':
       return { history: pushCommitted(session.history, event.command), inFlight: null, notice: null };
     case 'edit-failed':
-      return { ...session, inFlight: null, notice: 'edit-failed' };
+      // 이력은 그대로. 'edit-failed' 안내는 "마지막 저장 상태로 돌아갑니다" 문구라 되돌리는 조작에만 낸다 —
+      // 번역문은 초안을 유지하므로 이 안내를 내지 않는다(번역문 실패 문구는 PM 승인 전, 화면이 따로 표시).
+      return {
+        ...session,
+        inFlight: null,
+        notice: n5EditFailurePolicy(event.kind) === 'rollback-to-committed' ? 'edit-failed' : null,
+      };
     case 'undo-succeeded':
       return { history: commitUndo(session.history, event.command), inFlight: null, notice: null };
     case 'undo-failed':
@@ -172,7 +192,7 @@ export function resolveSaveSucceeded<TValue>(_state: N5CommittedValue<TValue>, s
   return { committed: saved, local: null };
 }
 
-/** 저장 실패 — 화면 값을 버리고 마지막 저장 성공 값으로 되돌린다 */
+/** 저장 실패 — 화면 값을 버리고 마지막 저장 성공 값으로 되돌린다. 'rollback-to-committed' 조작에만 쓴다(번역문 초안에는 쓰지 않는다) */
 export function resolveSaveFailed<TValue>(state: N5CommittedValue<TValue>): N5CommittedValue<TValue> {
   return { committed: state.committed, local: null };
 }

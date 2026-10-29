@@ -13,7 +13,7 @@ import { reachN5 } from './helpers/reach-n5';
 // (page.route 는 MSW Service Worker 응답을 가로채지 못한다 — e2e/n5-confirm.spec.ts 참고).
 // ─────────────────────────────────────────────────────────────────
 
-const FAILURE_NOTICE = '변경사항을 저장하지 못했습니다. 마지막으로 저장된 상태로 돌아갑니다.';
+const FAILURE_NOTICE = '변경 사항을 저장하지 못했습니다. 마지막으로 저장된 상태로 돌아갑니다.';
 
 function trackSectionPatches(page: Page) {
   const patches: { sectionId: string; body: string }[] = [];
