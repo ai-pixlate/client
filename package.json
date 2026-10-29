@@ -26,6 +26,7 @@
     "verify:library-view": "node --experimental-strip-types scripts/verify-library-view.mjs",
     "verify:msw-flag": "node --experimental-strip-types scripts/verify-msw-mocking-flag.mjs",
     "verify:displayed-progress": "node --experimental-strip-types scripts/verify-displayed-progress.mjs",
+    "verify:n1-category": "node --experimental-strip-types scripts/verify-n1-category-tree.mjs",
     "typecheck": "tsc --noEmit",
     "test:e2e": "playwright test"
   },

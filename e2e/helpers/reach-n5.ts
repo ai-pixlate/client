@@ -1,6 +1,7 @@
 import { type Page, expect, test } from '@playwright/test';
 
 import { MOCK_BRAND_ID, MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
+import { pickRegulatoryClass } from './n1-regulatory-class';
 
 // N1 combobox 순서(Figma 525:3023 재정합 후): 국가 → 언어 → 규제 분류
 // (카테고리는 더 이상 combobox가 아니다 — 검색 표시 필드 + "선택하기" 버튼
@@ -44,7 +45,7 @@ export async function reachN5(page: Page): Promise<void> {
   await categoryModal.getByRole('button', { name: '확인' }).click(); // PRD F-SRC-04 — [확인]으로 확정
   await page.getByRole('checkbox', { name: /외부 AI 서비스로 전송됨을 확인했습니다/ }).check(); // F-ACC-04 책임 동의
 
-  await selectFirstValidOption(page, 2); // 규제 분류 (카테고리가 combobox에서 빠지며 인덱스가 3→2로 당겨졌다)
+  await pickRegulatoryClass(page, '화장품'); // 규제 분류 — 드롭다운(native select 아님)
 
   await page.getByLabel('파일 선택').setInputFiles({
     name: 'e2e-test.png',

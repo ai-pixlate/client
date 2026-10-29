@@ -1,10 +1,12 @@
 import { type Page, expect, test } from '@playwright/test';
 
 import { MOCK_BRAND_ID, MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
+import { mockMasterCategories } from '@/lib/mock-api/category-fixtures';
+import { pickRegulatoryClass, regulatoryClassTrigger } from './helpers/n1-regulatory-class';
 
 // ─────────────────────────────────────────────────────────────────
 // N1 — PRD v3.5.10 · Figma 525:3023 정합
-// 카테고리 트리 창([확인]으로 확정 · 검색 12월), OTC 종류(OTC 의약품·복합만 · 단일 선택 ·
+// 카테고리 트리 창(GET /master/categories · leaf만 [확인] · categoryId 숫자 전송 · 검색 12월), OTC 종류(OTC 의약품·복합만 · 단일 선택 ·
 // 국가 변경 시 다시 고름 · 저장 계약 없음), 책임 동의(F-ACC-04), 인증 마크 업로드(12월 · 비활성),
 // mock 모드의 로그인 미호출을 확인한다.
 // ─────────────────────────────────────────────────────────────────
@@ -51,7 +53,7 @@ async function recordApiCalls(page: Page): Promise<ApiCall[]> {
 
 const categoryModal = (page: Page) => page.getByRole('dialog', { name: '카테고리 선택' });
 const nextButton = (page: Page) => page.getByRole('button', { name: '다음', exact: true });
-const regulatorySelect = (page: Page) => page.getByRole('combobox', { name: '규제 분류' });
+const categoryIdOf = (path: string) => mockMasterCategories.find((c) => c.path === path)!.id;
 
 async function pickCategory(page: Page, labels: string[]) {
   await page.getByRole('button', { name: '선택하기' }).click();
@@ -60,11 +62,11 @@ async function pickCategory(page: Page, labels: string[]) {
 }
 
 /** 카테고리·동의·OTC를 뺀 나머지 필수값 */
-async function fillBase(page: Page, regulatoryClass = 'cosmetic') {
+async function fillBase(page: Page, regulatoryClass = '화장품') {
   await page.getByPlaceholder('상품 이름을 입력해주세요').fill('N1 정합 상품');
   await page.getByRole('combobox').nth(0).selectOption('US');
   await page.getByRole('combobox').nth(1).selectOption('en');
-  await regulatorySelect(page).selectOption(regulatoryClass);
+  await pickRegulatoryClass(page, regulatoryClass);
   await page.locator('#image-upload').setInputFiles({ name: 'n1.png', mimeType: 'image/png', buffer: TINY_PNG });
   await expect(page.locator('img[alt="n1.png"]')).toBeVisible();
 }
@@ -168,17 +170,163 @@ test.describe('카테고리 — 엑셀 3단 트리 창 + [확인]', () => {
   });
 });
 
+test.describe('카테고리 — GET /master/categories 실제 id', () => {
+  test('트리는 GET /master/categories에서 오고, leaf 소분류를 확정하면 PATCH categoryId에 숫자 id가 간다', async ({ page }) => {
+    const calls = await recordApiCalls(page);
+    await page.goto(`/jobs/new?brandId=${MOCK_BRAND_ID}`);
+    await fillBase(page);
+    await pickCategory(page, ['스킨케어', '크림', '아이크림']);
+    const field = page.getByTestId('n1-category-field');
+    // 화면에는 이름 경로만 — id 숫자를 노출하지 않는다
+    await expect(field).toHaveText('스킨케어 > 크림 > 아이크림');
+    await expect(field).not.toContainText(String(categoryIdOf('스킨케어 > 크림 > 아이크림')));
+    await page.getByRole('checkbox', { name: CONSENT }).check();
+    await nextButton(page).click();
+    await expect(page).toHaveURL(new RegExp(`/jobs/${MOCK_JOB_ID}$`));
+
+    expect(calls.some((c) => c.method === 'GET' && c.path === '/master/categories')).toBe(true);
+    const patch = JSON.parse(calls.find((c) => c.method === 'PATCH' && c.path === `/jobs/${MOCK_JOB_ID}`)!.body!);
+    expect(patch.categoryId).toBe(categoryIdOf('스킨케어 > 크림 > 아이크림'));
+    expect(typeof patch.categoryId).toBe('number');
+  });
+
+  test('하위가 있는 대분류·중분류는 [확인]할 수 없고, 하위 없는 중분류는 확정된다', async ({ page }) => {
+    await page.getByTestId('n1-category-field').click();
+    const modal = categoryModal(page);
+    const confirm = modal.getByRole('button', { name: '확인' });
+    await modal.getByRole('button', { name: '선케어', exact: true }).click();
+    await expect(confirm).toBeDisabled();
+    await modal.getByRole('button', { name: '선쿠션', exact: true }).click();
+    await expect(confirm).toBeDisabled();
+    await modal.getByRole('button', { name: '선크림', exact: true }).click();
+    await expect(confirm).toBeEnabled();
+    await confirm.click();
+    await expect(page.getByTestId('n1-category-field')).toHaveText('선케어 > 선크림');
+  });
+
+  test('목록을 불러오지 못하면 창에 실패 문구와 [다시 시도]가 보이고, 다시 시도하면 트리가 열린다', async ({ page }) => {
+    // QueryClient 기본 retry(1회)까지 실패시키고, [다시 시도] 직전에 허용한다
+    await page.addInitScript(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        const allow = (window as unknown as { __allowCategories?: boolean }).__allowCategories;
+        if (!allow && new URL(url, location.href).pathname === '/master/categories') {
+          return new Response(
+            JSON.stringify({ error: { code: 'INTERNAL_ERROR', message: 'fail', retryable: true, traceId: 't' } }),
+            { status: 500, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return originalFetch(input, init);
+      };
+    });
+    await page.goto(`/jobs/new?brandId=${MOCK_BRAND_ID}`);
+    await page.getByRole('button', { name: '선택하기' }).click();
+    const modal = categoryModal(page);
+    await expect(modal.getByRole('alert')).toHaveText('카테고리를 불러오지 못했습니다.', { timeout: 15_000 });
+    await expect(modal.getByRole('button', { name: '확인' })).toBeDisabled();
+    await page.evaluate(() => {
+      (window as unknown as { __allowCategories?: boolean }).__allowCategories = true;
+    });
+    await modal.getByRole('button', { name: '다시 시도' }).click();
+    await expect(modal.getByRole('button', { name: '스킨케어', exact: true })).toBeVisible();
+  });
+
+  test('창을 고르지 않고 닫으면 「카테고리를 선택해 주세요.」가 보이고, 고르면 사라진다', async ({ page }) => {
+    const field = page.getByTestId('n1-category-field');
+    await expect(page.getByText('카테고리를 선택해 주세요.')).toHaveCount(0);
+    await field.click();
+    await categoryModal(page).getByRole('button', { name: '취소' }).click();
+    await expect(page.getByText('카테고리를 선택해 주세요.')).toBeVisible();
+    await expect(field).toHaveAccessibleDescription('카테고리를 선택해 주세요.');
+    await pickCategory(page, ['선케어', '선크림']);
+    await expect(page.getByText('카테고리를 선택해 주세요.')).toHaveCount(0);
+  });
+});
+
+test.describe('N1 입력 전수 interaction', () => {
+  test('상품명은 입력·수정·삭제되고, 비우고 벗어나면 오류 문구가 보인다(공백만도 빈 값)', async ({ page }) => {
+    const name = page.getByPlaceholder('상품 이름을 입력해주세요');
+    await expect(page.getByText('상품명을 입력해 주세요.')).toHaveCount(0);
+    await name.fill('첫 이름');
+    await name.fill('고친 이름');
+    await expect(name).toHaveValue('고친 이름');
+    await name.fill('');
+    await name.blur();
+    await expect(page.getByText('상품명을 입력해 주세요.')).toBeVisible();
+    await expect(name).toHaveAttribute('aria-invalid', 'true');
+    await name.fill('   ');
+    await expect(page.getByText('상품명을 입력해 주세요.')).toBeVisible();
+    await name.fill('상품');
+    await expect(page.getByText('상품명을 입력해 주세요.')).toHaveCount(0);
+  });
+
+  test('상품코드·핵심 키워드가 비어도 [다음]이 열리고, 상품명이 공백뿐이면 닫힌다', async ({ page }) => {
+    await fillBase(page);
+    await pickCategory(page, ['선케어', '선크림']);
+    await page.getByRole('checkbox', { name: CONSENT }).check();
+    await expect(page.getByPlaceholder('상품 코드를 입력해주세요')).toHaveValue('');
+    await expect(nextButton(page)).toBeEnabled();
+    await page.getByPlaceholder('상품 코드를 입력해주세요').fill('SKU-1');
+    await expect(page.getByPlaceholder('상품 코드를 입력해주세요')).toHaveValue('SKU-1');
+    await page.getByPlaceholder('상품 이름을 입력해주세요').fill('   ');
+    await expect(nextButton(page)).toBeDisabled();
+  });
+
+  test('핵심 키워드는 Enter·[추가]로 태그가 되고, 중복은 무시되며 ×로 지운다', async ({ page }) => {
+    const input = page.getByPlaceholder('키워드를 입력해주세요.');
+    await input.fill('보습');
+    await input.press('Enter');
+    await input.fill('저자극');
+    await page.getByRole('button', { name: '추가', exact: true }).click();
+    await input.fill('보습');
+    await input.press('Enter');
+    await expect(page.getByRole('button', { name: /^(보습|저자극) 삭제$/ })).toHaveCount(2);
+    await page.getByRole('button', { name: '보습 삭제' }).click();
+    await expect(page.getByRole('button', { name: '보습 삭제' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '저자극 삭제' })).toBeVisible();
+  });
+
+  test('국가·언어를 고르면 값이 보이고, 추천 언어 태그로도 언어를 고른다', async ({ page }) => {
+    const country = page.getByRole('combobox').nth(0);
+    const language = page.getByRole('combobox').nth(1);
+    await country.selectOption('US');
+    await expect(country).toHaveValue('US');
+    await page.getByRole('button', { name: '영어', exact: true }).click();
+    await expect(language).toHaveValue('en');
+    await language.selectOption('ja');
+    await expect(language).toHaveValue('ja');
+  });
+
+  test('필수값을 하나씩 채우는 동안 [다음]은 닫혀 있다가 모두 채우면 열린다', async ({ page }) => {
+    await expect(nextButton(page)).toBeDisabled();
+    await page.getByPlaceholder('상품 이름을 입력해주세요').fill('상품');
+    await expect(nextButton(page)).toBeDisabled();
+    await page.getByRole('combobox').nth(0).selectOption('US');
+    await page.getByRole('combobox').nth(1).selectOption('en');
+    await expect(nextButton(page)).toBeDisabled();
+    await pickRegulatoryClass(page, '잘모름');
+    await expect(nextButton(page)).toBeDisabled();
+    await pickCategory(page, ['선케어', '선크림']);
+    await expect(nextButton(page)).toBeDisabled();
+    await page.getByRole('checkbox', { name: CONSENT }).check();
+    await expect(nextButton(page)).toBeDisabled(); // 이미지 없음
+    await page.locator('#image-upload').setInputFiles({ name: 'n1.png', mimeType: 'image/png', buffer: TINY_PNG });
+    await expect(nextButton(page)).toBeEnabled();
+  });
+});
+
 test.describe('규제 분류 · OTC 종류', () => {
   const otcGroup = (page: Page) => page.getByRole('radiogroup', { name: 'OTC 종류' });
 
-  test('화장품·잘 모름은 OTC 종류가 없고, OTC 의약품·복합은 4종이 보인다', async ({ page }) => {
+  test('화장품·잘모름은 OTC 종류가 없고, OTC 화장품·복합은 4종이 보인다', async ({ page }) => {
     await page.getByRole('combobox').nth(0).selectOption('US');
-    for (const value of ['cosmetic', 'unknown']) {
-      await regulatorySelect(page).selectOption(value);
+    for (const label of ['화장품', '잘모름']) {
+      await pickRegulatoryClass(page, label);
       await expect(otcGroup(page)).toHaveCount(0);
     }
-    for (const value of ['otc', 'combination']) {
-      await regulatorySelect(page).selectOption(value);
+    for (const label of ['OTC 화장품', '화장품+OTC 복합']) {
+      await pickRegulatoryClass(page, label);
       await expect(otcGroup(page).getByRole('radio')).toHaveText([
         '선크림 (Sunscreen)',
         '여드름 (Acne)',
@@ -186,17 +334,17 @@ test.describe('규제 분류 · OTC 종류', () => {
         '피부보호제 (Skin Protectant)',
       ]);
     }
-    // 복합만 PRD 한계 고지, OTC 의약품에는 없다
+    // 복합만 PRD 한계 고지, OTC 화장품에는 없다
     const helper = page.getByTestId('n1-regulatory-helper');
     await expect(helper).toContainText('복합 제품은 고른 OTC 종류와 같은 기준으로 검사합니다(화장품 규칙 포함).');
     await expect(helper).toContainText('제품이 그 OTC 기준(성분 · 함량 · 시험)을 실제로 충족하는지는 확인하지 않습니다.');
-    await regulatorySelect(page).selectOption('otc');
+    await pickRegulatoryClass(page, 'OTC 화장품');
     await expect(helper).toHaveCount(0);
   });
 
   test('태그는 하나만 선택되고, 국가를 바꾸면 규제 분류와 OTC 종류를 다시 고른다', async ({ page }) => {
     await page.getByRole('combobox').nth(0).selectOption('US');
-    await regulatorySelect(page).selectOption('otc');
+    await pickRegulatoryClass(page, 'OTC 화장품');
     const sunscreen = otcGroup(page).getByRole('radio', { name: '선크림 (Sunscreen)' });
     const acne = otcGroup(page).getByRole('radio', { name: '여드름 (Acne)' });
     await sunscreen.click();
@@ -209,16 +357,16 @@ test.describe('규제 분류 · OTC 종류', () => {
     await expect(acne).toHaveCSS('border-color', 'rgb(255, 106, 56)');
 
     await page.getByRole('combobox').nth(0).selectOption('JP');
-    await expect(regulatorySelect(page)).toHaveValue('');
+    await expect(regulatoryClassTrigger(page)).toHaveText('선택');
     await page.getByRole('combobox').nth(0).selectOption('US');
-    await regulatorySelect(page).selectOption('otc');
+    await pickRegulatoryClass(page, 'OTC 화장품');
     await expect(otcGroup(page).locator('[aria-checked="true"]')).toHaveCount(0);
   });
 
-  test('OTC 의약품은 OTC 종류를 골라야 [다음]이 열리고, 요청에는 OTC 종류 필드를 넣지 않는다', async ({ page }) => {
+  test('OTC 화장품은 OTC 종류를 골라야 [다음]이 열리고, 요청에는 OTC 종류 필드를 넣지 않는다', async ({ page }) => {
     const calls = await recordApiCalls(page);
     await page.goto(`/jobs/new?brandId=${MOCK_BRAND_ID}`);
-    await fillBase(page, 'otc');
+    await fillBase(page, 'OTC 화장품');
     await pickCategory(page, ['선케어', '선크림']);
     await page.getByRole('checkbox', { name: CONSENT }).check();
     await expect(nextButton(page)).toBeDisabled();
@@ -241,6 +389,7 @@ test.describe('규제 분류 · OTC 종류', () => {
       regulatoryClass: 'otc',
       specType: 'original',
       imageType: 'multi_section',
+      categoryId: categoryIdOf('선케어 > 선크림'),
       keywords: [],
     });
     expect(patch!.body).not.toMatch(/otc_?type|monograph|M020/i);
@@ -308,7 +457,7 @@ test.describe('인증 마크 업로드 (F-SRC-08 · 12월)', () => {
 
 test('1920×1080에서 동의 체크·인증 마크·다음이 한 화면에 보인다', async ({ page }) => {
   await page.getByRole('combobox').nth(0).selectOption('US');
-  await regulatorySelect(page).selectOption('combination');
+  await pickRegulatoryClass(page, '화장품+OTC 복합');
   for (const locator of [
     page.getByTestId('n1-consent'),
     page.getByTestId('n1-certification-upload'),
@@ -324,6 +473,23 @@ test('1920×1080에서 동의 체크·인증 마크·다음이 한 화면에 보
     type: 'measure',
     description: `consent x=${consent.x} y=${consent.y} w=${consent.width} h=${consent.height} · cert x=${cert.x} y=${cert.y} w=${cert.width} · next x=${next.x} y=${next.y} w=${next.width} h=${next.height}`,
   });
+  // Figma 525:3023 — 우측 패널 x1344·폭 516, 카테고리 입력 323 + 버튼 108 한 줄, 규제 분류 474×39
+  const panel = (await page.getByTestId('n1-category-field').locator('xpath=ancestor::div[contains(@class,"w-[516px]")]').boundingBox())!;
+  expect(Math.round(panel.width)).toBe(516);
+  const categoryField = (await page.getByTestId('n1-category-field').boundingBox())!;
+  const categoryButton = (await page.getByRole('button', { name: '선택하기' }).boundingBox())!;
+  expect(Math.round(categoryField.width)).toBe(323);
+  expect(Math.round(categoryButton.width)).toBe(108);
+  expect(Math.round(categoryButton.y + categoryButton.height / 2)).toBe(Math.round(categoryField.y + categoryField.height / 2));
+  const regulatory = (await page.getByTestId('n1-regulatory-class').boundingBox())!;
+  expect([Math.round(regulatory.width), Math.round(regulatory.height)]).toEqual([474, 39]);
+  // 우측 패널은 가로로 넘치지 않는다
+  expect(
+    await page.getByTestId('n1-category-field').evaluate((el) => {
+      const scroller = el.closest('.overflow-y-auto')!;
+      return scroller.scrollWidth <= scroller.clientWidth;
+    }),
+  ).toBe(true);
   // 동의 문구는 잘리지 않는다(두 줄 모두 상자 안)
   expect(await page.getByTestId('n1-consent').evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
   await page.screenshot({ path: test.info().outputPath('n1-1920x1080-combination.png') });
@@ -334,7 +500,7 @@ test('1920×1080에서 동의 체크·인증 마크·다음이 한 화면에 보
 test('작은 viewport(1440×800)에서도 패널은 스크롤되고 동의·다음은 보인다', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 800 });
   await page.getByRole('combobox').nth(0).selectOption('US');
-  await regulatorySelect(page).selectOption('combination');
+  await pickRegulatoryClass(page, '화장품+OTC 복합');
   await expect(page.getByTestId('n1-consent')).toBeInViewport({ ratio: 1 });
   await expect(nextButton(page)).toBeInViewport({ ratio: 1 });
   const keyword = page.getByPlaceholder('키워드를 입력해주세요.');

@@ -2,6 +2,10 @@ import { type Page, expect, test } from '@playwright/test';
 
 import { MOCK_BRAND_ID, MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 import { MOCK_UPLOAD_FAIL_ONCE_MARKER } from '@/lib/msw/handlers';
+import { mockMasterCategories } from '@/lib/mock-api/category-fixtures';
+import { pickRegulatoryClass } from './helpers/n1-regulatory-class';
+
+const SUNSCREEN_CATEGORY_ID = mockMasterCategories.find((c) => c.path === '선케어 > 선크림')!.id;
 
 // ─────────────────────────────────────────────────────────────────
 // N1 실제 원본 업로드 — draft-first 계약
@@ -101,16 +105,20 @@ async function recordApiCalls(page: Page): Promise<ApiCall[]> {
 const JOB_PATH = `/jobs/${MOCK_JOB_ID}`;
 const UPLOAD_PATH = `${JOB_PATH}/source-images`;
 
-/** N1 쓰기 호출만 — N2 진입 후의 GET tasks polling 등 조회는 제외한다 */
-function summarize(calls: ApiCall[]) {
-  return calls.filter((c) => c.method !== 'GET').map((c) => `${c.method} ${c.path}`);
+/** N1 쓰기 호출만 — GET /master/categories·N2 진입 후의 GET tasks polling 등 조회는 제외한다 */
+function writesOf(calls: ApiCall[]) {
+  return calls.filter((c) => c.method !== 'GET');
 }
 
-async function fillRequired(page: Page, regulatoryClass = 'cosmetic') {
+function summarize(calls: ApiCall[]) {
+  return writesOf(calls).map((c) => `${c.method} ${c.path}`);
+}
+
+async function fillRequired(page: Page, regulatoryClass = '화장품') {
   await page.getByPlaceholder('상품 이름을 입력해주세요').fill('업로드 계약 상품');
   await page.getByRole('combobox').nth(0).selectOption('US');
   await page.getByRole('combobox').nth(1).selectOption('en');
-  await page.getByRole('combobox').nth(2).selectOption(regulatoryClass);
+  await pickRegulatoryClass(page, regulatoryClass);
   // 카테고리(F-SRC-04 필수 — [확인]으로 확정)와 책임 동의(F-ACC-04)
   await page.getByRole('button', { name: '선택하기' }).click();
   const categoryModal = page.getByRole('dialog', { name: '카테고리 선택' });
@@ -175,7 +183,7 @@ test.describe('N1 실제 원본 업로드 — draft-first', () => {
     ]);
 
     // POST /jobs — draft 계약: brandId만, Idempotency-Key 포함, 응답 Job.id(number)
-    const create = calls[0];
+    const create = writesOf(calls)[0];
     expect(JSON.parse(create.body!)).toEqual({ brandId: MOCK_BRAND_ID });
     expect(create.headers['idempotency-key']).toMatch(/^[0-9a-f-]{36}$/);
     expect(create.status).toBe(201);
@@ -183,15 +191,16 @@ test.describe('N1 실제 원본 업로드 — draft-first', () => {
     expect(create.response).not.toHaveProperty('jobId');
 
     // multipart — field 'files', 2개, 화면 순서, 실제 bytes. Content-Type은 직접 넣지 않는다.
-    const upload = calls[1];
+    const upload = writesOf(calls)[1];
     expect(upload.headers['content-type']).toBeUndefined();
     expect(upload.form).toEqual([
       { field: 'files', name: 'a.png', type: 'image/png', bytes: a.buffer.toString('base64') },
       { field: 'files', name: 'b.png', type: 'image/png', bytes: b.buffer.toString('base64') },
     ]);
 
-    // PATCH — JobPatch 확정값만. specId/카테고리/동의/채널 규격은 보내지 않는다.
-    expect(JSON.parse(calls[2].body!)).toEqual({
+    // PATCH — JobPatch 확정값만. categoryId는 GET /master/categories의 leaf id(선케어 > 선크림)다.
+    // 동의(consentId)·채널 규격은 보내지 않는다.
+    expect(JSON.parse(writesOf(calls)[2].body!)).toEqual({
       productName: '업로드 계약 상품',
       productCode: null,
       targetCountry: 'US',
@@ -199,6 +208,7 @@ test.describe('N1 실제 원본 업로드 — draft-first', () => {
       regulatoryClass: 'cosmetic',
       specType: 'original',
       imageType: 'multi_section',
+      categoryId: SUNSCREEN_CATEGORY_ID,
       keywords: [],
     });
 
@@ -221,8 +231,8 @@ test.describe('N1 실제 원본 업로드 — draft-first', () => {
     await expect(page).toHaveURL(new RegExp(`/jobs/${MOCK_JOB_ID}$`));
     await expect.poll(() => summarize(calls).includes(`POST ${JOB_PATH}/analyze`)).toBe(true);
     expect(summarize(calls)).toEqual(['POST /jobs', `POST ${UPLOAD_PATH}`, `PATCH ${JOB_PATH}`, `POST ${JOB_PATH}/analyze`]);
-    expect(calls[0].headers).not.toHaveProperty('idempotency-key');
-    expect(JSON.parse(calls[0].body!)).toEqual({ brandId: MOCK_BRAND_ID });
+    expect(writesOf(calls)[0].headers).not.toHaveProperty('idempotency-key');
+    expect(JSON.parse(writesOf(calls)[0].body!)).toEqual({ brandId: MOCK_BRAND_ID });
   });
 
   test('일부 실패: analyze 없이 N1 유지 → 실패 파일만 같은 draft에 재시도 → 순서 맞춘 뒤 analyze', async ({ page }) => {
@@ -242,14 +252,14 @@ test.describe('N1 실제 원본 업로드 — draft-first', () => {
     await expect(page.getByRole('button', { name: /다시 시도$/ })).toHaveCount(1);
     await expect(page.getByRole('button', { name: `${failName} 다시 시도` })).toBeVisible();
     expect(summarize(calls)).toEqual(['POST /jobs', `POST ${UPLOAD_PATH}`]);
-    expect(calls[1].form!.map((f) => f.name)).toEqual(['a.png', failName, 'c.png']);
+    expect(writesOf(calls)[1].form!.map((f) => f.name)).toEqual(['a.png', failName, 'c.png']);
     await expect(page).toHaveURL(/\/jobs\/new/);
 
     // 개별 재시도 — 같은 draft, 실패 파일 하나만
     await page.getByRole('button', { name: `${failName} 다시 시도` }).click();
     await expect(failedCard).toHaveCount(0);
     expect(summarize(calls)).toEqual(['POST /jobs', `POST ${UPLOAD_PATH}`, `POST ${UPLOAD_PATH}`]);
-    expect(calls[2].form!.map((f) => f.name)).toEqual([failName]);
+    expect(writesOf(calls)[2].form!.map((f) => f.name)).toEqual([failName]);
 
     // 다음 — 성공 파일은 다시 올리지 않고, 서버 순서(a,c,b)를 화면 순서(a,b,c)로 맞춘 뒤 analyze
     await page.getByRole('button', { name: '다음' }).click();
@@ -264,7 +274,7 @@ test.describe('N1 실제 원본 업로드 — draft-first', () => {
       `POST ${JOB_PATH}/analyze`,
     ]);
     const names = idToName(calls);
-    const reorderBody = JSON.parse(calls[4].body!) as { order: number[] };
+    const reorderBody = JSON.parse(writesOf(calls)[4].body!) as { order: number[] };
     expect(reorderBody.order.map((id) => names.get(id))).toEqual(['a.png', failName, 'c.png']);
     expect(lastServerOrder(calls)).toEqual(['a.png', failName, 'c.png']);
   });

@@ -67,6 +67,7 @@ Secret(JWT, access token, password 등)은 절대 Git에 커밋하지 않습니�
 | `npm run verify:library-view` | M1 보관함 화면 로직(검색·국가 필터·최신순·선택·날짜 포맷) 자동 검증 (브라우저 불필요) |
 | `npm run verify:msw-flag` | `isApiMockingEnabled()`(MSW on/off SSOT)가 `NEXT_PUBLIC_API_MOCKING` 값 조합에서 `NODE_ENV`와 무관하게 정확히 동작하는지 자동 검증 (브라우저 불필요) |
 | `npm run verify:displayed-progress` | N2·N4 처리 화면 표시 %(관측 단계는 상한만 염·점프·감소 없음·처리 중 100 없음·실패 시 멈춤·완료 응답 뒤 100 표시) 순수 계산 자동 검증 (브라우저 불필요) |
+| `npm run verify:n1-category` | N1 카테고리 트리(GET /master/categories → 트리, 하위 없는 항목만 leaf)와 [다음] 진행 조건 순수 함수 자동 검증 (브라우저 불필요) |
 | `npm run generate:openapi-types` | 최신 OpenAPI 계약(`ai-pixlate.github.io/server/openapi.yaml`)에서 타입 재생성 → `lib/api/generated/openapi.d.ts` (직접 수정 금지, 재실행으로만 갱신) |
 | `npm run make:ruler` | 스파이크용 눈금 테스트 이미지 재생성 |
 | `npm run make:n5-section-fixtures` | N5 실제 계약(v3.4.2, 섹션별 원문/렌더 이미지) mock fixture 이미지 재생성 |

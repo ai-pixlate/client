@@ -2,6 +2,7 @@ import { type Page, test, expect } from '@playwright/test';
 
 import { reachN5 } from './helpers/reach-n5';
 import { MOCK_BRAND_ID, MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
+import { pickRegulatoryClass } from './helpers/n1-regulatory-class';
 
 // ─────────────────────────────────────────────────────────────────
 // N3/N5 표시 정렬 회귀 — Figma N3 1422:10176 · N5 544:3168, PRD v3.5.10.
@@ -33,7 +34,7 @@ async function reachN3(page: Page) {
   await page.getByRole('dialog', { name: '카테고리 선택' }).getByRole('button', { name: '선크림' }).click();
   await page.getByRole('dialog', { name: '카테고리 선택' }).getByRole('button', { name: '확인' }).click(); // PRD F-SRC-04 — [확인]으로 확정
   await page.getByRole('checkbox', { name: /외부 AI 서비스로 전송됨을 확인했습니다/ }).check(); // F-ACC-04 책임 동의
-  await selectFirstValidOption(page, 2);
+  await pickRegulatoryClass(page, '화장품'); // 규제 분류 — 드롭다운(native select 아님)
   await page.getByLabel('파일 선택').setInputFiles({
     name: 'e2e-test.png',
     mimeType: 'image/png',
