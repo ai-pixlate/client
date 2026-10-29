@@ -37,7 +37,7 @@ test.describe('규제 분류 드롭다운', () => {
     expect(Math.round(box.height)).toBe(39);
     await page.screenshot({ path: test.info().outputPath('n1-regulatory-closed.png') });
 
-    // 목록은 겹쳐 뜬다 — 아래 블록(이미지 유형 질문)을 밀어내지 않는다
+    // Figma(1502:21358)처럼 목록은 흐름 안에 있어 아래 블록(이미지 유형 질문)을 항목 4개(4×39)만큼 밀어낸다
     const below = page.getByText('이미지 안에 여러 내용이 이어져 있나요?');
     const beforeY = (await below.boundingBox())!.y;
     await trigger.click();
@@ -49,8 +49,31 @@ test.describe('규제 분류 드롭다운', () => {
     for (const option of await options.all()) {
       expect(Math.round((await option.boundingBox())!.height)).toBe(39);
     }
-    expect((await below.boundingBox())!.y).toBe(beforeY);
+    expect(Math.round((await below.boundingBox())!.y - beforeY)).toBe(4 * 39);
+    // 패널만 스크롤된다 — 동의·[다음]은 그대로 보이고, 목록은 패널 아래로 잘리지 않는다
+    await expect(page.getByTestId('n1-consent')).toBeInViewport({ ratio: 1 });
+    await expect(page.getByRole('button', { name: '다음', exact: true })).toBeInViewport({ ratio: 1 });
+    await expect(regulatoryClassListbox(page)).toBeInViewport({ ratio: 1 });
     await page.screenshot({ path: test.info().outputPath('n1-regulatory-open.png') });
+  });
+
+  test('낮은 창(1440×800)에서도 열린 목록은 패널 안에서 보이게 스크롤되고 동의·[다음]은 가려지지 않는다', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 800 });
+    await page.getByRole('combobox').nth(0).selectOption('US');
+    await pickRegulatoryClass(page, '화장품+OTC 복합');
+    await regulatoryClassTrigger(page).click();
+    const listbox = regulatoryClassListbox(page);
+    const panel = page.getByTestId('n1-category-field').locator('xpath=ancestor::div[contains(@class,"overflow-y-auto")][1]');
+    const panelBox = (await panel.boundingBox())!;
+    const listBox = (await listbox.boundingBox())!;
+    expect(listBox.y).toBeGreaterThanOrEqual(panelBox.y);
+    expect(listBox.y + listBox.height).toBeLessThanOrEqual(panelBox.y + panelBox.height + 1);
+    await expect(page.getByTestId('n1-consent')).toBeInViewport({ ratio: 1 });
+    await expect(page.getByRole('button', { name: '다음', exact: true })).toBeInViewport({ ratio: 1 });
+    await page.keyboard.press('End');
+    await page.keyboard.press('Enter');
+    await expect(regulatoryClassTrigger(page)).toHaveText('잘모름');
+    await page.screenshot({ path: test.info().outputPath('n1-regulatory-open-1440x800.png') });
   });
 
   test('각 항목을 고르면 닫히고 표시값이 바뀌며, 다시 열어 다른 값으로 바꿀 수 있다', async ({ page }) => {

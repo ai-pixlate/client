@@ -347,3 +347,240 @@ test.describe('N1 실제 원본 업로드 — draft-first', () => {
     expect(uploads.map((u) => u.form!.map((f) => f.bytes))).toEqual([[first.buffer.toString('base64')], [second.buffer.toString('base64')]]);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────
+// Job 생성 시점 (PM 전제) — N1 진입·입력·파일 선택·동의까지는 서버 Job도 서버 원본도 없다.
+// [다음]을 눌러야 POST /jobs(createdAt) → 업로드 → PATCH → (reorder) → analyze 순서로 진행한다.
+// ─────────────────────────────────────────────────────────────────
+
+const countOf = (calls: ApiCall[], method: string, path: string) =>
+  calls.filter((c) => c.method === method && c.path === path).length;
+const nextButton = (page: Page) => page.getByRole('button', { name: '다음', exact: true });
+const exitButton = (page: Page) => page.getByRole('button', { name: '보관함으로 나가기' });
+const exitDialog = (page: Page) => page.getByTestId('n1-exit-dialog');
+
+/** 화면의 모든 입력 상호작용을 거쳐도 [다음] 전에는 쓰기 요청이 하나도 없다 */
+async function expectNoServerWrites(calls: ApiCall[]) {
+  expect(countOf(calls, 'POST', '/jobs')).toBe(0);
+  expect(calls.filter((c) => c.path.endsWith('/source-images') || c.path.includes('/source-images/'))).toEqual([]);
+  expect(summarize(calls)).toEqual([]);
+}
+
+/** OS 파일 drag & drop — 클릭 업로드와 같은 addFiles 경로로 들어간다 */
+async function dropFile(page: Page, file: ReturnType<typeof png>) {
+  const dataTransfer = await page.evaluateHandle(
+    ({ name, mimeType, b64 }) => {
+      const bytes = Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0));
+      const dt = new DataTransfer();
+      dt.items.add(new File([bytes], name, { type: mimeType }));
+      return dt;
+    },
+    { name: file.name, mimeType: file.mimeType, b64: file.buffer.toString('base64') },
+  );
+  await page.dispatchEvent('[data-testid="n1-image-dropzone"]', 'drop', { dataTransfer });
+  await expect(page.locator(`img[alt="${file.name}"]`)).toBeVisible();
+}
+
+test.describe('Job 생성 시점 — [다음] 전에는 Job·서버 원본이 없다', () => {
+  test('N1 진입만으로는 POST /jobs·source-images 요청이 없다', async ({ page }) => {
+    const calls = await recordApiCalls(page);
+    await page.goto(`/jobs/new?brandId=${MOCK_BRAND_ID}`);
+    await expect(nextButton(page)).toBeDisabled();
+    // 카테고리 목록 조회(GET /master/categories)까지 끝난 뒤에도 쓰기 요청은 없다
+    await expect.poll(() => calls.some((c) => c.path === '/master/categories')).toBe(true);
+    await expectNoServerWrites(calls);
+  });
+
+  test('파일 선택·drop·순서 변경·삭제와 모든 입력·동의를 거쳐도 [다음] 전에는 서버 요청이 없다', async ({ page }) => {
+    const calls = await recordApiCalls(page);
+    await page.goto(`/jobs/new?brandId=${MOCK_BRAND_ID}`);
+
+    await addFiles(page, [png('a.png', 1), png('b.png', 2)]);
+    await expect(page.getByText('이미지 2개')).toBeVisible();
+    await expectNoServerWrites(calls);
+
+    await dropFile(page, png('c.png', 3));
+    await expect(page.getByText('이미지 3개')).toBeVisible();
+
+    // 썸네일 드래그 재정렬 — 로컬 순서만 바뀐다
+    const card = (name: string) => page.locator(`img[alt="${name}"]`).locator('..');
+    await card('c.png').dragTo(card('a.png'));
+    await expect.poll(() => screenOrder(page)).toEqual(['c.png', 'a.png', 'b.png']);
+
+    // 업로드 전 파일 삭제는 로컬에서만 지운다(DELETE 없음)
+    await page.getByRole('button', { name: 'b.png 삭제' }).click();
+    await expect(page.locator('img[alt="b.png"]')).toHaveCount(0);
+
+    await fillRequired(page); // 상품명·국가·언어·규제 분류·카테고리·동의
+    const keyword = page.getByPlaceholder('키워드를 입력해주세요.');
+    await keyword.fill('보습');
+    await keyword.press('Enter');
+    await expect(nextButton(page)).toBeEnabled();
+
+    await expectNoServerWrites(calls);
+    expect(calls.filter((c) => c.method === 'DELETE')).toEqual([]);
+  });
+
+  test('[다음]은 POST /jobs 1회 → 응답 jobId로 업로드 → PATCH → reorder → analyze 순서다', async ({ page }) => {
+    const calls = await recordApiCalls(page);
+    await page.goto(`/jobs/new?brandId=${MOCK_BRAND_ID}`);
+    // 가운데 파일 업로드 실패 1회 → 재시도로 서버 순서(a,c,b)가 화면(a,b,c)과 달라져 reorder까지 지나가는 경로
+    const failName = `b${MOCK_UPLOAD_FAIL_ONCE_MARKER}.png`;
+    await addFiles(page, [png('a.png', 1), png(failName, 2), png('c.png', 3)]);
+    await fillRequired(page);
+    await expectNoServerWrites(calls);
+
+    await nextButton(page).click();
+    await page.getByRole('button', { name: `${failName} 다시 시도` }).click();
+    await nextButton(page).click();
+    await expect(page).toHaveURL(new RegExp(`/jobs/${MOCK_JOB_ID}$`));
+    await expect.poll(() => summarize(calls).includes(`POST ${JOB_PATH}/analyze`)).toBe(true);
+
+    expect(countOf(calls, 'POST', '/jobs')).toBe(1);
+    const index = (method: string, path: string) => calls.findIndex((c) => c.method === method && c.path === path);
+    const lastIndex = (method: string, path: string) =>
+      calls.length - 1 - [...calls].reverse().findIndex((c) => c.method === method && c.path === path);
+    const create = index('POST', '/jobs');
+    const firstUpload = calls.findIndex((c) => c.path.startsWith('/jobs/') && c.path.includes('/source-images'));
+    // 서버 원본 요청은 Job 생성보다 먼저 나가지 않고, 생성 응답의 id로 만든 경로만 쓴다
+    expect(create).toBeGreaterThanOrEqual(0);
+    expect(firstUpload).toBeGreaterThan(create);
+    expect(String((calls[create].response as { id: number }).id)).toBe(MOCK_JOB_ID);
+    for (const c of calls.filter((c) => c.path.includes('/source-images'))) expect(c.path.startsWith(`${JOB_PATH}/`)).toBe(true);
+    expect(lastIndex('POST', UPLOAD_PATH)).toBeLessThan(index('PATCH', JOB_PATH));
+    expect(index('PATCH', JOB_PATH)).toBeLessThan(index('PATCH', `${UPLOAD_PATH}/reorder`));
+    expect(index('PATCH', `${UPLOAD_PATH}/reorder`)).toBeLessThan(index('POST', `${JOB_PATH}/analyze`));
+  });
+
+  test('응답이 느린 동안 [다음]을 여러 번 눌러도 POST /jobs는 1회이고, 처리 중에는 ✕가 막힌다', async ({ page }) => {
+    // POST /jobs 응답을 늦춘다(기록기보다 먼저 등록해 기록기가 이 지연된 fetch를 감싼다)
+    await page.addInitScript(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (init?.method === 'POST' && new URL(url, location.href).pathname === '/jobs') {
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+        }
+        return originalFetch(input, init);
+      };
+    });
+    const calls = await recordApiCalls(page);
+    await page.goto(`/jobs/new?brandId=${MOCK_BRAND_ID}`);
+    await addFiles(page, [png('a.png', 1)]);
+    await fillRequired(page);
+
+    // 리렌더 전 같은 task 안의 연속 클릭 + 처리 중 추가 클릭
+    await page.evaluate(() => {
+      const button = [...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === '다음')!;
+      button.click();
+      button.click();
+      button.click();
+    });
+    await expect(page.getByRole('button', { name: '생성 중...' })).toBeDisabled();
+    await expect(exitButton(page)).toBeDisabled();
+    await page.getByRole('button', { name: '생성 중...' }).click({ force: true });
+
+    await expect(page).toHaveURL(new RegExp(`/jobs/${MOCK_JOB_ID}$`), { timeout: 15_000 });
+    expect(countOf(calls, 'POST', '/jobs')).toBe(1);
+    expect(countOf(calls, 'POST', `${JOB_PATH}/analyze`)).toBe(1);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────
+// N1 ✕ — draft job 유무로 동작이 다르다(PRD F-JOB-07).
+// 작업 없음: 저장되지 않는다는 안내 후 보관함 이동(서버 요청 없음).
+// 작업 있음: 작업 취소 확인 → DELETE /jobs/{jobId}(API-JOB-04) → 성공 시 보관함 이동, 실패 시 N1 유지.
+// ─────────────────────────────────────────────────────────────────
+
+test.describe('N1 ✕ — 작업 유무에 따른 이탈', () => {
+  test('작업이 없으면 저장되지 않는다는 안내 후 보관함으로 가고, 취소 API를 부르지 않는다', async ({ page }) => {
+    const calls = await recordApiCalls(page);
+    await page.goto(`/jobs/new?brandId=${MOCK_BRAND_ID}`);
+    await addFiles(page, [png('a.png', 1)]);
+    await page.getByRole('checkbox', { name: /외부 AI 서비스로 전송됨을 확인했습니다/ }).check();
+
+    await exitButton(page).click();
+    const dialog = exitDialog(page);
+    await expect(dialog).toHaveAccessibleName('작성을 그만두고 나갈까요?');
+    await expect(dialog).toContainText('입력한 정보와 선택한 이미지는 저장되지 않습니다.');
+    // [계속 작성]·Esc는 닫기만 하고 입력은 그대로다
+    await dialog.getByRole('button', { name: '계속 작성' }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(exitButton(page)).toBeFocused();
+    await exitButton(page).click();
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    await expect(page.locator('img[alt="a.png"]')).toBeVisible();
+
+    await exitButton(page).click();
+    await dialog.getByRole('button', { name: '나가기' }).click();
+    await expect(page).toHaveURL(/\/$/);
+    expect(calls.filter((c) => c.method === 'DELETE')).toEqual([]);
+    expect(countOf(calls, 'POST', '/jobs')).toBe(0);
+  });
+
+  /** [다음]으로 작업을 만든 뒤 업로드 실패로 N1에 남은 상태 */
+  async function leaveDraftOnN1(page: Page) {
+    const failName = `a${MOCK_UPLOAD_FAIL_ONCE_MARKER}.png`;
+    await addFiles(page, [png(failName, 1)]);
+    await fillRequired(page);
+    await nextButton(page).click();
+    await expect(page.getByRole('button', { name: `${failName} 다시 시도` })).toBeVisible();
+    await expect(page).toHaveURL(/\/jobs\/new/);
+    return failName;
+  }
+
+  test('작업이 생긴 뒤에는 작업 취소 확인 → DELETE /jobs/{jobId} 성공 후 보관함으로 간다', async ({ page }) => {
+    const calls = await recordApiCalls(page);
+    await page.goto(`/jobs/new?brandId=${MOCK_BRAND_ID}`);
+    await leaveDraftOnN1(page);
+    expect(summarize(calls)).toEqual(['POST /jobs', `POST ${UPLOAD_PATH}`]);
+
+    await exitButton(page).click();
+    const dialog = exitDialog(page);
+    await expect(dialog).toHaveAccessibleName('작업을 취소할까요?');
+    await expect(dialog).toContainText('이미 만든 작업과 올린 이미지가 삭제되고 보관함으로 이동합니다.');
+    await expect(dialog).not.toContainText('저장되지 않습니다');
+    await dialog.getByRole('button', { name: '작업 취소' }).click();
+
+    await expect(page).toHaveURL(/\/$/);
+    const cancel = calls.filter((c) => c.method === 'DELETE');
+    expect(cancel.map((c) => c.path)).toEqual([JOB_PATH]);
+    expect(cancel[0].body).toBeNull();
+    expect(cancel[0].status).toBe(204);
+  });
+
+  test('작업 취소가 실패하면 N1과 작업을 그대로 두고 실패를 알린다', async ({ page }) => {
+    await page.addInitScript(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (init?.method === 'DELETE' && /^\/jobs\/[^/]+$/.test(new URL(url, location.href).pathname)) {
+          return new Response(
+            JSON.stringify({ error: { code: 'INTERNAL_ERROR', message: 'fail', retryable: true, traceId: 't' } }),
+            { status: 500, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return originalFetch(input, init);
+      };
+    });
+    const calls = await recordApiCalls(page);
+    await page.goto(`/jobs/new?brandId=${MOCK_BRAND_ID}`);
+    const failName = await leaveDraftOnN1(page);
+
+    await exitButton(page).click();
+    const dialog = exitDialog(page);
+    await dialog.getByRole('button', { name: '작업 취소' }).click();
+    await expect(dialog.getByRole('alert')).toHaveText('작업을 취소하지 못했습니다. 다시 시도해 주세요.');
+    await expect(page).toHaveURL(/\/jobs\/new/);
+    expect(calls.filter((c) => c.method === 'DELETE').map((c) => c.status)).toEqual([500]);
+
+    // 닫고 다시 열어도 작업이 있는 상태 그대로다(실패 문구는 지워진다)
+    await dialog.getByRole('button', { name: '계속 작성' }).click();
+    await expect(page.getByRole('button', { name: `${failName} 다시 시도` })).toBeVisible();
+    await exitButton(page).click();
+    await expect(dialog).toHaveAccessibleName('작업을 취소할까요?');
+    await expect(dialog.getByRole('alert')).toHaveCount(0);
+    expect(countOf(calls, 'POST', '/jobs')).toBe(1);
+  });
+});
