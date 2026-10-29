@@ -19,9 +19,13 @@ import type { BlockViewModel, PreviewSectionViewModel, SignalBadge } from '@/lib
 import type { N5ViewMode } from '@/lib/n5/viewport';
 import {
   FAILED_DRAFT_CONFIRM_DESCRIPTION,
+  countFailedDrafts,
+  editTranslationDraft,
   failedDraftConfirmTitle,
-  isFailedDraft,
-  updateFailedDraftIds,
+  resolveTranslationSaveFailed,
+  resolveTranslationSaveSucceeded,
+  updateTranslationDrafts,
+  type TranslationDraft,
 } from '@/lib/n5/failed-drafts';
 import { useModalDialog } from '@/app/_components/use-modal-dialog';
 import {
@@ -243,36 +247,41 @@ function TranslationEditor({
   jobId,
   block,
   onSelect,
-  onFailedDraftChange,
+  draftEntry,
+  onDraftUpdate,
 }: {
   jobId: string;
   block: BlockViewModel;
   onSelect: () => void;
-  /** 저장하지 못한 번역문 여부가 바뀔 때(마운트 포함) 상위 집계에 알린다(lib/n5/failed-drafts.ts) */
-  onFailedDraftChange: (blockId: number, hasFailedDraft: boolean) => void;
+  /** 이 칸의 미저장 초안(N5Panel 소유 — 이 편집기가 사라졌다 다시 생겨도 남는다). 없으면 서버값 그대로 */
+  draftEntry: TranslationDraft | undefined;
+  onDraftUpdate: (
+    blockId: number,
+    update: (prev: TranslationDraft | undefined) => TranslationDraft | undefined,
+  ) => void;
 }) {
   const queryClient = useQueryClient();
   const patchMutation = usePatchN5BlockMutation(jobId);
 
-  const [draft, setDraft] = useState(block.translatedText);
+  // 초안의 정본은 N5Panel 의 draftEntry 다(원문 보기 전환으로 이 컴포넌트가 unmount 돼도 남아야 한다).
+  // 여기는 마지막으로 맞춘 서버값(syncedText/revision)과 409·오류 표시만 들고, 초안이 없으면 서버값을 보인다.
   const [syncedText, setSyncedText] = useState(block.translatedText);
   const [syncedRevision, setSyncedRevision] = useState(block.revision);
   const [rerenderTaskId, setRerenderTaskId] = useState<number | null>(null);
   const [conflictLatest, setConflictLatest] = useState<ApiTextBlock | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
 
+  const draft = draftEntry?.draft ?? syncedText;
   const isDirty = draft !== syncedText;
 
-  // 마지막 저장 시도가 실패했는지(409 포함) — 저장하지 못한 번역문 집계 전용이다. 오류 표시·409 UI는
-  // 기존 saveError/conflictLatest 그대로 쓴다. 초안이 서버값과 같아지면 실패 상태를 끝낸다(다음 편집은
-  // 저장 시도 전 일반 편집으로 센다).
-  const [lastSaveFailed, setLastSaveFailed] = useState(false);
-  if (lastSaveFailed && !isDirty) setLastSaveFailed(false);
-  const hasFailedDraft = isFailedDraft({ lastSaveFailed, isDirty });
-  // unmount 때 집계에서 빼지 않는다 — 저장에 성공한 것이 아니다(정리 함수를 두지 않는다).
+  function setDraft(text: string) {
+    onDraftUpdate(block.id, (prev) => editTranslationDraft(prev, text, syncedText));
+  }
+
+  // 다시 마운트됐을 때 서버값이 그 사이 초안과 같아졌다면 남은 초안 항목을 정리한다(미저장 변경이 아니다).
   useEffect(() => {
-    onFailedDraftChange(block.id, hasFailedDraft);
-  }, [block.id, hasFailedDraft, onFailedDraftChange]);
+    if (draftEntry && draftEntry.draft === syncedText) onDraftUpdate(block.id, () => undefined);
+  }, [block.id, draftEntry, syncedText, onDraftUpdate]);
 
   // block.revision이 이 draft가 마지막으로 맞춰졌던 값과 달라졌는데 편집
   // 중(dirty)이 아니면 render 도중 바로 맞춘다 — React의 "prop이 바뀌면 state를
@@ -281,8 +290,7 @@ function TranslationEditor({
   // 생긴다 — 여기서는 그 프레임 지연 없이 즉시 맞춘다.
   if (block.revision !== syncedRevision && !isDirty) {
     setSyncedRevision(block.revision);
-    setSyncedText(block.translatedText);
-    setDraft(block.translatedText);
+    setSyncedText(block.translatedText); // 초안이 없으므로 화면도 이 값을 따른다
   }
 
   const taskQuery = useN5TaskStatusQuery(jobId, rerenderTaskId);
@@ -316,17 +324,19 @@ function TranslationEditor({
     setSaveError(null);
     setConflictLatest(null);
     handledTaskIdRef.current = null; // 새 저장 사이클이므로 이전 task 완료 처리 기록을 리셋
+    const sentText = draft;
     try {
       const response = await patchMutation.mutateAsync({
         blockId: block.id,
-        payload: { trans1: draft, revision: block.revision },
+        payload: { trans1: sentText, revision: block.revision },
       });
-      setSyncedText(draft);
+      setSyncedText(sentText);
       setSyncedRevision(response.block?.revision ?? block.revision);
       setRerenderTaskId(getRerenderTaskId(response));
-      setLastSaveFailed(false);
+      onDraftUpdate(block.id, (prev) => resolveTranslationSaveSucceeded(prev, sentText));
     } catch (err) {
-      setLastSaveFailed(true);
+      // 초안은 그대로 두고 실패 표시만 켠다(PM: 번역문 저장 실패는 입력 유지) — 409 포함
+      onDraftUpdate(block.id, resolveTranslationSaveFailed);
       if (err instanceof ApiRequestError && err.status === 409) {
         const parsed = parseApiError(err.body);
         if (parsed && isRevisionConflict(parsed)) {
@@ -344,10 +354,10 @@ function TranslationEditor({
     queryClient.setQueryData<ApiTextBlock[]>(pixlateKeys.n5Blocks(jobId), (prev) =>
       prev ? prev.map((b) => (b.id === latest.id ? latest : b)) : prev,
     );
-    setDraft(latest.trans1 ?? '');
     setSyncedText(latest.trans1 ?? '');
     setSyncedRevision(latest.revision ?? block.revision);
     setConflictLatest(null);
+    onDraftUpdate(block.id, () => undefined); // 사용자가 최신 값을 고른 경우에만 초안을 버린다
   }
 
   return (
@@ -445,7 +455,8 @@ function BlockRow({
   isSelected,
   onSelect,
   rowRef,
-  onFailedDraftChange,
+  draftEntry,
+  onDraftUpdate,
 }: {
   jobId: string;
   block: BlockViewModel;
@@ -455,7 +466,11 @@ function BlockRow({
   isSelected: boolean;
   onSelect: () => void;
   rowRef: (el: HTMLLIElement | null) => void;
-  onFailedDraftChange: (blockId: number, hasFailedDraft: boolean) => void;
+  draftEntry: TranslationDraft | undefined;
+  onDraftUpdate: (
+    blockId: number,
+    update: (prev: TranslationDraft | undefined) => TranslationDraft | undefined,
+  ) => void;
 }) {
   return (
     <li ref={rowRef}>
@@ -508,7 +523,8 @@ function BlockRow({
                 jobId={jobId}
                 block={block}
                 onSelect={onSelect}
-                onFailedDraftChange={onFailedDraftChange}
+                draftEntry={draftEntry}
+                onDraftUpdate={onDraftUpdate}
               />
             ) : (
               <ReadOnlyTranslation text={block.translatedText} />
@@ -578,20 +594,26 @@ export function N5Panel({
   // 새 조건을 지어내는 게 아니다(lib/n5/adapter.ts의 areAllSectionsExcluded 참고).
   const allSectionsExcluded = areAllSectionsExcluded(sections);
 
-  // 저장하지 못한 번역문이 있는 blockId 집계(PM 확정 10/29). 이 칸들이 있어도 [저장하러 가기]를 막지 않고
-  // 확인창을 띄운다. 확정이 성공해 N5 를 떠날 때 이 컴포넌트와 함께 정리된다 — [계속]을 눌렀다고
-  // 지우지 않는다(확정 요청이 실패하면 초안·집계가 그대로 남아야 한다).
-  const [failedDraftIds, setFailedDraftIds] = useState<ReadonlySet<number>>(() => new Set());
-  const handleFailedDraftChange = useCallback((blockId: number, hasFailedDraft: boolean) => {
-    setFailedDraftIds((ids) => updateFailedDraftIds(ids, blockId, hasFailedDraft));
-  }, []);
+  // 번역문 미저장 초안 — blockId → { draft, lastSaveFailed }. 원문 보기 전환으로 편집기가 사라져도 초안이
+  // 남도록 여기(N5 화면 동안 살아 있는 패널)에 둔다. 서버·브라우저 저장소에는 두지 않는다.
+  // 저장하지 못한 칸 수도 이 Map 에서 바로 센다(PM 확정 10/29: 그런 칸이 있어도 [저장하러 가기]를 막지 않고
+  // 확인창). 확정이 성공해 N5 를 떠날 때 이 컴포넌트와 함께 정리된다 — [계속]을 눌렀다고 지우지 않는다
+  // (확정 요청이 실패하면 초안이 그대로 남아야 한다).
+  const [translationDrafts, setTranslationDrafts] = useState<ReadonlyMap<number, TranslationDraft>>(() => new Map());
+  const handleDraftUpdate = useCallback(
+    (blockId: number, update: (prev: TranslationDraft | undefined) => TranslationDraft | undefined) => {
+      setTranslationDrafts((drafts) => updateTranslationDrafts(drafts, blockId, update));
+    },
+    [],
+  );
+  const failedDraftCount = countFailedDrafts(translationDrafts);
   const [isFailedDraftConfirmOpen, setIsFailedDraftConfirmOpen] = useState(false);
   const confirmButtonRef = useRef<HTMLButtonElement>(null);
   const closeFailedDraftConfirm = useCallback(() => setIsFailedDraftConfirmOpen(false), []);
 
   function handleConfirmClick() {
     if (confirmMutation.isPending) return;
-    if (failedDraftIds.size > 0) {
+    if (failedDraftCount > 0) {
       setIsFailedDraftConfirmOpen(true);
       return;
     }
@@ -737,7 +759,8 @@ export function N5Panel({
                       if (el) blockRowRefs.current.set(block.id, el);
                       else blockRowRefs.current.delete(block.id);
                     }}
-                    onFailedDraftChange={handleFailedDraftChange}
+                    draftEntry={translationDrafts.get(block.id)}
+                    onDraftUpdate={handleDraftUpdate}
                   />
                 ))}
               </ul>
@@ -772,7 +795,7 @@ export function N5Panel({
       </div>
       {isFailedDraftConfirmOpen && (
         <FailedDraftConfirmDialog
-          count={failedDraftIds.size}
+          count={failedDraftCount}
           onCancel={closeFailedDraftConfirm}
           onContinue={handleFailedDraftContinue}
           returnFocusRef={confirmButtonRef}

@@ -62,7 +62,7 @@ Secret(JWT, access token, password 등)은 절대 Git에 커밋하지 않습니�
 | `npm run verify:n5-adapter` | N5 Adapter(OpenAPI DTO → ViewModel) 자동 검증 (브라우저 불필요) |
 | `npm run verify:n5-layout-edit` | N5 배치 영역 편집 순수 계산(이동·크기 조절·[+][-]·가운데선 snap, 섹션 경계) 자동 검증 (브라우저 불필요) |
 | `npm run verify:n5-history` | N5 실행 취소·다시 실행 이력 엔진(저장 성공 뒤 commit, 실패 시 불변) 자동 검증 (브라우저 불필요) |
-| `npm run verify:n5-failed-drafts` | N5 저장하지 못한 번역문 집계(실패 판정·추가/제거·확인창 문구) 자동 검증 (브라우저 불필요) |
+| `npm run verify:n5-failed-drafts` | N5 번역문 미저장 초안(편집·저장 성공/실패 전이, 실패 칸 집계, 확인창 문구) 자동 검증 (브라우저 불필요) |
 | `npm run verify:library-adapter` | M1 보관함 Adapter(LibraryCard → 카드 ViewModel) 자동 검증 (브라우저 불필요) |
 | `npm run verify:library-view` | M1 보관함 화면 로직(검색·국가 필터·최신순·선택·날짜 포맷) 자동 검증 (브라우저 불필요) |
 | `npm run verify:msw-flag` | `isApiMockingEnabled()`(MSW on/off SSOT)가 `NEXT_PUBLIC_API_MOCKING` 값 조합에서 `NODE_ENV`와 무관하게 정확히 동작하는지 자동 검증 (브라우저 불필요) |
