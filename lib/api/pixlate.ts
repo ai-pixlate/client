@@ -153,6 +153,15 @@ export async function deleteSourceImage(jobId: string, sourceImageId: number): P
   if (!res.ok) throw new ApiRequestError(res.status, await res.json().catch(() => null));
 }
 
+/**
+ * 작업 취소 (API-JOB-04, DELETE /jobs/{jobId} · 204 본문 없음). 서버가 status=archived로 바꾸고 종속 리소스를
+ * 정리한다. N1에서는 [다음]으로 draft를 만든 뒤 N1에 남은 상태에서 ✕로 나갈 때만 쓴다(F-JOB-07).
+ */
+export async function cancelJob(jobId: string): Promise<void> {
+  const res = await authorizedFetch(`/jobs/${jobId}`, { method: 'DELETE' });
+  if (!res.ok) throw new ApiRequestError(res.status, await res.json().catch(() => null));
+}
+
 /** 원본 순서 재정렬 (API-SRC-03). order는 sourceImageId 배열이다. */
 export function reorderSourceImages(jobId: string, order: number[]): Promise<ApiSourceImage[]> {
   return apiFetch<ApiSourceImage[]>(`/jobs/${jobId}/source-images/reorder`, {

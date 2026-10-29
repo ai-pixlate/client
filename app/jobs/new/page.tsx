@@ -1,15 +1,17 @@
 'use client';
 
-import { Fragment, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
 import {
   useCreateJobMutation,
   useAnalyzeJobMutation,
+  useCancelJobMutation,
   useMasterCategoriesQuery,
   usePatchJobMutation,
 } from '@/lib/queries/pixlate';
 import type { ApiRegulatoryClass } from '@/lib/api/job-schema';
+import { N1ExitDialog } from './_components/n1-exit-dialog';
 import { RegulatoryClassDropdown, type RegulatoryClassOption } from './_components/regulatory-class-dropdown';
 import { SourceImageUploadStatus } from './_components/source-image-upload-status';
 import {
@@ -405,6 +407,7 @@ function NewJobPageInner() {
   const createMutation = useCreateJobMutation();
   const patchMutation = usePatchJobMutation();
   const analyzeMutation = useAnalyzeJobMutation();
+  const cancelJobMutation = useCancelJobMutation();
 
   // ── 폼 상태 ─────────────────────────────────────────────────────
   const [targetCountry, setTargetCountry] = useState('');
@@ -434,7 +437,15 @@ function NewJobPageInner() {
   const [isDragOver, setIsDragOver] = useState(false);
 
   // ── 나가기 확인 ─────────────────────────────────────────────────
+  // ✕는 draft job 유무로 동작이 갈린다(N1ExitDialog 주석) — 작업이 있으면 DELETE /jobs/{jobId} 성공 뒤에만 나간다.
   const [showExitConfirm, setShowExitConfirm] = useState(false);
+  const exitButtonRef = useRef<HTMLButtonElement>(null);
+  const { reset: resetCancelJob, isPending: isCancellingJob } = cancelJobMutation;
+  const closeExitConfirm = useCallback(() => {
+    if (isCancellingJob) return;
+    setShowExitConfirm(false);
+    resetCancelJob();
+  }, [isCancellingJob, resetCancelJob, setShowExitConfirm]);
 
   // ── 카테고리 선택 모달 (Figma 381:6293) ─────────────────────────
   const [categoryModalOpen, setCategoryModalOpen] = useState(false);
@@ -539,8 +550,13 @@ function NewJobPageInner() {
   const [submitError, setSubmitError] = useState<unknown>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // 같은 task 안의 연속 클릭은 isSubmitting 리렌더 전에 들어온다(React가 갱신을 microtask로 미룬다) —
+  // 그 사이에 POST /jobs가 여러 번 나가지 않도록 ref로 한 번 더 막는다.
+  const submitInFlightRef = useRef(false);
+
   const handleSubmit = async () => {
-    if (!isValid || isSubmitting || isUploadBusy) return;
+    if (!isValid || isSubmitting || isUploadBusy || submitInFlightRef.current) return;
+    submitInFlightRef.current = true;
     setSubmitError(null);
     setIsSubmitting(true);
     try {
@@ -579,8 +595,18 @@ function NewJobPageInner() {
     } catch (error) {
       setSubmitError(error);
     } finally {
+      submitInFlightRef.current = false;
       setIsSubmitting(false);
     }
+  };
+
+  const handleExitConfirm = () => {
+    // TODO: M1 보관함 route가 바뀌면 함께 교체
+    if (!draftJobId) {
+      router.push('/');
+      return;
+    }
+    cancelJobMutation.mutate(draftJobId, { onSuccess: () => router.push('/') });
   };
 
   const handleRetryUpload = (localId: string) => {
@@ -618,9 +644,12 @@ function NewJobPageInner() {
       <div className="relative ml-9 h-full w-[44px] shrink-0">
         <button
           type="button"
+          ref={exitButtonRef}
           onClick={() => setShowExitConfirm(true)}
+          // [다음] 처리 중(POST /jobs 응답 전 포함)에는 막는다 — 나간 뒤 작업이 생겨 남는 것을 피한다
+          disabled={isSubmitting}
           aria-label="보관함으로 나가기"
-          className="absolute top-10 left-1/2 z-20 flex size-10 -translate-x-1/2 shrink-0 items-center justify-center rounded-md border border-[#eaeaea] bg-white text-[#171717] transition-colors hover:bg-gray-50"
+          className="absolute top-10 left-1/2 z-20 flex size-10 -translate-x-1/2 shrink-0 items-center justify-center rounded-md border border-[#eaeaea] bg-white text-[#171717] transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {/* Figma(925:2530 "보관함으로 나가기") 실측: 16px Glyph 박스
               안에서 inset-1/4(사방 25%=4px)만큼 들여 그려진다 — 실제
@@ -1236,42 +1265,16 @@ function NewJobPageInner() {
         />
       )}
 
-      {/* 나가기 확인 오버레이 */}
+      {/* 나가기 / 작업 취소 확인 */}
       {showExitConfirm && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-          onClick={() => setShowExitConfirm(false)}
-        >
-          <div
-            className="mx-4 w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 className="mb-2 text-base font-semibold text-gray-900">나가기</h2>
-            <p className="mb-6 text-sm leading-relaxed text-gray-500">
-              현재 입력한 정보와 업로드한 이미지는 저장되지 않습니다.
-              그래도 나가시겠습니까?
-            </p>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => setShowExitConfirm(false)}
-                className="flex-1 rounded-lg border border-gray-200 bg-white py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
-              >
-                취소
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  // TODO: M1 보관함 구현 시 실제 보관함 route로 교체
-                  router.push('/');
-                }}
-                className="flex-1 rounded-lg bg-gray-800 py-2.5 text-sm font-medium text-white hover:bg-gray-900"
-              >
-                나가기
-              </button>
-            </div>
-          </div>
-        </div>
+        <N1ExitDialog
+          hasDraftJob={draftJobId !== null}
+          isCancelling={isCancellingJob}
+          cancelFailed={cancelJobMutation.isError}
+          onDismiss={closeExitConfirm}
+          onConfirm={handleExitConfirm}
+          returnFocusRef={exitButtonRef}
+        />
       )}
     </div>
   );

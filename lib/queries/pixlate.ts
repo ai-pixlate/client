@@ -9,6 +9,7 @@ import {
   deleteSourceImage,
   reorderSourceImages,
   patchJob,
+  cancelJob,
   getSectionDetail,
   getSections,
   updateSectionBucket,
@@ -116,6 +117,12 @@ export function useReorderSourceImagesMutation() {
 export function usePatchJobMutation() {
   return useMutation({
     mutationFn: ({ jobId, payload }: { jobId: string; payload: ApiJobPatch }) => patchJob(jobId, payload),
+  });
+}
+
+export function useCancelJobMutation() {
+  return useMutation({
+    mutationFn: (jobId: string) => cancelJob(jobId),
   });
 }
 

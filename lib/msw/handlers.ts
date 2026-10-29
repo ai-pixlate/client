@@ -884,6 +884,14 @@ export const handlers = [
     return HttpResponse.json(response);
   }),
 
+  // 작업 취소 (API-JOB-04) — 204 본문 없음. N1 draft를 버린다(이후 같은 jobId 요청은 404).
+  http.delete('/jobs/:jobId', ({ params }) => {
+    const jobId = params.jobId as string;
+    if (jobId !== MOCK_JOB_ID || !n1Draft) return contractError(404, 'NOT_FOUND', `Job '${jobId}' not found`);
+    n1Draft = null;
+    return new HttpResponse(null, { status: 204 });
+  }),
+
   // ──────────────────────────────────────────
   // N1 → N2 — 분석 시작 (API-ANL-01)
   //
