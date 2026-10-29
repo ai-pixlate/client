@@ -53,6 +53,9 @@ export interface N5History {
 
 export const EMPTY_N5_HISTORY: N5History = { entries: [], pointer: 0 };
 
+/** 보관할 최대 단계 수 — PM 확정(10/29). FE 제품 상수(서버 계약 아님). 넘치면 가장 오래된 것부터 버린다 */
+export const N5_HISTORY_LIMIT = 50;
+
 /**
  * 일반 저장 실패 때 화면을 어떻게 둘지 — FE 내부 개념(PM 확정 10/29).
  * - 'rollback-to-committed': 마지막 저장 성공 값으로 되돌린다(resolveSaveFailed) + 'edit-failed' 안내.
@@ -82,9 +85,12 @@ export function peekRedo(history: N5History): N5EditCommand | null {
   return canRedo(history) ? history.entries[history.pointer] : null;
 }
 
-/** 새 조작의 저장 성공 — 다시 실행 영역을 버리고 끝에 넣는다 */
+/**
+ * 새 조작의 저장 성공 — 다시 실행 영역(pointer 뒤)을 버리고 끝에 넣은 뒤, N5_HISTORY_LIMIT 를 넘으면
+ * 가장 오래된 것부터 버려 최근 단계만 남긴다. pointer 는 항상 남은 목록의 끝(가장 최근 명령 다음)이다.
+ */
 export function pushCommitted(history: N5History, command: N5EditCommand): N5History {
-  const entries = [...history.entries.slice(0, history.pointer), command];
+  const entries = [...history.entries.slice(0, history.pointer), command].slice(-N5_HISTORY_LIMIT);
   return { entries, pointer: entries.length };
 }
 

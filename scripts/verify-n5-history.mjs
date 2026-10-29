@@ -6,6 +6,7 @@
 
 import {
   EMPTY_N5_HISTORY,
+  N5_HISTORY_LIMIT,
   INITIAL_N5_EDIT_SESSION,
   canRedo,
   canStartSave,
@@ -158,6 +159,75 @@ console.log('\n[7] 명령에 revision 을 담지 않는다 · 안내 문구');
   check('실행 취소 실패 문구', N5_SAVE_NOTICE_MESSAGES['undo-failed'] === '실행 취소를 하지 못했습니다. 현재 상태를 유지합니다.');
   check('다시 실행 실패 문구', N5_SAVE_NOTICE_MESSAGES['redo-failed'] === '재실행하지 못했습니다. 현재 상태를 유지합니다.');
   check('일반 저장 실패 문구', N5_SAVE_NOTICE_MESSAGES['edit-failed'] === '변경 사항을 저장하지 못했습니다. 마지막으로 저장된 상태로 돌아갑니다.');
+}
+
+console.log('\n[8] 최대 단계(N5_HISTORY_LIMIT) — 최근 50단계만 유지');
+{
+  const n = (i) => cmd('box-move', i, { x: i - 1, y: 0 }, { x: i, y: 0 });
+  const pushN = (h, from, to) => {
+    for (let i = from; i <= to; i += 1) h = pushCommitted(h, n(i));
+    return h;
+  };
+  const ids = (h) => h.entries.map((c) => c.target.id);
+  const undoAll = (h) => {
+    let count = 0;
+    while (canUndo(h)) {
+      h = commitUndo(h, peekUndo(h));
+      count += 1;
+    }
+    return { h, count };
+  };
+
+  check('제한은 50', N5_HISTORY_LIMIT === 50);
+
+  const h50 = pushN(EMPTY_N5_HISTORY, 1, 50);
+  check('정확히 50개 → 50개 보관', h50.entries.length === 50 && h50.pointer === 50);
+  check('50번까지 실행 취소 가능', undoAll(h50).count === 50);
+
+  const h51 = pushCommitted(h50, n(51));
+  check('51번째 → 50개, 최초(1) 제거', h51.entries.length === 50 && ids(h51)[0] === 2 && ids(h51)[49] === 51 && h51.pointer === 50);
+
+  const h100 = pushN(EMPTY_N5_HISTORY, 1, 120);
+  check('120개 넣어도 50개, 최근 71~120', h100.entries.length === 50 && ids(h100)[0] === 71 && ids(h100)[49] === 120);
+
+  // 잘린 뒤 실행 취소·다시 실행
+  let t = commitUndo(h51, peekUndo(h51));
+  check('잘린 뒤 실행 취소 → 대상은 최신(51), pointer 49', t.pointer === 49 && peekRedo(t).target.id === 51);
+  t = commitRedo(t, peekRedo(t));
+  check('잘린 뒤 다시 실행 → pointer 50', t.pointer === 50 && peekUndo(t).target.id === 51);
+  const all = undoAll(h51);
+  check('잘린 뒤 끝까지 실행 취소하면 50번, 마지막 대상은 2', all.count === 50 && peekRedo(all.h).target.id === 2);
+
+  // 실행 취소 뒤 새 조작: A B C D → Undo Undo → E → A B E
+  let b = pushN(EMPTY_N5_HISTORY, 1, 4);
+  b = commitUndo(b, peekUndo(b));
+  b = commitUndo(b, peekUndo(b));
+  b = pushCommitted(b, n(5));
+  check('A B C D → 2번 실행 취소 → E → A B E, 다시 실행 없음', ids(b).join(',') === '1,2,5' && !canRedo(b));
+
+  // 제한 상태에서 실행 취소 뒤 새 조작 + 잘림
+  let c = pushN(EMPTY_N5_HISTORY, 1, 50);
+  for (let i = 0; i < 3; i += 1) c = commitUndo(c, peekUndo(c));
+  c = pushCommitted(c, n(99));
+  check('50개 중 3번 실행 취소 → 새 조작: 48개(47+1), 다시 실행 영역 제거', c.entries.length === 48 && ids(c)[47] === 99 && !canRedo(c));
+  c = pushN(c, 100, 102);
+  check('이어서 3개 더 → 50개 상한에서 최초(1) 제거', c.entries.length === 50 && ids(c)[0] === 2 && ids(c)[49] === 102);
+
+  // 제한 상태에서 실행 취소·다시 실행 실패 → pointer 불변
+  let s = { history: h51, inFlight: null, notice: null };
+  s = reduceN5EditSession(reduceN5EditSession(s, { type: 'save-started', operation: 'undo' }), { type: 'undo-failed' });
+  check('50개 상태 실행 취소 실패 → 이력·pointer 불변', s.history === h51 && s.history.pointer === 50);
+  const afterUndo = commitUndo(h51, peekUndo(h51));
+  s = { history: afterUndo, inFlight: null, notice: null };
+  s = reduceN5EditSession(reduceN5EditSession(s, { type: 'save-started', operation: 'redo' }), { type: 'redo-failed' });
+  check('50개 상태 다시 실행 실패 → 이력·pointer 불변', s.history === afterUndo && s.history.pointer === 49);
+
+  // 저장 실패한 조작은 제한과 관계없이 추가되지 않는다
+  s = { history: h51, inFlight: null, notice: null };
+  s = reduceN5EditSession(reduceN5EditSession(s, { type: 'save-started', operation: 'edit' }), { type: 'edit-failed', kind: 'box-move' });
+  check('50개 상태 저장 실패 → 이력 불변(최초도 밀려나지 않음)', s.history === h51 && ids(s.history)[0] === 2);
+
+  check('clear → 비움', clearHistory(h100).entries.length === 0 && clearHistory(h100).pointer === 0);
 }
 
 console.log(`\n결과: PASS ${pass} / FAIL ${fail}\n`);
