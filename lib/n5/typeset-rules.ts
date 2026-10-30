@@ -6,7 +6,7 @@
  * 자동 넘침 해소, renderer 입력·버전)은 여기 두지 않는다. API 타입을 바꾸지 않으며, 인자 이름도 API 필드가 아니다.
  *
  * React 도 브라우저 API 도 쓰지 않는다(scripts/verify-n5-typeset-rules.mjs 로 Node 에서 검증).
- * 실제 글자 경계(ink) 측정 엔진은 FE 에 없다 — isInkOverflow 는 측정 결과를 받아 비교만 한다.
+ * 브라우저 측정은 typeset-measurement.ts 가 맡는다 — 여기 overflow 판정은 측정 결과를 받아 비교만 한다.
  */
 
 import type { ApiBlockRole } from '../api/n5-schema';
@@ -99,12 +99,53 @@ export interface InkBounds {
  * 허용 오차(1px·epsilon)나 정수 반올림을 두지 않는다 — +0.115px 도 overflow 다.
  */
 export function isInkOverflow(ink: InkBounds, box: BoundingBox): boolean {
-  return (
-    ink.left < box.x ||
-    ink.top < box.y ||
-    ink.right > box.x + box.width ||
-    ink.bottom > box.y + box.height
+  return inkOverflowSides(ink, box).any;
+}
+
+/** 넘친 방향 — 각 축을 독립적으로 판정한다. any 는 네 방향 중 하나라도 넘쳤는지 */
+export interface OverflowSides {
+  left: boolean;
+  right: boolean;
+  top: boolean;
+  bottom: boolean;
+  any: boolean;
+}
+
+function overflowSides(left: boolean, right: boolean, top: boolean, bottom: boolean): OverflowSides {
+  return { left, right, top, bottom, any: left || right || top || bottom };
+}
+
+/** isInkOverflow 와 같은 비교를 방향별로 돌려준다(경계와 같으면 정상, 허용 오차 없음) */
+export function inkOverflowSides(ink: InkBounds, box: BoundingBox): OverflowSides {
+  return overflowSides(
+    ink.left < box.x,
+    ink.right > box.x + box.width,
+    ink.top < box.y,
+    ink.bottom > box.y + box.height,
   );
+}
+
+/**
+ * 최종 이미지 경계 이탈 감지 — 블록 박스 overflow 와 별개다.
+ * ink 는 섹션 로컬 원본 px, sectionOffset 은 그 섹션 원점이 최종 이미지에서 놓이는 위치(원본 px)다.
+ * 섹션 배치값을 어떻게 구하는지(displayTop 등)는 호출자가 정한다.
+ * 감지만 한다 — N5 확정·N6 저장·다운로드 차단 정책(PM 미승인)과 연결하지 않는다.
+ */
+export function imageBoundaryViolation(
+  ink: InkBounds,
+  sectionOffset: { x: number; y: number },
+  image: { width: number; height: number },
+): OverflowSides & { inkInImage: InkBounds } {
+  const inkInImage: InkBounds = {
+    left: ink.left + sectionOffset.x,
+    top: ink.top + sectionOffset.y,
+    right: ink.right + sectionOffset.x,
+    bottom: ink.bottom + sectionOffset.y,
+  };
+  return {
+    ...overflowSides(inkInImage.left < 0, inkInImage.right > image.width, inkInImage.top < 0, inkInImage.bottom > image.height),
+    inkInImage,
+  };
 }
 
 /** 조판 텍스트 CSS 계약(React style 객체 형태). 화면에 연결하는 곳은 아직 없다 */

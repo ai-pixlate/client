@@ -2,7 +2,7 @@
  * N5 HTML/CSS 조판 확정 규칙(lib/n5/typeset-rules.ts) 순수 함수 검증.
  *
  * 역할별 기준 style · 원본 폭 배율 · 사용자 글자 배율(누적 곱 없음) · 박스 선택(소수 보존) ·
- * ink overflow 경계 비교(허용 오차 없음) · CSS 계약(pre-line · line-height 1.2 · kerning normal)을 확인한다.
+ * ink overflow 경계 비교(허용 오차 없음, 방향별) · 최종 이미지 경계 이탈 감지 · CSS 계약(pre-line · line-height 1.2 · kerning normal)을 확인한다.
  * layout-edit.ts 의 effectiveFontSize · nextUserScale(±0.05)과 같은 정의인지도 함께 본다.
  *
  * 실행: npm run verify:n5-typeset
@@ -13,6 +13,8 @@ import {
   ROLE_STYLE_DEFAULTS,
   TYPESET_COMMON,
   TYPESET_REFERENCE_WIDTH,
+  imageBoundaryViolation,
+  inkOverflowSides,
   isInkOverflow,
   isTypesetRole,
   resolveActiveBBox,
@@ -111,6 +113,43 @@ check('title 750px × 1.05 → 67.2px · 600 · -0.015em',
 const styleKeys = Object.keys(style).join(',');
 check('말줄임·줄 수 제한·강제 분해 속성 없음', !/textOverflow|lineClamp|WebkitLineClamp|wordBreak|hyphens|overflowWrap|overflow/.test(styleKeys), styleKeys);
 check('원본 폭이 잘못되면 style 없음', typesetTextStyle('body', 0) === null);
+
+console.log('\n[7] ink overflow 방향 — 각 축 독립, isInkOverflow와 같은 의미');
+const noSides = inkOverflowSides(edge, box);
+check('경계 정확히 같음 → 네 방향 모두 false', !noSides.left && !noSides.right && !noSides.top && !noSides.bottom && !noSides.any);
+for (const [side, ink] of [
+  ['left', { ...edge, left: edge.left - 0.001 }],
+  ['right', { ...edge, right: edge.right + 0.115 }],
+  ['top', { ...edge, top: edge.top - 0.001 }],
+  ['bottom', { ...edge, bottom: edge.bottom + 0.115 }],
+]) {
+  const s = inkOverflowSides(ink, box);
+  const others = ['left', 'right', 'top', 'bottom'].filter((k) => k !== side);
+  check(`${side}만 초과 → ${side}만 true`, s[side] && s.any && others.every((k) => !s[k]) && isInkOverflow(ink, box), JSON.stringify(s));
+}
+const both = inkOverflowSides({ left: 0, top: 0, right: 500, bottom: 500 }, box);
+check('사방 초과 → 네 방향 모두 true', both.left && both.right && both.top && both.bottom && both.any);
+
+console.log('\n[8] 최종 이미지 경계 이탈 — 섹션 로컬 ink + 섹션 배치 위치, 경계 같으면 정상');
+const image = { width: 860, height: 3000 };
+const offset = { x: 0, y: 1200 };
+// 섹션 로컬 ink(0, -1200)~(860, 1800) → 이미지 (0,0)~(860,3000): 경계와 정확히 같음
+const exact = imageBoundaryViolation({ left: 0, top: -1200, right: 860, bottom: 1800 }, offset, image);
+check('이미지 경계 정확히 같음 → 정상', !exact.any && !exact.left && !exact.right && !exact.top && !exact.bottom, JSON.stringify(exact));
+check('이미지 좌표 환산값 보존', exact.inkInImage.top === 0 && exact.inkInImage.bottom === 3000 && exact.inkInImage.right === 860);
+const inside = { left: 10, top: 10, right: 100, bottom: 50 };
+for (const [side, ink, sideOffset] of [
+  ['left', { ...inside, left: -0.115 }, { x: 0, y: 0 }],
+  ['right', { ...inside, right: 860.115 }, { x: 0, y: 0 }],
+  ['top', inside, { x: 0, y: -10.115 }],
+  ['bottom', { ...inside, bottom: 1800.115 }, offset],
+]) {
+  const v = imageBoundaryViolation(ink, sideOffset, image);
+  const others = ['left', 'right', 'top', 'bottom'].filter((k) => k !== side);
+  check(`${side} 소수(0.115px) 이탈 → ${side}만 true`, v[side] && v.any && others.every((k) => !v[k]), JSON.stringify(v));
+}
+check('블록 박스 overflow와 이미지 이탈은 별개(박스는 넘쳐도 이미지 안)',
+  isInkOverflow({ ...edge, right: edge.right + 1 }, box) && !imageBoundaryViolation({ ...edge, right: edge.right + 1 }, { x: 0, y: 0 }, image).any);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);
