@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { parseZoomPercentInput, type N5ViewMode } from '@/lib/n5/viewport';
 
 // ─────────────────────────────────────────────────────────────────
-// N5 조작 컨트롤 모음 — ViewModeToggle(번역문/원문 독립 버튼 2개) +
+// N5 조작 컨트롤 모음 — ViewModeToggle(번역 후/번역 전 독립 버튼 2개) +
 // ZoomControls(-/입력/+) + FitControls(fit width/height, compact icon) +
 // PlacementToolbar(하단 배치 편집 툴). Figma 544:3168 기준.
 //
@@ -18,12 +18,11 @@ import { parseZoomPercentInput, type N5ViewMode } from '@/lib/n5/viewport';
 // 않는다. before/after 비교 슬라이더도 아니다 — 같은 block을 번역문 view와
 // 원문 view 사이에서 전환하는 기능이다(재정합, N5 2차 정렬).
 //
-// 라벨(재정합): Figma(node 544:3168, "번역문"/"원문")가 실제 정답이었다 —
-// 이전 "번역 후"/"번역 전"은 v3.4.1 FE 메모 기준 추정이었는데, Figma를 다시
-// 직접 대조한 결과 실제 버튼 문구는 "번역문"/"원문"이 맞다(v3.4.1 메모가
-// 낡은 값이었다). mode 값 자체('translated'/'original')는 그대로 유지한다
-// — 라벨(사람이 보는 문구)만 바꾸고 상태값(코드가 쓰는 값)은 API/selection
-// 로직과 무관하므로 건드릴 이유가 없다.
+// 라벨: 현재 Figma(node 544:3168)와 PRD v3.5.10은 "번역 후"/"번역 전"이다
+// (한때 Figma가 "번역문"/"원문"이었던 시기가 있었다). mode 값 자체
+// ('translated'/'original')는 그대로 유지한다 — 라벨(사람이 보는 문구)만
+// 바꾸고 상태값(코드가 쓰는 값)은 API/selection 로직과 무관하므로 건드릴
+// 이유가 없다.
 //
 // N5 3차 정렬 — render_image_key가 null(번역 렌더 이미지 미완료)이어도 이
 // 토글은 더 이상 disabled 처리하지 않는다. "번역 렌더 이미지가 없다"와
@@ -47,8 +46,8 @@ import { parseZoomPercentInput, type N5ViewMode } from '@/lib/n5/viewport';
 // ─────────────────────────────────────────────────────────────────
 
 const VIEW_MODE_OPTIONS: { mode: N5ViewMode; label: string }[] = [
-  { mode: 'translated', label: '번역문' },
-  { mode: 'original', label: '원문' },
+  { mode: 'translated', label: '번역 후' },
+  { mode: 'original', label: '번역 전' },
 ];
 
 export function ViewModeToggle({
@@ -459,6 +458,71 @@ export function PlacementToolbar({
           <DeleteButton joined={false} />
         </>
       )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────
+// UndoRedoControls — 캔버스 좌하단 독립 그룹(Figma 544:3168 「After」 1512:23333).
+// PlacementToolbar와 별개 그룹이다(Figma에서도 따로 놓인다).
+//
+// PRD F-CFM-03 MVP: 버튼은 보이지만 동작하지 않고 12월 기능임을 툴팁으로 안내한다.
+// 실행 취소 기록·단축키는 만들지 않는다 — 삭제하기(DeleteButton)와 같은 disabled + title 패턴이고,
+// 툴팁 문구는 N6의 「12월 제공 예정」을 그대로 쓴다.
+// 시각은 Figma 그대로다(흰 배경, #eaeaea 1px 테두리, 48×48 두 칸이 붙음, 모서리 각짐).
+// ─────────────────────────────────────────────────────────────────
+
+const UNDO_REDO_COMING_SOON = '12월 제공 예정';
+
+/** Figma 53:1249 「Card/Action/Undo」 20px glyph — 원격 asset 좌표를 20×20 slot 위치 그대로 옮겼다 */
+function UndoIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <g transform="translate(2.75 5.25)" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M4.25 0.75L0.75 4.25L4.25 7.75" />
+        <path d="M1.25 4.25H7.75C9.07608 4.25 10.3479 4.77678 11.2855 5.71447C12.2232 6.65215 12.75 7.92392 12.75 9.25" />
+      </g>
+    </svg>
+  );
+}
+
+/** Figma 53:1270 「Card/Action/Redo」 20px glyph */
+function RedoIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <g transform="translate(3.75 5.25)" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M9.25 0.75L12.75 4.25L9.25 7.75" />
+        <path d="M12.25 4.25H5.75C4.42392 4.25 3.15215 4.77678 2.21447 5.71447C1.27678 6.65215 0.75 7.92392 0.75 9.25" />
+      </g>
+    </svg>
+  );
+}
+
+function UndoRedoButton({ testId, label, children }: { testId: string; label: string; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      data-testid={testId}
+      aria-label={label}
+      title={UNDO_REDO_COMING_SOON}
+      disabled
+      aria-disabled="true"
+      className="flex size-12 shrink-0 cursor-not-allowed items-center justify-center border border-[#eaeaea] bg-white text-[#171717]"
+    >
+      {children}
+    </button>
+  );
+}
+
+export function UndoRedoControls() {
+  return (
+    <div data-testid="n5-undo-redo" role="group" aria-label="실행 취소·다시 실행" className="flex items-start">
+      <UndoRedoButton testId="n5-undo" label="실행 취소">
+        <UndoIcon />
+      </UndoRedoButton>
+      <UndoRedoButton testId="n5-redo" label="다시 실행">
+        <RedoIcon />
+      </UndoRedoButton>
     </div>
   );
 }

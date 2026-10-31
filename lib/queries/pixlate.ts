@@ -9,6 +9,8 @@ import {
   deleteSourceImage,
   reorderSourceImages,
   patchJob,
+  cancelJob,
+  getSectionDetail,
   getSections,
   updateSectionBucket,
   proceedSections,
@@ -28,6 +30,7 @@ import {
   getLibrary,
   getMasterCountries,
   getMasterLanguages,
+  getMasterCategories,
 } from '@/lib/api/pixlate';
 import type { ApiJobPatch } from '@/lib/api/job-schema';
 import {
@@ -35,7 +38,7 @@ import {
   n2DisplayedProgressKey,
   n4DisplayedProgressKey,
 } from '@/lib/processing/displayed-progress-storage';
-import type { ApiBlockPatch, ApiConfirmRequest, ApiJobTaskStatus, ApiTextBlock } from '@/lib/api/n5-schema';
+import type { ApiBlockPatch, ApiConfirmRequest, ApiJobTaskStatus, ApiReviewPreview, ApiTextBlock } from '@/lib/api/n5-schema';
 import type { ApiExportRequest, ApiExportArtifactType } from '@/lib/api/n6-schema';
 import type { ApiSection, ApiSectionBucket, ApiSectionList, ApiSectionPatch } from '@/lib/api/n3-schema';
 
@@ -58,6 +61,8 @@ export const pixlateKeys = {
   job: (jobId: string) => ['pixlate', 'job', jobId] as const,
   tasks: (jobId: string) => ['pixlate', 'job', jobId, 'tasks'] as const,
   sections: (jobId: string) => ['pixlate', 'job', jobId, 'sections'] as const,
+  // sections 아래에 둔다 — bucket 변경 뒤 sections invalidate가 상세까지 함께 갱신한다
+  sectionDetail: (jobId: string, sectionId: number) => ['pixlate', 'job', jobId, 'sections', sectionId] as const,
   sourceImages: (jobId: string) => ['pixlate', 'job', jobId, 'source-images'] as const,
   n5Blocks: (jobId: string) => ['pixlate', 'job', jobId, 'n5-blocks'] as const,
   n5Preview: (jobId: string) => ['pixlate', 'job', jobId, 'n5-preview'] as const,
@@ -67,6 +72,7 @@ export const pixlateKeys = {
   library: () => ['pixlate', 'library'] as const,
   masterCountries: () => ['pixlate', 'master', 'countries'] as const,
   masterLanguages: () => ['pixlate', 'master', 'languages'] as const,
+  masterCategories: () => ['pixlate', 'master', 'categories'] as const,
 };
 
 // ─────────────────────────────────────────────
@@ -111,6 +117,12 @@ export function useReorderSourceImagesMutation() {
 export function usePatchJobMutation() {
   return useMutation({
     mutationFn: ({ jobId, payload }: { jobId: string; payload: ApiJobPatch }) => patchJob(jobId, payload),
+  });
+}
+
+export function useCancelJobMutation() {
+  return useMutation({
+    mutationFn: (jobId: string) => cancelJob(jobId),
   });
 }
 
@@ -193,6 +205,15 @@ export function useSectionsQuery(jobId: string) {
     queryKey: pixlateKeys.sections(jobId),
     queryFn: () => getSections(jobId),
     enabled: !!jobId,
+  });
+}
+
+/** 선택한 섹션 1개의 상세(판정 근거). 카드마다 호출하지 않는다(N+1 금지) — N3 가운데 패널 전용. */
+export function useSectionDetailQuery(jobId: string, sectionId: number | null) {
+  return useQuery({
+    queryKey: pixlateKeys.sectionDetail(jobId, sectionId ?? -1),
+    queryFn: () => getSectionDetail(jobId, sectionId!),
+    enabled: !!jobId && sectionId != null,
   });
 }
 
@@ -441,6 +462,14 @@ export function useMasterLanguagesQuery() {
   });
 }
 
+export function useMasterCategoriesQuery() {
+  return useQuery({
+    queryKey: pixlateKeys.masterCategories(),
+    queryFn: getMasterCategories,
+    staleTime: Infinity,
+  });
+}
+
 // ─────────────────────────────────────────────
 // N3 — 섹션 bucket 변경 (3단계: N3View가 이제 ApiSection/ApiSectionList를
 // 직접 쓰므로 캐시 shape도 실제 {exclude, include}로 맞춘다)
@@ -452,7 +481,12 @@ export function useMasterLanguagesQuery() {
 // optimistic update는 대상 section을 원래 배열에서 빼서 목표 배열로 옮기고
 // bucket 필드만 바꾼다 — exclusionReason/excludedStage는 서버가 파생하는
 // 값이라 FE가 임의로 채워 넣지 않는다. 최신 값은 onSettled의 refetch로 받는다.
-// N5(n5Blocks/n5Preview 캐시)는 이 낙관적 갱신의 영향을 받지 않는다 — 별도 query key.
+//
+// N5도 같은 SEC-03(N3·N5 공용)이라 이 hook을 그대로 쓴다. N5 프리뷰(n5Preview)는
+// 낙관적으로 바꾸지 않는다 — 저장 성공 응답의 bucket/excludedStage만 반영하고,
+// 성공·실패 모두 n5Preview를 다시 받아 서버 정본(displayTop 등 서버 계산값 포함)에
+// 맞춘다(계약: 프리뷰 재조회는 구성 변경 SEC-03·CFM-02 시). 섹션 bucket은 블록·job을
+// 바꾸지 않으므로 n5Blocks/job은 건드리지 않는다.
 // ─────────────────────────────────────────────
 
 export function useUpdateSectionBucketMutation(jobId: string) {
@@ -486,6 +520,18 @@ export function useUpdateSectionBucketMutation(jobId: string) {
 
       return { previous };
     },
+    onSuccess: (saved) => {
+      queryClient.setQueryData<ApiReviewPreview>(pixlateKeys.n5Preview(jobId), (prev) =>
+        prev?.sections
+          ? {
+              ...prev,
+              sections: prev.sections.map((s) =>
+                s.id === saved.id ? { ...s, bucket: saved.bucket, excludedStage: saved.excludedStage ?? null } : s,
+              ),
+            }
+          : prev,
+      );
+    },
     onError: (_err, _vars, context) => {
       if (context?.previous) {
         queryClient.setQueryData(pixlateKeys.sections(jobId), context.previous);
@@ -493,6 +539,7 @@ export function useUpdateSectionBucketMutation(jobId: string) {
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: pixlateKeys.sections(jobId) });
+      queryClient.invalidateQueries({ queryKey: pixlateKeys.n5Preview(jobId) });
     },
   });
 }

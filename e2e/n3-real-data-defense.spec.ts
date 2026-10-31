@@ -1,79 +1,23 @@
-import { test, expect, type Locator, type Page } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 
 import { MOCK_BRAND_ID, MOCK_JOB_ID, mockSectionsResponse } from '@/lib/mock-api/fixtures';
-
-/** dnd-kit PointerSensor(activationConstraint distance:4)를 넘기는 최소 drag. */
-async function dragBetweenZones(page: Page, source: Locator, targetZone: Locator) {
-  const sourceBox = await source.boundingBox();
-  const targetBox = await targetZone.boundingBox();
-  if (!sourceBox || !targetBox) {
-    throw new Error('drag source 또는 target 영역의 위치를 찾을 수 없습니다');
-  }
-  await page.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(targetBox.x + targetBox.width / 2, targetBox.y + targetBox.height / 2, { steps: 10 });
-  await page.mouse.up();
-}
+import { pickRegulatoryClass } from './helpers/n1-regulatory-class';
 
 /**
  * lib/msw/handlers.ts의 toNumericId와 동일한 규칙(끝자리 숫자 추출)이다 —
- * fixture는 '@/' alias를 쓰지 않고 여기서 그대로 옮겨 적는다. mock 데이터의
- * section 개수/bucket 배정이 바뀌어도 이 테스트 파일이 특정 id를 하드코딩하지
- * 않도록, section id는 항상 이 함수로 fixture에서 파생시킨다.
+ * section id는 항상 fixture에서 파생시켜 특정 id 하드코딩을 줄인다.
  */
 function toNumericId(id: string): number {
   const digits = id.match(/\d+/)?.[0];
   return digits ? Number(digits) : 0;
 }
 
-/** 현재 활성화된(active ring이 있는) exclude thumbnail 하나를 동적으로 찾는다. */
-async function getActiveExcludeThumb(page: Page): Promise<Locator> {
-  const thumbs = page.locator('[data-testid^="n3-thumb-exclude-"]');
-  const count = await thumbs.count();
-  for (let i = 0; i < count; i += 1) {
-    const cls = await thumbs.nth(i).getAttribute('class');
-    if (cls?.includes('ring-[#ff6a38]')) return thumbs.nth(i);
-  }
-  throw new Error('active(ring) exclude thumbnail을 찾지 못했습니다');
-}
-
-/**
- * 썸네일(`섹션 {sectionOrder} 미리보기`)과 중앙 상세보기(`섹션 {sectionOrder}
- * 소속 원본 상세페이지`) img는 둘 다 alt에 sectionOrder를 담는다 — 이 값으로
- * "지금 active로 보이는 thumbnail"과 "지금 상세보기에 뜬 section"이 같은
- * section인지, id를 하드코딩하지 않고 동적으로 대조한다.
- */
-async function sectionOrderFromAlt(imgLocator: Locator): Promise<string> {
-  const alt = await imgLocator.getAttribute('alt');
-  const match = alt?.match(/^섹션 (\S+) /);
-  if (!match) throw new Error(`alt에서 섹션 번호를 추출하지 못했습니다: "${alt}"`);
-  return match[1];
-}
-
-async function detailPanelSectionOrder(page: Page): Promise<string> {
-  return sectionOrderFromAlt(page.getByTestId('n3-source-viewport').locator('img'));
-}
-
 // ─────────────────────────────────────────────────────────────────
-// N3 — "실데이터 방어 검증" (10일차 작성, 3단계 Figma 재구성에 맞춰 갱신)
+// N3 — "실데이터 방어 검증" (Figma 1422:10176 · PRD v3.5.10 구조로 갱신)
 //
-// 3단계부터 Section 자체엔 이미지 URL이 없다 — 중앙 뷰포트는
-// SourceImage.fileUrl 전체를 보여주고(테스트에서는 n3-source-viewport로
-// 찾는다), 좌측 nav/우측 sidebar 썸네일은 SourceImage+bbox를 FE가 crop해
-// 만든다. fixture 파일 자체(scripts/make-n3-fixture-images.mjs 생성물)는
-// 그대로이므로 1번 테스트는 손대지 않았다.
-//
-// sectionId는 이제 숫자다(mock: 'sec_03' → id 3, msw handler의 toNumericId
-// 참고) — 문자열 id를 하드코딩하지 않는다.
-//
-// (verdict/bucket 정본 확인 결과) mock 기본 데이터의 exclude/include 개수와
-// "기본 active가 어느 section인지"는 fixture(lib/mock-api/fixtures.ts)의
-// verdictType→bucket 배정에 따라 달라진다 — verdictType='regulatory'
-// (사용자 표시 "규제 위반")는 기본 bucket이 exclude여야 하는 계약값이라
-// (scripts/verify-n3-verdict-contract.mjs), fixture를 그 계약에 맞게
-// 고치면서 sec_02/sec_05도 exclude로 바뀌었다. 이 파일은 그 결과로 exclude
-// 개수(1→3)나 "어떤 id가 기본 active인지"를 더 이상 하드코딩하지 않고,
-// 항상 현재 렌더링된 DOM에서 동적으로 읽는다.
+// N3는 sectionOrder 순 단일 목록 + 선택 섹션 판정 상세 + 선택 섹션 이미지 +
+// 카드 버튼식 bucket 변경이다(드래그·2버킷 영역 없음). mock 기본 데이터:
+// 1(포함) · 2(자동 제외, 규제 위반) · 3(자동 제외, 현지) · 4(포함) · 5(자동 제외, 규제 위반).
 // ─────────────────────────────────────────────────────────────────
 
 async function selectFirstValidOption(page: Page, index: number) {
@@ -96,9 +40,12 @@ async function reachN3(page: Page): Promise<void> {
   await selectFirstValidOption(page, 1); // 언어
 
   await page.getByRole('button', { name: '선택하기' }).click();
-  await page.getByRole('dialog', { name: '카테고리 선택' }).getByRole('button', { name: '바디/헤어' }).click();
+  await page.getByRole('dialog', { name: '카테고리 선택' }).getByRole('button', { name: '선케어' }).click();
+  await page.getByRole('dialog', { name: '카테고리 선택' }).getByRole('button', { name: '선크림' }).click();
+  await page.getByRole('dialog', { name: '카테고리 선택' }).getByRole('button', { name: '확인' }).click(); // PRD F-SRC-04 — [확인]으로 확정
+  await page.getByRole('checkbox', { name: /외부 AI 서비스로 전송됨을 확인했습니다/ }).check(); // F-ACC-04 책임 동의
 
-  await selectFirstValidOption(page, 2); // 규제 분류
+  await pickRegulatoryClass(page, '화장품'); // 규제 분류 — 드롭다운(native select 아님)
 
   await page.getByLabel('파일 선택').setInputFiles({
     name: 'e2e-test.png',
@@ -111,8 +58,11 @@ async function reachN3(page: Page): Promise<void> {
   await expect(page).toHaveURL(new RegExp(`/jobs/${MOCK_JOB_ID}$`));
 
   // 기본 mock N2(analyze → finalize → judge, poll 6회)와 N3 전환 전 완료 표시(app/jobs/[jobId]/page.tsx)를 감안한 여유 타임아웃.
-  await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole('button', { name: '이대로 진행' })).toBeVisible({ timeout: 30_000 });
 }
+
+const card = (page: Page, id: number) => page.getByTestId(`n3-section-card-${id}`);
+const action = (page: Page, id: number) => page.getByTestId(`n3-section-action-${id}`);
 
 test.describe('N3 section 이미지 — 실측 크기 방어 검증', () => {
   const targets = [
@@ -150,7 +100,7 @@ test.describe('N3 section 이미지 — 실측 크기 방어 검증', () => {
     }
   });
 
-  test('mock 기본 job(N3)에서 중앙 뷰포트가 SourceImage 전체를 로드한다', async ({ page }) => {
+  test('mock 기본 job(N3)에서 선택 섹션 이미지(crop)가 실제로 로드된다', async ({ page }) => {
     const failedImages: string[] = [];
     page.on('response', (res) => {
       if (res.request().resourceType() === 'image' && res.status() >= 400) {
@@ -162,227 +112,247 @@ test.describe('N3 section 이미지 — 실측 크기 방어 검증', () => {
 
     await reachN3(page);
 
-    // 좌우 2단 화면(삭제 영역 + 번역 영역)이 정상 렌더된다.
-    await expect(page.getByTestId('n3-exclude-zone')).toBeVisible();
-    await expect(page.getByTestId('n3-include-zone')).toBeVisible();
-
-    // 중앙 원본 상세페이지 뷰포트가 실제 이미지를 로드한다 — Section 자체가
-    // 아니라 SourceImage.fileUrl 전체를 보여준다(3단계 데이터 가정).
-    await expect(page.getByTestId('n3-source-viewport').locator('img')).toBeVisible();
-
+    await expect(page.getByTestId('n3-section-image').locator('img')).toBeVisible();
     expect(pageErrors).toEqual([]);
     expect(failedImages).toEqual([]);
   });
 });
 
-test.describe('N3 — 판정(verdicts) 0건 방어', () => {
-  test('좌우 2단 화면이 정상 렌더되고, 판정 0건인 section이 crash 없이 표시된다', async ({ page }) => {
-    // mock 기본 데이터 중 어떤 section이 기본 active인지는 verdictType→
-    // bucket 배정에 따라 달라질 수 있으므로 특정 id를 가정하지 않는다 —
-    // 이 테스트는 "exclude 목록의 아무 section이나 렌더돼도(verdicts:[]
-    // 포함) crash 없이 뜨는지"를 exclude 전체를 순회해 확인한다.
-    // verdicts[0] 같은 암묵적 가정이 있었다면 어느 section에서든 여기서
-    // crash한다.
-    const pageErrors: Error[] = [];
-    page.on('pageerror', (err) => pageErrors.push(err));
-
+test.describe('N3 — 단일 목록 구조', () => {
+  test('모든 섹션이 sectionOrder 순 단일 목록이고, 2버킷 영역·드래그 안내가 없다', async ({ page }) => {
     await reachN3(page);
 
-    await expect(page.getByTestId('n3-exclude-zone')).toBeVisible();
-    await expect(page.getByTestId('n3-include-zone')).toBeVisible();
+    const expectedOrder = [...mockSectionsResponse.sections]
+      .sort((a, b) => a.sectionOrder - b.sectionOrder)
+      .map((s) => `n3-section-card-${toNumericId(s.sectionId)}`);
+    const cards = page.getByTestId('n3-section-list').locator('[data-testid^="n3-section-card-"]');
+    await expect(cards).toHaveCount(expectedOrder.length);
+    expect(await cards.evaluateAll((els) => els.map((el) => el.getAttribute('data-testid')))).toEqual(expectedOrder);
 
-    const excludeThumbs = page.locator('[data-testid^="n3-thumb-exclude-"]');
-    const count = await excludeThumbs.count();
-    expect(count, '이 검증이 의미 있으려면 exclude 후보가 최소 1개는 있어야 한다').toBeGreaterThan(0);
-
-    for (let i = 0; i < count; i += 1) {
-      await excludeThumbs.nth(i).click();
-      await expect(page.getByTestId('n3-source-viewport')).toBeVisible();
-    }
-
-    expect(pageErrors, `pageerror 발생: ${pageErrors.map((e) => e.message).join(', ')}`).toEqual([]);
-  });
-});
-
-test.describe('N3 — 기본 active section', () => {
-  test('exclude thumbnail 중 정확히 하나가 active이고, 상세보기가 그 section과 일치한다', async ({
-    page,
-  }) => {
-    await reachN3(page);
-
-    const excludeThumbs = page.locator('[data-testid^="n3-thumb-exclude-"]');
-    const count = await excludeThumbs.count();
-    expect(count, '기본 mock 데이터에 exclude 후보가 있어야 한다').toBeGreaterThan(0);
-
-    let activeCount = 0;
-    let activeIndex = -1;
-    for (let i = 0; i < count; i += 1) {
-      const cls = await excludeThumbs.nth(i).getAttribute('class');
-      if (cls?.includes('ring-[#ff6a38]')) {
-        activeCount += 1;
-        activeIndex = i;
-      }
-    }
-    expect(activeCount, 'exclude thumbnail 중 정확히 하나만 active ring을 가져야 한다').toBe(1);
-
-    // "id=N이 기본 active여야 한다"가 아니라, 지금 active로 표시된
-    // thumbnail과 중앙 상세보기가 같은 section을 가리키는지만 확인한다.
-    const activeThumbOrder = await sectionOrderFromAlt(excludeThumbs.nth(activeIndex).locator('img'));
-    const detailOrder = await detailPanelSectionOrder(page);
-    expect(detailOrder, '중앙 상세보기의 section이 active thumbnail과 일치해야 한다').toBe(activeThumbOrder);
-
-    // verdict column도 같은 DetailPanel 트리에서 그 section을 그린다 —
-    // crash 없이 렌더됐는지만 함께 확인한다(내용은 판정 0건 방어 테스트가 맡는다).
-    await expect(page.getByTestId('n3-source-viewport')).toBeVisible();
-  });
-});
-
-test.describe('N3 — drag 후 다른 thumbnail click 회귀 방지', () => {
-  test('drag→drop 직후(지연 없이) 다른 exclude thumbnail을 클릭해도 active section이 바뀐다', async ({
-    page,
-  }) => {
-    // 4단계에서 재현·확정한 회귀: dnd-kit AbstractPointerSensor.detach()가
-    // drag 종료 시 document capture 단계의 click 억제 리스너를 즉시 지우지
-    // 않고 setTimeout(..., 50)으로 50ms 뒤에 지운다 — 그 사이의 click은
-    // 어떤 엘리먼트를 눌러도 capture 단계에서 stopPropagation되어 target까지
-    // 도달하지 못한다(React onClick도, native addEventListener('click')도
-    // 실행되지 않음을 실측 확인). optimistic update로 화면이 즉시 갱신되는
-    // 이 앱에서는 drop 직후 바로 이어지는 클릭이 그 50ms 창에 들어가는 게
-    // 충분히 재현 가능하다 — 그래서 이 테스트는 일부러 drag→click 사이에
-    // 아무 대기도 넣지 않는다(가장 나쁜 타이밍을 그대로 재현).
-    const pageErrors: Error[] = [];
-    page.on('pageerror', (err) => pageErrors.push(err));
-
-    await reachN3(page);
-
-    // 1. 현재 active exclude thumbnail을 동적으로 찾는다(특정 id 가정 없음).
-    const originalActive = await getActiveExcludeThumb(page);
-    const originalOrder = await sectionOrderFromAlt(originalActive.locator('img'));
-    await expect(originalActive).toHaveClass(/ring-\[#ff6a38\]/);
-
-    // 2. 그 section을 include로 drag한다.
-    await dragBetweenZones(page, originalActive, page.getByTestId('n3-include-zone'));
-
-    // 3. 남아 있는 exclude 중 "지금(자동 전환됐을 수 있는) active와 다른"
-    // thumbnail 하나를 동적으로 고른다 — 우연히 같은 걸 고르면 클릭해도
-    // active가 안 바뀌어 회귀를 검증하지 못하므로, 반드시 다른 걸 고른다.
-    const remainingExclude = page.locator('[data-testid^="n3-thumb-exclude-"]');
-    const remainingCount = await remainingExclude.count();
-    expect(remainingCount, '이 시나리오는 옮긴 뒤에도 exclude 후보가 남아 있어야 성립한다').toBeGreaterThan(0);
-
-    let currentActiveOrder: string | null = null;
-    try {
-      const currentActive = await getActiveExcludeThumb(page);
-      currentActiveOrder = await sectionOrderFromAlt(currentActive.locator('img'));
-    } catch {
-      currentActiveOrder = null;
-    }
-
-    let target: Locator | null = null;
-    let targetOrder = '';
-    for (let i = 0; i < remainingCount; i += 1) {
-      const order = await sectionOrderFromAlt(remainingExclude.nth(i).locator('img'));
-      if (order !== currentActiveOrder) {
-        target = remainingExclude.nth(i);
-        targetOrder = order;
-        break;
-      }
-    }
-    expect(target, '현재 active와 다른 exclude thumbnail이 최소 하나 있어야 이 시나리오가 성립한다').not.toBeNull();
-
-    // 4. drop 직후 지연 없이 target을 바로 클릭한다.
-    await target!.click();
-
-    // 5. active ring이 클릭한 thumbnail로 이동한다.
-    await expect(target!).toHaveClass(/ring-\[#ff6a38\]/);
-
-    // 6. 중앙 상세보기/판정 내용도 target section으로 바뀐다.
-    const detailOrder = await detailPanelSectionOrder(page);
-    expect(detailOrder).toBe(targetOrder);
-    expect(detailOrder).not.toBe(originalOrder);
-
-    expect(pageErrors, `pageerror 발생: ${pageErrors.map((e) => e.message).join(', ')}`).toEqual([]);
+    await expect(page.getByTestId('n3-exclude-zone')).toHaveCount(0);
+    await expect(page.getByTestId('n3-include-zone')).toHaveCount(0);
+    await expect(page.getByText('삭제할 섹션', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('번역할 섹션', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('끌어다 놓', { exact: false })).toHaveCount(0);
   });
 
-  test('drag 없이 일반 click만으로도 active section이 정상 전환된다', async ({ page }) => {
-    // 회귀 수정이 "drag를 거친 뒤"만 고치고 평범한 클릭 경로를 깨지
-    // 않았는지 확인한다. mock 기본 데이터가 이미 exclude 2개 이상을
-    // 갖고 있다는 전제만 확인하고(드래그로 개수를 인위적으로 만들지
-    // 않는다), 그 중 첫 번째/두 번째 thumbnail을 동적으로 골라 클릭
-    // 왕복이 정상 전환되는지 본다.
+  test('포함·자동 제외 카드의 칩과 버튼 문구가 상태별로 다르다', async ({ page }) => {
     await reachN3(page);
-
-    const excludeThumbs = page.locator('[data-testid^="n3-thumb-exclude-"]');
-    const count = await excludeThumbs.count();
-    expect(count, '이 시나리오는 exclude 후보가 2개 이상이어야 한다').toBeGreaterThanOrEqual(2);
-
-    const thumbA = excludeThumbs.nth(0);
-    const thumbB = excludeThumbs.nth(1);
-
-    await thumbA.click();
-    await expect(thumbA).toHaveClass(/ring-\[#ff6a38\]/);
-    await expect(thumbB).not.toHaveClass(/ring-\[#ff6a38\]/);
-
-    await thumbB.click();
-    await expect(thumbB).toHaveClass(/ring-\[#ff6a38\]/);
-    await expect(thumbA).not.toHaveClass(/ring-\[#ff6a38\]/);
-
-    await thumbA.click();
-    await expect(thumbA).toHaveClass(/ring-\[#ff6a38\]/);
-    await expect(thumbB).not.toHaveClass(/ring-\[#ff6a38\]/);
-  });
-});
-
-test.describe('N3 — active section 자동 보정', () => {
-  test('exclude를 하나씩 include로 옮길 때마다 active가 안전하게 다음 후보로 넘어가고, 0개가 되면 empty state로 간다', async ({
-    page,
-  }) => {
-    // "한 번/두 번 옮기면 0개"처럼 초기 개수를 가정하지 않는다 — 지금
-    // 렌더된 exclude 개수를 읽어서 그만큼 반복하고, 매 반복마다 "남은
-    // 후보가 있으면 다른 section이 active가 되는지", "0개가 되면 empty
-    // state가 뜨는지"만 검증한다.
-    await reachN3(page);
-
-    const excludeThumbs = page.locator('[data-testid^="n3-thumb-exclude-"]');
-    let remaining = await excludeThumbs.count();
-    expect(remaining, '이 시나리오는 exclude 후보가 최소 1개는 있어야 성립한다').toBeGreaterThan(0);
-
-    while (remaining > 0) {
-      const active = await getActiveExcludeThumb(page);
-      const activeOrder = await sectionOrderFromAlt(active.locator('img'));
-
-      await dragBetweenZones(page, active, page.getByTestId('n3-include-zone'));
-
-      const nextCount = await excludeThumbs.count();
-      expect(nextCount, '방금 옮긴 만큼 exclude 개수가 정확히 하나 줄어야 한다').toBe(remaining - 1);
-
-      if (nextCount > 0) {
-        // 다른 section이 자동으로 active가 된다 — 방금 옮긴 section과
-        // 같은 section이 다시 active로 남아있으면 안 된다.
-        const nextActive = await getActiveExcludeThumb(page);
-        const nextActiveOrder = await sectionOrderFromAlt(nextActive.locator('img'));
-        expect(nextActiveOrder, '방금 옮긴 section이 아니라 남은 다른 후보로 active가 넘어가야 한다').not.toBe(
-          activeOrder,
-        );
-        await expect(page.locator('text=삭제 후보로 남은 섹션이 없습니다')).toHaveCount(0);
+    for (const s of mockSectionsResponse.sections) {
+      const id = toNumericId(s.sectionId);
+      if (s.bucket === 'include') {
+        await expect(card(page, id)).toHaveAttribute('data-kind', 'include');
+        await expect(card(page, id)).toContainText('번역 예정');
+        await expect(action(page, id)).toHaveText('제외하기');
       } else {
-        await expect(page.locator('text=삭제 후보로 남은 섹션이 없습니다')).toBeVisible();
+        await expect(card(page, id)).toHaveAttribute('data-kind', 'autoExcluded');
+        await expect(action(page, id)).toHaveText('그래도 번역하기');
       }
-
-      remaining = nextCount;
     }
+  });
+});
+
+test.describe('N3 — 선택', () => {
+  test('기본으로 첫 제외 섹션 하나만 선택되고, 상세 제목·이미지가 그 섹션을 가리킨다', async ({ page }) => {
+    await reachN3(page);
+    const firstExclude = [...mockSectionsResponse.sections]
+      .sort((a, b) => a.sectionOrder - b.sectionOrder)
+      .find((s) => s.bucket === 'exclude')!;
+    const id = toNumericId(firstExclude.sectionId);
+
+    await expect(page.locator('[data-testid^="n3-section-card-"][aria-pressed="true"]')).toHaveCount(1);
+    await expect(card(page, id)).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('n3-detail-title')).toHaveText(`SECTION ${String(firstExclude.sectionOrder).padStart(2, '0')}`);
+    await expect(page.getByTestId('n3-section-image')).toHaveAttribute('data-section-id', String(id));
+  });
+
+  test('모든 카드를 클릭으로 선택할 수 있고, 선택 카드에만 orange 테두리가 붙는다', async ({ page }) => {
+    const pageErrors: Error[] = [];
+    page.on('pageerror', (err) => pageErrors.push(err));
+    await reachN3(page);
+
+    for (const s of mockSectionsResponse.sections) {
+      const id = toNumericId(s.sectionId);
+      await card(page, id).click({ position: { x: 150, y: 20 } });
+      await expect(card(page, id)).toHaveAttribute('aria-pressed', 'true');
+      await expect(card(page, id)).toHaveClass(/border-\[#ff6a38\]/);
+      await expect(page.locator('[data-testid^="n3-section-card-"][class*="border-[#ff6a38]"]')).toHaveCount(1);
+      await expect(page.getByTestId('n3-detail-title')).toHaveText(`SECTION ${String(s.sectionOrder).padStart(2, '0')}`);
+      await expect(page.getByTestId('n3-section-image')).toHaveAttribute('data-section-id', String(id));
+    }
+    expect(pageErrors).toEqual([]);
+  });
+
+  test('상세 API는 선택한 섹션만 부른다(카드 수만큼 부르지 않는다)', async ({ page }) => {
+    const detailIds: string[] = [];
+    page.on('request', (req) => {
+      const m = new URL(req.url()).pathname.match(new RegExp(`^/jobs/${MOCK_JOB_ID}/sections/(\\d+)$`));
+      if (req.method() === 'GET' && m) detailIds.push(m[1]);
+    });
+    await reachN3(page);
+    await expect(page.getByTestId('n3-detail-title')).toBeVisible();
+    await expect.poll(() => detailIds.length).toBe(1);
+
+    const includeId = toNumericId(mockSectionsResponse.sections.find((s) => s.bucket === 'include')!.sectionId);
+    await card(page, includeId).click({ position: { x: 150, y: 20 } });
+    await expect.poll(() => detailIds.includes(String(includeId))).toBe(true);
+    expect(new Set(detailIds).size).toBe(2);
+  });
+
+  test('판정이 없는 포함 섹션은 「걸린 판정이 없어요」를 보여 준다', async ({ page }) => {
+    await reachN3(page);
+    const emptyInclude = mockSectionsResponse.sections.find((s) => s.bucket === 'include' && s.verdicts.length === 0)!;
+    await card(page, toNumericId(emptyInclude.sectionId)).click({ position: { x: 150, y: 20 } });
+    await expect(page.getByTestId('n3-verdict-empty')).toHaveText('걸린 판정이 없어요');
+  });
+});
+
+test.describe('N3 — 버튼식 bucket 변경', () => {
+  test('[제외하기] → PATCH exclude, 다시 [번역하기] → PATCH restore, 선택은 유지된다', async ({ page }) => {
+    const patches: { id: string; action: string }[] = [];
+    page.on('request', (req) => {
+      const m = new URL(req.url()).pathname.match(/\/sections\/(\d+)$/);
+      if (req.method() === 'PATCH' && m) patches.push({ id: m[1], action: JSON.parse(req.postData() ?? '{}').action });
+    });
+    await reachN3(page);
+
+    const selectedBefore = await page.locator('[data-testid^="n3-section-card-"][aria-pressed="true"]').getAttribute('data-testid');
+    const includeId = toNumericId(mockSectionsResponse.sections.find((s) => s.bucket === 'include')!.sectionId);
+
+    await action(page, includeId).click();
+    await expect.poll(() => patches.at(-1)).toEqual({ id: String(includeId), action: 'exclude' });
+    await expect(card(page, includeId)).toHaveAttribute('data-bucket', 'exclude');
+    // 버튼은 선택을 바꾸지 않는다
+    await expect(page.locator('[data-testid^="n3-section-card-"][aria-pressed="true"]')).toHaveAttribute('data-testid', selectedBefore!);
+
+    // mock PATCH는 exclusionReason을 비우므로 사유를 단정하지 않는 [번역하기]가 된다
+    await expect(action(page, includeId)).toHaveText('번역하기');
+    await action(page, includeId).click();
+    await expect.poll(() => patches.at(-1)).toEqual({ id: String(includeId), action: 'restore' });
+    await expect(card(page, includeId)).toHaveAttribute('data-bucket', 'include');
+  });
+
+  test('자동 제외 [그래도 번역하기] → PATCH restore', async ({ page }) => {
+    const patches: string[] = [];
+    page.on('request', (req) => {
+      if (req.method() === 'PATCH' && /\/sections\/\d+$/.test(new URL(req.url()).pathname)) {
+        patches.push(JSON.parse(req.postData() ?? '{}').action);
+      }
+    });
+    await reachN3(page);
+    const excludeId = toNumericId(mockSectionsResponse.sections.find((s) => s.bucket === 'exclude')!.sectionId);
+    await action(page, excludeId).click();
+    await expect.poll(() => patches.at(-1)).toBe('restore');
+    await expect(card(page, excludeId)).toHaveAttribute('data-bucket', 'include');
+  });
+});
+
+test.describe('N3 — CTA', () => {
+  test('「이대로 진행」은 포함 섹션이 0개면 비활성 + 이유 안내, 하나라도 되살리면 다시 활성', async ({ page }) => {
+    await reachN3(page);
+    const cta = page.getByTestId('n3-proceed');
+    await expect(cta).toHaveText('이대로 진행');
+    await expect(cta).toBeEnabled();
+    await expect(page.getByRole('button', { name: '번역 시작' })).toHaveCount(0);
+
+    const includeIds = mockSectionsResponse.sections.filter((s) => s.bucket === 'include').map((s) => toNumericId(s.sectionId));
+    for (const id of includeIds) {
+      await action(page, id).click();
+      await expect(card(page, id)).toHaveAttribute('data-bucket', 'exclude');
+    }
+    await expect(cta).toBeDisabled();
+    await expect(page.getByTestId('n3-proceed-notice')).toHaveText('번역 가능한 섹션이 있어야 진행 가능합니다');
+
+    await action(page, includeIds[0]).click();
+    await expect(card(page, includeIds[0])).toHaveAttribute('data-bucket', 'include');
+    await expect(cta).toBeEnabled();
+    await expect(page.getByTestId('n3-proceed-notice')).toHaveCount(0);
+  });
+});
+
+test.describe('N3 — 9월 표시 범위', () => {
+  test('서버 fixture에 channel_policy verdict가 있어도 현재 N3 카드/상세에는 표시되지 않는다', async ({ page }) => {
+    const withChannel = mockSectionsResponse.sections.find((s) => s.verdicts.some((v) => v.verdictType === 'channel_policy'));
+    expect(withChannel, 'fixture에 channel_policy verdict가 있어야 이 검증이 의미 있다').toBeTruthy();
+    const id = toNumericId(withChannel!.sectionId);
+    const channelProblem = withChannel!.verdicts.find((v) => v.verdictType === 'channel_policy')!.problemText;
+    const visibleProblem = withChannel!.verdicts.find((v) => v.verdictType !== 'channel_policy')!.problemText;
+
+    await reachN3(page);
+
+    // 카드: 9월 배지(규제 위반)는 보이고 채널 정책 배지는 없다
+    await expect(card(page, id)).toContainText('규제 위반');
+    await expect(card(page, id)).not.toContainText('채널 정책');
+
+    // 상세: 같은 섹션의 9월 판정 행은 보이고 채널 정책 판정 행은 없다
+    await card(page, id).click({ position: { x: 150, y: 20 } });
+    const detail = page.getByTestId('n3-detail-panel');
+    await expect(detail).toContainText(visibleProblem);
+    await expect(detail).not.toContainText(channelProblem);
+    await expect(detail).not.toContainText('채널 정책');
+    await expect(page.getByText('채널 정책')).toHaveCount(0);
+  });
+
+  test('상세 패널에 옛 「제외 사유」 요약 배지가 없다(사유는 카드 칩·판정 행으로만 보인다)', async ({ page }) => {
+    await reachN3(page);
+    for (const s of mockSectionsResponse.sections) {
+      await card(page, toNumericId(s.sectionId)).click({ position: { x: 150, y: 20 } });
+      const detail = page.getByTestId('n3-detail-panel');
+      await expect(detail).not.toContainText('(자동)');
+      await expect(detail).not.toContainText('직접 제외');
+      await expect(detail).not.toContainText('직접 되살림');
+    }
+  });
+});
+
+test.describe('N3 — ALL_SECTIONS_EXCLUDED 경쟁 상태', () => {
+  test('화면은 포함 섹션이 있는데 서버가 409 ALL_SECTIONS_EXCLUDED로 거절하면 N3에 남아 안내하고 목록을 다시 받는다', async ({
+    page,
+  }) => {
+    await reachN3(page);
+    const cta = page.getByTestId('n3-proceed');
+    await expect(cta).toBeEnabled();
+
+    // 다른 탭/사용자가 포함 섹션을 전부 뺀 상황 — 화면 cache는 그대로 두고 서버(MSW) 상태만 바꾼다
+    const includeIds = mockSectionsResponse.sections.filter((s) => s.bucket === 'include').map((s) => toNumericId(s.sectionId));
+    for (const id of includeIds) {
+      const status = await page.evaluate(
+        async ({ path }) =>
+          (await fetch(path, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'exclude' }),
+          })).status,
+        { path: `/jobs/${MOCK_JOB_ID}/sections/${id}` },
+      );
+      expect(status).toBe(200);
+    }
+    await expect(cta, '화면 cache는 아직 포함 섹션이 있다고 본다').toBeEnabled();
+
+    let sectionListGets = 0;
+    page.on('request', (req) => {
+      if (req.method() === 'GET' && new URL(req.url()).pathname === `/jobs/${MOCK_JOB_ID}/sections`) sectionListGets += 1;
+    });
+    const proceedResponse = page.waitForResponse(
+      (res) => res.request().method() === 'POST' && new URL(res.url()).pathname === `/jobs/${MOCK_JOB_ID}/sections/proceed`,
+    );
+    await cta.click();
+    const res = await proceedResponse;
+    expect(res.status()).toBe(409);
+    expect((await res.json()).error.code).toBe('ALL_SECTIONS_EXCLUDED');
+
+    // 화면 유지 + 안내 + 목록 재조회(서버 정본으로 CTA가 다시 막힌다)
+    await expect(page.getByRole('heading', { level: 1, name: '섹션 확인' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '번역 중' })).toHaveCount(0);
+    await expect(page.getByTestId('n3-proceed-notice')).toHaveText('번역 가능한 섹션이 있어야 진행 가능합니다');
+    await expect.poll(() => sectionListGets).toBeGreaterThan(0);
+    for (const id of includeIds) await expect(card(page, id)).toHaveAttribute('data-bucket', 'exclude');
+    await expect(cta).toBeDisabled();
   });
 });
 
 test.describe('N3 — 규제 위반(regulatory) verdict bucket 회귀 방지', () => {
-  test('regulatory verdict section은 기본적으로 exclude rail에 표시된다', async ({ page }) => {
-    // 이번에 실제로 발견·수정한 버그: verdictType='regulatory'(사용자 표시
-    // "규제 위반")를 가진 section(sec_02/sec_05)이 fixture에 bucket:'include'로
-    // 잘못 박혀 있어 "번역할 섹션" rail에 노출되고 있었다. 재발 방지를 위해
-    // "regulatory → exclude"라는 계약(scripts/verify-n3-verdict-contract.mjs)을
-    // 화면 레벨에서 직접 검증한다 — 특정 id를 하드코딩하지 않고, fixture
-    // 데이터 자체에서 regulatory verdict를 가진 section id를 동적으로
-    // 구해서 그 id들이 전부 exclude rail에만 있는지 확인한다.
+  test('regulatory verdict section은 기본적으로 제외 상태(data-bucket=exclude)다', async ({ page }) => {
     const regulatorySectionIds = mockSectionsResponse.sections
       .filter((s) => s.verdicts.some((v) => v.verdictType === 'regulatory'))
       .map((s) => toNumericId(s.sectionId));
@@ -395,14 +365,10 @@ test.describe('N3 — 규제 위반(regulatory) verdict bucket 회귀 방지', (
     await reachN3(page);
 
     for (const id of regulatorySectionIds) {
-      await expect(
-        page.getByTestId(`n3-thumb-exclude-${id}`),
-        `regulatory(규제 위반) verdict를 가진 section(id=${id})이 삭제할 섹션(exclude) rail에 없습니다 — 기본 bucket은 exclude여야 합니다`,
-      ).toBeVisible();
-      await expect(
-        page.getByTestId(`n3-thumb-include-${id}`),
-        `regulatory(규제 위반) verdict를 가진 section(id=${id})이 번역할 섹션(include) rail에도 표시되고 있습니다 — regulatory는 include에 있으면 안 됩니다`,
-      ).toHaveCount(0);
+      await expect(card(page, id), `regulatory section(id=${id})은 기본 bucket이 exclude여야 합니다`).toHaveAttribute(
+        'data-bucket',
+        'exclude',
+      );
     }
   });
 });

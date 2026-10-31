@@ -278,7 +278,7 @@ test.describe('N2 analysisProgress 상세 진행', () => {
     await expect(page.getByText('분석 실패', { exact: true })).toHaveCount(0);
     await expect(page.getByText('이미지 분석에 실패했습니다')).toHaveCount(0);
 
-    await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 25_000 });
+    await expect(page.getByRole('button', { name: '이대로 진행' })).toBeVisible({ timeout: 25_000 });
     const last = responses.at(-1)!;
     expect(last.currentStep).toBe('N3');
     expect(last.hasAnalysisProgress).toBe(false);
@@ -361,7 +361,7 @@ test.describe('N2 analysisProgress 상세 진행', () => {
     ]);
 
     await expect(logCaption(page)).toHaveText('판정 대상 3개 · 완료 1 · 자동 제외 0 · 진행 중 1 · 대기 1');
-    await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 25_000 });
+    await expect(page.getByRole('button', { name: '이대로 진행' })).toBeVisible({ timeout: 25_000 });
     expect(responses.at(-1)?.currentStep).toBe('N3');
     // 마지막 poll 에 analysisProgress 가 없어도 N3 전환이면 완료 표시(5단계 전부 완료)를 그린 뒤 넘어간다
     const rows = await rowsLog(page);
@@ -612,7 +612,7 @@ test.describe('N2 로딩 표현', () => {
   test('L-4. 낮은 % 에서 바로 currentStep=N3 가 와도 100 까지 오르는 완료 표시를 보고 N3 로 넘어간다', async ({ page }) => {
     const rec = await recordProcessing(page);
     await setup(page, [ocr(S1), merge(S1), { progress: 1, stages: stages('done', 'done', 'done'), items: [item(9001, 'ocr', 'job', 'done')], advance: true }]);
-    await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole('button', { name: '이대로 진행' })).toBeVisible({ timeout: 20_000 });
 
     const timeline = formatTimeline(rec);
     const snaps = processingSnaps(rec, N2_TITLE, 'N3');
@@ -635,7 +635,7 @@ test.describe('N2 로딩 표현', () => {
   test('M-1. N3 응답 뒤 완료 표시 동안 상태 태그·LOG·안내가 모두 완료를 말하고, 그 전에는 완료라고 하지 않는다', async ({ page }) => {
     const rec = await recordProcessing(page);
     await setup(page, [ocr(S1), merge(S1), { progress: 1, stages: stages('done', 'done', 'done'), items: [item(9001, 'ocr', 'job', 'done')], advance: true }]);
-    await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole('button', { name: '이대로 진행' })).toBeVisible({ timeout: 20_000 });
 
     const timeline = formatTimeline(rec);
     expectCompletionPresentation(rec, N2_TITLE, 'N3', timeline);
@@ -652,7 +652,7 @@ test.describe('N2 로딩 표현', () => {
     test.setTimeout(60_000);
     const rec = await recordProcessing(page);
     await setup(page, []);
-    await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole('button', { name: '이대로 진행' })).toBeVisible({ timeout: 30_000 });
 
     const timeline = formatTimeline(rec);
     const snaps = processingSnaps(rec, N2_TITLE, 'N3');
@@ -881,7 +881,7 @@ test.describe('N2 대기·재시도·failed 동안 표시 % 일시정지', () =>
     await setup(page, [ocr, ...repeat(LOCAL_JUDGE_EXCLUDED_TICK, 3), N3_ADVANCE]);
     await expect(logCaption(page)).toHaveText(LOCAL_JUDGE_EXCLUDED_LINE, { timeout: 10_000 });
     await expectRows(page, rowsOf(D, D, D, A, A));
-    await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 25_000 });
+    await expect(page.getByRole('button', { name: '이대로 진행' })).toBeVisible({ timeout: 25_000 });
 
     const timeline = formatTimeline(rec);
     const snaps = processingSnaps(rec, N2_TITLE, 'N3');
@@ -899,7 +899,7 @@ test.describe('N2 대기·재시도·failed 동안 표시 % 일시정지', () =>
   test('P-8. waiting 으로 멈춘 낮은 숫자에서 N3 가 오면 그 숫자에서 100 까지 오르는 완료 표시 뒤 N3 로 넘어간다', async ({ page }) => {
     const rec = await recordProcessing(page);
     await setup(page, [ocr, ocr, analyzePaused('waiting'), analyzePaused('waiting'), N3_ADVANCE]);
-    await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 25_000 });
+    await expect(page.getByRole('button', { name: '이대로 진행' })).toBeVisible({ timeout: 25_000 });
 
     const timeline = formatTimeline(rec);
     const snaps = processingSnaps(rec, N2_TITLE, 'N3');
@@ -998,7 +998,7 @@ test.describe('N2 대기·재시도·failed 동안 표시 % 일시정지', () =>
   test('P-15. [방어] 상세 failed 와 jobStatus 가 불일치해 멈춘 낮은 숫자에서 N3 가 오면 그 숫자에서 100 까지 오르는 완료 표시 뒤 N3 로 넘어간다', async ({ page }) => {
     const rec = await recordProcessing(page);
     await setup(page, [ocr, ocr, judgeFailed, judgeFailed, N3_ADVANCE]);
-    await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 25_000 });
+    await expect(page.getByRole('button', { name: '이대로 진행' })).toBeVisible({ timeout: 25_000 });
 
     const timeline = formatTimeline(rec);
     const snaps = processingSnaps(rec, N2_TITLE, 'N3');

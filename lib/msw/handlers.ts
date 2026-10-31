@@ -12,9 +12,16 @@ import {
   mockN6Components,
   mockN6Validation,
 } from '@/lib/mock-api/fixtures';
-import { mockN5Job, mockN5Blocks, mockN5PreviewSections, buildMockN5Preview } from '@/lib/mock-api/n5-fixtures';
+import {
+  mockN5Job,
+  mockN5Blocks,
+  mockN5PreviewSections,
+  buildMockN5Preview,
+  type MockN5PreviewSection,
+} from '@/lib/mock-api/n5-fixtures';
 import { mockLibraryCards } from '@/lib/mock-api/library-fixtures';
 import { mockMasterCountries, mockMasterLanguages } from '@/lib/mock-api/master-fixtures';
+import { mockMasterCategories } from '@/lib/mock-api/category-fixtures';
 import type { ApiJob, ApiJobAsyncTaskItem, ApiTextBlock } from '@/lib/api/n5-schema';
 import type { ApiAcceptedTask, ApiAnalysisProgress, ApiJobPatch, ApiSourceImageUploadResult } from '@/lib/api/job-schema';
 import type {
@@ -54,6 +61,35 @@ const sectionState = new Map<string, {
     { bucket: s.bucket, exclusionReason: s.exclusionReason, excludedStage: s.excludedStage },
   ])
 );
+
+/**
+ * N5 프리뷰 섹션의 현재 bucket/excludedStage — SEC-03(N3·N5 공용 PATCH)이 숫자 id 501~505
+ * 를 받으면 이 목록을 바꾸고, GET /preview 와 confirm 의 전 섹션 제외 검사가 이 목록을 읽는다.
+ * 위 sectionState(N3 fixture, 1~5)와 id 가 겹치지 않아 서로 영향을 주지 않는다.
+ */
+let n5PreviewSectionState: MockN5PreviewSection[] = mockN5PreviewSections.map((s) => ({ ...s }));
+
+/** N5 프리뷰 섹션 → SEC-03 응답 Section. 이 fixture 에 없는 판정·bbox 정보는 null/빈 배열로 둔다. */
+function toWireN5Section(section: MockN5PreviewSection): ApiSection {
+  const displayTop = buildMockN5Preview(n5PreviewSectionState).sections.find((s) => s.id === section.id)?.displayTop ?? null;
+  return {
+    id: section.id,
+    sectionOrder: section.sectionOrder,
+    sourceImageId: section.sourceImageId,
+    topOffset: null,
+    displayTop,
+    height: section.height,
+    bbox: null,
+    category: null,
+    bucket: section.bucket,
+    exclusionReason: null,
+    excludedStage: section.excludedStage,
+    inpaintStatus: null,
+    warningBadge: null,
+    verdicts: [],
+    signals: [],
+  };
+}
 
 /**
  * 2단계(API 계약 정합화): fixture 내부 문자열 id('sec_01', 'src_mock_001')를
@@ -184,6 +220,7 @@ function resetJobState() {
   n6RenderTaskState.clear();
   n6ExportArtifactState.clear();
   mockJobSavedAt = null;
+  n5PreviewSectionState = mockN5PreviewSections.map((s) => ({ ...s }));
 }
 
 /**
@@ -827,7 +864,8 @@ export const handlers = [
       productName: n1Draft.patch.productName ?? null,
       productCode: n1Draft.patch.productCode ?? null,
     };
-    const { productName, productCode, targetCountry, regulatoryClass, targetLanguage, specType, keywords, imageType } = n1Draft.patch;
+    const { productName, productCode, targetCountry, regulatoryClass, targetLanguage, specType, categoryId, keywords, imageType } =
+      n1Draft.patch;
     const response: ApiJob = {
       ...jobState,
       status: 'draft',
@@ -839,10 +877,19 @@ export const handlers = [
       regulatoryClass: regulatoryClass ?? null,
       targetLanguage: targetLanguage ?? null,
       specType: specType ?? undefined,
+      categoryId: categoryId ?? null,
       keywords: keywords ?? [],
       imageType: imageType ?? null,
     };
     return HttpResponse.json(response);
+  }),
+
+  // 작업 취소 (API-JOB-04) — 204 본문 없음. N1 draft를 버린다(이후 같은 jobId 요청은 404).
+  http.delete('/jobs/:jobId', ({ params }) => {
+    const jobId = params.jobId as string;
+    if (jobId !== MOCK_JOB_ID || !n1Draft) return contractError(404, 'NOT_FOUND', `Job '${jobId}' not found`);
+    n1Draft = null;
+    return new HttpResponse(null, { status: 204 });
   }),
 
   // ──────────────────────────────────────────
@@ -897,6 +944,29 @@ export const handlers = [
   }),
 
   // ──────────────────────────────────────────
+  // N3 — 섹션 상세(API-SEC-02). 계약상 판정 근거 전체를 준다. 목록과 같은
+  // 인메모리 bucket 상태로 조립한다.
+  // ──────────────────────────────────────────
+  http.get('/jobs/:jobId/sections/:sectionId', ({ params }) => {
+    const jobId = params.jobId as string;
+    if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
+
+    const sectionIdNum = Number(params.sectionId);
+    const sec = mockSectionsResponse.sections.find((s) => toNumericId(s.sectionId) === sectionIdNum);
+    if (!sec) return notFound(`Section '${params.sectionId}' not found`);
+
+    const state = sectionState.get(sec.sectionId);
+    return HttpResponse.json(
+      toWireSection(
+        sec,
+        state?.bucket ?? sec.bucket,
+        state?.exclusionReason ?? sec.exclusionReason,
+        state?.excludedStage ?? sec.excludedStage,
+      ),
+    );
+  }),
+
+  // ──────────────────────────────────────────
   // N3 / N5 — 섹션 bucket 변경 (포함 / 제외 전환). 2단계: 실제 계약대로
   // sectionId는 path의 숫자, body는 { action: 'restore' | 'exclude' }다 —
   // 이전 mock의 { bucket } body는 실제 계약에 없다. restore=include로
@@ -911,6 +981,25 @@ export const handlers = [
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
 
     const sectionIdNum = Number(params.sectionId);
+
+    // N5 프리뷰 섹션(501~505) — 계약: "N5에서 excludedStage=N3 조작 시 409 INVALID_STATE"
+    const n5Section = n5PreviewSectionState.find((s) => s.id === sectionIdNum);
+    if (n5Section) {
+      const n5Body = (await request.json()) as Record<string, unknown>;
+      if (n5Body.action !== 'restore' && n5Body.action !== 'exclude') {
+        return badRequest("action은 'restore' 또는 'exclude'여야 합니다");
+      }
+      if (jobState.currentStep === 'N5' && n5Section.excludedStage === 'N3') {
+        return contractError(409, 'INVALID_STATE', 'N3에서 제외된 섹션은 N5에서 변경할 수 없습니다');
+      }
+      const updated: MockN5PreviewSection =
+        n5Body.action === 'restore'
+          ? { ...n5Section, bucket: 'include', excludedStage: null }
+          : { ...n5Section, bucket: 'exclude', excludedStage: (jobState.currentStep as 'N3' | 'N5' | undefined) ?? null };
+      n5PreviewSectionState = n5PreviewSectionState.map((s) => (s.id === updated.id ? updated : s));
+      return HttpResponse.json(toWireN5Section(updated));
+    }
+
     const sec = mockSectionsResponse.sections.find((s) => toNumericId(s.sectionId) === sectionIdNum);
     if (!sec || !sectionState.has(sec.sectionId)) {
       return notFound(`Section '${params.sectionId}' not found`);
@@ -1014,7 +1103,7 @@ export const handlers = [
   http.get('/jobs/:jobId/preview', ({ params }) => {
     const jobId = params.jobId as string;
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
-    return HttpResponse.json(buildMockN5Preview());
+    return HttpResponse.json(buildMockN5Preview(n5PreviewSectionState));
   }),
 
   // ──────────────────────────────────────────
@@ -1206,7 +1295,7 @@ export const handlers = [
     const jobId = params.jobId as string;
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
 
-    const hasIncludedSection = mockN5PreviewSections.some((s) => s.bucket === 'include');
+    const hasIncludedSection = n5PreviewSectionState.some((s) => s.bucket === 'include');
     if (!hasIncludedSection) {
       return HttpResponse.json(
         {
@@ -1443,6 +1532,8 @@ export const handlers = [
   // ──────────────────────────────────────────
   http.get('/master/countries', () => HttpResponse.json(mockMasterCountries)),
   http.get('/master/languages', () => HttpResponse.json(mockMasterLanguages)),
+  // N1 카테고리 트리 (API-MST-04) — 실서버와 같은 Category 평면 배열
+  http.get('/master/categories', () => HttpResponse.json(mockMasterCategories)),
 
   // ──────────────────────────────────────────
   // presigned 다운로드 URL(mock) — 실제로는 S3 객체다. 위 download 응답의 url 이 이 경로를

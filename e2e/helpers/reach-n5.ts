@@ -1,6 +1,7 @@
 import { type Page, expect, test } from '@playwright/test';
 
 import { MOCK_BRAND_ID, MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
+import { pickRegulatoryClass } from './n1-regulatory-class';
 
 // N1 combobox 순서(Figma 525:3023 재정합 후): 국가 → 언어 → 규제 분류
 // (카테고리는 더 이상 combobox가 아니다 — 검색 표시 필드 + "선택하기" 버튼
@@ -35,13 +36,16 @@ export async function reachN5(page: Page): Promise<void> {
   await selectFirstValidOption(page, 0); // 국가
   await selectFirstValidOption(page, 1); // 언어
 
-  // 카테고리 — "선택하기" 클릭 → 모달(381:6293)에서 하위 데이터가 없는
-  // 최상위 항목("바디/헤어")을 눌러 즉시 선택·닫힘 처리한다(가장 짧은 경로).
+  // 카테고리 — "선택하기" 클릭 → 모달(381:6293)에서
+  // 소분류가 없는 중분류("선케어 > 선크림")를 고른 뒤 [확인]으로 확정한다(가장 짧은 경로).
   await page.getByRole('button', { name: '선택하기' }).click();
   const categoryModal = page.getByRole('dialog', { name: '카테고리 선택' });
-  await categoryModal.getByRole('button', { name: '바디/헤어' }).click();
+  await categoryModal.getByRole('button', { name: '선케어' }).click();
+  await categoryModal.getByRole('button', { name: '선크림' }).click();
+  await categoryModal.getByRole('button', { name: '확인' }).click(); // PRD F-SRC-04 — [확인]으로 확정
+  await page.getByRole('checkbox', { name: /외부 AI 서비스로 전송됨을 확인했습니다/ }).check(); // F-ACC-04 책임 동의
 
-  await selectFirstValidOption(page, 2); // 규제 분류 (카테고리가 combobox에서 빠지며 인덱스가 3→2로 당겨졌다)
+  await pickRegulatoryClass(page, '화장품'); // 규제 분류 — 드롭다운(native select 아님)
 
   await page.getByLabel('파일 선택').setInputFiles({
     name: 'e2e-test.png',
@@ -58,9 +62,9 @@ export async function reachN5(page: Page): Promise<void> {
   // N3 고유 UI가 나타날 때까지 대기 (고정 sleep 대신 polling 완료를 기다림).
   // 기본 mock N2(analyze → finalize → judge, poll 6회)와 N3 전환 전 완료 표시(app/jobs/[jobId]/page.tsx)를 감안한
   // 여유 타임아웃.
-  await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole('button', { name: '이대로 진행' })).toBeVisible({ timeout: 30_000 });
 
-  await page.getByRole('button', { name: '번역 시작' }).click();
+  await page.getByRole('button', { name: '이대로 진행' }).click();
   // N4는 N2와 같은 ProcessingStageLayout을 공유하는 Figma(660:4221) 기준
   // 실제 화면이다(placeholder였던 "번역을 진행하고 있습니다" 문구는 폐기).
   await expect(page.getByRole('heading', { name: '번역 중' })).toBeVisible();

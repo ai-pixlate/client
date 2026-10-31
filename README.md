@@ -60,10 +60,16 @@ Secret(JWT, access token, password 등)은 절대 Git에 커밋하지 않습니�
 | `npm run typecheck` | 타입 검사 (`tsc --noEmit`) |
 | `npm run verify:coords` | **좌표 변환 자동 검증** (브라우저 불필요) |
 | `npm run verify:n5-adapter` | N5 Adapter(OpenAPI DTO → ViewModel) 자동 검증 (브라우저 불필요) |
+| `npm run verify:n5-layout-edit` | N5 배치 영역 편집 순수 계산(이동·크기 조절·[+][-]·가운데선 snap, 섹션 경계) 자동 검증 (브라우저 불필요) |
+| `npm run verify:n5-history` | N5 실행 취소·다시 실행 이력 엔진(저장 성공 뒤 commit, 실패 시 불변) 자동 검증 (브라우저 불필요) |
+| `npm run verify:n5-failed-drafts` | N5 번역문 미저장 초안(편집·저장 성공/실패 전이, 실패 칸 집계, 확인창 문구) 자동 검증 (브라우저 불필요) |
+| `npm run verify:n5-typeset` | N5 HTML/CSS 조판 확정 규칙(역할별 기준 style·원본 폭 배율·사용자 글자 배율·박스 선택·ink overflow 경계와 방향·최종 이미지 경계 이탈 감지·CSS 계약) 순수 함수 자동 검증 (브라우저 불필요) |
+| `npx playwright test e2e/n5-typeset-measurement.spec.ts --project=chromium` | N5 조판 브라우저 측정 엔진(`lib/n5/typeset-measurement.ts`) 검증 — dev 전용 harness `/spike/typeset-measure`에서 실제 줄바꿈·DOM baseline·Canvas ink·Pretendard 로딩을 확인하고 픽셀·clean 문서와 대조 (Chromium, dev 서버·Pretendard CDN 필요) |
 | `npm run verify:library-adapter` | M1 보관함 Adapter(LibraryCard → 카드 ViewModel) 자동 검증 (브라우저 불필요) |
 | `npm run verify:library-view` | M1 보관함 화면 로직(검색·국가 필터·최신순·선택·날짜 포맷) 자동 검증 (브라우저 불필요) |
 | `npm run verify:msw-flag` | `isApiMockingEnabled()`(MSW on/off SSOT)가 `NEXT_PUBLIC_API_MOCKING` 값 조합에서 `NODE_ENV`와 무관하게 정확히 동작하는지 자동 검증 (브라우저 불필요) |
 | `npm run verify:displayed-progress` | N2·N4 처리 화면 표시 %(관측 단계는 상한만 염·점프·감소 없음·처리 중 100 없음·실패 시 멈춤·완료 응답 뒤 100 표시) 순수 계산 자동 검증 (브라우저 불필요) |
+| `npm run verify:n1-category` | N1 카테고리 트리(GET /master/categories → 트리, 하위 없는 항목만 leaf)와 [다음] 진행 조건 순수 함수 자동 검증 (브라우저 불필요) |
 | `npm run generate:openapi-types` | 최신 OpenAPI 계약(`ai-pixlate.github.io/server/openapi.yaml`)에서 타입 재생성 → `lib/api/generated/openapi.d.ts` (직접 수정 금지, 재실행으로만 갱신) |
 | `npm run make:ruler` | 스파이크용 눈금 테스트 이미지 재생성 |
 | `npm run make:n5-section-fixtures` | N5 실제 계약(v3.4.2, 섹션별 원문/렌더 이미지) mock fixture 이미지 재생성 |

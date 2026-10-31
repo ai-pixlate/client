@@ -10,6 +10,7 @@
 import {
   areAllSectionsExcluded,
   buildAcknowledgedWarnings,
+  canRestoreSectionInN5,
   getInvalidStateWarnings,
   getPreviewContainerWidth,
   getRerenderTaskId,
@@ -297,6 +298,17 @@ console.log('\n[12] areAllSectionsExcluded — 서버가 검사하는 것과 같
     areAllSectionsExcluded([{ bucket: 'exclude' }, { bucket: 'include' }]) === false,
   );
   check('전부 exclude면 true', areAllSectionsExcluded([{ bucket: 'exclude' }, { bucket: 'exclude' }]) === true);
+}
+
+console.log('\n[12-1] canRestoreSectionInN5 — SEC-03: N5 에서 excludedStage=N3 조작은 409');
+{
+  const excluded = { status: 'excluded' };
+  check('N5 에서 제외한 섹션은 되돌릴 수 있다', canRestoreSectionInN5({ render: excluded, excludedStage: 'N5' }) === true);
+  check('N3 에서 제외된 섹션은 N5 에서 되돌릴 수 없다', canRestoreSectionInN5({ render: excluded, excludedStage: 'N3' }) === false);
+  check(
+    '포함 상태 섹션은 되돌리기 대상이 아니다',
+    canRestoreSectionInN5({ render: { status: 'ready', url: 'u' }, excludedStage: null }) === false,
+  );
 }
 
 console.log('\n[13] confirm 에러 판별 — isAllSectionsExcludedError / isInvalidStateError / getInvalidStateWarnings');

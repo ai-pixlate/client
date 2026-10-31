@@ -13,10 +13,10 @@ import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 // logo_match_failed, translation_failed, empty_block,
 // mandatory_term_unapplied)가 서버의 "현재 미해결 경고 집합"이다.
 //
-// 전체 section 제외(ALL_SECTIONS_EXCLUDED)는 이 mock job에서 실제 데이터로
-// 재현할 수 없다 — F-CFM-14 제외/되돌리기가 의도적으로 로컬 전용이라(서버
-// 왕복 없음, 6단계에서도 안 건드림) 서버가 아는 section bucket을 브라우저에서
-// 바꿀 방법이 없다. 그래서 이 경로는 page.addInitScript로 window.fetch 자체를
+// 전체 section 제외(ALL_SECTIONS_EXCLUDED) 409 응답 분기는 여기서 응답을 가로채
+// 재현한다 — F-CFM-14 제외/되돌리기는 이제 SEC-03으로 서버에 저장되지만(실제 전체
+// 제외 시 버튼 비활성은 e2e/n5-section-exclude.spec.ts가 확인), 버튼이 막히기 전에
+// 서버가 409를 돌려주는 경우의 FE 분기는 실제 데이터로 만들 수 없다. 그래서 이 경로는 page.addInitScript로 window.fetch 자체를
 // 감싸 confirm 응답만 가로채 재현한다 — FE의 error.code 분기 로직을 검증하는
 // 것이 목적이다. page.route()/context.route()는 MSW가 Service Worker의
 // fetch 이벤트 안에서 네트워크 왕복 없이 직접 Response를 만들어버려 CDP
