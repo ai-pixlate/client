@@ -9,7 +9,7 @@
  */
 
 import { buildCategoryTree, findCategoryPath, formatCategoryPath, isCategoryLeaf } from '../app/jobs/new/_lib/category-tree.ts';
-import { isN1Ready } from '../app/jobs/new/_lib/n1-readiness.ts';
+import { getN1MissingFields, isN1Ready, resolveN1BrandId } from '../app/jobs/new/_lib/n1-readiness.ts';
 
 let pass = 0;
 let fail = 0;
@@ -91,6 +91,16 @@ check('이미지 없으면 불가', !isN1Ready({ ...ready, imageCount: 0 }));
 check('brandId 없으면 불가', !isN1Ready({ ...ready, brandId: '' }));
 check('OTC는 OTC 종류(화면 게이트)가 있어야 진행', !isN1Ready({ ...ready, regulatoryClass: 'otc' }));
 check('OTC + OTC 종류면 진행', isN1Ready({ ...ready, regulatoryClass: 'combination', otcType: 'M020' }));
+
+check('빠진 항목 이름을 화면 표기로 알려 준다', getN1MissingFields({ ...ready, targetCountry: '', imageCount: 0 }).join() === '국가,이미지');
+check('필수값이 모두 있으면 빠진 항목이 없다', getN1MissingFields(ready).length === 0);
+check('숨겨진 brandId가 없어도 이유를 알려 준다', getN1MissingFields({ ...ready, brandId: '' }).join() === '브랜드 정보');
+
+console.log('\nresolveN1BrandId');
+check('URL 쿼리가 우선한다', resolveN1BrandId('7', 'mock') === '7');
+check('Mock은 쿼리가 없으면 fixture를 쓴다', resolveN1BrandId(null, 'mock') === 'mock');
+check('빈 쿼리도 없는 것으로 본다', resolveN1BrandId('  ', 'mock') === 'mock');
+check('실서버는 쿼리가 없으면 값을 만들지 않는다', resolveN1BrandId(null, null) === '');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

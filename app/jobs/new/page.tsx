@@ -11,8 +11,11 @@ import {
   usePatchJobMutation,
 } from '@/lib/queries/pixlate';
 import type { ApiRegulatoryClass } from '@/lib/api/job-schema';
+import { isApiMockingEnabled } from '@/lib/api/session';
+import { MOCK_BRAND_ID } from '@/lib/mock-api/fixtures';
 import { N1ExitDialog } from './_components/n1-exit-dialog';
 import { RegulatoryClassDropdown, type RegulatoryClassOption } from './_components/regulatory-class-dropdown';
+import { SizeSelection } from './_components/size-selection';
 import { SourceImageUploadStatus } from './_components/source-image-upload-status';
 import {
   buildCategoryTree,
@@ -21,7 +24,7 @@ import {
   isCategoryLeaf,
   type CategoryNode,
 } from './_lib/category-tree';
-import { isN1Ready, requiresOtcType } from './_lib/n1-readiness';
+import { getN1MissingFields, resolveN1BrandId, requiresOtcType } from './_lib/n1-readiness';
 import { useSourceImageUploads } from './_lib/use-source-image-uploads';
 import { StepNav } from '../[jobId]/_components/step-nav';
 
@@ -170,6 +173,15 @@ function CheckIcon() {
   );
 }
 
+function TooltipArrow({ className }: { className: string }) {
+  return (
+    <svg width="12" height="11" viewBox="0 0 12 11" fill="none" aria-hidden="true" className={`absolute top-[calc(100%-1px)] ${className}`}>
+      <path d="M0.5 0.5L6 10L11.5 0.5" fill="white" stroke="#ff6a38" />
+      <path d="M1 0H11" stroke="white" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
 function ChevronRightIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
@@ -193,7 +205,7 @@ function createIdempotencyKey(): string | null {
 
 function FieldLabel({ children, required }: { children: React.ReactNode; required?: boolean }) {
   return (
-    <p className={`text-[16px] tracking-[-0.03em] ${required ? 'text-[#171717]' : 'text-[#707070]'}`}>
+    <p className={`text-[16px] leading-[normal] tracking-[-0.03em] ${required ? 'text-[#171717]' : 'text-[#707070]'}`}>
       {children}
       {required && <span className="ml-1 text-[#ff6a38]">*</span>}
     </p>
@@ -211,18 +223,18 @@ function FieldError({ id, children }: { id: string; children: React.ReactNode })
 }
 
 // ─────────────────────────────────────────────────────────────────
-// 카테고리 선택 모달 (Figma 381:6293 "카테고리 선택")
+// 카테고리 선택 모달 (Figma 1094:10968 「Category Input / Specimen」 1192×468)
 //
-// Figma 프레임은 흰 카드(drop-shadow) + 검색 입력 + 단별 목록뿐이다. 목록은
-// GET /master/categories 트리이고 대분류·중분류·소분류 3단으로 보인다. PRD v3.5.10
-// F-SRC-04는 9월에 [선택하기] 트리 창 + [확인]이고 검색칸은 12월이라, 검색
-// 입력은 숨기고 [취소]·[확인]을 기존 Button 스타일로 보완했다. leaf(하위 없음 —
-// isCategoryLeaf)를 골라야만 [확인]이 열린다. leaf를 눌러도
-// 창 안의 선택만 바뀌고, [확인]을 눌러야 N1 값이 바뀐다. 취소·바깥 클릭·Esc는
-// 선택 전 값을 그대로 둔다. backdrop은 화면을 어둡게 가리지 않는(Figma에 없음)
+// 외곽 크기는 데이터 개수와 무관하게 고정이고, 넘치는 목록은 단 안에서만 스크롤한다.
+// 목록은 GET /master/categories 트리다. PRD v3.5.10 F-SRC-04는 9월에 [선택하기] 트리 창 +
+// [확인]이고 검색칸은 12월이라 검색 입력은 두지 않는다. leaf(하위 없음 — isCategoryLeaf)를
+// 골라야만 [확인]이 열린다. leaf를 눌러도 창 안의 선택만 바뀌고, [확인]을 눌러야 N1 값이 바뀐다.
+// X·바깥 클릭·Esc는 선택 전 값을 그대로 둔다. backdrop은 화면을 어둡게 가리지 않는(Figma에 없음)
 // 투명 캐처다. 불러오는 중·실패는 Figma에 없어 프로젝트 공통 한 줄 문구로 보완했다
 // (실패는 서버 재시도 여부와 무관하게 같은 GET을 다시 부르는 [다시 시도]만 둔다).
 // ─────────────────────────────────────────────────────────────────
+
+const CATEGORY_SCROLLING_RESET_MS = 800;
 
 function CategoryColumn({
   heading,
@@ -237,29 +249,61 @@ function CategoryColumn({
   onSelect: (node: CategoryNode) => void;
   showChevron: boolean;
 }) {
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const scrollingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // 창을 다시 열었을 때 고른 항목이 목록 아래쪽이면 보이는 위치로 옮긴다
+  useEffect(() => {
+    scrollerRef.current?.querySelector('[aria-pressed="true"]')?.scrollIntoView({ block: 'nearest' });
+    return () => {
+      if (scrollingTimerRef.current) clearTimeout(scrollingTimerRef.current);
+    };
+  }, []);
+
+  // 실제 스크롤 중에도 스크롤바가 보이게 한다(표시는 globals.css .n1-category-scroll)
+  const handleScroll = () => {
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    scroller.setAttribute('data-scrolling', 'true');
+    if (scrollingTimerRef.current) clearTimeout(scrollingTimerRef.current);
+    scrollingTimerRef.current = setTimeout(() => scroller.removeAttribute('data-scrolling'), CATEGORY_SCROLLING_RESET_MS);
+  };
+
   return (
-    // 대분류 11종이 낮은 창에서 넘치면 단마다 따로 스크롤한다
-    <div className="flex min-h-0 w-[277px] shrink-0 flex-col items-start overflow-y-auto">
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col items-start" data-testid={`n1-category-column-${heading}`}>
       <div className="flex w-full shrink-0 items-center px-4 py-2">
-        <p className="text-[12px] font-light tracking-[-0.04em] text-[#999]">{heading}</p>
+        <p className="text-[12px] leading-[normal] font-light tracking-[-0.04em] text-[#999]">{heading}</p>
       </div>
-      {items.map((item) => {
-        const isSelected = item.id === selectedId;
-        return (
-          <button
-            key={item.id}
-            type="button"
-            onClick={() => onSelect(item)}
-            aria-pressed={isSelected}
-            className={`flex w-full shrink-0 items-center justify-between px-4 py-[18px] text-left text-[14px] tracking-[-0.01em] transition-colors ${
-              isSelected ? 'bg-[#f5f5f5] text-[#ff6a38]' : 'text-[#707070] hover:bg-gray-50'
-            }`}
-          >
-            <span>{item.name}</span>
-            {showChevron && !isCategoryLeaf(item) && <ChevronRightIcon />}
-          </button>
-        );
-      })}
+      <div
+        ref={scrollerRef}
+        onScroll={handleScroll}
+        data-testid={`n1-category-scroller-${heading}`}
+        className="n1-category-scroll min-h-0 w-full flex-1"
+      >
+        {items.map((item) => {
+          const isSelected = item.id === selectedId;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => onSelect(item)}
+              aria-pressed={isSelected}
+              className={`flex w-full items-center justify-between gap-2 px-4 py-[18px] text-left text-[14px] leading-[normal] tracking-[-0.01em] transition-colors ${
+                isSelected ? 'bg-[#f5f5f5] text-[#ff6a38]' : 'text-[#707070] hover:bg-gray-50'
+              }`}
+            >
+              <span title={item.name} className="min-w-0 truncate">
+                {item.name}
+              </span>
+              {showChevron && !isCategoryLeaf(item) && (
+                <span className="shrink-0">
+                  <ChevronRightIcon />
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -296,23 +340,48 @@ function CategoryModal({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [onClose]);
 
+  // 창이 열리면 키보드 Tab이 바로 단 목록으로 들어가게 하고, 닫히면 연 버튼으로 돌려준다
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialogRef.current?.focus();
+    return () => opener?.focus();
+  }, []);
+
   const columnItems = (depth: number) => (depth === 0 ? tree : (path[depth - 1]?.children ?? []));
 
   return (
     <div className="fixed inset-0 z-50" onClick={onClose} role="presentation">
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label="카테고리 선택"
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
-        className="absolute top-1/2 left-1/2 flex w-[1203px] max-w-[calc(100vw-48px)] -translate-x-1/2 -translate-y-1/2 flex-col items-start gap-3 rounded-[5px] bg-white px-7 py-5 drop-shadow-[2px_2px_12px_rgba(0,0,0,0.06)]"
+        // Figma: 1192×468 · padding 32 · gap 16, 프레임 세로 중앙 +26(1080에서 top 332).
+        // 낮은 창에서만 화면 안에 들어오도록 줄고, 내용 때문에 커지지는 않는다.
+        className="absolute top-[max(16px,calc(50%-208px))] left-1/2 flex h-[468px] max-h-[calc(100dvh-32px)] w-[1192px] max-w-[calc(100vw-48px)] -translate-x-1/2 flex-col gap-4 rounded-[5px] bg-white p-8 outline-none drop-shadow-[2px_2px_12px_rgba(0,0,0,0.06)]"
+        data-testid="n1-category-modal"
       >
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="닫기"
+          className="absolute top-[24.81px] right-6 z-10 flex size-5 items-center justify-center"
+        >
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <path d="M5 5L15 15M15 5L5 15" stroke="#171717" strokeWidth="1.5" strokeLinecap="round" />
+          </svg>
+        </button>
         {status === 'success' && tree.length > 0 ? (
-          <div className="flex max-h-[min(680px,calc(100vh-160px))] w-full items-stretch gap-1.5 overflow-x-auto">
+          <div className="flex min-h-0 w-full flex-1 items-stretch gap-3 overflow-hidden">
             {CATEGORY_COLUMN_HEADINGS.map((heading, depth) => (
               <Fragment key={heading}>
                 {depth > 0 && <div className="w-px shrink-0 self-stretch bg-[#eaeaea]" />}
+                {/* 상위 선택이 바뀌면 목록도 바뀌므로 스크롤 위치를 맨 위로 되돌린다 */}
                 <CategoryColumn
+                  key={depth === 0 ? 'root' : (path[depth - 1]?.id ?? 'empty')}
                   heading={heading}
                   items={columnItems(depth)}
                   selectedId={path[depth]?.id ?? null}
@@ -323,7 +392,7 @@ function CategoryModal({
             ))}
           </div>
         ) : (
-          <div className="flex min-h-[120px] w-full items-center justify-center gap-3" data-testid="n1-category-status">
+          <div className="flex min-h-0 w-full flex-1 items-center justify-center gap-3" data-testid="n1-category-status">
             {status === 'pending' && (
               <p role="status" className="text-[14px] tracking-[-0.01em] text-[#707070]">
                 카테고리를 불러오는 중입니다.
@@ -351,14 +420,7 @@ function CategoryModal({
           </div>
         )}
 
-        <div className="flex w-full justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-[6px] border border-[#eaeaea] bg-white px-5 py-2.5 text-[14px] font-medium tracking-[-0.03em] text-[#171717] hover:bg-gray-50"
-          >
-            취소
-          </button>
+        <div className="flex w-full shrink-0 justify-end">
           <button
             type="button"
             onClick={() => {
@@ -367,7 +429,7 @@ function CategoryModal({
               onClose();
             }}
             disabled={!selectedLeaf}
-            className="rounded-[6px] bg-[#171717] px-5 py-2.5 text-[14px] font-medium tracking-[-0.03em] text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
+            className="rounded-[6px] bg-[#171717] px-7 py-2.5 text-[14px] leading-[normal] font-medium tracking-[-0.03em] text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
           >
             확인
           </button>
@@ -401,7 +463,8 @@ function NewJobPageInner() {
   // state는 빈 값으로 고정돼 있었다. 클라이언트 라우팅에도 반응하는
   // useSearchParams()로 바꿔 URL을 실제 source of truth로 삼는다.
   const searchParamsObj = useSearchParams();
-  const brandId = searchParamsObj.get('brandId') ?? '';
+  // Mock에서만 기존 fixture로 보완한다. 실서버에서 쿼리가 없으면 임의 값을 만들지 않고 안내한다.
+  const brandId = resolveN1BrandId(searchParamsObj.get('brandId'), isApiMockingEnabled() ? MOCK_BRAND_ID : null);
 
   const router = useRouter();
   const createMutation = useCreateJobMutation();
@@ -505,8 +568,8 @@ function NewJobPageInner() {
 
   // ── 유효성 검사 ──────────────────────────────────────────────────
 
-  // 조건 정본은 _lib/n1-readiness.ts(isN1Ready) 한 곳이다.
-  const isValid = isN1Ready({
+  // 조건 정본은 _lib/n1-readiness.ts 한 곳이다.
+  const missingFields = getN1MissingFields({
     brandId,
     productName,
     targetCountry,
@@ -517,6 +580,7 @@ function NewJobPageInner() {
     hasAcceptedResponsibility,
     imageCount: images.length,
   });
+  const isValid = missingFields.length === 0;
   const showProductNameError = touched.productName && productName.trim() === '';
   const showCategoryError = touched.category && categoryId === null;
   const showRegulatoryClassError = touched.regulatoryClass && !regulatoryClass;
@@ -555,7 +619,12 @@ function NewJobPageInner() {
   const submitInFlightRef = useRef(false);
 
   const handleSubmit = async () => {
-    if (!isValid || isSubmitting || isUploadBusy || submitInFlightRef.current) return;
+    if (!isValid) {
+      // 막힌 [다음]을 눌렀을 때 비어 있는 필드의 오류 문구를 모두 보여준다
+      setTouched({ productName: true, category: true, regulatoryClass: true });
+      return;
+    }
+    if (isSubmitting || isUploadBusy || submitInFlightRef.current) return;
     submitInFlightRef.current = true;
     setSubmitError(null);
     setIsSubmitting(true);
@@ -579,7 +648,7 @@ function NewJobPageInner() {
           targetCountry,
           targetLanguage,
           regulatoryClass: regulatoryClass || null,
-          // 9월 MVP: 결과물 규격은 원본 사이즈만, 이미지 유형은 다중 섹션만 지원한다(화면도 그 외 선택지를 비활성화).
+          // OpenAPI: 1.0.0 specType은 original만 사용한다(사이즈 변경 탭은 화면 표시뿐). 이미지 유형은 다중 섹션만 지원한다.
           specType: 'original',
           imageType: 'multi_section',
           // GET /master/categories에서 고른 leaf id
@@ -599,6 +668,8 @@ function NewJobPageInner() {
       setIsSubmitting(false);
     }
   };
+
+  const canSubmit = isValid && !isSubmitting && !isUploadBusy;
 
   const handleExitConfirm = () => {
     // TODO: M1 보관함 route가 바뀌면 함께 교체
@@ -649,7 +720,7 @@ function NewJobPageInner() {
           // [다음] 처리 중(POST /jobs 응답 전 포함)에는 막는다 — 나간 뒤 작업이 생겨 남는 것을 피한다
           disabled={isSubmitting}
           aria-label="보관함으로 나가기"
-          className="absolute top-10 left-1/2 z-20 flex size-10 -translate-x-1/2 shrink-0 items-center justify-center rounded-md border border-[#eaeaea] bg-white text-[#171717] transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+          className="absolute top-10 left-1 z-20 flex size-10 shrink-0 items-center justify-center rounded-md border border-[#eaeaea] bg-white text-[#171717] transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {/* Figma(925:2530 "보관함으로 나가기") 실측: 16px Glyph 박스
               안에서 inset-1/4(사방 25%=4px)만큼 들여 그려진다 — 실제
@@ -658,7 +729,7 @@ function NewJobPageInner() {
             <path d="M4 4L12 12M12 4L4 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
           </svg>
         </button>
-        <div className="absolute inset-0 pt-[100px] pb-6">
+        <div className="absolute inset-0 pt-[max(100px,calc(100vh-930px))] pb-[70px]">
           <StepNav currentStep="N1" />
         </div>
       </div>
@@ -712,7 +783,7 @@ function NewJobPageInner() {
                   type="button"
                   onClick={() => setTargetLanguage(recommendedLanguageOption.value)}
                   aria-pressed={targetLanguage === recommendedLanguageOption.value}
-                  className="flex h-7 shrink-0 items-center justify-center gap-1 rounded-[6px] border border-[#ff6a38] bg-white px-2 text-[12px] leading-[14px] text-[#ff6a38] transition-colors hover:bg-[#faf3ed]"
+                  className="flex h-7 w-[60px] shrink-0 items-center justify-center gap-1 rounded-[6px] border border-[#ff6a38] bg-white px-2 text-[12px] leading-[14px] text-[#ff6a38] transition-colors hover:bg-[#faf3ed]"
                 >
                   {recommendedLanguageOption.label}
                 </button>
@@ -766,20 +837,20 @@ function NewJobPageInner() {
                     <PlusIcon />
                   </div>
                   <div className="flex flex-col items-center gap-2 text-center">
-                    <p className="text-[18px] font-medium tracking-[-0.03em] whitespace-nowrap text-[#171717]">
+                    <p className="text-[18px] leading-[normal] font-medium tracking-[-0.03em] whitespace-nowrap text-[#171717]">
                       파일을 이곳에 놓아주세요.
                     </p>
-                    <p className="text-[14px] tracking-[-0.01em] whitespace-nowrap text-[#707070]">또는 클릭해서 선택 · JPG, PNG</p>
+                    <p className="text-[14px] leading-[normal] tracking-[-0.01em] whitespace-nowrap text-[#707070]">또는 클릭해서 선택 · JPG, PNG</p>
                   </div>
                   <label
                     htmlFor="image-upload"
-                    className="cursor-pointer rounded-[6px] bg-[#171717] px-8 py-3.5 text-[14px] font-medium tracking-[-0.03em] whitespace-nowrap text-white"
+                    className="cursor-pointer rounded-[6px] bg-[#171717] px-11 py-3.5 text-[14px] leading-[normal] font-medium tracking-[-0.03em] whitespace-nowrap text-white"
                   >
                     파일 선택
                   </label>
                 </div>
                 {/* 책임 고지는 하단 동의 체크(F-ACC-04)가 겸한다 — 여기에는 업로드 안내만 둔다 */}
-                <p className="max-w-xl text-center text-[12px] font-light tracking-[-0.04em] text-[#999]">
+                <p className="max-w-xl text-center text-[12px] leading-[normal] font-light tracking-[-0.04em] text-[#999]">
                   최대 1GB · 여러 파일을 한 번에 업로드할 수 있습니다.
                 </p>
               </div>
@@ -932,7 +1003,7 @@ function NewJobPageInner() {
               나타나지 않는다. 블록 간격은 최신 Figma(1170:7877) gap 52 · 첫 묶음 안 gap 16. */}
           <div className="flex min-h-0 w-[516px] shrink-0 flex-col">
             <div className="flex min-h-0 flex-1 flex-col gap-[52px] overflow-y-auto rounded-[8px] border border-[#eaeaea] p-5">
-              <div className="flex flex-col gap-4">
+              <div className="flex flex-col gap-4 pt-2">
                 <div className="flex flex-col gap-1">
                   <FieldLabel required>상품명</FieldLabel>
                   <input
@@ -944,7 +1015,7 @@ function NewJobPageInner() {
                     aria-invalid={showProductNameError || undefined}
                     aria-describedby={showProductNameError ? 'n1-product-name-error' : undefined}
                     placeholder="상품 이름을 입력해주세요"
-                    className="w-full rounded-[6px] border border-[#eaeaea] px-4 py-2.5 text-[14px] tracking-[-0.01em] text-[#171717] outline-none placeholder:text-[#707070] focus:border-[#ff6a38]"
+                    className="h-[39px] w-full rounded-[6px] border border-[#eaeaea] px-4 text-[14px] tracking-[-0.01em] text-[#171717] outline-none placeholder:text-[#707070] focus:border-[#ff6a38]"
                   />
                   {showProductNameError && <FieldError id="n1-product-name-error">상품명을 입력해 주세요.</FieldError>}
                 </div>
@@ -957,7 +1028,7 @@ function NewJobPageInner() {
                     value={productCode}
                     onChange={(e) => setProductCode(e.target.value)}
                     placeholder="상품 코드를 입력해주세요"
-                    className="w-full rounded-[6px] border border-[#eaeaea] px-4 py-2.5 text-[14px] tracking-[-0.01em] text-[#171717] outline-none placeholder:text-[#707070] focus:border-[#ff6a38]"
+                    className="h-[39px] w-full rounded-[6px] border border-[#eaeaea] px-4 text-[14px] tracking-[-0.01em] text-[#171717] outline-none placeholder:text-[#707070] focus:border-[#ff6a38]"
                   />
                 </div>
 
@@ -1072,9 +1143,9 @@ function NewJobPageInner() {
                   실제로 값을 바꿀 수 없는 상태라 디자인과 현재 계약이 충돌한다
                   — 그대로 숨기지 않고, "출력 규격"의 나머지 옵션과 같은 방식
                   (보여주되 비활성)으로 처리하고 보고에 남긴다. */}
-              <div className="flex flex-col gap-2">
-                <div className="flex items-center gap-2">
-                  <p className="text-[18px] font-medium tracking-[-0.03em] text-[#171717]">
+              <div className="flex flex-col">
+                <div className="flex h-7 items-center gap-2">
+                  <p className="text-[18px] leading-[normal] font-medium tracking-[-0.03em] text-[#171717]">
                     이미지 안에 여러 내용이 이어져 있나요?
                   </p>
                   <div
@@ -1086,45 +1157,21 @@ function NewJobPageInner() {
                   >
                     <div className="size-4 rounded-full bg-white shadow-sm" />
                   </div>
-                  <span className="text-[18px] font-medium tracking-[-0.03em] text-[#ff6a38]">*</span>
+                  <span className="self-start text-[18px] leading-[normal] font-medium tracking-[-0.03em] text-[#ff6a38]">*</span>
                 </div>
                 {/* Figma(673:7819)는 이 helper text를 라벨/토글과 같은 좌측
                     기준선에 맞춘다 — 혼자 text-center로 떠 있던 것을 고쳤다. */}
-                <p className="text-left text-[12px] font-light tracking-[-0.04em] text-[#707070]">
+                <p className="text-left text-[12px] leading-[normal] font-light tracking-[-0.04em] text-[#707070]">
                   이미지 유형에 따라 분석 방식이 달라집니다.
                 </p>
               </div>
 
-              {/* 결과물 규격 — Figma 기본값은 "사이트 맞춤" 탭이 활성이지만, 9월
-                  MVP는 원본 규격만 실제로 지원한다(기존 결정 유지, lib/api/types.ts
-                  SpecType 주석 참고). 디자인과 계약이 다시 충돌해 Figma의 활성
-                  탭을 그대로 베끼지 않고, 실제로 쓸 수 있는 "원본 사이즈"를
-                  활성으로 두고 나머지 두 탭은 비활성으로 보여준다. */}
-              <div className="flex flex-col gap-4">
-                {/* Figma(925:2573-2575) — 이 라벨의 asterisk만 18px Medium이다
-                    (다른 라벨의 asterisk는 16px 상속). FieldLabel 공용
-                    컴포넌트의 기본 16px 상속 asterisk와 다르므로 이 자리만
-                    직접 마크업한다. */}
-                <div className="flex items-center gap-2">
-                  <p className="text-[16px] tracking-[-0.03em] text-[#171717]">결과물 규격</p>
-                  <span className="text-[18px] font-medium tracking-[-0.03em] text-[#ff6a38]">*</span>
-                </div>
-                <div className="flex h-8 w-full items-center">
-                  <div className="flex-1 border-b border-[#eaeaea] pb-2 text-center">
-                    <span className="text-[16px] tracking-[-0.03em] text-[#171717]">원본 사이즈</span>
-                  </div>
-                  <div className="flex-1 cursor-not-allowed pb-2 text-center" title="준비 중입니다.">
-                    <span className="text-[16px] tracking-[-0.03em] text-[#999]">사이트 맞춤</span>
-                  </div>
-                  <div className="flex-1 cursor-not-allowed pb-2 text-center" title="준비 중입니다.">
-                    <span className="text-[16px] tracking-[-0.03em] text-[#999]">커스텀</span>
-                  </div>
-                </div>
-                <p className="text-[12px] font-light tracking-[-0.04em] text-[#999]">업로드된 이미지의 원본 크기를 유지합니다.</p>
-              </div>
+              <SizeSelection />
 
               <div className="flex flex-col gap-1">
-                <FieldLabel>핵심 키워드</FieldLabel>
+                <div className="mb-1">
+                  <FieldLabel>핵심 키워드</FieldLabel>
+                </div>
                 <div className="flex gap-2">
                   <input
                     type="text"
@@ -1132,17 +1179,17 @@ function NewJobPageInner() {
                     onChange={(e) => setKeywordInput(e.target.value)}
                     onKeyDown={handleKeywordKeyDown}
                     placeholder="키워드를 입력해주세요."
-                    className="flex-1 rounded-[6px] border border-[#eaeaea] px-4 py-2.5 text-[14px] tracking-[-0.01em] text-[#171717] outline-none placeholder:text-[#707070] focus:border-[#ff6a38]"
+                    className="h-[39px] min-w-0 flex-1 rounded-[6px] border border-[#eaeaea] px-4 text-[14px] tracking-[-0.01em] text-[#171717] outline-none placeholder:text-[#707070] focus:border-[#ff6a38]"
                   />
                   <button
                     type="button"
                     onClick={addKeyword}
-                    className="shrink-0 rounded-[6px] border border-[#eaeaea] px-4 py-2 text-[12px] font-medium text-[#171717] hover:bg-gray-50"
+                    className="h-[39px] shrink-0 rounded-[6px] border border-[#eaeaea] px-4 text-[12px] font-medium text-[#171717] hover:bg-gray-50"
                   >
                     추가
                   </button>
                 </div>
-                <p className="text-[12px] font-light tracking-[-0.04em] text-[#707070]">
+                <p className="text-[12px] leading-[normal] font-light tracking-[-0.04em] text-[#707070]">
                   번역 중 강조할 표현을 태그로 추가합니다.
                 </p>
                 {keywords.length > 0 && (
@@ -1174,6 +1221,13 @@ function NewJobPageInner() {
                   ? '업로드에 실패한 파일이 있습니다. 다시 시도하거나 삭제한 뒤 진행해 주세요.'
                   : uploadNotice ??
                     (submitError instanceof Error ? submitError.message : '오류가 발생했습니다. 다시 시도해 주세요.')}
+              </p>
+            )}
+
+            {/* Figma에 없는 보완 — 화면에 없는 값 때문에 이유 없이 [다음]이 막히지 않도록 알린다 */}
+            {!brandId && (
+              <p role="alert" data-testid="n1-brand-missing" className="mt-3 shrink-0 text-sm text-red-500">
+                연결된 브랜드 정보가 없어 다음 단계로 진행할 수 없습니다. 브랜드가 지정된 경로로 다시 들어와 주세요.
               </p>
             )}
 
@@ -1225,28 +1279,33 @@ function NewJobPageInner() {
                   {CERTIFICATION_TOOLTIP_LINES.map((line) => (
                     <p key={line}>- {line}</p>
                   ))}
-                  <svg
-                    width="12"
-                    height="11"
-                    viewBox="0 0 12 11"
-                    fill="none"
-                    aria-hidden="true"
-                    className="absolute top-[calc(100%-1px)] left-[90px]"
-                  >
-                    <path d="M0.5 0.5L6 10L11.5 0.5" fill="white" stroke="#ff6a38" />
-                    <path d="M1 0H11" stroke="white" strokeWidth="1.5" />
-                  </svg>
+                  <TooltipArrow className="left-[90px]" />
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={handleSubmit}
-                disabled={!isValid || isSubmitting || isUploadBusy}
-                title={!isValid ? '필수 항목을 모두 입력해 주세요.' : undefined}
-                className="h-[45px] w-[148px] shrink-0 rounded-[6px] bg-[#171717] px-8 py-3.5 text-[14px] leading-[normal] font-medium tracking-[-0.03em] text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                {isSubmitting ? '생성 중...' : '다음'}
-              </button>
+              {/* 막힌 이유를 hover·focus에 보여주려고 인증 마크 버튼과 같이 disabled 대신 aria-disabled를 쓴다.
+                  처리 조건은 handleSubmit이 막는다. 툴팁 모양은 Figma 1090:10048 패턴을 그대로 쓴다. */}
+              <div className="group relative">
+                <button
+                  type="button"
+                  onClick={handleSubmit}
+                  aria-disabled={!canSubmit}
+                  aria-describedby={isValid ? undefined : 'n1-next-tooltip'}
+                  className="h-[45px] w-[148px] shrink-0 rounded-[6px] bg-[#171717] px-8 py-3.5 text-[14px] leading-[normal] font-medium tracking-[-0.03em] text-white transition-opacity aria-disabled:cursor-not-allowed aria-disabled:opacity-40"
+                >
+                  {isSubmitting ? '생성 중...' : '다음'}
+                </button>
+                {!isValid && (
+                  <div
+                    id="n1-next-tooltip"
+                    role="tooltip"
+                    data-testid="n1-next-tooltip"
+                    className="invisible absolute right-0 bottom-[calc(100%-3px)] z-10 w-[193px] rounded-[8px] break-keep border border-[#ff6a38] bg-white p-2.5 text-[12px] leading-[normal] font-light tracking-[-0.04em] text-[#ff6a38] group-focus-within:visible group-hover:visible"
+                  >
+                    입력이 필요해요: {missingFields.join(', ')}
+                    <TooltipArrow className="left-[90px]" />
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>

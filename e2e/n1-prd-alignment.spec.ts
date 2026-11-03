@@ -96,7 +96,7 @@ test.describe('카테고리 — 엑셀 3단 트리 창 + [확인]', () => {
     const majorColumn = modal.getByText('대분류', { exact: true }).locator('xpath=../..');
     await expect(majorColumn.getByRole('button')).toHaveText(MAJORS);
     await expect(modal.getByRole('button', { name: '화장품/향수' })).toHaveCount(0);
-    await modal.getByRole('button', { name: '취소' }).click();
+    await modal.getByRole('button', { name: '닫기' }).click();
     await expect(modal).toHaveCount(0);
 
     await page.getByRole('button', { name: '선택하기' }).click();
@@ -151,7 +151,7 @@ test.describe('카테고리 — 엑셀 3단 트리 창 + [확인]', () => {
     await expect(page.getByTestId('n1-category-field')).toHaveText('선케어 > 선크림');
   });
 
-  test('취소·바깥 클릭·Esc는 선택 전 값을 유지한다', async ({ page }) => {
+  test('X·바깥 클릭·Esc는 선택 전 값을 유지한다', async ({ page }) => {
     const field = page.getByTestId('n1-category-field');
     await pickCategory(page, ['선케어', '선크림']);
     await expect(field).toHaveText('선케어 > 선크림');
@@ -161,7 +161,7 @@ test.describe('카테고리 — 엑셀 3단 트리 창 + [확인]', () => {
       await categoryModal(page).getByRole('button', { name: '스킨케어', exact: true }).click();
       await categoryModal(page).getByRole('button', { name: '스킨/토너', exact: true }).click();
       await expect(categoryModal(page).getByRole('button', { name: '확인' })).toBeEnabled();
-      if (close === 'cancel') await categoryModal(page).getByRole('button', { name: '취소' }).click();
+      if (close === 'cancel') await categoryModal(page).getByRole('button', { name: '닫기' }).click();
       if (close === 'outside') await page.mouse.click(10, 10);
       if (close === 'escape') await page.keyboard.press('Escape');
       await expect(categoryModal(page)).toHaveCount(0);
@@ -236,7 +236,7 @@ test.describe('카테고리 — GET /master/categories 실제 id', () => {
     const field = page.getByTestId('n1-category-field');
     await expect(page.getByText('카테고리를 선택해 주세요.')).toHaveCount(0);
     await field.click();
-    await categoryModal(page).getByRole('button', { name: '취소' }).click();
+    await categoryModal(page).getByRole('button', { name: '닫기' }).click();
     await expect(page.getByText('카테고리를 선택해 주세요.')).toBeVisible();
     await expect(field).toHaveAccessibleDescription('카테고리를 선택해 주세요.');
     await pickCategory(page, ['선케어', '선크림']);
