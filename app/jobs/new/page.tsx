@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, Suspense, useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
 import {
@@ -19,12 +19,15 @@ import { SizeSelection } from './_components/size-selection';
 import { SourceImageUploadStatus } from './_components/source-image-upload-status';
 import {
   buildCategoryTree,
+  filterCategoryTree,
   findCategoryPath,
+  firstBranchPath,
   formatCategoryPath,
   isCategoryLeaf,
   type CategoryNode,
 } from './_lib/category-tree';
-import { getN1MissingFields, resolveN1BrandId, requiresOtcType } from './_lib/n1-readiness';
+import { N1_SIZE_CHANGE_BLOCK_LINES, getN1MissingFields, isN1Ready, resolveN1BrandId, requiresOtcType } from './_lib/n1-readiness';
+import { INITIAL_SIZE_SELECTION, sizeSelectionReducer } from './_lib/size-selection';
 import { useSourceImageUploads } from './_lib/use-source-image-uploads';
 import { StepNav } from '../[jobId]/_components/step-nav';
 
@@ -226,8 +229,8 @@ function FieldError({ id, children }: { id: string; children: React.ReactNode })
 // 카테고리 선택 모달 (Figma 1094:10968 「Category Input / Specimen」 1192×468)
 //
 // 외곽 크기는 데이터 개수와 무관하게 고정이고, 넘치는 목록은 단 안에서만 스크롤한다.
-// 목록은 GET /master/categories 트리다. PRD v3.5.10 F-SRC-04는 9월에 [선택하기] 트리 창 +
-// [확인]이고 검색칸은 12월이라 검색 입력은 두지 않는다. leaf(하위 없음 — isCategoryLeaf)를
+// 목록은 GET /master/categories 트리다. [선택하기]는 전체 트리를, 검색은 검색어에 맞는 leaf와
+// 상위만 남긴 트리(filterCategoryTree)를 같은 창에 보여 준다. leaf(하위 없음 — isCategoryLeaf)를
 // 골라야만 [확인]이 열린다. leaf를 눌러도 창 안의 선택만 바뀌고, [확인]을 눌러야 N1 값이 바뀐다.
 // X·바깥 클릭·Esc는 선택 전 값을 그대로 둔다. backdrop은 화면을 어둡게 가리지 않는(Figma에 없음)
 // 투명 캐처다. 불러오는 중·실패는 Figma에 없어 프로젝트 공통 한 줄 문구로 보완했다
@@ -313,6 +316,7 @@ const CATEGORY_COLUMN_HEADINGS = ['대분류', '중분류', '소분류'];
 function CategoryModal({
   tree,
   status,
+  searchQuery,
   onRetry,
   currentId,
   onClose,
@@ -320,17 +324,14 @@ function CategoryModal({
 }: {
   tree: CategoryNode[];
   status: 'pending' | 'error' | 'success';
+  /** null이면 [선택하기]로 연 전체 트리다 */
+  searchQuery: string | null;
   onRetry: () => void;
   currentId: number | null;
   onClose: () => void;
   onConfirm: (id: number) => void;
 }) {
-  // 창 안의 임시 경로 — [확인] 전에는 N1 값(categoryId)을 바꾸지 않는다
-  const [path, setPath] = useState<CategoryNode[]>(() =>
-    currentId !== null ? (findCategoryPath(tree, currentId) ?? []) : [],
-  );
-  const last = path.at(-1);
-  const selectedLeaf = last && isCategoryLeaf(last) ? last : null;
+  const visibleTree = useMemo(() => (searchQuery === null ? tree : filterCategoryTree(tree, searchQuery)), [tree, searchQuery]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -340,15 +341,13 @@ function CategoryModal({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [onClose]);
 
-  // 창이 열리면 키보드 Tab이 바로 단 목록으로 들어가게 하고, 닫히면 연 버튼으로 돌려준다
+  // 창이 열리면 키보드 Tab이 바로 단 목록으로 들어가게 하고, 닫히면 연 입력·버튼으로 돌려준다
   const dialogRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     dialogRef.current?.focus();
     return () => opener?.focus();
   }, []);
-
-  const columnItems = (depth: number) => (depth === 0 ? tree : (path[depth - 1]?.children ?? []));
 
   return (
     <div className="fixed inset-0 z-50" onClick={onClose} role="presentation">
@@ -374,68 +373,113 @@ function CategoryModal({
             <path d="M5 5L15 15M15 5L5 15" stroke="#171717" strokeWidth="1.5" strokeLinecap="round" />
           </svg>
         </button>
-        {status === 'success' && tree.length > 0 ? (
-          <div className="flex min-h-0 w-full flex-1 items-stretch gap-3 overflow-hidden">
-            {CATEGORY_COLUMN_HEADINGS.map((heading, depth) => (
-              <Fragment key={heading}>
-                {depth > 0 && <div className="w-px shrink-0 self-stretch bg-[#eaeaea]" />}
-                {/* 상위 선택이 바뀌면 목록도 바뀌므로 스크롤 위치를 맨 위로 되돌린다 */}
-                <CategoryColumn
-                  key={depth === 0 ? 'root' : (path[depth - 1]?.id ?? 'empty')}
-                  heading={heading}
-                  items={columnItems(depth)}
-                  selectedId={path[depth]?.id ?? null}
-                  showChevron={depth < CATEGORY_COLUMN_HEADINGS.length - 1}
-                  onSelect={(node) => setPath((prev) => [...prev.slice(0, depth), node])}
-                />
-              </Fragment>
-            ))}
-          </div>
-        ) : (
-          <div className="flex min-h-0 w-full flex-1 items-center justify-center gap-3" data-testid="n1-category-status">
-            {status === 'pending' && (
-              <p role="status" className="text-[14px] tracking-[-0.01em] text-[#707070]">
-                카테고리를 불러오는 중입니다.
-              </p>
-            )}
-            {status === 'error' && (
-              <>
-                <p role="alert" className="text-[12px] text-red-500">
-                  카테고리를 불러오지 못했습니다.
-                </p>
-                <button
-                  type="button"
-                  onClick={onRetry}
-                  className="rounded-[6px] border border-[#eaeaea] bg-white px-4 py-2 text-[12px] font-medium text-[#171717] hover:bg-gray-50"
-                >
-                  다시 시도
-                </button>
-              </>
-            )}
-            {status === 'success' && (
-              <p role="status" className="text-[14px] tracking-[-0.01em] text-[#707070]">
-                선택할 수 있는 카테고리가 없습니다.
-              </p>
-            )}
-          </div>
-        )}
-
-        <div className="flex w-full shrink-0 justify-end">
-          <button
-            type="button"
-            onClick={() => {
-              if (!selectedLeaf) return;
-              onConfirm(selectedLeaf.id);
-              onClose();
-            }}
-            disabled={!selectedLeaf}
-            className="rounded-[6px] bg-[#171717] px-7 py-2.5 text-[14px] leading-[normal] font-medium tracking-[-0.03em] text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            확인
-          </button>
-        </div>
+        {/* 목록을 다 받은 뒤 시작 경로를 다시 계산하도록 status로 다시 마운트한다 */}
+        <CategoryModalBody
+          key={status}
+          tree={visibleTree}
+          status={status}
+          isSearch={searchQuery !== null}
+          onRetry={onRetry}
+          currentId={currentId}
+          onClose={onClose}
+          onConfirm={onConfirm}
+        />
       </div>
     </div>
+  );
+}
+
+function CategoryModalBody({
+  tree,
+  status,
+  isSearch,
+  onRetry,
+  currentId,
+  onClose,
+  onConfirm,
+}: {
+  tree: CategoryNode[];
+  status: 'pending' | 'error' | 'success';
+  isSearch: boolean;
+  onRetry: () => void;
+  currentId: number | null;
+  onClose: () => void;
+  onConfirm: (id: number) => void;
+}) {
+  // 창 안의 임시 경로 — [확인] 전에는 N1 값(categoryId)을 바꾸지 않는다.
+  // 검색으로 열면 고른 값이 결과에 없을 때 첫 결과 가지를 펼쳐 둔다(leaf는 직접 고른다).
+  const [path, setPath] = useState<CategoryNode[]>(() => {
+    const currentPath = currentId !== null ? findCategoryPath(tree, currentId) : null;
+    return currentPath ?? (isSearch ? firstBranchPath(tree) : []);
+  });
+  const last = path.at(-1);
+  const selectedLeaf = last && isCategoryLeaf(last) ? last : null;
+
+  const columnItems = (depth: number) => (depth === 0 ? tree : (path[depth - 1]?.children ?? []));
+
+  return (
+    <>
+      {status === 'success' && tree.length > 0 ? (
+        <div className="flex min-h-0 w-full flex-1 items-stretch gap-3 overflow-hidden">
+          {CATEGORY_COLUMN_HEADINGS.map((heading, depth) => (
+            <Fragment key={heading}>
+              {depth > 0 && <div className="w-px shrink-0 self-stretch bg-[#eaeaea]" />}
+              {/* 상위 선택이 바뀌면 목록도 바뀌므로 스크롤 위치를 맨 위로 되돌린다 */}
+              <CategoryColumn
+                key={depth === 0 ? 'root' : (path[depth - 1]?.id ?? 'empty')}
+                heading={heading}
+                items={columnItems(depth)}
+                selectedId={path[depth]?.id ?? null}
+                showChevron={depth < CATEGORY_COLUMN_HEADINGS.length - 1}
+                onSelect={(node) => setPath((prev) => [...prev.slice(0, depth), node])}
+              />
+            </Fragment>
+          ))}
+        </div>
+      ) : (
+        <div className="flex min-h-0 w-full flex-1 items-center justify-center gap-3" data-testid="n1-category-status">
+          {status === 'pending' && (
+            <p role="status" className="text-[14px] tracking-[-0.01em] text-[#707070]">
+              카테고리를 불러오는 중입니다.
+            </p>
+          )}
+          {status === 'error' && (
+            <>
+              <p role="alert" className="text-[12px] text-red-500">
+                카테고리를 불러오지 못했습니다.
+              </p>
+              <button
+                type="button"
+                onClick={onRetry}
+                className="rounded-[6px] border border-[#eaeaea] bg-white px-4 py-2 text-[12px] font-medium text-[#171717] hover:bg-gray-50"
+              >
+                다시 시도
+              </button>
+            </>
+          )}
+          {status === 'success' && (
+            <p role="status" className="text-[14px] tracking-[-0.01em] text-[#707070]">
+              {isSearch ? '검색 결과가 없습니다.' : '선택할 수 있는 카테고리가 없습니다.'}
+            </p>
+          )}
+        </div>
+      )}
+
+      <div className="flex w-full shrink-0 justify-end">
+        <button
+          type="button"
+          onClick={() => {
+            if (!selectedLeaf) return;
+            onConfirm(selectedLeaf.id);
+            onClose();
+          }}
+          disabled={!selectedLeaf}
+          className="rounded-[6px] bg-[#171717] px-7 py-2.5 text-[14px] leading-[normal] font-medium tracking-[-0.03em] text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          확인
+        </button>
+      </div>
+    </>
   );
 }
 
@@ -483,7 +527,10 @@ function NewJobPageInner() {
   // category_master id(leaf). PATCH /jobs/{jobId}의 categoryId로 그대로 보낸다
   const [categoryId, setCategoryId] = useState<number | null>(null);
   // 필수값 오류는 해당 필드를 한 번 건드린 뒤에만 보인다(처음부터 모든 칸을 오류로 칠하지 않는다)
-  const [touched, setTouched] = useState({ productName: false, category: false, regulatoryClass: false });
+  const [touched, setTouched] = useState({ productName: false, category: false, regulatoryClass: false, size: false });
+  // 사이즈 선택 — 화면 상태만 둔다. 서버로는 보내지 않는다(_lib/size-selection.ts)
+  const [sizeSelection, dispatchSizeSelection] = useReducer(sizeSelectionReducer, INITIAL_SIZE_SELECTION);
+  const sizeSectionRef = useRef<HTMLDivElement>(null);
   const [keywords, setKeywords] = useState<string[]>([]);
   const [keywordInput, setKeywordInput] = useState('');
   // 원본 이미지 — 파일별 업로드 상태(idle/uploading/done/failed)와 서버 sourceImageId는 hook이 소유한다.
@@ -512,11 +559,28 @@ function NewJobPageInner() {
 
   // ── 카테고리 선택 모달 (Figma 381:6293) ─────────────────────────
   const [categoryModalOpen, setCategoryModalOpen] = useState(false);
+  // 창에 적용할 검색어. null이면 [선택하기]의 전체 트리다
+  const [categorySearchQuery, setCategorySearchQuery] = useState<string | null>(null);
+  // 입력 중인 문구. null이면 입력칸에 확정한 경로를 보여 준다
+  const [categoryInputDraft, setCategoryInputDraft] = useState<string | null>(null);
   const categoriesQuery = useMasterCategoriesQuery();
   const categoryTree = useMemo(() => buildCategoryTree(categoriesQuery.data ?? []), [categoriesQuery.data]);
   // 메인 필드에는 확정한 경로 전체를 보인다(예: 스킨케어 > 크림 > 아이크림)
   const selectedCategoryPath = categoryId !== null ? findCategoryPath(categoryTree, categoryId) : null;
   const selectedCategoryLabel = selectedCategoryPath ? formatCategoryPath(selectedCategoryPath) : null;
+  const categoryInputValue = categoryInputDraft ?? selectedCategoryLabel ?? '';
+
+  const openCategorySearch = () => {
+    const query = categoryInputValue.trim();
+    if (!query) return;
+    setCategorySearchQuery(query);
+    setCategoryModalOpen(true);
+  };
+
+  const openCategoryTree = () => {
+    setCategorySearchQuery(null);
+    setCategoryModalOpen(true);
+  };
 
   // ── 키워드 ──────────────────────────────────────────────────────
 
@@ -569,7 +633,7 @@ function NewJobPageInner() {
   // ── 유효성 검사 ──────────────────────────────────────────────────
 
   // 조건 정본은 _lib/n1-readiness.ts 한 곳이다.
-  const missingFields = getN1MissingFields({
+  const readinessInput = {
     brandId,
     productName,
     targetCountry,
@@ -579,8 +643,11 @@ function NewJobPageInner() {
     categoryId,
     hasAcceptedResponsibility,
     imageCount: images.length,
-  });
-  const isValid = missingFields.length === 0;
+    sizeTab: sizeSelection.tab,
+  };
+  const missingFields = getN1MissingFields(readinessInput);
+  const isValid = isN1Ready(readinessInput);
+  const isSizeChangeSelected = sizeSelection.tab === 'change';
   const showProductNameError = touched.productName && productName.trim() === '';
   const showCategoryError = touched.category && categoryId === null;
   const showRegulatoryClassError = touched.regulatoryClass && !regulatoryClass;
@@ -621,7 +688,9 @@ function NewJobPageInner() {
   const handleSubmit = async () => {
     if (!isValid) {
       // 막힌 [다음]을 눌렀을 때 비어 있는 필드의 오류 문구를 모두 보여준다
-      setTouched({ productName: true, category: true, regulatoryClass: true });
+      setTouched({ productName: true, category: true, regulatoryClass: true, size: true });
+      // 오류 문구가 그려진 뒤에 옮겨야 문구까지 화면에 들어온다
+      if (isSizeChangeSelected) requestAnimationFrame(() => sizeSectionRef.current?.scrollIntoView({ block: 'nearest' }));
       return;
     }
     if (isSubmitting || isUploadBusy || submitInFlightRef.current) return;
@@ -648,7 +717,7 @@ function NewJobPageInner() {
           targetCountry,
           targetLanguage,
           regulatoryClass: regulatoryClass || null,
-          // OpenAPI: 1.0.0 specType은 original만 사용한다(사이즈 변경 탭은 화면 표시뿐). 이미지 유형은 다중 섹션만 지원한다.
+          // OpenAPI: 1.0.0 specType은 original만 사용한다(사이즈 변경이면 여기까지 오지 못한다). 이미지 유형은 다중 섹션만 지원한다.
           specType: 'original',
           imageType: 'multi_section',
           // GET /master/categories에서 고른 leaf id
@@ -1032,32 +1101,49 @@ function NewJobPageInner() {
                   />
                 </div>
 
-                {/* 카테고리 — Figma(1170:7877)는 「검색하기」 필드 + 「선택하기」 버튼이 한
-                    행에 있다. 텍스트 검색은 12월(PRD F-SRC-04)이라, 두 요소 모두 같은
-                    카테고리 트리 창(381:6293)을 연다. 값은 창의 [확인]으로만 바뀐다. */}
+                {/* 카테고리 — Figma(1170:7877) 「검색하기」 필드 + 「선택하기」 버튼 한 행.
+                    검색은 직접 입력한 뒤 Enter·아이콘으로 실행해 맞는 항목만 창에 보이고,
+                    선택하기는 전체 트리를 연다. 값은 창의 [확인]으로만 바뀐다. */}
                 <div className="flex flex-col gap-1">
                   <FieldLabel required>카테고리</FieldLabel>
                   {/* Figma Frame 62 — 행 폭 447(입력 323 · gap 16 · 버튼 108), 패널 content 474보다 좁다 */}
                   <div className="flex w-[447px] max-w-full items-center gap-4">
-                    <button
-                      type="button"
-                      onClick={() => setCategoryModalOpen(true)}
-                      aria-haspopup="dialog"
-                      aria-label={`카테고리${selectedCategoryLabel ? `: ${selectedCategoryLabel}` : ''}`}
-                      aria-describedby={showCategoryError ? 'n1-category-error' : undefined}
+                    <div
                       data-testid="n1-category-field"
-                      className="flex h-[39px] min-w-0 flex-1 items-center justify-between gap-2 rounded-[6px] border border-[#eaeaea] bg-white px-[14px] py-[10px] text-left outline-none hover:bg-gray-50 focus-visible:border-[#ff6a38]"
+                      className="flex h-[39px] min-w-0 flex-1 items-center gap-2 rounded-[6px] border border-[#eaeaea] bg-white pr-[14px] pl-[14px] focus-within:border-[#ff6a38]"
                     >
-                      <span
-                        title={selectedCategoryLabel ?? undefined}
-                        className={`truncate text-[14px] tracking-[-0.01em] ${
-                          selectedCategoryLabel ? 'text-[#171717]' : 'text-[#707070]'
-                        }`}
+                      <input
+                        type="search"
+                        aria-label="카테고리 검색"
+                        aria-describedby={showCategoryError ? 'n1-category-error' : undefined}
+                        aria-invalid={showCategoryError || undefined}
+                        value={categoryInputValue}
+                        title={categoryInputValue || undefined}
+                        placeholder="검색하기"
+                        onChange={(e) => setCategoryInputDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key !== 'Enter') return;
+                          e.preventDefault();
+                          openCategorySearch();
+                        }}
+                        // 고른 값이 있으면 실행하지 않은 입력을 남기지 않는다 — 입력칸이 실제 값과 달라 보이면 안 된다
+                        onBlur={() => {
+                          if (selectedCategoryLabel !== null || categoryInputValue.trim() === '') setCategoryInputDraft(null);
+                        }}
+                        className="h-full min-w-0 flex-1 appearance-none truncate bg-transparent text-[14px] tracking-[-0.01em] text-[#171717] outline-none placeholder:text-[#707070] [&::-webkit-search-cancel-button]:appearance-none"
+                      />
+                      <button
+                        type="button"
+                        aria-label="검색 실행"
+                        data-testid="n1-category-search"
+                        // 입력 포커스를 유지해 blur 처리가 검색어를 지우지 않게 한다
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={openCategorySearch}
+                        className="flex size-[14px] shrink-0 items-center justify-center"
                       >
-                        {selectedCategoryLabel ?? '검색하기'}
-                      </span>
-                      <SearchIcon />
-                    </button>
+                        <SearchIcon />
+                      </button>
+                    </div>
                     {/* h-[37px]를 고정한 채 py-2.5(=line-height 21px과 합쳐 41px)를
                         그대로 두면 실제 필요한 높이(41px)가 선언한 높이(37px)를
                         넘어서 텍스트가 세로 중앙에서 어긋나 보였다(실측: 다른
@@ -1067,7 +1153,7 @@ function NewJobPageInner() {
                         고쳤다. */}
                     <button
                       type="button"
-                      onClick={() => setCategoryModalOpen(true)}
+                      onClick={openCategoryTree}
                       className="flex h-[37px] w-[108px] shrink-0 items-center justify-center rounded-[6px] border border-[#eaeaea] bg-white px-5 py-2.5 text-[14px] font-medium tracking-[-0.03em] text-[#171717] hover:bg-gray-50"
                     >
                       선택하기
@@ -1166,7 +1252,23 @@ function NewJobPageInner() {
                 </p>
               </div>
 
-              <SizeSelection />
+              <div ref={sizeSectionRef}>
+                <SizeSelection
+                  state={sizeSelection}
+                  dispatch={(action) => {
+                    dispatchSizeSelection(action);
+                    if (action.type === 'selectTab') setTouched((prev) => ({ ...prev, size: false }));
+                  }}
+                >
+                  {isSizeChangeSelected && touched.size && (
+                    <FieldError id="n1-size-error">
+                      {N1_SIZE_CHANGE_BLOCK_LINES[0]}
+                      <br />
+                      {N1_SIZE_CHANGE_BLOCK_LINES[1]}
+                    </FieldError>
+                  )}
+                </SizeSelection>
+              </div>
 
               <div className="flex flex-col gap-1">
                 <div className="mb-1">
@@ -1301,7 +1403,10 @@ function NewJobPageInner() {
                     data-testid="n1-next-tooltip"
                     className="invisible absolute right-0 bottom-[calc(100%-3px)] z-10 w-[193px] rounded-[8px] break-keep border border-[#ff6a38] bg-white p-2.5 text-[12px] leading-[normal] font-light tracking-[-0.04em] text-[#ff6a38] group-focus-within:visible group-hover:visible"
                   >
-                    입력이 필요해요: {missingFields.join(', ')}
+                    {missingFields.length > 0 && <p>입력이 필요해요: {missingFields.join(', ')}</p>}
+                    {isSizeChangeSelected && (
+                      <p className={missingFields.length > 0 ? 'mt-1' : undefined}>{N1_SIZE_CHANGE_BLOCK_LINES.join(' ')}</p>
+                    )}
                     <TooltipArrow className="left-[90px]" />
                   </div>
                 )}
@@ -1316,13 +1421,17 @@ function NewJobPageInner() {
         <CategoryModal
           tree={categoryTree}
           status={categoriesQuery.status}
+          searchQuery={categorySearchQuery}
           onRetry={() => void categoriesQuery.refetch()}
           currentId={categoryId}
           onClose={() => {
             setCategoryModalOpen(false);
             setTouched((prev) => ({ ...prev, category: true }));
           }}
-          onConfirm={(id) => setCategoryId(id)}
+          onConfirm={(id) => {
+            setCategoryId(id);
+            setCategoryInputDraft(null);
+          }}
         />
       )}
 

@@ -78,17 +78,11 @@ test.beforeEach(async ({ page }) => {
 test.describe('카테고리 — 엑셀 3단 트리 창 + [확인]', () => {
   const MAJORS = ['스킨케어', '마스크팩', '클렌징', '선케어', '메이크업', '뷰티소품', '더모코스메틱', '네일', '헤어케어', '바디케어', '향수/디퓨저'];
 
-  test('「검색하기」 필드와 「선택하기」가 같은 3단 트리 창을 열고, 대분류 11종이 보이며 텍스트 검색은 없다', async ({ page }) => {
-    const field = page.getByTestId('n1-category-field');
-    await expect(field).toHaveText('검색하기');
-    expect(await field.evaluate((el) => el.tagName)).toBe('BUTTON');
-
-    await field.click();
+  test('「선택하기」는 3단 전체 트리 창을 열고 대분류 11종이 보인다', async ({ page }) => {
+    await page.getByRole('button', { name: '선택하기' }).click();
     const modal = categoryModal(page);
     await expect(modal).toBeVisible();
-    // 12월 검색칸은 노출하지 않는다
     await expect(modal.getByRole('textbox')).toHaveCount(0);
-    await expect(page.getByPlaceholder('카테고리명 검색')).toHaveCount(0);
     // 대분류 · 중분류 · 소분류 3단(세분류 없음)
     for (const heading of ['대분류', '중분류', '소분류']) await expect(modal.getByText(heading, { exact: true })).toBeVisible();
     await expect(modal.getByText('세분류', { exact: true })).toHaveCount(0);
@@ -105,8 +99,8 @@ test.describe('카테고리 — 엑셀 3단 트리 창 + [확인]', () => {
   });
 
   test('소분류가 있으면 소분류까지 골라야 [확인]이 열리고, [확인] 전에는 값이 그대로다', async ({ page }) => {
-    const field = page.getByTestId('n1-category-field');
-    await field.click();
+    const field = page.getByRole('searchbox', { name: '카테고리 검색' });
+    await page.getByRole('button', { name: '선택하기' }).click();
     const modal = categoryModal(page);
     const confirm = modal.getByRole('button', { name: '확인' });
     await expect(confirm).toBeDisabled();
@@ -128,11 +122,11 @@ test.describe('카테고리 — 엑셀 3단 트리 창 + [확인]', () => {
     await expect(confirm).toBeEnabled();
     // 항목 클릭만으로 닫히지 않고 N1 값도 그대로다
     await expect(modal).toBeVisible();
-    await expect(field).toHaveText('검색하기');
+    await expect(field).toHaveValue('');
 
     await confirm.click();
     await expect(modal).toHaveCount(0);
-    await expect(field).toHaveText('스킨케어 > 크림 > 아이크림');
+    await expect(field).toHaveValue('스킨케어 > 크림 > 아이크림');
 
     // 다시 열면 확정한 경로가 펼쳐져 있다
     await page.getByRole('button', { name: '선택하기' }).click();
@@ -148,13 +142,13 @@ test.describe('카테고리 — 엑셀 3단 트리 창 + [확인]', () => {
     await expect(modal.getByText('소분류', { exact: true }).locator('xpath=../..').getByRole('button')).toHaveCount(0);
     await expect(modal.getByRole('button', { name: '확인' })).toBeEnabled();
     await modal.getByRole('button', { name: '확인' }).click();
-    await expect(page.getByTestId('n1-category-field')).toHaveText('선케어 > 선크림');
+    await expect(page.getByRole('searchbox', { name: '카테고리 검색' })).toHaveValue('선케어 > 선크림');
   });
 
   test('X·바깥 클릭·Esc는 선택 전 값을 유지한다', async ({ page }) => {
-    const field = page.getByTestId('n1-category-field');
+    const field = page.getByRole('searchbox', { name: '카테고리 검색' });
     await pickCategory(page, ['선케어', '선크림']);
-    await expect(field).toHaveText('선케어 > 선크림');
+    await expect(field).toHaveValue('선케어 > 선크림');
 
     for (const close of ['cancel', 'outside', 'escape'] as const) {
       await page.getByRole('button', { name: '선택하기' }).click();
@@ -165,7 +159,7 @@ test.describe('카테고리 — 엑셀 3단 트리 창 + [확인]', () => {
       if (close === 'outside') await page.mouse.click(10, 10);
       if (close === 'escape') await page.keyboard.press('Escape');
       await expect(categoryModal(page)).toHaveCount(0);
-      await expect(field).toHaveText('선케어 > 선크림');
+      await expect(field).toHaveValue('선케어 > 선크림');
     }
   });
 });
@@ -176,10 +170,10 @@ test.describe('카테고리 — GET /master/categories 실제 id', () => {
     await page.goto(`/jobs/new?brandId=${MOCK_BRAND_ID}`);
     await fillBase(page);
     await pickCategory(page, ['스킨케어', '크림', '아이크림']);
-    const field = page.getByTestId('n1-category-field');
+    const field = page.getByRole('searchbox', { name: '카테고리 검색' });
     // 화면에는 이름 경로만 — id 숫자를 노출하지 않는다
-    await expect(field).toHaveText('스킨케어 > 크림 > 아이크림');
-    await expect(field).not.toContainText(String(categoryIdOf('스킨케어 > 크림 > 아이크림')));
+    await expect(field).toHaveValue('스킨케어 > 크림 > 아이크림');
+    await expect(field).not.toHaveValue(String(categoryIdOf('스킨케어 > 크림 > 아이크림')));
     await page.getByRole('checkbox', { name: CONSENT }).check();
     await nextButton(page).click();
     await expect(page).toHaveURL(new RegExp(`/jobs/${MOCK_JOB_ID}$`));
@@ -191,7 +185,7 @@ test.describe('카테고리 — GET /master/categories 실제 id', () => {
   });
 
   test('하위가 있는 대분류·중분류는 [확인]할 수 없고, 하위 없는 중분류는 확정된다', async ({ page }) => {
-    await page.getByTestId('n1-category-field').click();
+    await page.getByRole('button', { name: '선택하기' }).click();
     const modal = categoryModal(page);
     const confirm = modal.getByRole('button', { name: '확인' });
     await modal.getByRole('button', { name: '선케어', exact: true }).click();
@@ -201,7 +195,7 @@ test.describe('카테고리 — GET /master/categories 실제 id', () => {
     await modal.getByRole('button', { name: '선크림', exact: true }).click();
     await expect(confirm).toBeEnabled();
     await confirm.click();
-    await expect(page.getByTestId('n1-category-field')).toHaveText('선케어 > 선크림');
+    await expect(page.getByRole('searchbox', { name: '카테고리 검색' })).toHaveValue('선케어 > 선크림');
   });
 
   test('목록을 불러오지 못하면 창에 실패 문구와 [다시 시도]가 보이고, 다시 시도하면 트리가 열린다', async ({ page }) => {
@@ -233,9 +227,9 @@ test.describe('카테고리 — GET /master/categories 실제 id', () => {
   });
 
   test('창을 고르지 않고 닫으면 「카테고리를 선택해 주세요.」가 보이고, 고르면 사라진다', async ({ page }) => {
-    const field = page.getByTestId('n1-category-field');
+    const field = page.getByRole('searchbox', { name: '카테고리 검색' });
     await expect(page.getByText('카테고리를 선택해 주세요.')).toHaveCount(0);
-    await field.click();
+    await page.getByRole('button', { name: '선택하기' }).click();
     await categoryModal(page).getByRole('button', { name: '닫기' }).click();
     await expect(page.getByText('카테고리를 선택해 주세요.')).toBeVisible();
     await expect(field).toHaveAccessibleDescription('카테고리를 선택해 주세요.');

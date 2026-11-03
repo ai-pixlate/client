@@ -8,8 +8,9 @@
  * 실행: npm run verify:n1-category
  */
 
-import { buildCategoryTree, findCategoryPath, formatCategoryPath, isCategoryLeaf } from '../app/jobs/new/_lib/category-tree.ts';
-import { getN1MissingFields, isN1Ready, resolveN1BrandId } from '../app/jobs/new/_lib/n1-readiness.ts';
+import { buildCategoryTree, filterCategoryTree, findCategoryPath, firstBranchPath, formatCategoryPath, isCategoryLeaf } from '../app/jobs/new/_lib/category-tree.ts';
+import { N1_SIZE_CHANGE_BLOCK_LINES, getN1MissingFields, isN1Ready, resolveN1BrandId } from '../app/jobs/new/_lib/n1-readiness.ts';
+import { INITIAL_SIZE_SELECTION, sanitizeSizeInput, sizeSelectionReducer } from '../app/jobs/new/_lib/size-selection.ts';
 
 let pass = 0;
 let fail = 0;
@@ -78,6 +79,7 @@ const ready = {
   categoryId: 12,
   hasAcceptedResponsibility: true,
   imageCount: 1,
+  sizeTab: 'original',
 };
 check('필수값이 모두 있으면 진행 가능', isN1Ready(ready));
 check('잘모름(unknown)도 유효', isN1Ready({ ...ready, regulatoryClass: 'unknown' }));
@@ -101,6 +103,51 @@ check('URL 쿼리가 우선한다', resolveN1BrandId('7', 'mock') === '7');
 check('Mock은 쿼리가 없으면 fixture를 쓴다', resolveN1BrandId(null, 'mock') === 'mock');
 check('빈 쿼리도 없는 것으로 본다', resolveN1BrandId('  ', 'mock') === 'mock');
 check('실서버는 쿼리가 없으면 값을 만들지 않는다', resolveN1BrandId(null, null) === '');
+
+check('사이즈 변경이면 필수값이 모두 있어도 진행 불가', !isN1Ready({ ...ready, sizeTab: 'change' }));
+check('사이즈 변경은 입력 누락이 아니라 별도 안내로 알린다', getN1MissingFields({ ...ready, sizeTab: 'change' }).length === 0 && N1_SIZE_CHANGE_BLOCK_LINES.length === 2);
+
+console.log('\nfilterCategoryTree');
+const searchTree = buildCategoryTree([
+  { id: 1, parentId: null, name: '스킨케어' },
+  { id: 2, parentId: 1, name: '크림' },
+  { id: 3, parentId: 2, name: '아이크림' },
+  { id: 4, parentId: 2, name: '수분크림' },
+  { id: 5, parentId: 1, name: 'Toner' },
+  { id: 6, parentId: null, name: '선케어' },
+  { id: 7, parentId: 6, name: '선크림' },
+  { id: 8, parentId: null, name: '네일' },
+]);
+const leafNames = (nodes) => nodes.flatMap((n) => (n.children.length ? leafNames(n.children) : [n.name]));
+check('검색어가 없으면 전체 트리', filterCategoryTree(searchTree, '') === searchTree);
+check('공백만 있으면 전체 트리', filterCategoryTree(searchTree, '   ') === searchTree);
+check('leaf 검색은 그 leaf까지의 경로만 남긴다', JSON.stringify(leafNames(filterCategoryTree(searchTree, '아이크림'))) === '["아이크림"]');
+const eyeTree = filterCategoryTree(searchTree, '아이크림');
+check('ancestor를 유지한다', eyeTree.length === 1 && eyeTree[0].name === '스킨케어' && eyeTree[0].children[0].name === '크림' && eyeTree[0].children[0].children[0].id === 3);
+check('부분 문자열은 여러 대분류에서 찾는다', leafNames(filterCategoryTree(searchTree, '크림')).join() === '아이크림,수분크림,선크림');
+check('상위 이름으로 찾으면 하위 leaf가 남는다', leafNames(filterCategoryTree(searchTree, '스킨케어')).join() === '아이크림,수분크림,Toner');
+check('전체 경로 문구로도 찾는다', leafNames(filterCategoryTree(searchTree, '스킨케어 > 크림 > 아이크림')).join() === '아이크림');
+check('공백을 다듬는다', leafNames(filterCategoryTree(searchTree, '  아이크림  ')).join() === '아이크림');
+check('대소문자를 구분하지 않는다', leafNames(filterCategoryTree(searchTree, 'tONER')).join() === 'Toner');
+check('루트 leaf도 찾는다', filterCategoryTree(searchTree, '네일')[0].id === 8);
+check('결과가 없으면 빈 배열', filterCategoryTree(searchTree, '없는말').length === 0);
+check('필터가 원본 트리를 바꾸지 않는다', searchTree[0].children[0].children.length === 2);
+check('첫 가지를 leaf 위까지만 펼친다', firstBranchPath(eyeTree).map((n) => n.name).join() === '스킨케어,크림');
+check('루트 leaf뿐이면 펼칠 경로가 없다', firstBranchPath(filterCategoryTree(searchTree, '네일')).length === 0);
+
+console.log('\nsizeSelectionReducer');
+const changed = sizeSelectionReducer(INITIAL_SIZE_SELECTION, { type: 'selectTab', tab: 'change' });
+check('기본은 원본 유지', INITIAL_SIZE_SELECTION.tab === 'original');
+check('기본 사이즈 변경 방식은 판매처 맞춤', changed.tab === 'change' && changed.mode === 'site');
+const custom = sizeSelectionReducer(changed, { type: 'selectMode', mode: 'custom' });
+check('방식을 바꿔도 탭을 되돌리지 않는다', custom.tab === 'change' && custom.mode === 'custom');
+const sized = sizeSelectionReducer(custom, { type: 'setCustomWidth', value: '12a0px' });
+check('W는 숫자만 남긴다', sized.customWidth === '120');
+check('H는 그대로 둔다', sized.customHeight === '80');
+check('입력은 5자리로 자른다', sanitizeSizeInput('1234567') === '12345');
+const specced = sizeSelectionReducer(sized, { type: 'selectSiteSpec', siteSpec: 'basic' });
+const back = sizeSelectionReducer(specced, { type: 'selectTab', tab: 'original' });
+check('원본 유지로 옮겨도 고른 값은 보존한다', back.tab === 'original' && back.siteSpec === 'basic' && back.customWidth === '120');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

@@ -52,6 +52,83 @@ async function fillRequired(page: Page) {
   await page.locator('#image-upload').setInputFiles({ name: 'n1.png', mimeType: 'image/png', buffer: TINY_PNG });
 }
 
+const categoryInput = (page: Page) => page.getByRole('searchbox', { name: '카테고리 검색' });
+const columnButtons = (page: Page, heading: string) => page.getByTestId(`n1-category-column-${heading}`).getByRole('button');
+
+test.describe('카테고리 검색', () => {
+  test('검색칸을 눌러도 창이 열리지 않고 직접 입력할 수 있다', async ({ page }) => {
+    await page.goto('/jobs/new');
+    await categoryInput(page).click();
+    await expect(categoryInput(page)).toBeFocused();
+    await expect(categoryModal(page)).toHaveCount(0);
+    await page.keyboard.type('아이크림');
+    await expect(categoryInput(page)).toHaveValue('아이크림');
+    await expect(categoryModal(page)).toHaveCount(0);
+  });
+
+  test('Enter는 맞는 leaf와 상위만 남기고, leaf를 골라 [확인]해야 값이 바뀐다', async ({ page }) => {
+    await page.goto('/jobs/new');
+    await categoryInput(page).fill('  아이크림 ');
+    await page.keyboard.press('Enter');
+    await expect(categoryModal(page).getByRole('button', { name: '확인' })).toBeDisabled();
+    // 아이크림은 Mock 트리의 두 대분류에 있다. 첫 결과 가지를 펼쳐 둔다
+    await expect(columnButtons(page, '대분류')).toHaveText(['스킨케어', '더모코스메틱']);
+    await expect(columnButtons(page, '중분류')).toHaveText(['크림']);
+    await expect(columnButtons(page, '소분류')).toHaveText(['아이크림']);
+    expect(await categoryModal(page).boundingBox()).toEqual({ x: 364, y: 332, width: 1192, height: 468 });
+
+    await columnButtons(page, '소분류').first().click();
+    await categoryModal(page).getByRole('button', { name: '확인' }).click();
+    await expect(categoryInput(page)).toHaveValue('스킨케어 > 크림 > 아이크림');
+    await expect(page.getByText('카테고리를 선택해 주세요.')).toHaveCount(0);
+  });
+
+  test('아이콘으로도 검색하고, 하위가 있는 항목은 확정할 수 없다', async ({ page }) => {
+    await page.goto('/jobs/new');
+    await categoryInput(page).fill('크림');
+    await page.getByTestId('n1-category-search').click();
+    await expect(categoryModal(page)).toBeVisible();
+    await expect(categoryModal(page).getByRole('button', { name: '스킨케어', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await expect(categoryModal(page).getByRole('button', { name: '확인' })).toBeDisabled();
+    await categoryModal(page).getByRole('button', { name: '스킨케어', exact: true }).click();
+    await expect(categoryModal(page).getByRole('button', { name: '확인' })).toBeDisabled();
+  });
+
+  test('결과가 없으면 창 안에 안내하고 크기는 그대로이며, 빈 검색은 창을 열지 않는다', async ({ page }) => {
+    await page.goto('/jobs/new');
+    await categoryInput(page).fill('   ');
+    await page.keyboard.press('Enter');
+    await expect(categoryModal(page)).toHaveCount(0);
+
+    await categoryInput(page).fill('없는카테고리');
+    await page.keyboard.press('Enter');
+    await expect(categoryModal(page).getByRole('status')).toHaveText('검색 결과가 없습니다.');
+    expect(await categoryModal(page).boundingBox()).toEqual({ x: 364, y: 332, width: 1192, height: 468 });
+    await expect(categoryModal(page).getByRole('button', { name: '확인' })).toBeDisabled();
+    await page.keyboard.press('Escape');
+    await expect(categoryInput(page)).toBeFocused();
+    await expect(categoryInput(page)).toHaveValue('없는카테고리');
+  });
+
+  test('검색어가 있어도 「선택하기」는 전체 트리를 연다', async ({ page }) => {
+    await page.goto('/jobs/new');
+    await categoryInput(page).fill('아이크림');
+    await page.getByRole('button', { name: '선택하기' }).click();
+    await expect(columnButtons(page, '대분류')).toHaveCount(11);
+  });
+
+  test('값을 고른 뒤 실행하지 않은 입력은 벗어나면 고른 값으로 돌아간다', async ({ page }) => {
+    await page.goto('/jobs/new');
+    await page.getByRole('button', { name: '선택하기' }).click();
+    await categoryModal(page).getByRole('button', { name: '선케어', exact: true }).click();
+    await categoryModal(page).getByRole('button', { name: '선크림', exact: true }).click();
+    await categoryModal(page).getByRole('button', { name: '확인' }).click();
+    await categoryInput(page).fill('다른말');
+    await page.getByPlaceholder('상품 이름을 입력해주세요').click();
+    await expect(categoryInput(page)).toHaveValue('선케어 > 선크림');
+  });
+});
+
 test.describe('카테고리 창 — Figma 1192×468 고정', () => {
   test('Figma 위치·크기를 지키고, 항목 수가 달라도 외곽 크기는 그대로다', async ({ page }) => {
     await page.goto('/jobs/new');
@@ -166,24 +243,66 @@ test.describe('사이즈 선택 — Figma 1093:10288', () => {
     await expect(page.getByRole('radio', { name: '커스텀' })).toHaveCount(0);
   });
 
-  test('사이즈 변경 탭은 구조를 보이되 모두 비활성이고, 준비 중임을 알린다', async ({ page }) => {
+  test('사이즈 변경은 Figma 상태대로 조작되고, 조건에 맞는 요소만 보인다', async ({ page }) => {
     await page.goto('/jobs/new');
     await page.getByRole('tab', { name: '사이즈 변경' }).click();
-    await expect(page.getByRole('tab', { name: '사이즈 변경' })).toHaveAttribute('aria-selected', 'true');
     await expect(page.getByText('사이트 규격에 맞게 이미지를 다시 구성해요.', { exact: false })).toBeVisible();
-    for (const name of ['판매처 맞춤', '커스텀']) await expect(page.getByRole('radio', { name })).toBeDisabled();
-    for (const name of ['가로 크기(px)', '세로 크기(px)']) {
-      const input = page.getByRole('spinbutton', { name });
-      await expect(input).toBeDisabled();
-      const box = (await input.locator('xpath=..').boundingBox())!;
-      expect(Math.round(box.height)).toBe(48);
-    }
-    await expect(page.getByTestId('n1-size-change-notice')).toBeVisible();
+
+    // 판매처 맞춤(1093:10289) — 판매처 · 규격 태그만, W/H 없음
+    await expect(page.getByRole('radio', { name: '판매처 맞춤' })).toBeChecked();
+    await expect(page.getByRole('combobox', { name: '판매처' })).toHaveValue('amazon');
+    await expect(page.getByText('베이직(기본 등록)', { exact: false })).toBeVisible();
+    const specs = page.getByRole('radiogroup', { name: '판매처 규격' }).getByRole('radio');
+    await expect(specs).toHaveText(['Premium A+(1464 x 600)', 'Basic A+(970 x 300)', 'Basic']);
+    await expect(specs.nth(1)).toHaveAttribute('aria-checked', 'true');
+    await specs.nth(0).click();
+    await expect(specs.nth(0)).toHaveAttribute('aria-checked', 'true');
+    await expect(specs.nth(1)).toHaveAttribute('aria-checked', 'false');
+    await expect(page.getByRole('textbox', { name: '가로 크기(px)' })).toHaveCount(0);
+
+    // 커스텀(1093:10290) — W/H만, 판매처 없음
+    await page.getByRole('radio', { name: '커스텀' }).check();
+    await expect(page.getByRole('combobox', { name: '판매처' })).toHaveCount(0);
+    const width = page.getByRole('textbox', { name: '가로 크기(px)' });
+    await expect(width).toHaveValue('80');
+    await expect(page.getByRole('textbox', { name: '세로 크기(px)' })).toHaveValue('80');
+    expect(Math.round((await width.locator('xpath=..').boundingBox())!.height)).toBe(48);
+    await width.fill('12a0');
+    await expect(width).toHaveValue('120');
+
+    // Figma에 없는 설명을 평소 레이아웃에 두지 않는다
+    await expect(page.getByText('준비 중', { exact: false })).toHaveCount(0);
+    await expect(page.getByText('아직 작업에 반영할 수 없습니다.', { exact: false })).toBeHidden();
+
+    // 탭을 오가도 고른 값이 남는다
     await page.getByRole('tab', { name: '원본 유지' }).click();
-    await expect(page.getByTestId('n1-size-change-notice')).toHaveCount(0);
+    await expect(page.getByRole('radio', { name: '커스텀' })).toHaveCount(0);
+    await page.getByRole('tab', { name: '사이즈 변경' }).click();
+    await expect(width).toHaveValue('120');
   });
 
-  test('어느 탭이든 PATCH에는 specType original만 가고 크기·채널 필드가 없다', async ({ page }) => {
+  test('사이즈 변경이면 [다음]을 막고 이유를 알리며, 서버 요청 없이 선택을 그대로 둔다', async ({ page }) => {
+    const writes: string[] = [];
+    page.on('request', (r) => {
+      if (r.method() !== 'GET' && new URL(r.url()).pathname.startsWith('/jobs')) writes.push(`${r.method()} ${new URL(r.url()).pathname}`);
+    });
+    await page.goto('/jobs/new');
+    await fillRequired(page);
+    await expect(nextButton(page)).toBeEnabled();
+
+    await page.getByRole('tab', { name: '사이즈 변경' }).click();
+    await expect(nextButton(page)).toBeDisabled();
+    await nextButton(page).hover();
+    await expect(page.getByTestId('n1-next-tooltip')).toHaveText('사이즈 변경 기능은 아직 작업에 반영할 수 없습니다. 원본 유지를 선택해 주세요.');
+    await nextButton(page).click({ force: true });
+    await expect(page.locator('#n1-size-error')).toBeVisible();
+    await expect(page.locator('#n1-size-error')).toBeInViewport();
+    await expect(page).toHaveURL(/\/jobs\/new$/);
+    await expect(page.getByRole('tab', { name: '사이즈 변경' })).toHaveAttribute('aria-selected', 'true');
+    expect(writes).toEqual([]);
+  });
+
+  test('원본 유지로 돌아오면 [다음]이 열리고 PATCH는 specType original뿐이다', async ({ page }) => {
     const patches: Record<string, unknown>[] = [];
     await page.exposeFunction('__n1Patch', (body: string) => {
       patches.push(JSON.parse(body));
@@ -200,11 +319,14 @@ test.describe('사이즈 선택 — Figma 1093:10288', () => {
     await page.goto('/jobs/new');
     await fillRequired(page);
     await page.getByRole('tab', { name: '사이즈 변경' }).click();
+    await page.getByRole('radio', { name: '커스텀' }).check();
+    await page.getByRole('tab', { name: '원본 유지' }).click();
+    await expect(page.locator('#n1-size-error')).toHaveCount(0);
     await nextButton(page).click();
     await expect(page).toHaveURL(/\/jobs\/1$/, { timeout: 30_000 });
     expect(patches).toHaveLength(1);
     expect(patches[0].specType).toBe('original');
-    for (const key of ['channelSpecId', 'width', 'height', 'customWidth', 'customHeight']) expect(patches[0]).not.toHaveProperty(key);
+    for (const key of ['channelSpecId', 'width', 'height', 'customWidth', 'customHeight', 'siteSpec']) expect(patches[0]).not.toHaveProperty(key);
   });
 });
 

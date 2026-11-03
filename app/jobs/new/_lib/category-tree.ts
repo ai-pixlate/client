@@ -56,6 +56,35 @@ export function findCategoryPath(nodes: CategoryNode[], id: number, path: Catego
   return null;
 }
 
+/**
+ * 검색어에 맞는 leaf와 그 leaf까지의 상위만 남긴 트리. 이미 받은 GET /master/categories 데이터만 쓴다.
+ * 공백을 다듬은 뒤 대소문자 없이 전체 경로(이름 포함)에 부분 일치하는지 본다. 남은 노드는 하위가 있거나 원래 leaf라
+ * isCategoryLeaf 판정이 바뀌지 않는다. 검색어가 비면 트리를 그대로 돌려준다.
+ */
+export function filterCategoryTree(nodes: CategoryNode[], query: string): CategoryNode[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return nodes;
+  const walk = (siblings: CategoryNode[], parents: CategoryNode[]): CategoryNode[] =>
+    siblings.flatMap((node) => {
+      const path = [...parents, node];
+      if (isCategoryLeaf(node)) return formatCategoryPath(path).toLowerCase().includes(needle) ? [node] : [];
+      const children = walk(node.children, path);
+      return children.length > 0 ? [{ ...node, children }] : [];
+    });
+  return walk(nodes, []);
+}
+
+/** 첫 번째 가지를 leaf 바로 위까지 펼친 경로. 검색 결과를 열 때 쓰며 leaf는 사용자가 직접 고른다 */
+export function firstBranchPath(nodes: CategoryNode[]): CategoryNode[] {
+  const path: CategoryNode[] = [];
+  let current = nodes[0];
+  while (current && !isCategoryLeaf(current)) {
+    path.push(current);
+    current = current.children[0];
+  }
+  return path;
+}
+
 /** N1 필드 표시 문구 — 확정한 경로 전체(예: 스킨케어 > 크림 > 아이크림). id는 화면에 노출하지 않는다 */
 export function formatCategoryPath(path: CategoryNode[]): string {
   return path.map((node) => node.name).join(' > ');

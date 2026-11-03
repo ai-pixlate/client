@@ -4,13 +4,15 @@
  * 서버 계약: JobCreate는 brandId만 필수이고, analyze(ANL-01) 게이트는 product_name NULL만 400으로 막는다.
  * 나머지는 PRD v3.5.10 N1 기준 화면 필수값이다 — 국가·도착어·규제 분류(F-LNG), 카테고리 leaf(F-SRC-04 ①),
  * OTC 의약품·복합의 OTC 종류(F-LNG-03 ⑦ — 화면 게이트일 뿐 서버로 보내지 않는다), 책임 동의(F-ACC-04),
- * 원본 이미지 1장 이상. 사이즈 선택은 원본(specType 'original') 고정이라 항상 충족한다.
+ * 원본 이미지 1장 이상. 서버가 specType 'original'만 받으므로 사이즈 선택이 원본 유지일 때만 진행한다
+ * (사이즈 변경을 고른 채 몰래 original로 보내지 않는다).
  * 상품코드·핵심 키워드는 선택값이라 여기서 보지 않는다. 규제 분류 'unknown'(잘모름)도 유효한 선택이다.
  *
  * React를 쓰지 않는 순수 함수라 scripts/verify-n1-category-tree.mjs가 그대로 import한다.
  */
 
 import type { ApiRegulatoryClass } from '@/lib/api/job-schema';
+import type { SizeTab } from './size-selection';
 
 export interface N1ReadinessInput {
   brandId: string;
@@ -23,7 +25,13 @@ export interface N1ReadinessInput {
   categoryId: number | null;
   hasAcceptedResponsibility: boolean;
   imageCount: number;
+  sizeTab: SizeTab;
 }
+
+export const N1_SIZE_CHANGE_BLOCK_LINES = [
+  '사이즈 변경 기능은 아직 작업에 반영할 수 없습니다.',
+  '원본 유지를 선택해 주세요.',
+];
 
 export function requiresOtcType(regulatoryClass: ApiRegulatoryClass | ''): boolean {
   return regulatoryClass === 'otc' || regulatoryClass === 'combination';
@@ -53,5 +61,5 @@ export function getN1MissingFields(input: N1ReadinessInput): string[] {
 }
 
 export function isN1Ready(input: N1ReadinessInput): boolean {
-  return getN1MissingFields(input).length === 0;
+  return getN1MissingFields(input).length === 0 && input.sizeTab === 'original';
 }
