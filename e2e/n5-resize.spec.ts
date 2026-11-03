@@ -263,7 +263,8 @@ test('center snap(실제 mouse) — 화면 중심이 1px 안으로 맞고, 유�
   near(o.x, 50, 2);
   expect(Math.abs(o.y)).toBeLessThan(1);
 
-  // 둘 다 → 정중앙 (손을 놓으면 guide가 사라진다)
+  // 둘 다 → 정중앙 (손을 놓으면 guide가 사라진다). 이미 붙은 축은 구간을 벗어난 뒤에야 다시 붙으므로 밖에서 다가온다
+  await dragToOffset(40, 40);
   await dragToOffset(5, 5);
   o = await offsets();
   expect(Math.abs(o.x)).toBeLessThan(1);
@@ -271,12 +272,17 @@ test('center snap(실제 mouse) — 화면 중심이 1px 안으로 맞고, 유�
   await expect(guideX).toHaveCount(0);
   await expect(guideY).toHaveCount(0);
 
-  // 한 번의 끌기 안에서 — 붙은 동안 guide 표시, 20px 전까지 유지, X만 넘기면 X만 풀린다
+  // 한 번의 끌기 안에서 — 밖에서 들어와 붙으면 guide 표시, 20px 전까지 유지, X만 넘기면 X만 풀린다
+  await dragToOffset(-40, -40);
   const here = await box(page, BLOCK);
-  const px = here.x + here.width * 0.4;
-  const py = here.y + here.height * 0.6;
-  await page.mouse.move(px, py);
+  const px = here.x + here.width * 0.4 + 40;
+  const py = here.y + here.height * 0.6 + 40;
+  await page.mouse.move(px - 40, py - 40);
   await page.mouse.down();
+  await page.mouse.move(px, py, { steps: 6 });
+  o = await offsets();
+  expect(Math.abs(o.x)).toBeLessThan(1);
+  expect(Math.abs(o.y)).toBeLessThan(1);
   await page.mouse.move(px + 15, py + 15, { steps: 4 });
   o = await offsets();
   expect(Math.abs(o.x)).toBeLessThan(1);

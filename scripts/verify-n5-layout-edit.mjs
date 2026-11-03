@@ -9,6 +9,7 @@ import {
   N5_SNAP_ACQUIRE_SCREEN_PX,
   N5_SNAP_RELEASE_SCREEN_PX,
   NO_CENTER_SNAP,
+  startCenterSnapLock,
   isSameBox,
   canDecreaseScale,
   canIncreaseScale,
@@ -227,6 +228,19 @@ console.log('\nmoveBoxWithCenterSnap (acquire·release)');
   const nearCenter = moveBoxWithCenterSnap(wide, { x: 10, y: 0 }, section, { acquire: 30, release: 75 }, { snappedX: true, snappedY: false });
   check('끝에 닿기 전에는 유지된다', nearCenter.snappedX && nearCenter.box.x === 50);
   check('후보 위치를 함께 돌려준다', jumped.candidate.x === 315);
+  // 폭이 넓은 박스 — 구간 안에서 시작하면 첫 이동에 묶이지 않는다
+  const wideStart = { x: 40, y: 200, width: 900, height: 100 }; // 중심 490, 선까지 10
+  const wideDistance = { acquire: 30, release: 50 };
+  const startLock = startCenterSnapLock(wideStart, section, wideDistance.acquire);
+  check('구간 안 시작 축은 아직 붙지 않고, 밖 축은 붙을 수 있다', startLock.armedX === false && startLock.armedY === true);
+  const free1 = moveBoxWithCenterSnap(wideStart, { x: 20, y: 0 }, section, wideDistance, startLock, wideStart);
+  check('구간 안 이동은 그대로 따라온다', !free1.snappedX && free1.box.x === 60, JSON.stringify(free1.box));
+  const crossInside = moveBoxWithCenterSnap(wideStart, { x: 15, y: 0 }, section, wideDistance, startLock, wideStart);
+  check('구간 안에서 중앙선을 지나도 붙지 않는다', !crossInside.snappedX && crossInside.box.x === 55);
+  const left = moveBoxWithCenterSnap(wideStart, { x: 45, y: 0 }, section, wideDistance, startLock, free1.candidate);
+  check('구간을 벗어나면 다시 붙을 수 있게 된다', left.armedX === true && !left.snappedX);
+  const back = moveBoxWithCenterSnap(wideStart, { x: 15, y: 0 }, section, wideDistance, left, left.candidate);
+  check('벗어난 뒤 돌아오면 정확히 붙는다', back.snappedX && back.box.x === 50, JSON.stringify(back.box));
   check('같은 박스 비교', isSameBox(box, { ...box }) && !isSameBox(box, { ...box, x: 41 }));
 }
 

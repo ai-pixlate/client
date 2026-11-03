@@ -138,7 +138,18 @@ export const mockSectionsResponse: SectionsResponse = {
       // N3에서 자동 제외된 섹션. N5 화면에 표시되지 않음.
       excludedStage: 'N3',
       bbox: { x: 0, y: 1100, width: 1000, height: 200 },
-      verdicts: [],
+      // 자동 제외(auto_local)는 근거 판정이 있어야 한다. 판정이 없으면 포함이고, 판정을 못 한 것은 auto_local_failed다(F-SEC-02).
+      verdicts: [
+        {
+          verdictId: 'ver_03_01',
+          verdictStatus: 'irrelevant',
+          verdictType: 'local_irrelevant',
+          problemText: '카카오톡 상담 안내',
+          alternativeExpression: null,
+          evidenceUrl: null,
+          basis: '미국(도착 시장)에서 쓰지 않는 채널 안내입니다.',
+        },
+      ],
       warningBadge: null,
       originalVerdict: null,
     },

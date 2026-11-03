@@ -45,7 +45,7 @@ test('카드 7종이 서버 상태와 선택에 따라 나오고, 상세에도 �
   // 선택되지 않은 나머지
   await expectCard(card(1), { variant: 'translation-pending', bg: WHITE, border: NEUTRAL, opacity: '1', height: 160, chip: '번역 예정', action: '제외하기', badges: false });
   await expectCard(card(3), { variant: 'excluded', bg: GRAY, border: NEUTRAL, opacity: '1', height: 160, chip: '직접 제외', action: '번역하기', badges: false });
-  await expectCard(card(4), { variant: 'judgement-failed', bg: GRAY, border: NEUTRAL, opacity: '0.5', height: 160, noChip: '판정실패', action: '그래도 번역하기', badges: false });
+  await expectCard(card(4), { variant: 'judgement-failed', bg: GRAY, border: NEUTRAL, opacity: '0.5', height: 160, chip: '판정 실패', noChip: '번역 예정', action: '그래도 번역하기', badges: false });
   await expectCard(card(5), { variant: 'restored', bg: WHITE, border: NEUTRAL, opacity: '1', chip: '직접 되살림', action: '제외하기', badges: true });
   const restored = (await card(5).boundingBox())!;
   expect(restored.height).toBeGreaterThanOrEqual(161);
@@ -78,7 +78,34 @@ test('카드 7종이 서버 상태와 선택에 따라 나오고, 상세에도 �
   await card(4).click({ position: { x: 300, y: 20 } });
   await expect(card(4)).toHaveCSS('border-top-color', ORANGE);
   await expect(card(4)).toHaveAttribute('data-variant', 'judgement-failed');
-  await expect(page.getByTestId('n3-verdict-judge-failed')).toBeVisible();
+  await expect(page.getByTestId('n3-verdict-judge-failed')).toHaveText('판정 실패');
+  await expect(page.getByTestId('n3-verdict-empty')).toHaveCount(0);
+  await expect(page.getByTestId('n3-detail-action')).toHaveText('그래도 번역하기');
+  await expect(card(4)).toHaveAttribute('data-bucket', 'exclude');
+});
+
+test('기본 Mock — 판정 없는 정상 섹션은 번역 예정이고, 자동 제외에는 근거 판정이 있다', async ({ page }) => {
+  await reachN3(page);
+  const inconsistent = page.locator('[data-contract-inconsistent]');
+
+  // 무판정 정상 — include · 번역 예정 · 걸린 판정이 없어요
+  const noVerdict = page.getByTestId('n3-section-card-1');
+  await noVerdict.click({ position: { x: 300, y: 20 } });
+  await expect(noVerdict).toHaveAttribute('data-bucket', 'include');
+  await expect(noVerdict).toContainText('번역 예정');
+  await expect(noVerdict.getByRole('button').last()).toHaveText('제외하기');
+  await expect(page.getByTestId('n3-detail-status')).toHaveText('번역 예정');
+  await expect(page.getByTestId('n3-verdict-empty')).toHaveText('걸린 판정이 없어요');
+  await expect(page.getByTestId('n3-verdict-judge-failed')).toHaveCount(0);
+  await expect(page.getByTestId('n3-detail-action')).toHaveText('제외하기');
+
+  // 예전 fixture 모순(auto_local + 판정 없음) — 이제 근거 판정이 보이고 「걸린 판정이 없어요」가 없다
+  await page.getByTestId('n3-section-card-3').click({ position: { x: 300, y: 20 } });
+  await expect(page.getByTestId('n3-detail-title')).toHaveText('SECTION 03');
+  await expect(page.getByTestId('n3-detail-panel')).toContainText('현지 수정 필수');
+  await expect(page.getByTestId('n3-verdict-empty')).toHaveCount(0);
+  await expect(inconsistent).toHaveCount(0);
+  await page.screenshot({ path: test.info().outputPath('n3-normal.png') });
 });
 
 test('전 섹션 제외 — 안내는 hover·focus에만 보이고 눌러도 요청이 없다', async ({ page }) => {

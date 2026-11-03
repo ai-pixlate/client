@@ -1,7 +1,9 @@
 'use client';
 
 import type { ApiSection } from '@/lib/api/n3-schema';
-import { formatN3SectionTitle, getN3SectionCardState } from '@/lib/n3/section-card-state';
+import { useEffect } from 'react';
+
+import { formatN3SectionTitle, getN3SectionViewState } from '@/lib/n3/section-card-state';
 import { filterN3VisibleVerdicts } from '@/lib/n3/verdict';
 import { N3StatusChip } from './section-list-card';
 import { VerdictCard } from './verdict-card';
@@ -34,7 +36,19 @@ export function DetailPanel({
   isMutating: boolean;
   onChangeBucket: () => void;
 }) {
-  if (!section) {
+  const listVerdicts = filterN3VisibleVerdicts(section?.verdicts);
+  const verdicts = detail ? filterN3VisibleVerdicts(detail.verdicts) : listVerdicts;
+  const state = section ? getN3SectionViewState(section, true, detail ? verdicts.length : undefined) : null;
+  const inconsistentId = state?.isContractInconsistent ? section?.id : undefined;
+
+  // 서버 값이 서로 맞지 않으면 FE가 고치지 않고 개발 중에 알아볼 수 있게만 한다
+  useEffect(() => {
+    if (inconsistentId != null && process.env.NODE_ENV !== 'production') {
+      console.warn(`[N3] section ${inconsistentId}: bucket·exclusionReason·verdicts가 서로 맞지 않습니다.`);
+    }
+  }, [inconsistentId]);
+
+  if (!section || !state) {
     return (
       <div data-testid="n3-detail-panel" className="flex h-full items-center justify-center">
         <p className="text-sm text-[#999]">섹션이 없습니다.</p>
@@ -42,27 +56,25 @@ export function DetailPanel({
     );
   }
 
-  const state = getN3SectionCardState(section);
-  // 현지 AI 판정을 끝내지 못한 섹션(auto_local_failed)은 사유 배지가 아니라 배지 없는
-  // 「판정 실패」 행으로 보여 준다(PRD v3.5.10).
-  const isJudgeFailed = section.exclusionReason === 'auto_local_failed';
-  const listVerdicts = filterN3VisibleVerdicts(section.verdicts);
-  const verdicts = detail ? filterN3VisibleVerdicts(detail.verdicts) : listVerdicts;
   const isVerdictPending = !detail && listVerdicts.length === 0 && (isDetailLoading || isDetailError);
 
   return (
-    <div data-testid="n3-detail-panel" className="flex h-full min-h-0 flex-col justify-between gap-6">
+    <div
+      data-testid="n3-detail-panel"
+      data-contract-inconsistent={state.isContractInconsistent || undefined}
+      className="flex h-full min-h-0 flex-col justify-between gap-6"
+    >
       <div className="flex min-h-0 flex-1 flex-col gap-5">
         <div className="flex shrink-0 flex-col gap-2">
           <p data-testid="n3-detail-title" className="text-[20px] font-semibold tracking-[-0.02em] text-[#171717]">
             {formatN3SectionTitle(section.sectionOrder)}
           </p>
-          {/* 카드와 같은 상태값(getN3SectionCardState)을 그대로 보인다 */}
-          {state.chip && <N3StatusChip label={state.chip} testId="n3-detail-status" />}
+          {/* 카드와 같은 상태값을 그대로 보인다. 판정 실패는 아래 전용 행이 같은 말을 한다 */}
+          {state.chip && !state.isJudgeFailed && <N3StatusChip label={state.chip} testId="n3-detail-status" />}
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-3">
-          {isJudgeFailed && (
+          {state.isJudgeFailed && (
             <div data-testid="n3-verdict-judge-failed" className="flex w-full flex-col items-start rounded-[8px] bg-white px-5 py-3">
               <p className="text-[18px] font-medium tracking-[-0.03em] text-[#171717]">판정 실패</p>
             </div>
@@ -77,8 +89,7 @@ export function DetailPanel({
               {isDetailError ? '판정 정보를 불러오지 못했습니다.' : '판정 정보를 불러오는 중...'}
             </p>
           ) : (
-            !isJudgeFailed &&
-            verdicts.length === 0 && (
+            state.isNoVerdict && (
               <p data-testid="n3-verdict-empty" className="px-1 text-sm text-[#999]">
                 걸린 판정이 없어요
               </p>

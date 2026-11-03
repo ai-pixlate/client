@@ -25,12 +25,7 @@ export interface N3SectionCardState {
   targetBucket: ApiSectionBucket;
 }
 
-const AUTO_EXCLUSION_REASONS = new Set<ApiExclusionReason>([
-  'auto_regulatory',
-  'auto_channel',
-  'auto_local',
-  'auto_local_failed',
-]);
+const AUTO_EXCLUSION_REASONS = new Set<ApiExclusionReason>(['auto_regulatory', 'auto_channel', 'auto_local']);
 
 export function getN3SectionCardState(section: {
   bucket?: ApiSectionBucket;
@@ -42,6 +37,10 @@ export function getN3SectionCardState(section: {
       : { kind: 'include', chip: '번역 예정', actionLabel: '제외하기', targetBucket: 'exclude' };
   }
   const reason = section.exclusionReason ?? null;
+  // 판정을 끝내지 못한 것(auto_local_failed)은 「판정이 없는 것」과 다르다 — 자동 제외이고 상태를 그대로 밝힌다
+  if (reason === 'auto_local_failed') {
+    return { kind: 'autoExcluded', chip: '판정 실패', actionLabel: '그래도 번역하기', targetBucket: 'include' };
+  }
   if (reason && AUTO_EXCLUSION_REASONS.has(reason)) {
     return { kind: 'autoExcluded', chip: null, actionLabel: '그래도 번역하기', targetBucket: 'include' };
   }
@@ -78,6 +77,38 @@ export function getN3CardVisual(
   if (section.exclusionReason === 'auto_local_failed') return { variant: 'judgement-failed', layout: 'compact' };
   if (kind === 'autoExcluded') return { variant: isSelected ? 'exclusion-selected' : 'exclusion-verdict', layout: 'verdict' };
   return { variant: isSelected ? 'exclusion-selected' : 'excluded', layout: 'compact' };
+}
+
+export interface N3SectionViewState extends N3SectionCardState {
+  variant: N3CardVariant;
+  layout: N3CardLayout;
+  /** AI 판정을 끝내지 못했다 — 「걸린 판정이 없어요」로 표시하지 않는다 */
+  isJudgeFailed: boolean;
+  /** 상세 판정이 도착했고, 판정을 끝낸 결과 걸린 것이 없다. 카드만 볼 때(상세 전)는 false */
+  isNoVerdict: boolean;
+  /** 서버 값끼리 맞지 않는다(자동 제외인데 판정 없음 · 제외인데 사유 없음). FE는 bucket을 고치지 않고 드러내기만 한다 */
+  isContractInconsistent: boolean;
+}
+
+/**
+ * N3 카드·상세의 표시 상태 — 한 곳에서 정한다(F-SEC-02).
+ * verdictCount는 상세 판정이 도착했을 때만 넘긴다. 도착 전에 판정 없음으로 단정하지 않는다.
+ */
+export function getN3SectionViewState(
+  section: { bucket?: ApiSectionBucket; exclusionReason?: ApiExclusionReason | null },
+  isSelected: boolean,
+  verdictCount?: number,
+): N3SectionViewState {
+  const isJudgeFailed = section.exclusionReason === 'auto_local_failed';
+  const hasAutoReason = section.exclusionReason != null && AUTO_EXCLUSION_REASONS.has(section.exclusionReason);
+  return {
+    ...getN3SectionCardState(section),
+    ...getN3CardVisual(section, isSelected),
+    isJudgeFailed,
+    isNoVerdict: verdictCount === 0 && !isJudgeFailed,
+    isContractInconsistent:
+      section.bucket === 'exclude' && (section.exclusionReason == null || (hasAutoReason && verdictCount === 0)),
+  };
 }
 
 /** 카드·상세 제목. Figma 1422:10176 「SECTION 01」 형식 */

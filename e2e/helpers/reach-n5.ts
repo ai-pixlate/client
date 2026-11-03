@@ -27,7 +27,7 @@ const TINY_PNG_BASE64 =
  * drag&drop처럼 각 단계 자체를 검증하는 assertion은 포함하지 않는다(그건
  * basic-flow.spec.ts의 몫). 여기서는 오직 "N5까지 도달"만 책임진다.
  */
-export async function reachN5(page: Page, options: { mockScenario?: string } = {}): Promise<void> {
+export async function reachN5(page: Page, options: { mockScenario?: string; debugSnap?: boolean } = {}): Promise<void> {
   // 기본 mock N2(poll 6회 · 약 10초)와 N4(poll 9회 · 약 18초)를 지나므로 그만큼 테스트 시간을 늘린다
   test.info().setTimeout(test.info().timeout + 30_000);
   await page.goto(`/jobs/new?brandId=${MOCK_BRAND_ID}`);
@@ -59,8 +59,11 @@ export async function reachN5(page: Page, options: { mockScenario?: string } = {
   await page.getByRole('button', { name: '다음' }).click();
   await expect(page).toHaveURL(new RegExp(`/jobs/${MOCK_JOB_ID}$`));
   // Mock 시나리오는 화면 주소로 켠다(MSW가 request.referrer로 읽는다) — 사용자가 직접 여는 주소와 같은 경로다
-  if (options.mockScenario) {
-    await page.evaluate((scenario) => history.replaceState(history.state, '', `?mockScenario=${scenario}`), options.mockScenario);
+  const search = new URLSearchParams();
+  if (options.mockScenario) search.set('mockScenario', options.mockScenario);
+  if (options.debugSnap) search.set('debugSnap', '1');
+  if (search.size > 0) {
+    await page.evaluate((query) => history.replaceState(history.state, '', `?${query}`), search.toString());
   }
 
   // N3 고유 UI가 나타날 때까지 대기 (고정 sleep 대신 polling 완료를 기다림).

@@ -1,7 +1,7 @@
 'use client';
 
 import type { ApiSection, ApiSourceImage } from '@/lib/api/n3-schema';
-import { formatN3SectionTitle, getN3CardVisual, getN3SectionCardState } from '@/lib/n3/section-card-state';
+import { formatN3SectionTitle, getN3SectionViewState } from '@/lib/n3/section-card-state';
 import { filterN3VisibleVerdicts } from '@/lib/n3/verdict';
 import { SectionCropThumbnail } from './section-crop-thumbnail';
 import { VerdictBadge } from './verdict-card';
@@ -52,11 +52,11 @@ export function SectionListCard({
   onSelect: () => void;
   onChangeBucket: () => void;
 }) {
-  const state = getN3SectionCardState(section);
-  const { variant, layout } = getN3CardVisual(section, isSelected);
+  const state = getN3SectionViewState(section, isSelected);
+  const { variant, layout } = state;
   const isCompact = layout === 'compact';
   const isWhite = variant === 'translation-pending' || variant === 'translation-selected' || variant === 'restored';
-  const isJudgementFailed = variant === 'judgement-failed';
+  const isJudgementFailed = state.isJudgeFailed;
   const title = formatN3SectionTitle(section.sectionOrder);
   const badges = filterN3VisibleVerdicts(section.verdicts);
 
@@ -69,6 +69,7 @@ export function SectionListCard({
       data-bucket={section.bucket}
       data-kind={state.kind}
       data-variant={variant}
+      data-contract-inconsistent={state.isContractInconsistent || undefined}
       data-selected={isSelected}
       onClick={onSelect}
       onKeyDown={(e) => {

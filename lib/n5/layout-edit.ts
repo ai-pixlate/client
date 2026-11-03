@@ -178,9 +178,25 @@ export function snapBoxToSectionCenter(
 export interface CenterSnapLock {
   snappedX: boolean;
   snappedY: boolean;
+  /** false면 이 축은 아직 acquire 구간을 벗어난 적이 없어 붙지 않는다(없으면 true로 본다) */
+  armedX?: boolean;
+  armedY?: boolean;
 }
 
 export const NO_CENTER_SNAP: CenterSnapLock = { snappedX: false, snappedY: false };
+
+/**
+ * 끌기 시작 상태. 이미 acquire 구간 안에서 시작한 축은 그 구간을 한 번 벗어난 뒤에야 붙는다 — 그러지 않으면 폭이 넓은 박스는
+ * 첫 이동부터 중앙에 묶여 옆으로 움직이지 않고, 붙는 순간의 변화도 보이지 않는다.
+ */
+export function startCenterSnapLock(box: BoundingBox, section: Size, acquire: number): CenterSnapLock {
+  return {
+    snappedX: false,
+    snappedY: false,
+    armedX: Math.abs(box.x + box.width / 2 - section.width / 2) > acquire,
+    armedY: Math.abs(box.y + box.height / 2 - section.height / 2) > acquire,
+  };
+}
 
 /**
  * 끌기 중 가운데선 snap — 축마다 따로 판단한다. 지금 붙어 있지 않은 축은 acquire 거리, 붙어 있는 축은 release 거리로
@@ -192,8 +208,10 @@ export function applyCenterSnapWithHysteresis(
   distance: { acquire: number; release: number },
   lock: CenterSnapLock,
 ): { box: BoundingBox; snappedX: boolean; snappedY: boolean } {
-  const x = snapBoxToSectionCenter(box, section, lock.snappedX ? distance.release : distance.acquire);
-  const y = snapBoxToSectionCenter(box, section, lock.snappedY ? distance.release : distance.acquire);
+  // 음수 거리면 snapBoxToSectionCenter 가 붙이지 않는다
+  const axis = (snapped: boolean, armed: boolean | undefined) => (snapped ? distance.release : armed === false ? -1 : distance.acquire);
+  const x = snapBoxToSectionCenter(box, section, axis(lock.snappedX, lock.armedX));
+  const y = snapBoxToSectionCenter(box, section, axis(lock.snappedY, lock.armedY));
   return { box: { ...box, x: x.box.x, y: y.box.y }, snappedX: x.snappedX, snappedY: y.snappedY };
 }
 
@@ -211,21 +229,25 @@ export function moveBoxWithCenterSnap(
   distance: { acquire: number; release: number },
   lock: CenterSnapLock,
   previous: BoundingBox | null = null,
-): { box: BoundingBox; candidate: BoundingBox; snappedX: boolean; snappedY: boolean } {
+): { box: BoundingBox; candidate: BoundingBox; snappedX: boolean; snappedY: boolean; armedX: boolean; armedY: boolean } {
   const candidate = moveBoxWithinSection(start, { x: start.x + delta.x, y: start.y + delta.y }, section);
   const crossed = (from: number, to: number, line: number) => (from - line) * (to - line) < 0;
   // section 끝에 닿은 축은 유지하지 않는다 — 폭이 넓은 박스는 움직일 수 있는 범위 전체가 release 안이라 빠져나오지 못한다
   const holds = (locked: boolean, from: number | null, to: number, line: number, atEdge: boolean) =>
     !atEdge && (locked || (from != null && crossed(from, to, line)));
+  const armedX = lock.armedX !== false || Math.abs(candidate.x + candidate.width / 2 - section.width / 2) > distance.acquire;
+  const armedY = lock.armedY !== false || Math.abs(candidate.y + candidate.height / 2 - section.height / 2) > distance.acquire;
   const effectiveLock = {
-    snappedX: holds(
+    armedX,
+    armedY,
+    snappedX: armedX && holds(
       lock.snappedX,
       previous ? previous.x + previous.width / 2 : null,
       candidate.x + candidate.width / 2,
       section.width / 2,
       candidate.x <= 0 || candidate.x + candidate.width >= section.width,
     ),
-    snappedY: holds(
+    snappedY: armedY && holds(
       lock.snappedY,
       previous ? previous.y + previous.height / 2 : null,
       candidate.y + candidate.height / 2,
@@ -233,7 +255,7 @@ export function moveBoxWithCenterSnap(
       candidate.y <= 0 || candidate.y + candidate.height >= section.height,
     ),
   };
-  return { ...applyCenterSnapWithHysteresis(candidate, section, distance, effectiveLock), candidate };
+  return { ...applyCenterSnapWithHysteresis(candidate, section, distance, effectiveLock), candidate, armedX, armedY };
 }
 
 /** 위치·크기가 같은 박스인지 — 값이 그대로면 실행 취소 단계를 만들지 않는다 */

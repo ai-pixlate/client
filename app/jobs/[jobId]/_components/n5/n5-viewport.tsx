@@ -15,8 +15,8 @@ import {
   moveBoxWithCenterSnap,
   N5_SNAP_ACQUIRE_SCREEN_PX,
   N5_SNAP_RELEASE_SCREEN_PX,
-  NO_CENTER_SNAP,
   resizeBoxWithinSection,
+  startCenterSnapLock,
   type CenterSnapLock,
   type ResizeHandle,
 } from '@/lib/n5/layout-edit';
@@ -341,7 +341,7 @@ function BlockOverlay({
           e.stopPropagation();
           onSelect();
         }}
-        className={`absolute z-[2] ${isSelected ? 'border border-[#ff6a38]' : ''} ${isSelected && drag ? 'cursor-move' : 'cursor-pointer'}`}
+        className={`absolute z-[2] ${isSelected ? 'border border-[#ff6a38]' : ''} ${drag ? 'cursor-move' : 'cursor-pointer'}`}
         style={{ left: visualRect.left, top: visualRect.top, width: visualRect.width, height: visualRect.height }}
       />
       <div
@@ -581,6 +581,65 @@ function SnapGuides({ snappedX, snappedY, zoom }: { snappedX: boolean; snappedY:
         />
       )}
     </>
+  );
+}
+
+interface SnapDebugValues {
+  blockId: number;
+  pointer: { x: number; y: number };
+  start: { x: number; y: number };
+  raw: BoundingBox;
+  candidate: BoundingBox;
+  section: Size;
+  acquirePx: number;
+  releasePx: number;
+  snappedX: boolean;
+  snappedY: boolean;
+  scale: number;
+  zoom: number;
+}
+
+/** snap 진단(Mock 전용, ?debugSnap=1) — 끌기 중 계산 값. 이벤트를 받지 않는다 */
+function SnapDebugHud({ values: v }: { values: SnapDebugValues | null }) {
+  const n = (value: number) => (Math.round(value * 10) / 10).toString();
+  const rect = (b: BoundingBox) => `${n(b.x)}, ${n(b.y)}, ${n(b.width)}, ${n(b.height)}`;
+  const rows: [string, string][] = v
+    ? [
+        ['Block', String(v.blockId)],
+        ['pointer', `${n(v.pointer.x)}, ${n(v.pointer.y)}`],
+        ['drag start', `${n(v.start.x)}, ${n(v.start.y)}`],
+        ['raw bbox', rect(v.raw)],
+        ['candidate', rect(v.candidate)],
+        ['section center', `${n(v.section.width / 2)}, ${n(v.section.height / 2)}`],
+        ['block center', `${n(v.candidate.x + v.candidate.width / 2)}, ${n(v.candidate.y + v.candidate.height / 2)}`],
+        ['deltaToCenterX', n(v.section.width / 2 - v.candidate.x - v.candidate.width / 2)],
+        ['deltaToCenterY', n(v.section.height / 2 - v.candidate.y - v.candidate.height / 2)],
+        ['acquire / release', `${v.acquirePx} / ${v.releasePx} px`],
+        ['snappedX', String(v.snappedX)],
+        ['snappedY', String(v.snappedY)],
+        ['previewScale', String(v.scale)],
+        ['zoom', n(v.zoom)],
+      ]
+    : [];
+  return (
+    <div
+      data-testid="n5-snap-hud"
+      data-snapped-x={v?.snappedX}
+      data-snapped-y={v?.snappedY}
+      className="pointer-events-none absolute top-[84px] left-8 z-10 w-[300px] rounded-[6px] border border-[#eaeaea] bg-white p-3 text-[11px] leading-[16px] text-[#171717]"
+    >
+      <p className="font-medium">snap 진단</p>
+      {v ? (
+        rows.map(([label, value]) => (
+          <p key={label} className="flex justify-between gap-2">
+            <span className="text-[#707070]">{label}</span>
+            <span>{value}</span>
+          </p>
+        ))
+      ) : (
+        <p className="text-[#707070]">block 본체를 끌어 보세요</p>
+      )}
+    </div>
   );
 }
 
@@ -1446,6 +1505,12 @@ export function N5Viewport({
     const params = new URLSearchParams(window.location.search);
     return params.get('debugOverlap') === '1' || params.get('mockScenario') === 'n5-overlap';
   });
+  // snap 진단 — Mock에서 ?debugSnap=1일 때만 끌기 중 계산 값을 그대로 보인다
+  const [isSnapDebug] = useState(() => {
+    if (typeof window === 'undefined' || !isApiMockingEnabled()) return false;
+    return new URLSearchParams(window.location.search).get('debugSnap') === '1';
+  });
+  const [snapDebug, setSnapDebug] = useState<SnapDebugValues | null>(null);
   const selectedBlockForOverlap = blocks.find((b) => b.id === selectedBlockId);
   const overlapDiagnostic =
     isOverlapDebug && selectedBlockForOverlap?.bbox
@@ -1540,7 +1605,11 @@ export function N5Viewport({
               startBbox: block.bbox,
               zoom: transform.zoom,
               moved: false,
-              snapLock: NO_CENTER_SNAP,
+              snapLock: startCenterSnapLock(
+                block.bbox,
+                section,
+                screenDeltaToBboxDelta({ x: N5_SNAP_ACQUIRE_SCREEN_PX, y: 0 }, preview.scale, transform.zoom).x,
+              ),
               lastCandidate: block.bbox,
               lastBbox: block.bbox,
             };
@@ -1569,6 +1638,23 @@ export function N5Viewport({
             drag.lastCandidate = result.candidate;
             drag.lastBbox = result.box;
             setBboxDraft(drag.block.id, result.box);
+            if (isSnapDebug) {
+              const acquirePx = N5_SNAP_ACQUIRE_SCREEN_PX;
+              setSnapDebug({
+                blockId: drag.block.id,
+                pointer: { x: e.clientX, y: e.clientY },
+                start: drag.startClient,
+                raw: { ...drag.startBbox, x: drag.startBbox.x + delta.x, y: drag.startBbox.y + delta.y },
+                candidate: result.candidate,
+                section: drag.section,
+                acquirePx,
+                releasePx: N5_SNAP_RELEASE_SCREEN_PX,
+                snappedX: result.snappedX,
+                snappedY: result.snappedY,
+                scale: preview.scale,
+                zoom: drag.zoom,
+              });
+            }
             setSnapGuide(
               result.snappedX || result.snappedY
                 ? { sectionId: drag.block.sectionId, snappedX: result.snappedX, snappedY: result.snappedY }
@@ -1596,7 +1682,7 @@ export function N5Viewport({
       ref={viewportRef}
       data-testid="n5-viewport"
       // 위 여백은 canvas 시작 위치다(Figma 1080에서 y156). 그 위로 상단 정보와 Section 태그가 놓인다
-      className="group/viewport relative h-full min-w-0 flex-1 touch-none overflow-hidden rounded-[6px] bg-[#f5f5f5] px-6 pt-[clamp(110px,14.45vh,156px)] pb-6"
+      className="group/viewport relative h-full min-w-0 flex-1 touch-none overflow-hidden select-none rounded-[6px] bg-[#f5f5f5] px-6 pt-[clamp(110px,14.45vh,156px)] pb-6"
       style={{ cursor }}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
@@ -1618,6 +1704,7 @@ export function N5Viewport({
               켜서(n5-toolbar.tsx), 빈 영역은 클릭이 아래 canvas로 그대로
               통과하게 한다. */}
           <JobMetaTags meta={jobMeta} />
+          {isSnapDebug && <SnapDebugHud values={snapDebug} />}
           {isOverlapDebug && (
             <div
               data-testid="n5-overlap-hud"
