@@ -51,6 +51,35 @@ export function getN3SectionCardState(section: {
   return { kind: 'excluded', chip: null, actionLabel: '번역하기', targetBucket: 'include' };
 }
 
+/**
+ * Figma N3 카드 variant 7종(component set 1416:12943). 서버 상태(kind·exclusionReason)와 선택 여부로만 정한다.
+ * variant는 모양이고 문구(칩·버튼)는 N3SectionCardState가 맡는다 — Figma 샘플 문구를 쓰지 않는다.
+ */
+export type N3CardVariant =
+  | 'translation-pending' // 번역 예정
+  | 'translation-selected' // 번역 선택
+  | 'excluded' // 제외된
+  | 'judgement-failed' // 판정실패
+  | 'exclusion-verdict' // 제외 판정
+  | 'restored' // 되살린
+  | 'exclusion-selected'; // 제외 선택
+
+/** compact 600×160 · verdict 602×161~193(판정 배지 줄 수만큼). 선택해도 바꾸지 않아 목록이 밀리지 않는다 */
+export type N3CardLayout = 'compact' | 'verdict';
+
+export function getN3CardVisual(
+  section: { bucket?: ApiSectionBucket; exclusionReason?: ApiExclusionReason | null },
+  isSelected: boolean,
+): { variant: N3CardVariant; layout: N3CardLayout } {
+  const { kind } = getN3SectionCardState(section);
+  if (kind === 'include') return { variant: isSelected ? 'translation-selected' : 'translation-pending', layout: 'compact' };
+  if (kind === 'restored') return { variant: 'restored', layout: 'verdict' };
+  // 현지 판정을 끝내지 못한 섹션은 자동 제외와 다른 카드다. Figma에 선택 variant가 없어 테두리만 카드가 따로 표시한다
+  if (section.exclusionReason === 'auto_local_failed') return { variant: 'judgement-failed', layout: 'compact' };
+  if (kind === 'autoExcluded') return { variant: isSelected ? 'exclusion-selected' : 'exclusion-verdict', layout: 'verdict' };
+  return { variant: isSelected ? 'exclusion-selected' : 'excluded', layout: 'compact' };
+}
+
 /** 카드·상세 제목. Figma 1422:10176 「SECTION 01」 형식 */
 export function formatN3SectionTitle(sectionOrder: number | undefined): string {
   return `SECTION ${String(sectionOrder ?? 0).padStart(2, '0')}`;

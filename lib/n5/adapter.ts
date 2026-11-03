@@ -18,7 +18,9 @@
 // 이 파일을 plain Node(--experimental-strip-types)로 직접 불러오는데, '@/' alias는
 // tsconfig paths 전용이라 Node 단독 실행에서는 풀리지 않는다(타입 전용 import는
 // 실행 시 제거되므로 alias를 써도 무방하다 — 아래 BlockRole/Api* import 참고).
-import { BLOCK_ROLE_LABELS, getSignalLabel } from '../api/labels.ts';
+import { BLOCK_ROLE_LABELS, SECTION_WARNING_LABELS, getSignalLabel } from '../api/labels.ts';
+import { VERDICT_BADGE_LABELS } from '../n3/verdict.ts';
+import type { ApiSection } from '../api/n3-schema';
 import type { BlockRole, BoundingBox } from '@/lib/api/types';
 import type {
   ApiBbox,
@@ -29,6 +31,7 @@ import type {
   ApiReviewSignal,
   ApiSectionBucket,
   ApiExcludedStage,
+  ApiJobAsyncTaskItem,
   ApiSignalCode,
   ApiTextBlock,
 } from '@/lib/api/n5-schema';
@@ -64,6 +67,157 @@ export function toSignalBadges(signals: ApiReviewSignal[] | undefined): SignalBa
     taskId: signal.taskId ?? null,
     retryable: signal.retryable ?? null,
   }));
+}
+
+/**
+ * 화면 표시용 톤(Figma Tag/Status Warning·Neutral). 서버 계약이 아니라 시각 매핑일 뿐이다 — 차단·확정 여부와 무관하다.
+ * 계약에 severity가 없어, 금지 표현만 Warning으로 두고 나머지는 Neutral로 표시한다.
+ */
+export type SignalTone = 'warning' | 'neutral';
+
+export function getSignalTone(code: ApiSignalCode): SignalTone {
+  return code === 'prohibited_expression' ? 'warning' : 'neutral';
+}
+
+/** 재시도 대상 task. 재시도 가능 여부는 서버 값을 따른다 */
+export interface RetryTarget {
+  taskId: number;
+  retryable: boolean;
+}
+
+/** 번역문 칸 안의 실패 문구로 표시하는 signal(Figma 1244:8238). 나머지는 번호 아래 [라벨] 사유 행으로 표시한다(1244:8031) */
+const CELL_SIGNAL_CODES: ReadonlySet<ApiSignalCode> = new Set<ApiSignalCode>(['translation_failed', 'width_overflow']);
+
+export function getSignalRows(badges: SignalBadge[]): SignalBadge[] {
+  return badges.filter((badge) => !CELL_SIGNAL_CODES.has(badge.code));
+}
+
+export function hasWidthOverflowSignal(badges: SignalBadge[]): boolean {
+  return badges.some((badge) => badge.code === 'width_overflow');
+}
+
+/** 번역 실패의 정본은 signals[].code=translation_failed다(blockStatus로 판단하지 않는다). taskId·retryable은 그 signal에 동봉된다 */
+export function getTranslationFailure(badges: SignalBadge[]): { retry: RetryTarget | null } | null {
+  const signal = badges.find((badge) => badge.code === 'translation_failed');
+  if (!signal) return null;
+  return { retry: signal.taskId != null ? { taskId: signal.taskId, retryable: signal.retryable === true } : null };
+}
+
+/* ------------------------------------------------------------------ *
+ * 1-1. JOB-05 items → 검수 화면 실패 상태
+ * ------------------------------------------------------------------ */
+
+function toRetryTarget(item: ApiJobAsyncTaskItem): RetryTarget | null {
+  return item.taskId != null ? { taskId: item.taskId, retryable: item.retryable === true } : null;
+}
+
+function findFailedItem(
+  items: readonly ApiJobAsyncTaskItem[],
+  taskType: ApiJobAsyncTaskItem['taskType'],
+  unitType: ApiJobAsyncTaskItem['unitType'],
+  unitId: number,
+): ApiJobAsyncTaskItem | undefined {
+  return items.find(
+    (item) => item.taskType === taskType && item.unitType === unitType && item.unitId === unitId && item.status === 'failed',
+  );
+}
+
+export interface BlockTaskFailures {
+  /** 검사(verify) 실패 — 칸의 "검사하지 못했습니다" */
+  verifyFailed: boolean;
+  /** 블록 재렌더(render · text_block) 실패 — 칸의 "미리보기를 갱신하지 못했습니다" */
+  previewFailure: RetryTarget | null;
+}
+
+export function getBlockTaskFailures(items: readonly ApiJobAsyncTaskItem[], blockId: number): BlockTaskFailures {
+  const preview = findFailedItem(items, 'render', 'text_block', blockId);
+  return {
+    verifyFailed: findFailedItem(items, 'verify', 'text_block', blockId) != null,
+    previewFailure: preview ? toRetryTarget(preview) : null,
+  };
+}
+
+export interface SectionStatusViewModel {
+  /** 실행 실패 단계. JOB-05 items 기준(섹션 렌더 실패는 warningBadge로 판별하지 않는다) */
+  failedStages: ('render' | 'inpaint')[];
+  /** 렌더 실패 task. 인페인팅은 재시도 계약(translate·render만)이 없어 대상이 아니다 */
+  renderRetry: RetryTarget | null;
+  /** N3에서 사용자가 되살린 섹션(Section.exclusionReason) */
+  restoredInN3: boolean;
+  /** 판정 배지 문구(Section.verdicts[].verdictType) */
+  verdictLabels: string[];
+  /** Section.warningBadge 문구 */
+  warningLabel: string | null;
+  /** PreviewSection.signals */
+  signals: SignalBadge[];
+  /** 실패가 아닌 진행·제외 상태 문구(렌더 대기 중 · 렌더링 중 · 제외된 섹션). renderedUrl=null만으로 실패로 보지 않는다 */
+  progressLabel: string | null;
+}
+
+function getSectionProgressLabel(
+  sectionId: number,
+  items: readonly ApiJobAsyncTaskItem[],
+  renderStatus: SectionRenderState['status'] | undefined,
+  renderFailed: boolean,
+): string | null {
+  if (renderStatus === 'excluded') return '제외된 섹션';
+  if (renderStatus !== 'unresolved' || renderFailed) return null;
+  const isRunning = items.some(
+    (item) => item.taskType === 'render' && item.unitType === 'section' && item.unitId === sectionId && item.status === 'running',
+  );
+  return isRunning ? '렌더링 중' : '렌더 대기 중';
+}
+
+export function buildSectionStatus(
+  sectionId: number,
+  signals: SignalBadge[],
+  items: readonly ApiJobAsyncTaskItem[],
+  section: Pick<ApiSection, 'exclusionReason' | 'verdicts' | 'warningBadge'> | undefined,
+  renderStatus?: SectionRenderState['status'],
+): SectionStatusViewModel {
+  const render = findFailedItem(items, 'render', 'section', sectionId);
+  const inpaint = findFailedItem(items, 'inpaint', 'section', sectionId);
+  const labels = (section?.verdicts ?? []).flatMap((verdict) => (verdict.verdictType ? [VERDICT_BADGE_LABELS[verdict.verdictType]] : []));
+  return {
+    failedStages: [...(render ? (['render'] as const) : []), ...(inpaint ? (['inpaint'] as const) : [])],
+    renderRetry: render ? toRetryTarget(render) : null,
+    restoredInN3: section?.exclusionReason === 'restored_by_user',
+    verdictLabels: [...new Set(labels)],
+    warningLabel: section?.warningBadge ? SECTION_WARNING_LABELS[section.warningBadge] : null,
+    signals,
+    progressLabel: getSectionProgressLabel(sectionId, items, renderStatus, render != null),
+  };
+}
+
+/** Figma 1244:8444 — 상태 행 수(signal 사유는 패널의 block 목록 위에만 그린다). 실패 / 되살림·판정 배지 / 품질 */
+export function getSectionStatusRowCount(status: SectionStatusViewModel | undefined): number {
+  if (!status) return 0;
+  return (
+    (status.failedStages.length > 0 ? 1 : 0) +
+    (status.restoredInN3 || status.verdictLabels.length > 0 ? 1 : 0) +
+    (status.warningLabel != null ? 1 : 0)
+  );
+}
+
+/**
+ * 좌측 canvas에서 section 이미지 위에 차지하는 높이(Figma 1244:8444 Frame 259). 태그 28 + 간격 16 + 행(26, 간격 4) +
+ * 이미지까지 4 — 세 행이면 134다. 상태가 없으면 0(정상 화면과 같다).
+ */
+export function getSectionCanvasHeaderHeight(status: SectionStatusViewModel | undefined): number {
+  const rows = getSectionStatusRowCount(status);
+  return rows === 0 ? 0 : 28 + 16 + rows * 26 + (rows - 1) * 4 + 4;
+}
+
+export function hasSectionStatus(status: SectionStatusViewModel | undefined): boolean {
+  if (!status) return false;
+  return (
+    status.failedStages.length > 0 ||
+    status.restoredInN3 ||
+    status.verdictLabels.length > 0 ||
+    status.warningLabel != null ||
+    status.signals.length > 0 ||
+    status.progressLabel != null
+  );
 }
 
 /* ------------------------------------------------------------------ *
@@ -339,6 +493,26 @@ export function buildAcknowledgedWarnings(
  * ALL_SECTIONS_EXCLUDED, RETRY_NOT_ALLOWED, REVISION_CONFLICT,
  * CSV_SCHEMA_MISMATCH, RATE_LIMITED, INTERNAL_ERROR, SERVICE_UNAVAILABLE.
  * ------------------------------------------------------------------ */
+
+/** N5 상단 정보(Figma 「N3 섹션 상단」 1507:21672). 실제 값이 있는 항목만 담고, 없으면 빈 값으로 둔다 */
+export interface JobMetaViewModel {
+  countryLabel: string | null;
+  regulatoryClassLabel: string | null;
+  categoryLabel: string | null;
+}
+
+export function toJobMetaViewModel(
+  job: { targetCountry?: string | null; regulatoryClass?: string | null; categoryId?: number | null },
+  countries: readonly { code?: string; name?: string }[],
+  categories: readonly { id?: number; name?: string }[],
+  regulatoryClassLabels: Readonly<Record<string, string>>,
+): JobMetaViewModel {
+  return {
+    countryLabel: countries.find((country) => country.code === job.targetCountry)?.name ?? null,
+    regulatoryClassLabel: job.regulatoryClass ? (regulatoryClassLabels[job.regulatoryClass] ?? null) : null,
+    categoryLabel: categories.find((category) => category.id === job.categoryId)?.name ?? null,
+  };
+}
 
 export interface ApiErrorInfo {
   /**

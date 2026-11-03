@@ -1,12 +1,35 @@
 'use client';
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, Fragment, useReducer } from 'react';
 
-import { canRestoreSectionInN5 } from '@/lib/n5/adapter';
-import type { BlockViewModel, PreviewSectionViewModel, PreviewViewModel } from '@/lib/n5/adapter';
+import { isApiMockingEnabled } from '@/lib/api/session';
+import { canRestoreSectionInN5, getSectionCanvasHeaderHeight } from '@/lib/n5/adapter';
+import { computeBlockOverlaps, type BlockOverlap } from '@/lib/n5/overlap';
+import type { BlockViewModel, JobMetaViewModel, PreviewSectionViewModel, PreviewViewModel, SectionStatusViewModel } from '@/lib/n5/adapter';
+import type { BoundingBox } from '@/lib/api/types';
 import { N5_SAVE_NOTICE_MESSAGES } from '@/lib/n5/messages';
 import { useUpdateSectionBucketMutation } from '@/lib/queries/pixlate';
-import { getBlockDisplayRect, getBlockHitRect, type DisplayRect } from '@/lib/n5/coordinates';
+import { getBlockDisplayRect, getBlockHitRect, getFontScaleToolbarLeft, screenDeltaToBboxDelta, type DisplayRect } from '@/lib/n5/coordinates';
+import {
+  isSameBox,
+  moveBoxWithCenterSnap,
+  N5_SNAP_ACQUIRE_SCREEN_PX,
+  N5_SNAP_RELEASE_SCREEN_PX,
+  NO_CENTER_SNAP,
+  resizeBoxWithinSection,
+  type CenterSnapLock,
+  type ResizeHandle,
+} from '@/lib/n5/layout-edit';
+import {
+  canRedo,
+  canUndo,
+  INITIAL_N5_EDIT_SESSION,
+  peekRedo,
+  peekUndo,
+  reduceN5EditSession,
+  type N5EditCommand,
+} from '@/lib/n5/history';
+import { CanvasSectionStatus } from './n5-section-status';
 import {
   ZOOM_BUTTON_STEP,
   computeWheelZoomFactor,
@@ -15,12 +38,19 @@ import {
   computeFitWidthScale,
   computeFitHeightScale,
   computeCenteredPan,
+  computeScrollThumb,
   clampPan,
   type N5ViewMode,
   type Point,
   type Size,
 } from '@/lib/n5/viewport';
-import { ZoomControls, FitControls, PlacementToolbar, UndoRedoControls } from './n5-toolbar';
+import {
+  BLOCK_FONT_SCALE_TOOLBAR_SIZE,
+  BlockFontScaleToolbar,
+  ZoomControls,
+  FitControls,
+  UndoRedoControls,
+} from './n5-toolbar';
 
 // ─────────────────────────────────────────────────────────────────
 // N5 — 캔버스형 viewport (Figma 544:3168 "N5 검수" 기준)
@@ -50,9 +80,9 @@ import { ZoomControls, FitControls, PlacementToolbar, UndoRedoControls } from '.
 // (3단계에서 section별 own 이미지 구조로 바뀌면서 이 부분이 단순해졌다).
 //
 // 선택 UI는 Figma가 실제로 보여준 값만 쓴다 — 선택된 block: 채움 없는 1px
-// orange 테두리(Selection 컴포넌트, border-[#ff6a38]) + 번호 배지 색(아래
-// BlockPinBadge, 7단계 544:3168 재확인분 — 우측 panel의 BlockNumberBadge와
-// 같은 규칙). 선택된 section: 슬라이스 좌상단에 뜨는 "SectionN" 태그
+// orange 테두리 + 번호 배지 색(BlockPinBadge, 우측 panel의 BlockNumberBadge와 같은 규칙) +
+// 핸들 8개·글자크기 action handle과 툴바(BlockSelectionChrome, 저장 계약 없음).
+// 선택된 section: 슬라이스 바로 위에 뜨는 "SectionN" 태그
 // (Tag/Selectable, border-[#ff6a38] bg-white text-[#ff6a38]). 선택 안 된
 // section에는 이 태그 자체를 렌더하지 않는다 — Figma가 "기본(미선택)"
 // variant를 보여주지 않아 값을 추측하지 않기 위함이고, absolute 배치라 넣고
@@ -127,14 +157,65 @@ function buildSectionSlices(sections: PreviewSectionViewModel[], scale: number):
   }));
 }
 
-/** 선택된 section 좌상단에 뜨는 태그. Figma Tag/Selectable(Selected) 값 그대로. */
-function SectionSelectedTag({ sectionOrder }: { sectionOrder: number }) {
+/** Figma Tag/Selectable(Selected) */
+function SectionTagLabel({ sectionOrder }: { sectionOrder: number }) {
   return (
     <div
       data-testid="n5-section-selected-tag"
-      className="absolute top-2 left-2 z-10 flex h-7 items-center justify-center rounded-[6px] border border-[#ff6a38] bg-white px-2 text-[12px] text-[#ff6a38]"
+      className="flex h-7 w-fit items-center justify-center rounded-[6px] border border-[#ff6a38] bg-white px-2 text-[12px] leading-[14px] whitespace-nowrap text-[#ff6a38]"
     >
       Section{sectionOrder}
+    </div>
+  );
+}
+
+/** 선택된 section 위에 뜨는 태그(Figma 903:7235 — section 위 gap 4). 이미지 위 overlay라 위치를 밀지 않는다 */
+function SectionSelectedTag({ sectionOrder }: { sectionOrder: number }) {
+  return (
+    <div className="absolute -top-[33px] left-0 z-10">
+      <SectionTagLabel sectionOrder={sectionOrder} />
+    </div>
+  );
+}
+
+/** 첫 section의 태그가 canvas 위 여백에 걸치는 만큼(정상 화면의 태그 위치 y123과 같게 한다) */
+const FIRST_SECTION_HEADER_OVERHANG_PX = 33;
+
+/** 상태 공간 중 문서 흐름에서 차지하는 높이 */
+function sectionFlowHeaderHeight(headerHeight: number, sliceIndex: number): number {
+  if (headerHeight === 0) return 0;
+  return sliceIndex === 0 ? headerHeight - FIRST_SECTION_HEADER_OVERHANG_PX : headerHeight;
+}
+
+/**
+ * section 상태가 있으면 이미지 위 공간을 실제로 차지한다(Figma 1244:8444 — 태그, 16 아래 상태 행, 4 아래 이미지).
+ * 이미지 좌표를 밀어내므로 canvas 높이·선택 위치 계산도 sectionFlowHeight 로 이 공간을 함께 센다.
+ */
+function SectionStatusHeader({
+  height,
+  overhang,
+  sectionOrder,
+  isSelected,
+  status,
+  width,
+}: {
+  height: number;
+  overhang: number;
+  sectionOrder: number;
+  isSelected: boolean;
+  status: SectionStatusViewModel;
+  width: number;
+}) {
+  return (
+    <div
+      data-testid={`n5-section-header-${sectionOrder}`}
+      className="relative z-10 shrink-0"
+      style={{ height, width, marginTop: -overhang }}
+    >
+      {isSelected && <SectionTagLabel sectionOrder={sectionOrder} />}
+      <div className="absolute top-11 left-0">
+        <CanvasSectionStatus status={status} />
+      </div>
     </div>
   );
 }
@@ -219,19 +300,28 @@ function BlockHitArea({ blockId, hitRect, onSelect }: { blockId: number; hitRect
   );
 }
 
+interface BlockBodyDragHandlers {
+  onPointerDown: (e: React.PointerEvent<HTMLDivElement>, block: BlockViewModel) => void;
+  onPointerMove: (e: React.PointerEvent<HTMLDivElement>) => void;
+  onPointerEnd: (e: React.PointerEvent<HTMLDivElement>) => void;
+}
+
 function BlockOverlay({
   block,
   visualRect,
   index,
   isSelected,
   onSelect,
+  drag,
 }: {
   block: BlockViewModel;
   visualRect: DisplayRect;
   index: number;
   isSelected: boolean;
-  /** ImageLayer가 현재 selectionTool에 맞춰 이미 만들어 둔 클릭 동작(block 선택 또는 section 선택)을 그대로 받는다. */
+  /** block을 선택하는 클릭 동작 */
   onSelect: () => void;
+  /** 본체 끌어 옮기기. 「번역 후」 화면에서만 있다 */
+  drag: BlockBodyDragHandlers | null;
 }) {
   return (
     <>
@@ -241,20 +331,25 @@ function BlockOverlay({
         aria-pressed={isSelected}
         data-testid={`n5-block-overlay-${block.id}`}
         onClick={stopAndRun(onSelect)}
+        onPointerDown={drag ? (e) => drag.onPointerDown(e, block) : undefined}
+        onPointerMove={drag?.onPointerMove}
+        onPointerUp={drag?.onPointerEnd}
+        onPointerCancel={drag?.onPointerEnd}
         onKeyDown={(e) => {
           if (e.key !== 'Enter' && e.key !== ' ') return;
           e.preventDefault();
           e.stopPropagation();
           onSelect();
         }}
-        className={`absolute z-[2] cursor-pointer ${isSelected ? 'border border-[#ff6a38]' : ''}`}
+        className={`absolute z-[2] ${isSelected ? 'border border-[#ff6a38]' : ''} ${isSelected && drag ? 'cursor-move' : 'cursor-pointer'}`}
         style={{ left: visualRect.left, top: visualRect.top, width: visualRect.width, height: visualRect.height }}
       />
       <div
         aria-hidden="true"
         data-testid={`n5-block-pin-${block.id}`}
         onClick={stopAndRun(onSelect)}
-        className="absolute z-10 cursor-pointer"
+        // 선택된 block은 번호를 다시 누를 일이 없다 — 아래 왼쪽 위 손잡이를 끌 수 있게 통과시킨다
+        className={`absolute z-10 ${isSelected ? 'pointer-events-none' : 'cursor-pointer'}`}
         // 9/23 재확인 — rect.left/top은 preview.scale(소수)이 곱해진 값이라
         // 그대로 쓰면 배지가 소수 px 위치에 놓인다. Playwright로 Pretendard
         // leading-none 배지의 실제 glyph-vs-circle 중심 오차를 측정한 결과
@@ -263,10 +358,273 @@ function BlockOverlay({
         // 않다. 다만 소수 px 위치는 브라우저마다 서브픽셀 렌더링 방식이 달라
         // 미세한 흐림/치우침 인상을 줄 수 있어, 정수 px로 스냅한다(패딩/
         // translate로 임의 보정한 값이 아니라 위치 자체를 반올림한 것).
-        style={{ left: Math.round(visualRect.left - 10), top: Math.round(visualRect.top - 10) }}
+        style={{ left: Math.round(visualRect.left - 8), top: Math.round(visualRect.top - 8) }}
       >
         <BlockPinBadge index={index} isSelected={isSelected} />
       </div>
+    </>
+  );
+}
+
+const HANDLE_POSITIONS: { key: ResizeHandle; x: number; y: number; cursor: string }[] = [
+  { key: 'nw', x: 0, y: 0, cursor: 'nwse-resize' },
+  { key: 'n', x: 0.5, y: 0, cursor: 'ns-resize' },
+  { key: 'ne', x: 1, y: 0, cursor: 'nesw-resize' },
+  { key: 'w', x: 0, y: 0.5, cursor: 'ew-resize' },
+  { key: 'e', x: 1, y: 0.5, cursor: 'ew-resize' },
+  { key: 'sw', x: 0, y: 1, cursor: 'nesw-resize' },
+  { key: 's', x: 0.5, y: 1, cursor: 'ns-resize' },
+  { key: 'se', x: 1, y: 1, cursor: 'nwse-resize' },
+];
+
+// Figma 1512:23496 실측(화면 px) — action handle 중심은 block 오른쪽 변 위, block 위에서 18. 툴바는 block 오른쪽 25
+/** 이만큼 움직여야 클릭이 아니라 끌기로 본다(화면 px) */
+const BLOCK_DRAG_START_DISTANCE_PX = 3;
+const FONT_HANDLE_CENTER_TOP_PX = 18;
+const FONT_HANDLE_SIZE_PX = 12;
+const FONT_TOOLBAR_GAP_PX = 25;
+const FONT_TOOLBAR_TAIL_WIDTH_PX = 11;
+
+/**
+ * 선택 block의 핸들 8개·글자크기 action handle·툴바(Figma 1512:23496). section 밖 canvas overlay에 그려서
+ * section 경계와 무관하고, canvas transform을 함께 받아 zoom·pan을 그대로 따라간다. 화면 크기는 zoom과 무관하다.
+ *
+ * 핸들 8개(F-CFM-15)는 영역 크기만 바꾸고 section 밖으로 넓히지 못한다. 이 세션의 local 초안 bbox만 바꾼다 — 저장 계약이
+ * 없어 서버 요청을 만들지 않는다.
+ * 툴바 열림 상태는 block 하나의 상태라 호출부가 key를 block id로 준다. block이 바뀌거나 선택 UI가 사라지면 닫힌다.
+ */
+function BlockSelectionChrome({
+  bbox,
+  section,
+  scale,
+  onResize,
+  onResizeCommit,
+  rect,
+  zoom,
+  panX,
+  usableWidth,
+}: {
+  /** 현재 표시 중인 bbox(section-local 원본 px) */
+  bbox: BoundingBox;
+  /** 소속 section 크기(원본 px) */
+  section: Size;
+  /** preview scale */
+  scale: number;
+  onResize: (next: BoundingBox) => void;
+  /** 손을 놓았을 때 한 번 — 실행 취소 한 단계 */
+  onResizeCommit: (before: BoundingBox, after: BoundingBox) => void;
+  /** canvas 기준 block 위치 */
+  rect: DisplayRect;
+  zoom: number;
+  panX: number;
+  /** viewport padding 안쪽 폭. pan과 같은 좌표계라 오른쪽 padding을 남기고 멈춘다 */
+  usableWidth: number;
+}) {
+  const [isToolbarOpen, setIsToolbarOpen] = useState(false);
+  // 끌기 시작 시점의 값. pointer capture로 손잡이 밖에서도 이어지고, 해제되면 함께 지운다
+  const dragRef = useRef<{
+    pointerId: number;
+    handle: ResizeHandle;
+    startClient: { x: number; y: number };
+    startBbox: BoundingBox;
+    startZoom: number;
+    lastBbox: BoundingBox;
+  } | null>(null);
+
+  function handleResizePointerDown(e: React.PointerEvent<HTMLSpanElement>, handle: ResizeHandle) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragRef.current = {
+      pointerId: e.pointerId,
+      handle,
+      startClient: { x: e.clientX, y: e.clientY },
+      startBbox: bbox,
+      startZoom: zoom,
+      lastBbox: bbox,
+    };
+  }
+
+  function handleResizePointerMove(e: React.PointerEvent<HTMLSpanElement>) {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+    e.stopPropagation();
+    const delta = screenDeltaToBboxDelta(
+      { x: e.clientX - drag.startClient.x, y: e.clientY - drag.startClient.y },
+      scale,
+      drag.startZoom,
+    );
+    // null이면 폭·높이가 0 이하가 되는 위치다 — 직전 유효한 박스를 그대로 둔다
+    const next = resizeBoxWithinSection(drag.startBbox, drag.handle, delta, section);
+    if (next) {
+      drag.lastBbox = next;
+      onResize(next);
+    }
+  }
+
+  function handleResizePointerEnd(e: React.PointerEvent<HTMLSpanElement>) {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+    e.stopPropagation();
+    dragRef.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+    // 시스템이 끌기를 취소하면 시작 전 상태로 돌리고 이력에 남기지 않는다
+    if (e.type === 'pointercancel') onResize(drag.startBbox);
+    else onResizeCommit(drag.startBbox, drag.lastBbox);
+  }
+
+  const inverseScale = `scale(${1 / zoom})`;
+  const blockLeft = panX + rect.left * zoom;
+  const blockRight = blockLeft + rect.width * zoom;
+  const toolbarLeft = getFontScaleToolbarLeft({
+    blockLeft,
+    blockRight,
+    toolbarWidth: BLOCK_FONT_SCALE_TOOLBAR_SIZE.width,
+    gap: FONT_TOOLBAR_GAP_PX,
+    maxRight: usableWidth,
+  });
+  // 낮은 block에서도 handle이 block 아래로 나가지 않게 하고, 툴바 꼬리는 handle 높이에 맞춘다
+  const handleCenterTop = Math.min(FONT_HANDLE_CENTER_TOP_PX, rect.height * zoom);
+  const stopPropagation = (e: React.SyntheticEvent) => e.stopPropagation();
+  return (
+    <div data-testid="n5-block-selection" className="pointer-events-none absolute inset-0">
+      {/* 쌓는 순서: 핸들은 번호 배지(z-10) 아래, 툴바와 action handle은 그 위. 툴바가 밀려 겹쳐도 handle로 닫을 수 있다 */}
+      {HANDLE_POSITIONS.map(({ key, x, y, cursor }) => (
+        <span
+          key={key}
+          aria-hidden="true"
+          data-testid={`n5-block-handle-${key}`}
+          // 8px는 잡기에 작아 before로 잡는 영역만 넓힌다. pointer만 쓰는 조작이라 aria-hidden을 유지한다
+          className="pointer-events-auto absolute z-[5] box-border size-[7.667px] touch-none rounded-[1.355px] border border-[#ff6a38] bg-white before:absolute before:-inset-[4px]"
+          style={{
+            left: rect.left + rect.width * x,
+            top: rect.top + rect.height * y,
+            transform: `translate(-50%, -50%) ${inverseScale}`,
+            cursor,
+          }}
+          onPointerDown={(e) => handleResizePointerDown(e, key)}
+          onPointerMove={handleResizePointerMove}
+          onPointerUp={handleResizePointerEnd}
+          onPointerCancel={handleResizePointerEnd}
+          onClick={stopPropagation}
+        />
+      ))}
+      <button
+        type="button"
+        data-testid="n5-font-scale-handle"
+        aria-label="글자크기 조절"
+        aria-expanded={isToolbarOpen}
+        // 12px는 누르기에 작아 before로 누르는 영역만 16px로 넓힌다(낮은 block에서 옆 손잡이를 덮지 않는 선)
+        className="pointer-events-auto absolute z-[21] cursor-pointer rounded-[2.6px] bg-[#ff6a38] before:absolute before:-inset-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ff6a38]"
+        style={{
+          left: rect.left + rect.width,
+          top: rect.top + handleCenterTop / zoom,
+          width: FONT_HANDLE_SIZE_PX,
+          height: FONT_HANDLE_SIZE_PX,
+          transform: `translate(-50%, -50%) ${inverseScale}`,
+        }}
+        onPointerDown={stopPropagation}
+        onClick={(e) => {
+          e.stopPropagation();
+          setIsToolbarOpen((open) => !open);
+        }}
+        // Space는 window에서 pan 키로 먼저 잡는다. 이 버튼에서는 버튼 동작으로 쓴다
+        onKeyDown={(e) => {
+          if (e.code === 'Space') e.stopPropagation();
+        }}
+      />
+      {isToolbarOpen && (
+        <div
+          className="pointer-events-auto absolute z-20"
+          onPointerDown={stopPropagation}
+          onClick={stopPropagation}
+          style={{
+            left: (toolbarLeft - panX) / zoom,
+            top: rect.top + (handleCenterTop - BLOCK_FONT_SCALE_TOOLBAR_SIZE.height / 2) / zoom,
+            transform: inverseScale,
+            transformOrigin: '0 0',
+          }}
+        >
+          <BlockFontScaleToolbar showTail={toolbarLeft - blockRight >= FONT_HANDLE_SIZE_PX / 2 + FONT_TOOLBAR_TAIL_WIDTH_PX} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface SnapGuideState {
+  sectionId: number;
+  snappedX: boolean;
+  snappedY: boolean;
+}
+
+/** 끌기 중 가운데선에 붙어 있을 때만 그 section의 중앙선을 보인다. 두께는 zoom과 무관하게 화면 1px */
+function SnapGuides({ snappedX, snappedY, zoom }: { snappedX: boolean; snappedY: boolean; zoom: number }) {
+  const thickness = 1 / zoom;
+  return (
+    <>
+      {snappedX && (
+        <div
+          aria-hidden="true"
+          data-testid="n5-snap-guide-x"
+          className="pointer-events-none absolute inset-y-0 left-1/2 z-[3] -translate-x-1/2 bg-[#ff6a38]"
+          style={{ width: thickness }}
+        />
+      )}
+      {snappedY && (
+        <div
+          aria-hidden="true"
+          data-testid="n5-snap-guide-y"
+          className="pointer-events-none absolute inset-x-0 top-1/2 z-[3] -translate-y-1/2 bg-[#ff6a38]"
+          style={{ height: thickness }}
+        />
+      )}
+    </>
+  );
+}
+
+/** 겹침 진단(Mock 전용) — 겹친 block은 점선과 번호, 겹친 영역은 옅은 주황. 이벤트를 받지 않아 실제 선택에 영향이 없다 */
+function OverlapDiagnosticLayer({
+  overlaps,
+  scale,
+  zoom,
+  blockIndexById,
+}: {
+  overlaps: BlockOverlap[];
+  scale: number;
+  zoom: number;
+  blockIndexById: Map<number, number>;
+}) {
+  return (
+    <>
+      {overlaps.map(({ blockId, box, intersection }) => {
+        const other = getBlockDisplayRect(box, 0, scale);
+        const shared = getBlockDisplayRect(intersection, 0, scale);
+        return (
+          <Fragment key={blockId}>
+            <div
+              aria-hidden="true"
+              data-testid={`n5-overlap-block-${blockId}`}
+              className="pointer-events-none absolute z-[3] border border-dashed border-[#707070]"
+              style={{ left: other.left, top: other.top, width: other.width, height: other.height }}
+            >
+              <span
+                className="absolute top-0 right-0 bg-white px-1 text-[11px] leading-[normal] whitespace-nowrap text-[#707070]"
+                style={{ transform: `scale(${1 / zoom})`, transformOrigin: '100% 0' }}
+              >
+                Block {blockIndexById.get(blockId) ?? ''}
+              </span>
+            </div>
+            <div
+              aria-hidden="true"
+              data-testid={`n5-overlap-area-${blockId}`}
+              className="pointer-events-none absolute z-[3] bg-[#ff6a38]/25"
+              style={{ left: shared.left, top: shared.top, width: shared.width, height: shared.height }}
+            />
+          </Fragment>
+        );
+      })}
     </>
   );
 }
@@ -275,8 +633,13 @@ function ImageLayer({
   slices,
   blocksBySection,
   blockIndexById,
+  sectionStatusById,
+  sectionHeaderHeightById,
+  snapGuide,
+  overlapDiagnostic,
   mode,
-  selectionTool,
+  blockDrag,
+  consumeDragClick,
   pendingSectionIds,
   failedSectionId,
   onExcludeSection,
@@ -292,11 +655,17 @@ function ImageLayer({
   blocksBySection: Map<number, BlockViewModel[]>;
   /** 우측 panel과 같은 번호(BlockNumberBadge)를 canvas 배지에도 쓰기 위한 공유 인덱스 */
   blockIndexById: Map<number, number>;
+  sectionStatusById: ReadonlyMap<number, SectionStatusViewModel>;
+  /** 이미지 위 상태 공간 높이(없으면 0) */
+  sectionHeaderHeightById: ReadonlyMap<number, number>;
+  /** 끌기 중 가운데선에 붙어 있는 축 */
+  snapGuide: SnapGuideState | null;
+  /** 겹침 진단(Mock 전용) */
+  overlapDiagnostic: { sectionId: number; overlaps: BlockOverlap[] } | null;
   mode: N5ViewMode;
-  /** 하단 배치 편집 toolbar의 현재 활성 도구. 'section'일 때는 block을 눌러도
-   *  그 block이 아니라 소속 section만 선택한다(block 선택은 유지/해제하지
-   *  않고, 애초에 block 클릭 자체를 section 클릭으로 취급한다). */
-  selectionTool: 'text' | 'section';
+  blockDrag: BlockBodyDragHandlers | null;
+  /** 방금 끝난 끌기가 만든 click이면 true — 그 click은 선택으로 치지 않는다 */
+  consumeDragClick: () => boolean;
   /** SEC-03 저장 중인 sectionId — 그 섹션의 제외하기/되돌리기만 잠시 막는다(다른 섹션은 그대로). */
   pendingSectionIds: ReadonlySet<number>;
   /** 마지막 SEC-03 저장이 실패한 sectionId — 그 섹션 위에 실패 안내를 띄운다. */
@@ -313,35 +682,54 @@ function ImageLayer({
 }) {
   return (
     <>
-      {slices.map((slice) => {
+      {slices.map((slice, sliceIndex) => {
+        const headerHeight = sectionHeaderHeightById.get(slice.sectionId) ?? 0;
+        const status = sectionStatusById.get(slice.sectionId);
+        const renderFailed = status?.failedStages.includes('render') ?? false;
+        // 렌더링 실패 섹션은 원본 그대로 결과물에 들어간다(PRD N4 부분 실패) — 번역 후 화면도 원본을 보인다
         const url =
           mode === 'original'
             ? slice.originalUrl
             : slice.render.status === 'ready'
               ? slice.render.url
-              : null;
+              : renderFailed
+                ? slice.originalUrl
+                : null;
         const isExcluded = slice.isExcluded;
         const isSaving = pendingSectionIds.has(slice.sectionId);
         // renderedUrl===null(렌더 전)이고 제외도 아닌데 「번역 후」를 보고 있는
         // 경우 — 상위(N5View)가 이 상태면 번역 후 자체를 disabled 처리하므로
         // 실제로는 거의 도달하지 않지만, 방어적으로 안내 문구를 보여준다(빈
         // 배경으로 조용히 실패 처리하지 않는다).
-        const isPending = mode === 'translated' && !isExcluded && slice.render.status === 'unresolved';
+        const isPending = mode === 'translated' && !isExcluded && slice.render.status === 'unresolved' && !renderFailed;
         const blockRects = isExcluded
           ? []
           : buildBlockRects(blocksBySection.get(slice.sectionId) ?? [], scale, zoom, slice);
-        const selectHandlerOf = (block: BlockViewModel) =>
-          selectionTool === 'section' ? () => onSelectSection(block.sectionId) : () => onSelectBlock(block);
+        const selectHandlerOf = (block: BlockViewModel) => () => {
+          if (!consumeDragClick()) onSelectBlock(block);
+        };
         return (
+          <Fragment key={slice.sectionId}>
+          {headerHeight > 0 && status && (
+            <SectionStatusHeader
+              height={headerHeight}
+              overhang={sliceIndex === 0 ? FIRST_SECTION_HEADER_OVERHANG_PX : 0}
+              sectionOrder={slice.sectionOrder}
+              isSelected={slice.sectionId === selectedSectionId}
+              status={status}
+              width={slice.width}
+            />
+          )}
           <div
-            key={slice.sectionId}
             data-testid={`n5-slice-${mode}-${slice.sectionId}`}
             role="button"
             tabIndex={0}
-            // Figma(544:3168)는 section마다 border(border-[#eaeaea])로 구획을
-            // 나눈다 — 쌓인 section 사이 경계가 시각적으로 보이게 한다.
-            className="relative shrink-0 cursor-pointer border border-[#eaeaea]"
-            onClick={() => onSelectSection(slice.sectionId)}
+            // Figma(544:3168)는 section마다 테두리로 구획을 나눈다. border는 안쪽 원점을 1px 밀어 bbox·이미지·중앙선이
+            // 어긋나므로, 크기에 영향이 없는 inset 그림자로 그린다.
+            className="relative shrink-0 cursor-pointer shadow-[inset_0_0_0_1px_#eaeaea]"
+            onClick={() => {
+              if (!consumeDragClick()) onSelectSection(slice.sectionId);
+            }}
             onKeyDown={(e) => {
               if (e.key !== 'Enter' && e.key !== ' ') return;
               e.preventDefault();
@@ -357,9 +745,20 @@ function ImageLayer({
             }}
           >
             {isPending && (
-              <div className="absolute inset-0 flex items-center justify-center bg-[#e5e5e5] text-center text-[12px] text-[#999]">
-                렌더 대기 중
+              <div className="absolute inset-0 flex items-center justify-center text-center text-[12px] text-[#999]">
+                {status?.progressLabel ?? '렌더 대기 중'}
               </div>
+            )}
+            {snapGuide?.sectionId === slice.sectionId && (
+              <SnapGuides snappedX={snapGuide.snappedX} snappedY={snapGuide.snappedY} zoom={zoom} />
+            )}
+            {overlapDiagnostic?.sectionId === slice.sectionId && (
+              <OverlapDiagnosticLayer
+                overlaps={overlapDiagnostic.overlaps}
+                scale={scale}
+                zoom={zoom}
+                blockIndexById={blockIndexById}
+              />
             )}
             {orderForHitLayer(blockRects).map(({ block, hitRect }) => (
               <BlockHitArea key={block.id} blockId={block.id} hitRect={hitRect} onSelect={selectHandlerOf(block)} />
@@ -372,9 +771,10 @@ function ImageLayer({
                 index={blockIndexById.get(block.id) ?? 0}
                 isSelected={block.id === selectedBlockId}
                 onSelect={selectHandlerOf(block)}
+                drag={blockDrag}
               />
             ))}
-            {!isExcluded && slice.sectionId === selectedSectionId && (
+            {!isExcluded && headerHeight === 0 && slice.sectionId === selectedSectionId && (
               <SectionSelectedTag sectionOrder={slice.sectionOrder} />
             )}
             {isExcluded ? (
@@ -430,9 +830,68 @@ function ImageLayer({
               </p>
             )}
           </div>
+          </Fragment>
         );
       })}
     </>
+  );
+}
+
+/** 캔버스 스크롤 위치 표시(Figma 655:6232·6235). pan과 연결된 표시 전용이고, 영역에 마우스·포커스가 있을 때만 보인다 */
+function CanvasScrollIndicator({
+  axis,
+  pan,
+  scaledSize,
+  usableSize,
+}: {
+  axis: 'vertical' | 'horizontal';
+  pan: number;
+  scaledSize: number;
+  usableSize: number;
+}) {
+  const thumb = computeScrollThumb(pan, scaledSize, usableSize);
+  if (!thumb) return null;
+  const isVertical = axis === 'vertical';
+  return (
+    <div
+      aria-hidden="true"
+      data-testid={`n5-scroll-${axis}`}
+      className={`pointer-events-none absolute z-10 rounded-[2px] opacity-0 transition-opacity group-focus-within/viewport:opacity-100 group-hover/viewport:opacity-100 ${
+        isVertical ? 'top-[82px] right-0 bottom-[244px] w-[11px]' : 'right-[67px] bottom-0 left-0 h-[11px]'
+      }`}
+    >
+      <div
+        className={`absolute rounded-[2px] bg-[#999] ${isVertical ? 'left-1 w-[3px]' : 'top-1 h-[3px]'}`}
+        style={
+          isVertical
+            ? { top: `${thumb.start * 100}%`, height: `${thumb.size * 100}%` }
+            : { left: `${thumb.start * 100}%`, width: `${thumb.size * 100}%` }
+        }
+      />
+    </div>
+  );
+}
+
+/** workspace 좌상단 정보(Figma 「N3 섹션 상단」 1507:21672, x152 y46). 실제 값이 있는 항목만 그린다 */
+function JobMetaTags({ meta }: { meta: JobMetaViewModel }) {
+  const tags = [meta.regulatoryClassLabel, meta.categoryLabel].filter((label): label is string => !!label);
+  if (!meta.countryLabel && tags.length === 0) return null;
+  return (
+    <div data-testid="n5-job-meta" className="pointer-events-none absolute top-[46px] left-8 z-10 flex items-center gap-3">
+      {meta.countryLabel && <p className="text-[12px] leading-[normal] tracking-[-0.02em] whitespace-nowrap text-black">{meta.countryLabel}</p>}
+      {tags.length > 0 && (
+        <div className="flex items-center gap-0.5">
+          {tags.map((label) => (
+            <span
+              key={label}
+              className="flex h-7 items-center justify-center rounded-[6px] border border-[#eaeaea] bg-white px-2 text-[12px] leading-[14px] whitespace-nowrap text-[#171717]"
+            >
+              {label}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -462,7 +921,9 @@ const INITIAL_TRANSFORM: Transform = { zoom: 1, pan: { x: 0, y: 0 } };
 export function N5Viewport({
   jobId,
   preview,
-  blocks,
+  blocks: serverBlocks,
+  sectionStatusById,
+  jobMeta,
   viewMode,
   selectedBlockId,
   selectedSectionId,
@@ -474,6 +935,8 @@ export function N5Viewport({
   jobId: string;
   preview: PreviewViewModel;
   blocks: BlockViewModel[];
+  sectionStatusById: ReadonlyMap<number, SectionStatusViewModel>;
+  jobMeta: JobMetaViewModel;
   /** 11일차부터 이 컴포넌트가 소유하지 않는다 — 토글 UI가 N5Panel로 이동했다. */
   viewMode: N5ViewMode;
   /** F-CFM-13 — 정본은 N5View(상위)가 소유한다. 이 컴포넌트는 prop/콜백만 받는다. */
@@ -494,29 +957,8 @@ export function N5Viewport({
   const [transform, setTransform] = useState<Transform>(INITIAL_TRANSFORM);
   const [isSpaceHeld, setIsSpaceHeld] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
-
-  // 하단 배치 편집 toolbar의 현재 도구 — 로컬 UI state다(새 API/선택 데이터
-  // 구조를 만들지 않는다). 기본은 'text'(지금까지의 기본 클릭 동작과 동일:
-  // block을 누르면 block을, 빈 section 배경을 누르면 section을 선택한다).
-  // 'section'으로 바꾸면 block 위를 눌러도 block이 아니라 그 section만
-  // 선택한다 — selectedBlockId/selectedSectionId 정본(N5View 소유)은 그대로
-  // 재사용하고, 이 tool state는 "클릭을 어떻게 해석할지"만 바꾼다.
-  const [selectionTool, setSelectionTool] = useState<'text' | 'section'>('text');
-
-  const handleSelectTextTool = useCallback(() => {
-    setSelectionTool('text');
-  }, []);
-
-  // 섹션 선택 도구로 전환하는 순간, 이미 선택된 block이 있으면 그 block의
-  // section으로 다운그레이드한다("block selection은 해제하거나 section
-  // selection 규칙에 맞게 처리" — onSelectSection이 이미 selectedBlockId를
-  // null로 정리하는 handleSelectSection(n5-view.tsx)을 그대로 호출한다).
-  const handleSelectSectionTool = useCallback(() => {
-    setSelectionTool('section');
-    if (selectedBlockId != null && selectedSectionId != null) {
-      onSelectSection(selectedSectionId);
-    }
-  }, [selectedBlockId, selectedSectionId, onSelectSection]);
+  // 스크롤 표시 막대와 글자크기 툴바 위치 전용(렌더 중 DOM을 읽지 않으려고 둔다). pan·zoom 계산은 그때그때 DOM을 측정한다
+  const [usableSize, setUsableSize] = useState<Size>({ width: 0, height: 0 });
 
   // F-CFM-14 — N5 섹션 제외·되돌리기는 SEC-03(PATCH /jobs/{jobId}/sections/{sectionId},
   // N3·N5 공용)으로 저장한다. 제외 여부의 정본은 프리뷰 응답의 bucket/excludedStage
@@ -589,6 +1031,21 @@ export function N5Viewport({
     [preview.sections, preview.scale],
   );
 
+  // 손잡이·본체 끌기로 바꾼 bbox(위치·크기 전부) — 이 세션의 local 초안이다. 저장 계약이 없어 서버로 보내지 않고,
+  // 새로고침하면 사라진다. 재조회·보기 전환으로 지워지지 않게 여기 둔다.
+  // F-CFM-15 조정은 「번역 후」 화면의 것이라 「번역 전」에는 원본 bbox를 보인다.
+  const [bboxDrafts, setBboxDrafts] = useState<ReadonlyMap<number, BoundingBox>>(() => new Map());
+  const blocks = useMemo(
+    () =>
+      bboxDrafts.size === 0 || viewMode !== 'translated'
+        ? serverBlocks
+        : serverBlocks.map((block) => {
+            const draft = bboxDrafts.get(block.id);
+            return draft ? { ...block, bbox: draft } : block;
+          }),
+    [serverBlocks, bboxDrafts, viewMode],
+  );
+
   const blocksBySection = useMemo(() => {
     const map = new Map<number, BlockViewModel[]>();
     for (const block of blocks) {
@@ -621,23 +1078,50 @@ export function N5Viewport({
   // slices는 이미 sectionOrder 오름차순이고 `flex-col items-start`로 위→아래
   // 단순 document flow로 쌓이므로(각 slice의 x는 항상 0), Y축 offset만
   // 계산하면 된다 — BlockOverlay(CSS 렌더용, displayTop=0)와는 다른 값이다.
+  // section 상태가 이미지 위에 차지하는 공간(Figma 1244:8444). 제외된 section은 회색 오버레이만 얹으므로 두지 않는다.
+  const sectionHeaderHeightById = useMemo(() => {
+    const map = new Map<number, number>();
+    for (const slice of slices) {
+      if (!slice.isExcluded) map.set(slice.sectionId, getSectionCanvasHeaderHeight(sectionStatusById.get(slice.sectionId)));
+    }
+    return map;
+  }, [slices, sectionStatusById]);
+
   const sliceOffsetYById = useMemo(() => {
     const map = new Map<number, number>();
     let cursor = 0;
-    for (const slice of slices) {
+    slices.forEach((slice, index) => {
+      cursor += sectionFlowHeaderHeight(sectionHeaderHeightById.get(slice.sectionId) ?? 0, index);
       map.set(slice.sectionId, cursor);
       cursor += slice.height;
-    }
+    });
     return map;
-  }, [slices]);
+  }, [slices, sectionHeaderHeightById]);
+
+  // 선택 UI는 section 밖 canvas overlay에 그린다.
+  const selectedBlockBbox = blocks.find((b) => b.id === selectedBlockId)?.bbox ?? null;
+  const selectedBlockCanvasRect = useMemo<DisplayRect | null>(() => {
+    const block = blocks.find((b) => b.id === selectedBlockId);
+    if (!block?.bbox) return null;
+    const slice = slices.find((s) => s.sectionId === block.sectionId);
+    if (!slice || slice.isExcluded) return null;
+    const rect = getBlockDisplayRect(block.bbox, 0, preview.scale);
+    return {
+      ...rect,
+      top: rect.top + (sliceOffsetYById.get(slice.sectionId) ?? 0),
+    };
+  }, [blocks, selectedBlockId, slices, sliceOffsetYById, preview.scale]);
 
   // canvas(원본, zoom과 무관한) 크기 — fit 계산의 기준값. 매 렌더 다시 측정하지 않는다.
   const canvasSize = useMemo<Size>(
     () => ({
       width: Math.max(preview.containerWidth, slices.reduce((max, s) => Math.max(max, s.width), 0)),
-      height: slices.reduce((sum, s) => sum + s.height, 0),
+      height: slices.reduce(
+        (sum, s, index) => sum + s.height + sectionFlowHeaderHeight(sectionHeaderHeightById.get(s.sectionId) ?? 0, index),
+        0,
+      ),
     }),
-    [preview.containerWidth, slices],
+    [preview.containerWidth, slices, sectionHeaderHeightById],
   );
 
   // wheel/pointer 핸들러는 useCallback([])/useEffect([])로 한 번만 만들어
@@ -674,10 +1158,11 @@ export function N5Viewport({
     if (!el) return;
 
     function centerHorizontallyIfUntouched() {
+      const usable = computeUsableViewportSize(el!.clientWidth, el!.clientHeight, readPadding(el!));
+      setUsableSize(usable);
       if (hasInteractedRef.current) return;
       const canvas = canvasSizeRef.current;
       if (canvas.width <= 0) return;
-      const usable = computeUsableViewportSize(el!.clientWidth, el!.clientHeight, readPadding(el!));
       const centered = computeCenteredPan(canvas, transformRef.current.zoom, usable);
       setTransform((prev) => ({ ...prev, pan: { x: centered.x, y: prev.pan.y } }));
     }
@@ -833,7 +1318,9 @@ export function N5Viewport({
 
       if (e.ctrlKey || e.metaKey) {
         const rect = el!.getBoundingClientRect();
-        const pointer: Point = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+        const padding = readPadding(el!);
+        // pan 원점은 padding 안쪽(canvas 시작점)이다
+        const pointer: Point = { x: e.clientX - rect.left - padding.left, y: e.clientY - rect.top - padding.top };
         const usable = computeUsableViewportSize(el!.clientWidth, el!.clientHeight, readPadding(el!));
         setTransform((prev) => {
           const nextZoomRaw = prev.zoom * computeWheelZoomFactor(e.deltaY);
@@ -896,9 +1383,8 @@ export function N5Viewport({
     const el = viewportRef.current;
     if (!el) return;
     hasInteractedRef.current = true; // 사용자가 직접 조작 — 이후 자동 중앙 정렬 중단
-    const rect = el.getBoundingClientRect();
-    const center: Point = { x: rect.width / 2, y: rect.height / 2 };
     const usable = computeUsableViewportSize(el.clientWidth, el.clientHeight, readPadding(el));
+    const center: Point = { x: usable.width / 2, y: usable.height / 2 };
     setTransform((prev) => {
       const result = computeZoomAroundPoint(prev.zoom, prev.pan, center, prev.zoom + direction * ZOOM_BUTTON_STEP);
       return { zoom: result.zoom, pan: clampPan(result.pan, canvasSizeRef.current, result.zoom, usable) };
@@ -909,9 +1395,8 @@ export function N5Viewport({
     const el = viewportRef.current;
     if (!el) return;
     hasInteractedRef.current = true; // 사용자가 직접 조작 — 이후 자동 중앙 정렬 중단
-    const rect = el.getBoundingClientRect();
-    const center: Point = { x: rect.width / 2, y: rect.height / 2 };
     const usable = computeUsableViewportSize(el.clientWidth, el.clientHeight, readPadding(el));
+    const center: Point = { x: usable.width / 2, y: usable.height / 2 };
     setTransform((prev) => {
       const result = computeZoomAroundPoint(prev.zoom, prev.pan, center, nextZoom);
       return { zoom: result.zoom, pan: clampPan(result.pan, canvasSizeRef.current, result.zoom, usable) };
@@ -936,13 +1421,182 @@ export function N5Viewport({
     setTransform({ zoom, pan: computeCenteredPan(canvasSize, zoom, usable) });
   }, [canvasSize]);
 
+  // ── 본체 끌어 옮기기(F-CFM-15) — 누르면 선택, 누른 채 끌면 옮긴다. section 안으로 제한하고 가운데선에 붙인다.
+  const selectedSection = preview.sections.find(
+    (s) => s.id === blocks.find((b) => b.id === selectedBlockId)?.sectionId,
+  );
+  const blockDragRef = useRef<{
+    pointerId: number;
+    block: BlockViewModel;
+    section: Size;
+    startClient: Point;
+    startBbox: BoundingBox;
+    zoom: number;
+    moved: boolean;
+    snapLock: CenterSnapLock;
+    lastCandidate: BoundingBox | null;
+    lastBbox: BoundingBox;
+  } | null>(null);
+  const dragClickPendingRef = useRef(false);
+  const [snapGuide, setSnapGuide] = useState<SnapGuideState | null>(null);
+
+  // 겹침 진단 — Mock에서 ?debugOverlap=1 또는 ?mockScenario=n5-overlap일 때만 켠다. 표시 전용이고 선택·hit testing을 바꾸지 않는다.
+  const [isOverlapDebug] = useState(() => {
+    if (typeof window === 'undefined' || !isApiMockingEnabled()) return false;
+    const params = new URLSearchParams(window.location.search);
+    return params.get('debugOverlap') === '1' || params.get('mockScenario') === 'n5-overlap';
+  });
+  const selectedBlockForOverlap = blocks.find((b) => b.id === selectedBlockId);
+  const overlapDiagnostic =
+    isOverlapDebug && selectedBlockForOverlap?.bbox
+      ? {
+          sectionId: selectedBlockForOverlap.sectionId,
+          overlaps: computeBlockOverlaps(
+            { id: selectedBlockForOverlap.id, bbox: selectedBlockForOverlap.bbox },
+            blocks.filter((b) => b.sectionId === selectedBlockForOverlap.sectionId),
+          ),
+        }
+      : null;
+
+  const consumeDragClick = useCallback(() => {
+    const pending = dragClickPendingRef.current;
+    dragClickPendingRef.current = false;
+    return pending;
+  }, []);
+
+  function setBboxDraft(blockId: number, next: BoundingBox) {
+    setBboxDrafts((drafts) => new Map(drafts).set(blockId, next));
+  }
+
+  // ── 실행 취소·다시 실행(F-CFM-03, lib/n5/history.ts) — 박스 저장 계약이 없어 지금은 이 세션의 local 초안에 곧바로 적용하고
+  // 성공으로 기록한다. 저장 계약이 생기면 save-started → 저장 → 결과 이벤트 순서로 이 자리만 바꾸면 된다. 값은 커서가 아니라
+  // 실제 결과 bbox(snap·경계 반영)다. 끌기 한 번(손을 놓을 때까지)이 한 단계이고, 값이 그대로면 단계를 만들지 않는다.
+  const [editSession, dispatchEdit] = useReducer(reduceN5EditSession, INITIAL_N5_EDIT_SESSION);
+
+  function commitBoxEdit(kind: 'box-move' | 'box-resize', blockId: number, before: BoundingBox, after: BoundingBox) {
+    if (isSameBox(before, after)) return;
+    dispatchEdit({ type: 'edit-succeeded', command: { kind, target: { type: 'block', id: blockId }, before, after } });
+  }
+
+  // 「번역 전」에는 조정 UI가 없고 원본 bbox를 보이므로 되돌려도 보이지 않는다 — 「번역 후」에서만 동작한다
+  const isHistoryAvailable = viewMode === 'translated';
+
+  function applyHistoryCommand(command: N5EditCommand, value: unknown) {
+    const blockId = command.target.id;
+    setBboxDraft(blockId, value as BoundingBox);
+    if (blockId !== selectedBlockId) {
+      const block = serverBlocks.find((b) => b.id === blockId);
+      if (block) onSelectBlock(block); // 무엇이 되돌아갔는지 보이도록 그 block을 고른다
+    }
+  }
+
+  function handleUndo() {
+    const command = peekUndo(editSession.history);
+    if (!command || !isHistoryAvailable || blockDragRef.current) return;
+    applyHistoryCommand(command, command.before);
+    dispatchEdit({ type: 'undo-succeeded', command });
+  }
+
+  function handleRedo() {
+    const command = peekRedo(editSession.history);
+    if (!command || !isHistoryAvailable || blockDragRef.current) return;
+    applyHistoryCommand(command, command.after);
+    dispatchEdit({ type: 'redo-succeeded', command });
+  }
+
+  // 단축키 — 입력칸의 글자 실행 취소와 열린 확인창은 가로채지 않는다(F-CFM-03)
+  const historyShortcutRef = useRef({ undo: handleUndo, redo: handleRedo });
+  useEffect(() => {
+    historyShortcutRef.current = { undo: handleUndo, redo: handleRedo };
+  });
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.key.toLowerCase() !== 'z') return;
+      if (isTypingTarget(e.target) || (e.target instanceof Element && e.target.closest('[role="dialog"]'))) return;
+      e.preventDefault();
+      if (e.shiftKey) historyShortcutRef.current.redo();
+      else historyShortcutRef.current.undo();
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  const blockDrag: BlockBodyDragHandlers | null =
+    viewMode !== 'translated'
+      ? null
+      : {
+          onPointerDown(e, block) {
+            dragClickPendingRef.current = false;
+            if (e.button !== 0 || spaceHeldRef.current || !block.bbox) return; // Space는 pan이 쓴다
+            const section = preview.sections.find((s) => s.id === block.sectionId);
+            if (!section) return;
+            e.stopPropagation();
+            e.currentTarget.setPointerCapture(e.pointerId);
+            blockDragRef.current = {
+              pointerId: e.pointerId,
+              block,
+              section,
+              startClient: { x: e.clientX, y: e.clientY },
+              startBbox: block.bbox,
+              zoom: transform.zoom,
+              moved: false,
+              snapLock: NO_CENTER_SNAP,
+              lastCandidate: block.bbox,
+              lastBbox: block.bbox,
+            };
+          },
+          onPointerMove(e) {
+            const drag = blockDragRef.current;
+            if (!drag || drag.pointerId !== e.pointerId) return;
+            e.stopPropagation();
+            const screenDelta = { x: e.clientX - drag.startClient.x, y: e.clientY - drag.startClient.y };
+            if (!drag.moved) {
+              if (Math.hypot(screenDelta.x, screenDelta.y) < BLOCK_DRAG_START_DISTANCE_PX) return; // 아직 클릭이다
+              drag.moved = true;
+              if (drag.block.id !== selectedBlockId) onSelectBlock(drag.block);
+            }
+            const delta = screenDeltaToBboxDelta(screenDelta, preview.scale, drag.zoom);
+            const toOriginal = (px: number) => screenDeltaToBboxDelta({ x: px, y: 0 }, preview.scale, drag.zoom).x;
+            const result = moveBoxWithCenterSnap(
+              drag.startBbox,
+              delta,
+              drag.section,
+              { acquire: toOriginal(N5_SNAP_ACQUIRE_SCREEN_PX), release: toOriginal(N5_SNAP_RELEASE_SCREEN_PX) },
+              drag.snapLock,
+              drag.lastCandidate,
+            );
+            drag.snapLock = result;
+            drag.lastCandidate = result.candidate;
+            drag.lastBbox = result.box;
+            setBboxDraft(drag.block.id, result.box);
+            setSnapGuide(
+              result.snappedX || result.snappedY
+                ? { sectionId: drag.block.sectionId, snappedX: result.snappedX, snappedY: result.snappedY }
+                : null,
+            );
+          },
+          onPointerEnd(e) {
+            const drag = blockDragRef.current;
+            if (!drag || drag.pointerId !== e.pointerId) return;
+            e.stopPropagation();
+            blockDragRef.current = null;
+            setSnapGuide(null);
+            if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+            if (!drag.moved) return;
+            dragClickPendingRef.current = e.type === 'pointerup'; // 끌기 뒤 따라오는 click은 선택으로 치지 않는다
+            if (e.type === 'pointercancel') setBboxDraft(drag.block.id, drag.startBbox); // 시스템 취소는 시작 위치로, 이력 없음
+            else commitBoxEdit('box-move', drag.block.id, drag.startBbox, drag.lastBbox);
+          },
+        };
+
   const cursor = isPanning ? 'grabbing' : isSpaceHeld ? 'grab' : 'default';
 
   return (
     <div
       ref={viewportRef}
       data-testid="n5-viewport"
-      className="relative h-full min-w-0 flex-1 touch-none overflow-hidden rounded-[6px] bg-[#f5f5f5] p-6"
+      // 위 여백은 canvas 시작 위치다(Figma 1080에서 y156). 그 위로 상단 정보와 Section 태그가 놓인다
+      className="group/viewport relative h-full min-w-0 flex-1 touch-none overflow-hidden rounded-[6px] bg-[#f5f5f5] px-6 pt-[clamp(110px,14.45vh,156px)] pb-6"
       style={{ cursor }}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
@@ -963,15 +1617,46 @@ export function N5Viewport({
               버튼이 있는 두 컴포넌트 루트에만 pointer-events-auto를 다시
               켜서(n5-toolbar.tsx), 빈 영역은 클릭이 아래 canvas로 그대로
               통과하게 한다. */}
-          <div className="pointer-events-none absolute top-5 right-5 z-10 flex items-center gap-2">
+          <JobMetaTags meta={jobMeta} />
+          {isOverlapDebug && (
+            <div
+              data-testid="n5-overlap-hud"
+              className="pointer-events-none absolute top-[84px] left-8 z-10 flex w-[200px] flex-col gap-1 rounded-[6px] border border-[#eaeaea] bg-white p-3 text-[12px] leading-[normal] text-[#171717]"
+            >
+              <p className="font-medium">겹침 진단</p>
+              {!overlapDiagnostic ? (
+                <p className="text-[#707070]">block을 선택하세요</p>
+              ) : overlapDiagnostic.overlaps.length === 0 ? (
+                <p className="text-[#707070]">겹치는 block 없음</p>
+              ) : (
+                overlapDiagnostic.overlaps.map(({ blockId, intersection }) => (
+                  <p key={blockId} data-testid={`n5-overlap-label-${blockId}`}>
+                    Block {blockIndexById.get(selectedBlockId ?? -1)} ↔ Block {blockIndexById.get(blockId)}
+                    <br />
+                    <span className="text-[#707070]">
+                      겹침 {Math.round(intersection.width)} × {Math.round(intersection.height)} px
+                    </span>
+                  </p>
+                ))
+              )}
+            </div>
+          )}
+
+          {/* Figma 602:5437 — 배율은 x1281 y20(오른쪽 28). Figma에 없는 맞춤 버튼은 그 왼쪽의 보조 도구로 둔다 */}
+          <div className="pointer-events-none absolute top-5 right-7 z-10 flex items-start gap-2">
+            <div className="-mt-[3px]">
+              <FitControls onFitWidth={handleFitWidth} onFitHeight={handleFitHeight} />
+            </div>
             <ZoomControls
               zoom={transform.zoom}
               onZoomIn={() => handleZoomButton(1)}
               onZoomOut={() => handleZoomButton(-1)}
               onSetZoom={handleSetZoom}
             />
-            <FitControls onFitWidth={handleFitWidth} onFitHeight={handleFitHeight} />
           </div>
+
+          <CanvasScrollIndicator axis="vertical" pan={transform.pan.y} scaledSize={canvasSize.height * transform.zoom} usableSize={usableSize.height} />
+          <CanvasScrollIndicator axis="horizontal" pan={transform.pan.x} scaledSize={canvasSize.width * transform.zoom} usableSize={usableSize.width} />
 
           {/* N5 4차 정리 — 캔버스 전체를 덮던 상시 안내("번역문 미리보기가
               아직 생성되지 않았습니다")는 제거했다. render 없는 section에는
@@ -980,30 +1665,16 @@ export function N5Viewport({
               캔버스 전체가 "미리보기 자체가 없다"처럼 보이는 중복·과장된
               표현이었다 — section-local 표시 하나로 충분하다. */}
 
-          {/* N5 3차 정렬 — 텍스트 선택/섹션 선택은 이제 실제로 클릭 가능한
-              tool이다(pointer-events-none로 회피하지 않는다). fit-height로
-              캔버스가 이 toolbar와 같은 화면 위치(하단 중앙)까지 꽉 찰 때
-              그 지점을 클릭하면 toolbar가 우선한다 — 이는 Figma가 보여주는
-              대로 toolbar가 캔버스 위에 항상 떠 있는 고정 컨트롤이라는
-              점에서 의도된 동작이다(다른 캔버스형 툴의 floating toolbar와
-              동일). 삭제하기만 실제 handler가 없어 disabled 상태를 유지한다
-              (아래 PlacementToolbar 정의, n5-toolbar.tsx). */}
-          <div
-            data-testid="n5-placement-toolbar-wrap"
-            className="absolute bottom-5 left-1/2 z-10 -translate-x-1/2"
-          >
-            <PlacementToolbar
-              activeTool={selectionTool}
-              onSelectTextTool={handleSelectTextTool}
-              onSelectSectionTool={handleSelectSectionTool}
-            />
-          </div>
-
           {/* Figma 544:3168 「After」(1512:23333) — 캔버스 좌하단 독립 그룹. 캔버스 왼쪽 24px(viewport
               padding과 같은 값), 화면 아래 31px. viewport 기준이라 우측 검수 패널 폭과 무관하다.
-              동작이 없는 표시 전용이라 viewport의 pointer·pan·zoom 처리에는 연결하지 않는다. */}
+              viewport의 pointer·pan·zoom 처리에는 연결하지 않는다. */}
           <div data-testid="n5-undo-redo-wrap" className="absolute bottom-[31px] left-6 z-10">
-            <UndoRedoControls />
+            <UndoRedoControls
+              canUndo={isHistoryAvailable && canUndo(editSession.history)}
+              canRedo={isHistoryAvailable && canRedo(editSession.history)}
+              onUndo={handleUndo}
+              onRedo={handleRedo}
+            />
           </div>
 
           <div
@@ -1025,8 +1696,13 @@ export function N5Viewport({
               slices={slices}
               blocksBySection={blocksBySection}
               blockIndexById={blockIndexById}
+              sectionStatusById={sectionStatusById}
+              sectionHeaderHeightById={sectionHeaderHeightById}
+              snapGuide={snapGuide}
+              overlapDiagnostic={overlapDiagnostic}
               mode={viewMode}
-              selectionTool={selectionTool}
+              blockDrag={blockDrag}
+              consumeDragClick={consumeDragClick}
               pendingSectionIds={pendingSectionIds}
               failedSectionId={failedSectionId}
               onExcludeSection={handleExcludeSection}
@@ -1038,6 +1714,21 @@ export function N5Viewport({
               onSelectBlock={onSelectBlock}
               onSelectSection={onSelectSection}
             />
+            {/* 조정 UI는 「번역 후」 화면에만 있다(F-CFM-15). 「번역 전」은 선택 테두리·번호만 남는다 */}
+            {viewMode === 'translated' && selectedBlockCanvasRect && selectedBlockBbox && selectedBlockId != null && selectedSection && (
+              <BlockSelectionChrome
+                key={selectedBlockId}
+                bbox={selectedBlockBbox}
+                section={selectedSection}
+                scale={preview.scale}
+                onResize={(next) => setBboxDraft(selectedBlockId, next)}
+                onResizeCommit={(before, after) => commitBoxEdit('box-resize', selectedBlockId, before, after)}
+                rect={selectedBlockCanvasRect}
+                zoom={transform.zoom}
+                panX={transform.pan.x}
+                usableWidth={usableSize.width}
+              />
+            )}
           </div>
         </>
       )}

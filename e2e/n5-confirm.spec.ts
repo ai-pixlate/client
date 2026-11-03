@@ -40,7 +40,7 @@ async function readTransform(page: Page) {
 }
 
 test.beforeEach(async ({ page }) => {
-  await reachN5(page);
+  await reachN5(page, { mockScenario: 'n5-clean' });
 });
 
 test.describe('정상 confirm', () => {
@@ -64,15 +64,13 @@ test.describe('정상 confirm', () => {
     expect(confirmRequests).toHaveLength(1);
     const body = JSON.parse(confirmRequests[0]);
     expect(Array.isArray(body.acknowledgedWarnings)).toBe(true);
-    // mock 블록들이 가진 signal 6종이 전부 담겨 있어야 한다(개수가 아니라
-    // 식별자 목록 — ConfirmRequest.description).
+    // 로드된 블록의 signal이 전부 담겨 있어야 한다(개수가 아니라 식별자 목록 — ConfirmRequest.description).
+    // n5-clean 시나리오라 확인 항목이 되는 금지 표현·번역 실패는 빠져 있다.
     const codes = new Set(body.acknowledgedWarnings.map((w: { code: string }) => w.code));
     expect(codes).toEqual(
       new Set([
         'width_overflow',
-        'prohibited_expression',
         'logo_match_failed',
-        'translation_failed',
         'empty_block',
         'mandatory_term_unapplied',
       ]),

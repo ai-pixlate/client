@@ -180,3 +180,38 @@ export function getBlockHitRect(visual: DisplayRect, options: BlockHitRectOption
 
   return { left, top, width: Math.max(0, right - left), height: Math.max(0, bottom - top) };
 }
+
+/**
+ * 화면 px 이동량 → section-local 원본 px 이동량(getBlockDisplayRect의 역방향). pan·section 위치는
+ * 이동량에 영향을 주지 않아 배율(preview scale × 사용자 zoom)만 나눈다.
+ */
+export function screenDeltaToBboxDelta(
+  delta: { x: number; y: number },
+  scale: number,
+  zoom: number,
+): { x: number; y: number } {
+  return { x: delta.x / (scale * zoom), y: delta.y / (scale * zoom) };
+}
+
+/* ------------------------------------------------------------------ *
+ * 선택 block 글자크기 툴바 위치 (Figma 1512:23496)
+ * ------------------------------------------------------------------ */
+
+/**
+ * 글자크기 툴바의 가로 위치. 항상 block 오른쪽에 붙이고 section 경계는 보지 않는다(툴바는 이미지가 아닌 편집 UI다).
+ * workspace 오른쪽 끝을 넘을 때만 왼쪽으로 필요한 만큼 민다. 위치를 뒤집지 않는다.
+ * block이 workspace 밖으로 완전히 나가면 민 위치에 남지 않고 block과 함께 움직인다.
+ * 모든 값은 같은 화면 px 좌표계다.
+ */
+export function getFontScaleToolbarLeft(options: {
+  blockLeft: number;
+  blockRight: number;
+  toolbarWidth: number;
+  /** block 오른쪽 변에서 툴바까지의 거리 */
+  gap: number;
+  /** 툴바 오른쪽 끝이 넘지 않아야 할 위치 */
+  maxRight: number;
+}): number {
+  const { blockLeft, blockRight, toolbarWidth, gap, maxRight } = options;
+  return Math.min(blockRight + gap, Math.max(maxRight, blockLeft) - toolbarWidth);
+}

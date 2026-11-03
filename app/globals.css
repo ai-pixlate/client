@@ -53,47 +53,47 @@ body {
 }
 
 /*
- * N1 스크롤 영역(카테고리 단 · 입력 패널) 공용 — 평소에는 막대를 칠하지 않고, 해당 영역에 마우스·포커스가 있거나
+ * 스크롤 영역 공용(N1 카테고리 단 · 입력 패널, N5 검수 패널) — 평소에는 막대를 칠하지 않고, 해당 영역에 마우스·포커스가 있거나
  * 실제 스크롤 중일 때만 보인다. 자리는 항상 잡아 두어(scrollbar-gutter) 내용 폭이 흔들리지 않는다.
  */
-.n1-hover-scroll {
+.pix-hover-scroll {
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
 }
 
-.n1-hover-scroll::-webkit-scrollbar {
+.pix-hover-scroll::-webkit-scrollbar {
   width: 6px;
 }
 
-.n1-hover-scroll::-webkit-scrollbar-track {
+.pix-hover-scroll::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.n1-hover-scroll::-webkit-scrollbar-thumb {
+.pix-hover-scroll::-webkit-scrollbar-thumb {
   border-radius: 3px;
-  background: var(--n1-hover-scrollbar-thumb, transparent);
+  background: var(--pix-hover-scrollbar-thumb, transparent);
 }
 
 /* Chromium은 스크롤 영역 자체의 스타일이 바뀌어야 막대를 다시 그린다. :hover::-webkit-scrollbar-thumb만
    쓰면 스크롤하기 전까지 칠해지지 않아(실측) 영역의 custom property를 바꾼다. */
-.n1-hover-scroll:hover,
-.n1-hover-scroll:focus-within,
-.n1-hover-scroll[data-scrolling] {
-  --n1-hover-scrollbar-thumb: #999;
+.pix-hover-scroll:hover,
+.pix-hover-scroll:focus-within,
+.pix-hover-scroll[data-scrolling] {
+  --pix-hover-scrollbar-thumb: #999;
 }
 
 /* Firefox — ::-webkit-scrollbar를 지원하지 않는 브라우저만 표준 속성을 쓴다(Chrome은 표준 속성이 있으면 위 규칙을 무시한다) */
 @supports not selector(::-webkit-scrollbar) {
-  .n1-hover-scroll {
+  .pix-hover-scroll {
     scrollbar-color: transparent transparent;
     scrollbar-width: thin;
   }
 
-  .n1-hover-scroll:hover,
-  .n1-hover-scroll:focus-within,
-  .n1-hover-scroll[data-scrolling] {
+  .pix-hover-scroll:hover,
+  .pix-hover-scroll:focus-within,
+  .pix-hover-scroll[data-scrolling] {
     scrollbar-color: #999 transparent;
   }
 }

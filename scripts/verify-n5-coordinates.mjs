@@ -8,6 +8,8 @@
  */
 
 import {
+  getFontScaleToolbarLeft,
+  screenDeltaToBboxDelta,
   computeSectionDisplayTops,
   getBlockDisplayRect,
   getBlockHitRect,
@@ -287,6 +289,27 @@ console.log('\n[7] block hit rect — visual rect는 그대로, 클릭 영역만
 
   const edge = getBlockHitRect({ left: 2, top: 590, width: 50, height: 8 }, opts);
   check('section 밖으로 나가지 않는다', edge.left === 0 && edge.top + edge.height === 600, JSON.stringify(edge));
+}
+
+console.log('\nscreenDeltaToBboxDelta');
+{
+  const d = screenDeltaToBboxDelta({ x: 40, y: -20 }, 0.4, 2);
+  check('scale·zoom을 모두 나눈다', d.x === 50 && d.y === -25, JSON.stringify(d));
+  const rect = getBlockDisplayRect({ x: 0, y: 0, width: d.x, height: 0 }, 0, 0.4);
+  check('다시 scale·zoom을 곱하면 화면 이동량이다', Math.abs(rect.width * 2 - 40) < 1e-9, String(rect.width));
+}
+
+console.log('\ngetFontScaleToolbarLeft');
+{
+  const base = { toolbarWidth: 119, gap: 25, maxRight: 1000 };
+  const left = (blockLeft, blockRight) => getFontScaleToolbarLeft({ ...base, blockLeft, blockRight });
+  check('자리가 있으면 block 오른쪽 25', left(100, 300) === 325, String(left(100, 300)));
+  check('workspace에 딱 맞으면 밀지 않는다', left(700, 856) === 881, String(left(700, 856)));
+  check('workspace를 넘으면 필요한 만큼만 왼쪽으로 민다', left(700, 900) === 881, String(left(700, 900)));
+  check('끝에 붙은 좁은 block도 workspace 안에 남는다', left(970, 990) === 881, String(left(970, 990)));
+  check('오른쪽 변이 workspace 밖이어도 block이 보이면 안에 남는다', left(500, 1400) === 881, String(left(500, 1400)));
+  check('block이 완전히 나가면 block과 함께 움직인다', left(1200, 1400) === 1081, String(left(1200, 1400)));
+  check('왼쪽으로 나간 block은 뒤집지 않고 그대로 오른쪽이다', left(-500, -300) === -275, String(left(-500, -300)));
 }
 
 console.log(`\n결과: PASS ${pass} / FAIL ${fail}\n`);

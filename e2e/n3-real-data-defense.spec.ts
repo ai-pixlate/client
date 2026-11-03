@@ -260,13 +260,14 @@ test.describe('N3 — CTA', () => {
       await action(page, id).click();
       await expect(card(page, id)).toHaveAttribute('data-bucket', 'exclude');
     }
-    await expect(cta).toBeDisabled();
-    await expect(page.getByTestId('n3-proceed-notice')).toHaveText('번역 가능한 섹션이 있어야 진행 가능합니다');
+    await expect(cta).toHaveAttribute('aria-disabled', 'true');
+    await cta.hover();
+    await expect(page.getByTestId('n3-proceed-tooltip')).toHaveText('번역 가능한 섹션이 있어야 진행 가능합니다');
 
     await action(page, includeIds[0]).click();
     await expect(card(page, includeIds[0])).toHaveAttribute('data-bucket', 'include');
     await expect(cta).toBeEnabled();
-    await expect(page.getByTestId('n3-proceed-notice')).toHaveCount(0);
+    await expect(page.getByTestId('n3-proceed-tooltip')).toHaveCount(0);
   });
 });
 
@@ -347,7 +348,7 @@ test.describe('N3 — ALL_SECTIONS_EXCLUDED 경쟁 상태', () => {
     await expect(page.getByTestId('n3-proceed-notice')).toHaveText('번역 가능한 섹션이 있어야 진행 가능합니다');
     await expect.poll(() => sectionListGets).toBeGreaterThan(0);
     for (const id of includeIds) await expect(card(page, id)).toHaveAttribute('data-bucket', 'exclude');
-    await expect(cta).toBeDisabled();
+    await expect(cta).toHaveAttribute('aria-disabled', 'true');
   });
 });
 

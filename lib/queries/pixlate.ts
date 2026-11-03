@@ -1,6 +1,7 @@
 "use client";
 
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMemo } from 'react';
+import { useQueries, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 import {
   createJob,
@@ -67,6 +68,8 @@ export const pixlateKeys = {
   n5Blocks: (jobId: string) => ['pixlate', 'job', jobId, 'n5-blocks'] as const,
   n5Preview: (jobId: string) => ['pixlate', 'job', jobId, 'n5-preview'] as const,
   n5Task: (jobId: string, taskId: number | null) => ['pixlate', 'job', jobId, 'n5-task', taskId] as const,
+  // N3 캐시를 이어받지 않는다 — N4에서 바뀐 warningBadge 등을 N5 진입 시 새로 읽는다
+  n5SectionStatus: (jobId: string) => ['pixlate', 'job', jobId, 'n5-section-status'] as const,
   deliverables: (jobId: string) => ['pixlate', 'job', jobId, 'deliverables'] as const,
   validation: (jobId: string) => ['pixlate', 'job', jobId, 'validation'] as const,
   library: () => ['pixlate', 'library'] as const,
@@ -304,6 +307,59 @@ export function useN5TaskStatusQuery(jobId: string, taskId: number | null) {
         : 2000;
     },
   });
+}
+
+// ─────────────────────────────────────────────
+// N5 — 검수 화면의 실패 상태(JOB-05)
+//
+// page.tsx와 같은 tasks 캐시를 본다. N5에서는 page 쪽 polling이 멈춰 있고, 캐시는 N4에서 넘어오는 순간의 응답일 수
+// 있어 N5 진입 때 한 번 새로 읽는다.
+// ─────────────────────────────────────────────
+
+export function useN5ReviewTasksQuery(jobId: string) {
+  return useQuery({
+    queryKey: pixlateKeys.tasks(jobId),
+    queryFn: () => getJobTasks(jobId),
+    enabled: !!jobId,
+    refetchOnMount: 'always',
+  });
+}
+
+/**
+ * N5 섹션 상태용 Section DTO(id별). 목록(SEC-01)의 포함 섹션은 verdicts가 비어 있어, 되살린 섹션만 상세(SEC-02)로
+ * 판정 배지를 읽는다(모든 섹션 상세를 부르지 않는다). 받지 못해도 검수를 막지 않고 그 표시만 생략한다.
+ */
+export function useN5SectionStatusQuery(jobId: string): ReadonlyMap<number, ApiSection> {
+  const list = useQuery({
+    queryKey: pixlateKeys.n5SectionStatus(jobId),
+    queryFn: () => getSections(jobId),
+    enabled: !!jobId,
+    staleTime: 0,
+  });
+  const restoredIds = useMemo(
+    () =>
+      [...(list.data?.include ?? []), ...(list.data?.exclude ?? [])].flatMap((s) =>
+        s.id != null && s.exclusionReason === 'restored_by_user' ? [s.id] : [],
+      ),
+    [list.data],
+  );
+  const detailData = useQueries({
+    queries: restoredIds.map((id) => ({
+      queryKey: pixlateKeys.sectionDetail(jobId, id),
+      queryFn: () => getSectionDetail(jobId, id),
+    })),
+    combine: (results) => results.map((r) => r.data),
+  });
+  return useMemo(() => {
+    const map = new Map<number, ApiSection>();
+    for (const s of [...(list.data?.include ?? []), ...(list.data?.exclude ?? [])]) {
+      if (s.id != null) map.set(s.id, s);
+    }
+    for (const s of detailData) {
+      if (s?.id != null) map.set(s.id, s);
+    }
+    return map;
+  }, [list.data, detailData]);
 }
 
 // ─────────────────────────────────────────────

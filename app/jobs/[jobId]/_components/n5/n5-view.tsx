@@ -3,9 +3,18 @@
 import { useState } from 'react';
 import Link from 'next/link';
 
-import { useJobQuery, useN5BlocksQuery, useN5PreviewQuery } from '@/lib/queries/pixlate';
-import { toBlockViewModel, toPreviewViewModel } from '@/lib/n5/adapter';
-import type { BlockViewModel, PreviewViewModel } from '@/lib/n5/adapter';
+import { REGULATORY_CLASS_LABELS } from '@/lib/job/regulatory-class-labels';
+import {
+  useJobQuery,
+  useMasterCategoriesQuery,
+  useMasterCountriesQuery,
+  useN5BlocksQuery,
+  useN5ReviewTasksQuery,
+  useN5SectionStatusQuery,
+  useN5PreviewQuery,
+} from '@/lib/queries/pixlate';
+import { buildSectionStatus, getBlockTaskFailures, toBlockViewModel, toJobMetaViewModel, toPreviewViewModel } from '@/lib/n5/adapter';
+import type { BlockTaskFailures, BlockViewModel, JobMetaViewModel, PreviewViewModel, SectionStatusViewModel } from '@/lib/n5/adapter';
 import type { N5ViewMode } from '@/lib/n5/viewport';
 import { StepNav } from '../step-nav';
 import { N5Viewport } from './n5-viewport';
@@ -48,10 +57,16 @@ function N5Loaded({
   jobId,
   preview,
   blocks,
+  jobMeta,
+  sectionStatusById,
+  blockTaskFailuresById,
 }: {
   jobId: string;
   preview: PreviewViewModel;
   blocks: BlockViewModel[];
+  jobMeta: JobMetaViewModel;
+  sectionStatusById: ReadonlyMap<number, SectionStatusViewModel>;
+  blockTaskFailuresById: ReadonlyMap<number, BlockTaskFailures>;
 }) {
   // N5는 번역 검수 화면이다 — 렌더 이미지가 없다는 이유로 원문 모드로
   // 강제 전환하지 않는다. 최초 진입은 항상 'translated'다(요청 3). 렌더가
@@ -106,7 +121,7 @@ function N5Loaded({
         <Link
           href="/"
           aria-label="보관함으로 나가기"
-          className="absolute top-10 left-1/2 z-20 flex size-10 -translate-x-1/2 shrink-0 items-center justify-center rounded-md border border-[#eaeaea] bg-white text-[#171717] transition-colors hover:bg-gray-50"
+          className="absolute top-10 left-1 z-20 flex size-10 shrink-0 items-center justify-center rounded-md border border-[#eaeaea] bg-white text-[#171717] transition-colors hover:bg-gray-50"
         >
           {/* N5 3차 디테일 정렬 — Figma(849:7253 "Card/Navigation/Close", 16px
               glyph) 실제 asset을 내려받아 좌표를 확인했다: X선은 16px 박스
@@ -123,7 +138,8 @@ function N5Loaded({
             />
           </svg>
         </Link>
-        <div className="absolute inset-0 pt-[100px] pb-6">
+        {/* Figma 586:4807 — y150~1010(860). 낮은 창은 나가기 버튼 아래 100을 최소로 유지한다(N1과 같은 규칙) */}
+        <div className="absolute inset-0 pt-[max(100px,calc(100vh-930px))] pb-[70px]">
           <StepNav currentStep="N5" />
         </div>
       </div>
@@ -137,11 +153,13 @@ function N5Loaded({
           panel→프레임 오른쪽 끝 간격(pr, 같은 화면들의 clamp(45px,3.125vw,
           60px)과 동일)을 그대로 재사용한다. workspace와 panel 사이 gap은
           Figma 실측(52px, 1920 기준 2.708vw)을 상한으로 쓴다. */}
-      <div className="flex h-full min-h-0 min-w-0 flex-1 gap-[clamp(20px,2.708vw,52px)] pr-[clamp(45px,3.125vw,60px)] pl-[clamp(0px,calc(6.25vw_-_80px),40px)]">
+      <div className="flex h-full min-h-0 min-w-0 flex-1 gap-[clamp(20px,2.71vw,52px)] pr-[clamp(45px,3.125vw,60px)] pl-[clamp(0px,calc(6.25vw_-_80px),40px)]">
         <N5Viewport
           jobId={jobId}
           preview={preview}
           blocks={blocks}
+          sectionStatusById={sectionStatusById}
+          jobMeta={jobMeta}
           viewMode={viewMode}
           selectedBlockId={selectedBlockId}
           selectedSectionId={selectedSectionId}
@@ -154,6 +172,9 @@ function N5Loaded({
           jobId={jobId}
           sections={preview.sections}
           blocks={blocks}
+          sectionStatusById={sectionStatusById}
+          blockTaskFailuresById={blockTaskFailuresById}
+          revealRequestSeq={revealRequestSeq}
           viewMode={viewMode}
           onViewModeChange={setViewMode}
           selectedBlockId={selectedBlockId}
@@ -170,6 +191,12 @@ export function N5View({ jobId }: { jobId: string }) {
   const jobQuery = useJobQuery(jobId);
   const blocksQuery = useN5BlocksQuery(jobId);
   const previewQuery = useN5PreviewQuery(jobId);
+  // 상단 정보의 표시 이름용. 받지 못해도 검수는 막지 않고 그 항목만 비워 둔다
+  const countriesQuery = useMasterCountriesQuery();
+  const categoriesQuery = useMasterCategoriesQuery();
+  // 실패 상태 표시용. 받지 못해도 검수는 막지 않고 그 표시만 비워 둔다
+  const reviewTasksQuery = useN5ReviewTasksQuery(jobId);
+  const sectionDtoById = useN5SectionStatusQuery(jobId);
 
   const isLoading = jobQuery.isLoading || blocksQuery.isLoading || previewQuery.isLoading;
   const isError = jobQuery.isError || blocksQuery.isError || previewQuery.isError;
@@ -198,5 +225,25 @@ export function N5View({ jobId }: { jobId: string }) {
   const blocks = blocksQuery.data.map(toBlockViewModel);
   const preview = toPreviewViewModel(previewQuery.data);
 
-  return <N5Loaded jobId={jobId} preview={preview} blocks={blocks} />;
+  const jobMeta = toJobMetaViewModel(jobQuery.data, countriesQuery.data ?? [], categoriesQuery.data ?? [], REGULATORY_CLASS_LABELS);
+
+  const taskItems = reviewTasksQuery.data?.items ?? [];
+  const sectionStatusById = new Map(
+    preview.sections.map((section) => [
+      section.id,
+      buildSectionStatus(section.id, section.badges, taskItems, sectionDtoById.get(section.id), section.render.status),
+    ]),
+  );
+  const blockTaskFailuresById = new Map(blocks.map((block) => [block.id, getBlockTaskFailures(taskItems, block.id)]));
+
+  return (
+    <N5Loaded
+      jobId={jobId}
+      preview={preview}
+      blocks={blocks}
+      jobMeta={jobMeta}
+      sectionStatusById={sectionStatusById}
+      blockTaskFailuresById={blockTaskFailuresById}
+    />
+  );
 }

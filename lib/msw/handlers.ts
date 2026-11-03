@@ -19,6 +19,19 @@ import {
   buildMockN5Preview,
   type MockN5PreviewSection,
 } from '@/lib/mock-api/n5-fixtures';
+import {
+  applyN3CardVariant,
+  applyN5CleanBlock,
+  applyN5ErrorBlocks,
+  applyN5OverlapBlock,
+  getN5ErrorFailedItems,
+  isN3CardVariantsScenario,
+  isN5CleanScenario,
+  isN5ErrorScenario,
+  isN5OverlapScenario,
+  n5ErrorRestoredSectionDetail,
+  n5ErrorRestoredSectionListItem,
+} from '@/lib/mock-api/n5-error-fixtures';
 import { mockLibraryCards } from '@/lib/mock-api/library-fixtures';
 import { mockMasterCountries, mockMasterLanguages } from '@/lib/mock-api/master-fixtures';
 import { mockMasterCategories } from '@/lib/mock-api/category-fixtures';
@@ -257,9 +270,9 @@ const n5BlockState = new Map<number, ApiTextBlock>(mockN5Blocks.map((b) => [b.id
  * 시점에 같은 소스(로드된 block.signals)에서 다시 계산해 보내므로 정상
  * 흐름에서는 항상 일치한다.
  */
-function computeCurrentN5Warnings(): { blockId: number; code: string }[] {
+function computeCurrentN5Warnings(blocks: Iterable<ApiTextBlock> = n5BlockState.values()): { blockId: number; code: string }[] {
   const warnings: { blockId: number; code: string }[] = [];
-  for (const block of n5BlockState.values()) {
+  for (const block of blocks) {
     for (const signal of block.signals ?? []) {
       if (block.id != null && signal.code != null) {
         warnings.push({ blockId: block.id, code: signal.code });
@@ -281,8 +294,15 @@ function n5WarningSetsMatch(
   return true;
 }
 
-function getN5BlocksFromState(sectionId?: number): ApiTextBlock[] {
-  const all = [...n5BlockState.values()];
+function getN5BlocksFromState(sectionId?: number, referrer = ''): ApiTextBlock[] {
+  const overlay = isN5ErrorScenario(referrer)
+    ? applyN5ErrorBlocks
+    : isN5OverlapScenario(referrer)
+      ? applyN5OverlapBlock
+      : isN5CleanScenario(referrer)
+        ? applyN5CleanBlock
+        : null;
+  const all = [...n5BlockState.values()].map((b) => (overlay ? overlay(b) : b));
   return sectionId != null ? all.filter((b) => b.sectionId === sectionId) : all;
 }
 
@@ -295,6 +315,7 @@ function getN5BlocksFromState(sectionId?: number): ApiTextBlock[] {
  */
 let n5TaskIdCounter = 90000;
 const n5TaskState = new Map<number, { blockId: number; pollCount: number }>();
+
 
 function n5RevisionConflictResponse(current: ApiTextBlock) {
   return HttpResponse.json(
@@ -922,24 +943,28 @@ export const handlers = [
   // 계약처럼 보이게 했었다. 인메모리 bucket 상태(sectionState)는 그대로
   // 두고, 응답을 조립하는 시점에만 toWireSection으로 변환한다.
   // ──────────────────────────────────────────
-  http.get('/jobs/:jobId/sections', ({ params }) => {
+  http.get('/jobs/:jobId/sections', ({ params, request }) => {
     const jobId = params.jobId as string;
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
 
     const wireSections = mockSectionsResponse.sections.map((sec) => {
       const state = sectionState.get(sec.sectionId);
-      return toWireSection(
+      const wire = toWireSection(
         sec,
         state?.bucket ?? sec.bucket,
         state?.exclusionReason ?? sec.exclusionReason,
         state?.excludedStage ?? sec.excludedStage,
       );
+      return isN3CardVariantsScenario(request.referrer) ? applyN3CardVariant(wire) : wire;
     });
 
     const response: ApiSectionList = {
       exclude: wireSections.filter((s) => s.bucket === 'exclude'),
       include: wireSections.filter((s) => s.bucket === 'include'),
     };
+    if (isN5ErrorScenario(request.referrer) && jobState.currentStep === 'N5') {
+      response.include = [...(response.include ?? []), n5ErrorRestoredSectionListItem];
+    }
     return HttpResponse.json(response);
   }),
 
@@ -947,11 +972,14 @@ export const handlers = [
   // N3 — 섹션 상세(API-SEC-02). 계약상 판정 근거 전체를 준다. 목록과 같은
   // 인메모리 bucket 상태로 조립한다.
   // ──────────────────────────────────────────
-  http.get('/jobs/:jobId/sections/:sectionId', ({ params }) => {
+  http.get('/jobs/:jobId/sections/:sectionId', ({ params, request }) => {
     const jobId = params.jobId as string;
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
 
     const sectionIdNum = Number(params.sectionId);
+    if (isN5ErrorScenario(request.referrer) && sectionIdNum === n5ErrorRestoredSectionDetail.id) {
+      return HttpResponse.json(n5ErrorRestoredSectionDetail);
+    }
     const sec = mockSectionsResponse.sections.find((s) => toNumericId(s.sectionId) === sectionIdNum);
     if (!sec) return notFound(`Section '${params.sectionId}' not found`);
 
@@ -1097,13 +1125,26 @@ export const handlers = [
 
     const sectionIdParam = new URL(request.url).searchParams.get('sectionId');
     const sectionId = sectionIdParam != null ? Number(sectionIdParam) : undefined;
-    return HttpResponse.json(getN5BlocksFromState(sectionId));
+    return HttpResponse.json(getN5BlocksFromState(sectionId, request.referrer));
   }),
 
-  http.get('/jobs/:jobId/preview', ({ params }) => {
+  http.get('/jobs/:jobId/preview', ({ params, request }) => {
     const jobId = params.jobId as string;
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
-    return HttpResponse.json(buildMockN5Preview(n5PreviewSectionState));
+    const preview = buildMockN5Preview(n5PreviewSectionState);
+    if (isN5ErrorScenario(request.referrer)) {
+      return HttpResponse.json({
+        ...preview,
+        sections: preview.sections.map((s) =>
+          s.id === 502
+            ? { ...s, signals: [{ code: 'logo_match_failed', reason: '정품 로고 매칭에 실패했습니다' }] }
+            : s.id === 505
+              ? { ...s, renderedUrl: null } // 렌더링 실패 — JOB-05 item과 함께 본다
+              : s,
+        ),
+      });
+    }
+    return HttpResponse.json(preview);
   }),
 
   // ──────────────────────────────────────────
@@ -1158,11 +1199,15 @@ export const handlers = [
   // jobState를 그대로 반영한다 — FE(page.tsx)가 이 값으로만 다음 화면을
   // 고른다(별도 계산 없음).
   // ──────────────────────────────────────────
-  http.get('/jobs/:jobId/tasks', ({ params }) => {
+  http.get('/jobs/:jobId/tasks', ({ params, request }) => {
     const jobId = params.jobId as string;
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
 
     const items: ApiJobAsyncTaskItem[] = [];
+
+    if (isN5ErrorScenario(request.referrer) && jobState.currentStep === 'N5') {
+      items.push(...getN5ErrorFailedItems());
+    }
 
     if (n6LatestRenderTaskId != null) {
       const state = n6RenderTaskState.get(n6LatestRenderTaskId);
@@ -1315,7 +1360,7 @@ export const handlers = [
       acknowledgedWarnings?: { blockId: number; code: string }[];
     };
     const acknowledged = body.acknowledgedWarnings ?? [];
-    const currentWarnings = computeCurrentN5Warnings();
+    const currentWarnings = computeCurrentN5Warnings(getN5BlocksFromState(undefined, request.referrer));
     if (!n5WarningSetsMatch(acknowledged, currentWarnings)) {
       return HttpResponse.json(
         {

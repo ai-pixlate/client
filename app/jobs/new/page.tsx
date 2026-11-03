@@ -12,6 +12,7 @@ import {
 } from '@/lib/queries/pixlate';
 import type { ApiRegulatoryClass } from '@/lib/api/job-schema';
 import { isApiMockingEnabled } from '@/lib/api/session';
+import { REGULATORY_CLASS_LABELS } from '@/lib/job/regulatory-class-labels';
 import { MOCK_BRAND_ID } from '@/lib/mock-api/fixtures';
 import { N1ExitDialog } from './_components/n1-exit-dialog';
 import { RegulatoryClassDropdown, type RegulatoryClassOption } from './_components/regulatory-class-dropdown';
@@ -71,12 +72,10 @@ const COUNTRY_RECOMMENDED_LANGUAGE: Partial<Record<string, string>> = {
 // 규제 분류 — 미국 MVP 4종. 값은 OpenAPI RegulatoryClass enum 그대로 보내고, 라벨은 Figma(525:3023
 // dropdown open 1502:21358) 표기다. 화면 문자열을 API 값으로 보내지 않는다.
 // TODO: GET /master/regulatory-classes?country= 연결 시 교체
-const REGULATORY_CLASS_OPTIONS: RegulatoryClassOption[] = [
-  { value: 'cosmetic', label: '화장품' },
-  { value: 'otc', label: 'OTC 화장품' },
-  { value: 'combination', label: '화장품+OTC 복합' },
-  { value: 'unknown', label: '잘모름' },
-];
+const REGULATORY_CLASS_OPTIONS: RegulatoryClassOption[] = (['cosmetic', 'otc', 'combination', 'unknown'] as const).map((value) => ({
+  value,
+  label: REGULATORY_CLASS_LABELS[value],
+}));
 
 /**
  * 선택값별 검사 기준 안내 (helper text). 복합 문구는 PRD v3.5.10 F-LNG-03 한계 고지(★초안) 그대로다 —
@@ -282,7 +281,7 @@ function CategoryColumn({
         ref={scrollerRef}
         onScroll={handleScroll}
         data-testid={`n1-category-scroller-${heading}`}
-        className="n1-hover-scroll min-h-0 w-full flex-1"
+        className="pix-hover-scroll min-h-0 w-full flex-1"
       >
         {items.map((item) => {
           const isSelected = item.id === selectedId;
@@ -1084,7 +1083,7 @@ function NewJobPageInner() {
               나타나지 않는다. 블록 간격은 최신 Figma(1170:7877) gap 52 · 첫 묶음 안 gap 16. */}
           <div className="flex min-h-0 w-[516px] shrink-0 flex-col">
             {/* 스크롤바 자리 6px을 오른쪽 여백에서 빼고 안쪽 폭을 474로 고정해, Figma 폭과 정렬이 유지된다 */}
-            <div className="n1-hover-scroll min-h-0 flex-1 overflow-y-auto rounded-[8px] border border-[#eaeaea] py-5 pr-[14px] pl-5" data-testid="n1-input-panel">
+            <div className="pix-hover-scroll min-h-0 flex-1 overflow-y-auto rounded-[8px] border border-[#eaeaea] py-5 pr-[14px] pl-5" data-testid="n1-input-panel">
               <div className="flex w-[474px] flex-col gap-[52px]">
               <div className="flex flex-col gap-4 pt-2">
                 <div className="flex flex-col gap-1">

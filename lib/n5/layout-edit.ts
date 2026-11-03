@@ -12,7 +12,7 @@
  *
  * 계산 함수는 [+][-] 한 번의 배율 변화량(step)과 snap 판정 거리(tolerance)를 인자로 받는다.
  * N5 제품에서 쓸 step 은 아래 N5_FONT_SCALE_STEP 하나로만 관리한다(화면마다 0.05 를 적지 않는다).
- * snap tolerance 는 아직 미확정이라 상수가 없다.
+ * snap 거리는 PRD에 숫자가 없어 FE 구현값(N5_SNAP_ACQUIRE_SCREEN_PX · N5_SNAP_RELEASE_SCREEN_PX)으로 한 곳에서 관리한다.
  */
 
 import type { BoundingBox } from '../api/types';
@@ -24,6 +24,14 @@ import type { Point, Size } from './viewport';
  * 중심을 유지하며, 섹션을 넘으면 크기는 그대로 안쪽으로 민다(scaleBoxAndFont).
  */
 export const N5_FONT_SCALE_STEP = 0.05;
+
+/**
+ * 가운데선 snap 거리(화면 CSS px). PRD 정책값이 아니라 FE 조작감 구현값이다 — 중심이 ACQUIRE 안에 들어오면 붙고,
+ * 붙은 뒤에는 RELEASE를 넘어야 떨어진다. zoom과 무관하게 체감 거리가 같도록 호출부가 원본 px로 환산해 넘긴다.
+ * 조정이 필요하면 이 두 값만 바꾼다.
+ */
+export const N5_SNAP_ACQUIRE_SCREEN_PX = 12;
+export const N5_SNAP_RELEASE_SCREEN_PX = 20;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
@@ -141,7 +149,7 @@ export function canDecreaseScale({ box, currentScale, step, section }: ScaleStep
 
 /**
  * 가운데선 snap — 박스 중심이 섹션 세로·가로 중앙선에서 tolerance 이내면 중앙에 맞춘다.
- * tolerance 는 box·section 과 같은 좌표계 값을 받는다(원본 px 인지 화면 px 인지는 호출부가 환산 — 아직 미정).
+ * tolerance 는 box·section 과 같은 좌표계 값을 받는다(화면 px → 원본 px 환산은 호출부가 한다).
  * snappedX/snappedY 는 UI 가 중앙선 guide 를 그릴 때 쓴다.
  */
 export function snapBoxToSectionCenter(
@@ -165,4 +173,70 @@ export function snapBoxToSectionCenter(
     snappedX,
     snappedY,
   };
+}
+
+export interface CenterSnapLock {
+  snappedX: boolean;
+  snappedY: boolean;
+}
+
+export const NO_CENTER_SNAP: CenterSnapLock = { snappedX: false, snappedY: false };
+
+/**
+ * 끌기 중 가운데선 snap — 축마다 따로 판단한다. 지금 붙어 있지 않은 축은 acquire 거리, 붙어 있는 축은 release 거리로
+ * snapBoxToSectionCenter 를 부른다. 한 축이 풀려도 다른 축은 유지된다.
+ */
+export function applyCenterSnapWithHysteresis(
+  box: BoundingBox,
+  section: Size,
+  distance: { acquire: number; release: number },
+  lock: CenterSnapLock,
+): { box: BoundingBox; snappedX: boolean; snappedY: boolean } {
+  const x = snapBoxToSectionCenter(box, section, lock.snappedX ? distance.release : distance.acquire);
+  const y = snapBoxToSectionCenter(box, section, lock.snappedY ? distance.release : distance.acquire);
+  return { box: { ...box, x: x.box.x, y: y.box.y }, snappedX: x.snappedX, snappedY: y.snappedY };
+}
+
+/**
+ * 본체 끌어 옮기기 한 번의 결과 — 커서 기준 후보 위치를 섹션 안으로 제한한 뒤 가운데선 snap. 크기는 바꾸지 않는다
+ * (F-CFM-15). 후보는 항상 시작 위치+커서 이동량이라, 붙어 있는 동안에도 커서가 멀어지면 release 로 풀린다.
+ *
+ * 빠르게 끌면 pointermove 사이에 acquire 구간을 통째로 건너뛸 수 있다. 직전 후보(previous)와 지금 후보가 중앙선의 반대쪽이면
+ * 선을 지난 것이므로 붙어 있는 축처럼 release 거리로 판단한다.
+ */
+export function moveBoxWithCenterSnap(
+  start: BoundingBox,
+  delta: Point,
+  section: Size,
+  distance: { acquire: number; release: number },
+  lock: CenterSnapLock,
+  previous: BoundingBox | null = null,
+): { box: BoundingBox; candidate: BoundingBox; snappedX: boolean; snappedY: boolean } {
+  const candidate = moveBoxWithinSection(start, { x: start.x + delta.x, y: start.y + delta.y }, section);
+  const crossed = (from: number, to: number, line: number) => (from - line) * (to - line) < 0;
+  // section 끝에 닿은 축은 유지하지 않는다 — 폭이 넓은 박스는 움직일 수 있는 범위 전체가 release 안이라 빠져나오지 못한다
+  const holds = (locked: boolean, from: number | null, to: number, line: number, atEdge: boolean) =>
+    !atEdge && (locked || (from != null && crossed(from, to, line)));
+  const effectiveLock = {
+    snappedX: holds(
+      lock.snappedX,
+      previous ? previous.x + previous.width / 2 : null,
+      candidate.x + candidate.width / 2,
+      section.width / 2,
+      candidate.x <= 0 || candidate.x + candidate.width >= section.width,
+    ),
+    snappedY: holds(
+      lock.snappedY,
+      previous ? previous.y + previous.height / 2 : null,
+      candidate.y + candidate.height / 2,
+      section.height / 2,
+      candidate.y <= 0 || candidate.y + candidate.height >= section.height,
+    ),
+  };
+  return { ...applyCenterSnapWithHysteresis(candidate, section, distance, effectiveLock), candidate };
+}
+
+/** 위치·크기가 같은 박스인지 — 값이 그대로면 실행 취소 단계를 만들지 않는다 */
+export function isSameBox(a: BoundingBox, b: BoundingBox): boolean {
+  return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
 }

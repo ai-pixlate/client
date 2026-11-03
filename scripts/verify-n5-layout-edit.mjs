@@ -6,10 +6,15 @@
 
 import {
   N5_FONT_SCALE_STEP,
+  N5_SNAP_ACQUIRE_SCREEN_PX,
+  N5_SNAP_RELEASE_SCREEN_PX,
+  NO_CENTER_SNAP,
+  isSameBox,
   canDecreaseScale,
   canIncreaseScale,
   clampBoxToSection,
   effectiveFontSize,
+  moveBoxWithCenterSnap,
   moveBoxWithinSection,
   nextUserScale,
   resizeBoxWithinSection,
@@ -170,6 +175,59 @@ console.log('\n[8] 제품 step(N5_FONT_SCALE_STEP) — PM 확정 [+][-] 규칙')
   check('다음 확대가 섹션 안이면 [+] 가능(380 × 1.05 = 399)', canIncreaseScale({ box: fits, currentScale: 1, step: P, section: SECTION }));
   const tall = { x: 0, y: 0, width: 100, height: 290 };
   check('다음 확대가 섹션 높이를 넘으면 [+] 불가(290 × 1.05 = 304.5 > 300)', !canIncreaseScale({ box: tall, currentScale: 1, step: P, section: SECTION }));
+}
+
+console.log('\nmoveBoxWithCenterSnap (acquire·release)');
+{
+  const section = { width: 1000, height: 900 };
+  const box = { x: 40, y: 200, width: 400, height: 100 };
+  const d = { acquire: 10, release: 20 };
+  const size = (r) => r.box.width === 400 && r.box.height === 100;
+  const free = moveBoxWithCenterSnap(box, { x: 30, y: -40 }, section, d, NO_CENTER_SNAP);
+  check('가까운 선이 없으면 끈 만큼 옮기고 크기는 그대로', free.box.x === 70 && free.box.y === 160 && size(free) && !free.snappedX && !free.snappedY);
+  const x = moveBoxWithCenterSnap(box, { x: 265, y: 0 }, section, d, NO_CENTER_SNAP);
+  check('세로 중앙선만 가까우면 X만 맞춘다', x.snappedX && !x.snappedY && x.box.x === 300 && x.box.y === 200 && size(x), JSON.stringify(x));
+  const y = moveBoxWithCenterSnap(box, { x: 0, y: 195 }, section, d, NO_CENTER_SNAP);
+  check('가로 중앙선만 가까우면 Y만 맞춘다', !y.snappedX && y.snappedY && y.box.y === 400 && y.box.x === 40, JSON.stringify(y));
+  const both = moveBoxWithCenterSnap(box, { x: 265, y: 195 }, section, d, NO_CENTER_SNAP);
+  check('둘 다 가까우면 정중앙', both.snappedX && both.snappedY && both.box.x === 300 && both.box.y === 400);
+  const edgeOut = moveBoxWithCenterSnap(box, { x: 5000, y: -5000 }, section, d, NO_CENTER_SNAP);
+  check('섹션 밖으로 끌면 가장자리에서 멈춘다', edgeOut.box.x === 600 && edgeOut.box.y === 0 && size(edgeOut));
+
+  // 후보 x = 40 + dx, 중심 = x + 200. 세로 중앙선은 500 → dx = 260 이 정중앙
+  const notYet = moveBoxWithCenterSnap(box, { x: 260 + 15, y: 0 }, section, d, NO_CENTER_SNAP);
+  check('안 붙은 상태에서 acquire 밖(15)이면 붙지 않는다', !notYet.snappedX && notYet.box.x === 315);
+  const held = moveBoxWithCenterSnap(box, { x: 260 + 15, y: 0 }, section, d, { snappedX: true, snappedY: false });
+  check('붙은 상태면 같은 15에서도 유지된다', held.snappedX && held.box.x === 300);
+  const released = moveBoxWithCenterSnap(box, { x: 260 + 21, y: 0 }, section, d, { snappedX: true, snappedY: false });
+  check('release 밖(21)이면 풀리고 커서 위치로 돌아간다', !released.snappedX && released.box.x === 321);
+  const xOutYIn = moveBoxWithCenterSnap(box, { x: 260 + 21, y: 200 + 15 }, section, d, { snappedX: true, snappedY: true });
+  check('X만 풀려도 Y는 유지된다', !xOutYIn.snappedX && xOutYIn.snappedY && xOutYIn.box.y === 400);
+
+  // 화면 기준 거리는 zoom과 무관하다(scale 0.4)
+  for (const zoom of [0.5, 1, 2]) {
+    const unit = 0.4 * zoom;
+    const screen = { acquire: N5_SNAP_ACQUIRE_SCREEN_PX / unit, release: N5_SNAP_RELEASE_SCREEN_PX / unit };
+    const at = (px, lock) => moveBoxWithCenterSnap(box, { x: 260 + px / unit, y: 0 }, section, screen, lock);
+    const locked = { snappedX: true, snappedY: false };
+    check(
+      `zoom ${zoom} — 화면 11px 붙고 13px 안 붙고, 붙은 뒤 19px 유지 21px 해제`,
+      at(11, NO_CENTER_SNAP).snappedX && !at(13, NO_CENTER_SNAP).snappedX && at(19, locked).snappedX && !at(21, locked).snappedX,
+    );
+  }
+  // 한 번의 이동으로 acquire 구간을 건너뛰어도 선을 지났으면 붙는다
+  const before = { x: 200, y: 200, width: 400, height: 100 }; // 중심 400(선 왼쪽)
+  const jumped = moveBoxWithCenterSnap(box, { x: 260 + 15, y: 0 }, section, d, NO_CENTER_SNAP, before); // 중심 515(선 오른쪽)
+  check('선을 지나면 release 안에서 붙는다', jumped.snappedX && jumped.box.x === 300);
+  const far = moveBoxWithCenterSnap(box, { x: 260 + 30, y: 0 }, section, d, NO_CENTER_SNAP, before);
+  check('선을 지나도 release 밖이면 붙지 않는다', !far.snappedX && far.box.x === 330);
+  const wide = { x: 40, y: 200, width: 900, height: 100 };
+  const atEdge = moveBoxWithCenterSnap(wide, { x: 60, y: 0 }, section, { acquire: 30, release: 75 }, { snappedX: true, snappedY: false });
+  check('section 끝에 닿으면 붙어 있어도 빠져나온다(폭이 넓은 박스)', !atEdge.snappedX && atEdge.box.x === 100, JSON.stringify(atEdge.box));
+  const nearCenter = moveBoxWithCenterSnap(wide, { x: 10, y: 0 }, section, { acquire: 30, release: 75 }, { snappedX: true, snappedY: false });
+  check('끝에 닿기 전에는 유지된다', nearCenter.snappedX && nearCenter.box.x === 50);
+  check('후보 위치를 함께 돌려준다', jumped.candidate.x === 315);
+  check('같은 박스 비교', isSameBox(box, { ...box }) && !isSameBox(box, { ...box, x: 41 }));
 }
 
 console.log(`\n결과: PASS ${pass} / FAIL ${fail}\n`);

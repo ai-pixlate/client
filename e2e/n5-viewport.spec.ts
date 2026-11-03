@@ -145,26 +145,12 @@ test.describe('F-CFM-13 — 좌우 selection 연동 + 자동 스크롤', () => {
     const box = await slice.boundingBox();
     if (!box) throw new Error('section 505 슬라이스를 찾지 못했습니다');
 
-    // N5 3차 정렬로 하단 배치 편집 toolbar(n5-placement-toolbar)가 화면
-    // 하단 중앙에 실제로 클릭 가능해졌다(요청 5·6, pointer-events-none로
-    // 회피하지 않는다 — Figma가 보여주는 대로 toolbar가 캔버스 위에 항상
-    // 떠 있는 고정 컨트롤이라 의도된 동작이다). fit-height 뒤에는 section
-    // 하단부가 화면 하단·toolbar와 겹칠 수 있어, block bbox가 없는
-    // section 배경이면서도 (a) 실제로 화면에 보이는 영역 안이고 (b)
-    // toolbar 영역 밖인 지점을 계산해서 클릭한다 — 실제 사용자도 이
-    // toolbar를 피해 클릭해야 하는 것과 같은 제약이다.
+    // fit-height 뒤에는 section 하단부가 화면 밖일 수 있어, block bbox가 없는 section 배경이면서 화면에 보이는 지점을 누른다
     const viewportBox = await page.getByTestId('n5-viewport').boundingBox();
-    const toolbarBox = await page.getByTestId('n5-placement-toolbar-wrap').boundingBox();
-    if (!viewportBox || !toolbarBox) throw new Error('viewport 또는 toolbar bounding box를 찾지 못했습니다');
+    if (!viewportBox) throw new Error('viewport bounding box를 찾지 못했습니다');
 
-    const clickX = box.x + box.width * 0.15; // toolbar는 가로 중앙에 있으므로 왼쪽으로 피한다
-    // section 하단(90%)을 우선 시도하되, 실제로 화면에 보이는 범위(viewportBox)
-    // 를 넘지 않게 clamp하고, 그래도 toolbar 세로 범위와 겹치면 toolbar
-    // 바로 위까지 끌어올린다.
-    let clickY = Math.min(box.y + box.height * 0.9, viewportBox.y + viewportBox.height - 8);
-    if (clickY >= toolbarBox.y - 8) {
-      clickY = toolbarBox.y - 8;
-    }
+    const clickX = box.x + box.width * 0.15;
+    const clickY = Math.min(box.y + box.height * 0.9, viewportBox.y + viewportBox.height - 8);
     await page.mouse.click(clickX, clickY);
 
     await expect(page.getByTestId('n5-section-selected-tag')).toHaveText('Section5');
@@ -319,7 +305,7 @@ test.describe('F-CFM-13 양방향 계약 — 우→좌 자동 이동', () => {
     // 요청한 것이므로 좌측이 다시 그 위치로 이동해야 한다(F-CFM-13).
     await page.getByTestId('n5-block-row-9110').click();
 
-    expect(await isFullyWithinViewport(page, 'n5-block-overlay-9110')).toBe(true);
+    await expect.poll(() => isFullyWithinViewport(page, 'n5-block-overlay-9110')).toBe(true);
   });
 
   test('H. block A editor에 focus 후 여러 글자 입력해도 keystroke마다 재이동하지 않는다', async ({ page }) => {

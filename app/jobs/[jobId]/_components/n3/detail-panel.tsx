@@ -3,12 +3,13 @@
 import type { ApiSection } from '@/lib/api/n3-schema';
 import { formatN3SectionTitle, getN3SectionCardState } from '@/lib/n3/section-card-state';
 import { filterN3VisibleVerdicts } from '@/lib/n3/verdict';
+import { N3StatusChip } from './section-list-card';
 import { VerdictCard } from './verdict-card';
 
 // ─────────────────────────────────────────────────────────────────
 // N3 — 선택 섹션 판정 상세 (Figma 1422:10176 가운데 칼럼).
 //
-// 제목(SECTION 0n) · 판정 행 목록(독립 스크롤) · 하단 bucket 버튼(카드 버튼과 같은 동작).
+// 제목(SECTION 0n) · 상태 칩 · 판정 행 목록(독립 스크롤) · 하단 bucket 버튼(카드 버튼과 같은 동작).
 // 제외 사유 요약 배지는 두지 않는다 — 최신 Figma/PRD는 사유를 카드 칩과 판정 행으로만 보여 준다.
 // 12월 판정(channel_policy)은 filterN3VisibleVerdicts로 거른다.
 //
@@ -52,12 +53,13 @@ export function DetailPanel({
   return (
     <div data-testid="n3-detail-panel" className="flex h-full min-h-0 flex-col justify-between gap-6">
       <div className="flex min-h-0 flex-1 flex-col gap-5">
-        <p
-          data-testid="n3-detail-title"
-          className="shrink-0 text-[20px] font-semibold tracking-[-0.02em] text-[#171717]"
-        >
-          {formatN3SectionTitle(section.sectionOrder)}
-        </p>
+        <div className="flex shrink-0 flex-col gap-2">
+          <p data-testid="n3-detail-title" className="text-[20px] font-semibold tracking-[-0.02em] text-[#171717]">
+            {formatN3SectionTitle(section.sectionOrder)}
+          </p>
+          {/* 카드와 같은 상태값(getN3SectionCardState)을 그대로 보인다 */}
+          {state.chip && <N3StatusChip label={state.chip} testId="n3-detail-status" />}
+        </div>
 
         <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-3">
           {isJudgeFailed && (

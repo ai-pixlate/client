@@ -61,7 +61,7 @@ async function failSave(page: Page, blockId: number, text: string) {
 }
 
 test.beforeEach(async ({ page }) => {
-  await reachN5(page);
+  await reachN5(page, { mockScenario: 'n5-clean' });
 });
 
 test('실패 칸 없음 → 확인창 없이 바로 확정(저장 시도 전 편집 중 초안은 세지 않는다)', async ({ page }) => {
@@ -70,7 +70,7 @@ test('실패 칸 없음 → 확인창 없이 바로 확정(저장 시도 전 편
 
   await page.getByTestId('n5-confirm-button').click();
 
-  await expect(page.getByTestId('n5-failed-draft-confirm')).toHaveCount(0);
+  await expect(page.getByTestId('n5-review-dialog')).toHaveCount(0);
   await expect.poll(async () => (await calls(page)).confirm).toBe(1);
 });
 
@@ -85,15 +85,13 @@ test('실패 칸 1개 → 확인창 N=1 · 버튼은 막지 않는다 · 취소�
   const dialog = page.getByRole('dialog');
   await expect(dialog).toBeVisible();
   await expect(dialog).toHaveAttribute('aria-modal', 'true');
-  await expect(page.locator('#n5-failed-draft-title')).toHaveText('저장하지 못한 번역문이 1칸 있습니다.');
-  await expect(page.locator('#n5-failed-draft-description')).toHaveText(
-    '계속하면 이 칸들은 마지막으로 저장된 문장으로 확정됩니다.',
-  );
-  await expect(dialog.getByRole('button', { name: '계속' })).toBeVisible();
-  await expect(dialog.getByRole('button', { name: '취소' })).toBeVisible();
+  await expect(page.getByTestId('n5-review-count-unsaved-translation')).toHaveText('1건');
+  await expect(page.getByTestId('n5-review-group-unsaved-translation')).toContainText('이 칸은 마지막으로 저장된 문장으로 확정됩니다.');
+  await expect(dialog.getByRole('button', { name: '확인하고 저장' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '돌아가서 확인' })).toBeVisible();
 
-  await dialog.getByRole('button', { name: '취소' }).click();
-  await expect(page.getByTestId('n5-failed-draft-confirm')).toHaveCount(0);
+  await dialog.getByRole('button', { name: '돌아가서 확인' }).click();
+  await expect(page.getByTestId('n5-review-dialog')).toHaveCount(0);
   await expect(page.getByTestId(`n5-block-editor-${BLOCK_A}`)).toHaveValue('Failed draft A');
   await expect(page.getByTestId('n5-panel')).toBeVisible();
   expect((await calls(page)).confirm).toBe(0);
@@ -108,7 +106,7 @@ test('두 칸 실패 → N=2, 같은 칸 다시 실패해도 2', async ({ page }
   await expect(page.getByTestId(`n5-block-save-${BLOCK_A}`)).toHaveText('확인');
 
   await page.getByTestId('n5-confirm-button').click();
-  await expect(page.locator('#n5-failed-draft-title')).toHaveText('저장하지 못한 번역문이 2칸 있습니다.');
+  await expect(page.getByTestId('n5-review-count-unsaved-translation')).toHaveText('2건');
 });
 
 test('Escape → 취소 · 키보드로 계속', async ({ page }) => {
@@ -125,11 +123,11 @@ test('Escape → 취소 · 키보드로 계속', async ({ page }) => {
 
   await page.getByTestId('n5-confirm-button').click();
   await page.keyboard.press('Tab'); // 첫 control = 취소
-  await expect(page.getByTestId('n5-failed-draft-cancel')).toBeFocused();
+  await expect(page.getByTestId('n5-review-cancel')).toBeFocused();
   await page.keyboard.press('Tab');
-  await expect(page.getByTestId('n5-failed-draft-continue')).toBeFocused();
+  await expect(page.getByTestId('n5-review-continue')).toBeFocused();
   await page.keyboard.press('Tab'); // 확인창 안에서 순환
-  await expect(page.getByTestId('n5-failed-draft-cancel')).toBeFocused();
+  await expect(page.getByTestId('n5-review-cancel')).toBeFocused();
   await page.keyboard.press('Shift+Tab');
   await page.keyboard.press('Enter'); // 계속
   await expect.poll(async () => (await calls(page)).confirm).toBe(1);
@@ -141,7 +139,7 @@ test('계속 → 기존 확정 1회, 실패한 초안은 다시 저장하지 않
   const patchesBefore = (await calls(page)).blockPatch;
 
   await page.getByTestId('n5-confirm-button').click();
-  await page.getByTestId('n5-failed-draft-continue').click();
+  await page.getByTestId('n5-review-continue').click();
 
   await expect.poll(async () => (await calls(page)).confirm).toBe(1);
   await expect(page.getByTestId('n5-panel')).toHaveCount(0, { timeout: 15_000 }); // N6 로 이동
@@ -153,7 +151,7 @@ test('계속 → 확정 실패 → N5 유지 · 초안과 집계가 남아 다�
   await failSave(page, BLOCK_A, 'Failed draft A');
 
   await page.getByTestId('n5-confirm-button').click();
-  await page.getByTestId('n5-failed-draft-continue').click();
+  await page.getByTestId('n5-review-continue').click();
 
   await expect(page.getByTestId('n5-confirm-error')).toBeVisible();
   await expect(page.getByTestId('n5-panel')).toBeVisible();
@@ -161,7 +159,7 @@ test('계속 → 확정 실패 → N5 유지 · 초안과 집계가 남아 다�
   expect((await calls(page)).confirm).toBe(1);
 
   await page.getByTestId('n5-confirm-button').click();
-  await expect(page.locator('#n5-failed-draft-title')).toHaveText('저장하지 못한 번역문이 1칸 있습니다.');
+  await expect(page.getByTestId('n5-review-count-unsaved-translation')).toHaveText('1건');
 });
 
 test('초안을 서버값으로 되돌리거나 재저장에 성공하면 집계에서 빠진다', async ({ page }) => {
@@ -180,6 +178,6 @@ test('초안을 서버값으로 되돌리거나 재저장에 성공하면 집계
   await expect(page.getByTestId(`n5-block-save-${BLOCK_B}`)).toBeDisabled();
 
   await page.getByTestId('n5-confirm-button').click();
-  await expect(page.getByTestId('n5-failed-draft-confirm')).toHaveCount(0);
+  await expect(page.getByTestId('n5-review-dialog')).toHaveCount(0);
   await expect.poll(async () => (await calls(page)).confirm).toBe(1); // 확인창 없이 바로 확정 요청
 });

@@ -67,15 +67,15 @@ async function roundTripViewMode(page: Page) {
 
 async function failedCountInDialog(page: Page): Promise<string | null> {
   await page.getByTestId('n5-confirm-button').click();
-  const dialog = page.getByTestId('n5-failed-draft-confirm');
+  const dialog = page.getByTestId('n5-review-dialog');
   if ((await dialog.count()) === 0) return null;
-  const title = await page.locator('#n5-failed-draft-title').textContent();
-  await page.getByTestId('n5-failed-draft-cancel').click();
+  const title = await page.getByTestId('n5-review-count-unsaved-translation').textContent();
+  await page.getByTestId('n5-review-cancel').click();
   return title;
 }
 
 test.beforeEach(async ({ page }) => {
-  await reachN5(page);
+  await reachN5(page, { mockScenario: 'n5-clean' });
 });
 
 test('A. 저장 실패 → 원문 보기 왕복 → 초안·실패 상태·N 그대로', async ({ page }) => {
@@ -86,7 +86,7 @@ test('A. 저장 실패 → 원문 보기 왕복 → 초안·실패 상태·N 그
 
   await expect(editorOf(page, BLOCK_A)).toHaveValue('Failed draft A');
   await expect(saveOf(page, BLOCK_A)).toBeEnabled(); // 편집 중(미저장) 상태 그대로 — 다시 저장 가능
-  expect(await failedCountInDialog(page)).toBe('저장하지 못한 번역문이 1칸 있습니다.');
+  expect(await failedCountInDialog(page)).toBe('1건');
   expect((await calls(page)).confirm).toBe(0);
 });
 
@@ -145,7 +145,7 @@ test('D. 두 칸 실패 → 왕복 → 둘 다 초안 유지 · N=2', async ({ p
 
   await expect(editorOf(page, BLOCK_A)).toHaveValue('Failed draft A');
   await expect(editorOf(page, BLOCK_B)).toHaveValue('Failed draft B');
-  expect(await failedCountInDialog(page)).toBe('저장하지 못한 번역문이 2칸 있습니다.');
+  expect(await failedCountInDialog(page)).toBe('2건');
 });
 
 test('E. 실패 초안 → 계속 → 확정 실패 → N5 유지 · 왕복해도 초안 그대로', async ({ page }) => {
@@ -154,14 +154,14 @@ test('E. 실패 초안 → 계속 → 확정 실패 → N5 유지 · 왕복해�
   const patchesBefore = (await calls(page)).blockPatch;
 
   await page.getByTestId('n5-confirm-button').click();
-  await page.getByTestId('n5-failed-draft-continue').click();
+  await page.getByTestId('n5-review-continue').click();
   await expect(page.getByTestId('n5-confirm-error')).toBeVisible();
   await expect(editorOf(page, BLOCK_A)).toHaveValue('Failed draft A');
 
   await roundTripViewMode(page);
   await expect(editorOf(page, BLOCK_A)).toHaveValue('Failed draft A');
   expect((await calls(page)).blockPatch).toBe(patchesBefore); // 실패 초안을 다시 저장하지 않았다
-  expect(await failedCountInDialog(page)).toBe('저장하지 못한 번역문이 1칸 있습니다.');
+  expect(await failedCountInDialog(page)).toBe('1건');
 });
 
 test('F. 409 → 초안 유지 · 왕복해도 유지 · [최신 값 불러오기]를 고를 때만 서버값으로', async ({ page }) => {
@@ -185,7 +185,7 @@ test('F. 409 → 초안 유지 · 왕복해도 유지 · [최신 값 불러오�
 
   await roundTripViewMode(page);
   await expect(editor).toHaveValue('$99.99 (내 초안)'); // 409 뒤에도 초안은 자동으로 사라지지 않는다
-  expect(await failedCountInDialog(page)).toBe('저장하지 못한 번역문이 1칸 있습니다.');
+  expect(await failedCountInDialog(page)).toBe('1건');
 
   // 충돌 안내는 편집기 표시 상태라 왕복 뒤 다시 저장하면 다시 뜬다 → 사용자가 최신 값을 고른다
   await saveOf(page, 9103).click();

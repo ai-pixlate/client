@@ -75,6 +75,35 @@ function errorMessageOf(err: unknown): string {
 /** Figma 1437:15953 「모든게 제외된 상황」 말풍선 문구 */
 const NO_INCLUDED_SECTION_NOTICE = '번역 가능한 섹션이 있어야 진행 가능합니다';
 
+function ProceedBubble({
+  role,
+  id,
+  testId,
+  className = '',
+  children,
+}: {
+  role: 'alert' | 'tooltip';
+  id?: string;
+  testId: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      role={role}
+      id={id}
+      data-testid={testId}
+      className={`absolute bottom-[calc(100%+10px)] left-1/2 -translate-x-1/2 rounded-[8px] border border-[#ff6a38] bg-white p-2.5 text-[12px] font-light whitespace-nowrap tracking-[-0.04em] text-[#ff6a38] ${className}`}
+    >
+      {children}
+      <span
+        aria-hidden="true"
+        className="absolute top-full left-1/2 size-2.5 -translate-x-1/2 -translate-y-1/2 rotate-45 border-r border-b border-[#ff6a38] bg-white"
+      />
+    </div>
+  );
+}
+
 function ExitIcon() {
   // N2(n2-analysis-view.tsx)와 동일 패턴 재사용 — Figma(849:7241) glyph는
   // 7일 만료 원격 asset이라 커밋 코드에 하드링크하지 않는다.
@@ -134,7 +163,10 @@ export function N3View({ jobId }: { jobId: string }) {
     });
   }
 
-  const isCtaDisabled = proceedMutation.isPending || hasNoIncluded || !sectionsQuery.isSuccess;
+  // 전 섹션 제외는 aria-disabled로 막는다 — native disabled면 hover·focus가 닿지 않아 이유를 볼 수 없다.
+  // 실제 요청은 handleProceed가 막는다.
+  const isCtaDisabled = proceedMutation.isPending || !sectionsQuery.isSuccess;
+  const isCtaBlocked = isCtaDisabled || hasNoIncluded;
 
   return (
     <div className="flex h-full w-full bg-white">
@@ -232,27 +264,34 @@ export function N3View({ jobId }: { jobId: string }) {
               </div>
             </div>
 
-            <div className="relative mt-[14px] shrink-0" style={{ width: N3_LIST_WIDTH }}>
-              {(hasNoIncluded || proceedError) && (
-                // Figma 1437:15953 — CTA 위 orange 말풍선
-                <div
-                  role="status"
-                  data-testid="n3-proceed-notice"
-                  className="absolute bottom-[calc(100%+10px)] left-1/2 -translate-x-1/2 rounded-[8px] border border-[#ff6a38] bg-white p-2.5 text-[12px] font-light whitespace-nowrap tracking-[-0.04em] text-[#ff6a38]"
-                >
-                  {proceedError ?? NO_INCLUDED_SECTION_NOTICE}
-                  <span
-                    aria-hidden="true"
-                    className="absolute top-full left-1/2 size-2.5 -translate-x-1/2 -translate-y-1/2 rotate-45 border-r border-b border-[#ff6a38] bg-white"
-                  />
-                </div>
+            <div className="group relative mt-[14px] shrink-0" style={{ width: N3_LIST_WIDTH }}>
+              {/* Figma 1437:15953 — CTA 위 orange 말풍선. 서버가 거절한 진행 오류는 계속 보이고, 전 섹션 제외 안내는 hover·focus에만 보인다 */}
+              {proceedError ? (
+                <ProceedBubble role="alert" testId="n3-proceed-notice">
+                  {proceedError}
+                </ProceedBubble>
+              ) : (
+                hasNoIncluded && (
+                  <ProceedBubble
+                    role="tooltip"
+                    id="n3-proceed-tooltip"
+                    testId="n3-proceed-tooltip"
+                    className="hidden group-focus-within:block group-hover:block"
+                  >
+                    {NO_INCLUDED_SECTION_NOTICE}
+                  </ProceedBubble>
+                )
               )}
               <button
                 type="button"
                 data-testid="n3-proceed"
                 disabled={isCtaDisabled}
+                aria-disabled={isCtaBlocked}
+                aria-describedby={hasNoIncluded && !proceedError ? 'n3-proceed-tooltip' : undefined}
                 onClick={handleProceed}
-                className="w-full rounded-[6px] bg-[#171717] px-8 py-3.5 text-[14px] leading-[normal] font-medium tracking-[-0.03em] text-white transition-colors disabled:cursor-not-allowed disabled:bg-[#f5f5f5] disabled:text-[#999]"
+                className={`w-full rounded-[6px] px-8 py-3.5 text-[14px] leading-[normal] font-medium tracking-[-0.03em] transition-colors ${
+                  isCtaBlocked ? 'cursor-not-allowed bg-[#f5f5f5] text-[#999]' : 'bg-[#171717] text-white'
+                }`}
               >
                 {proceedMutation.isPending ? '진행하는 중...' : '이대로 진행'}
               </button>

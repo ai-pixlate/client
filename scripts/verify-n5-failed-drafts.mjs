@@ -5,10 +5,8 @@
  */
 
 import {
-  FAILED_DRAFT_CONFIRM_DESCRIPTION,
   countFailedDrafts,
   editTranslationDraft,
-  failedDraftConfirmTitle,
   isFailedDraft,
   resolveTranslationSaveFailed,
   resolveTranslationSaveSucceeded,
@@ -67,9 +65,6 @@ console.log('\n[2] 여러 칸 집계 — 초안 Map 하나에서 센다');
 
 console.log('\n[3] 확인창 문구(PM 승인)');
 {
-  check('제목 N=1', failedDraftConfirmTitle(1) === '저장하지 못한 번역문이 1칸 있습니다.');
-  check('제목 N=2', failedDraftConfirmTitle(2) === '저장하지 못한 번역문이 2칸 있습니다.');
-  check('설명', FAILED_DRAFT_CONFIRM_DESCRIPTION === '계속하면 이 칸들은 마지막으로 저장된 문장으로 확정됩니다.');
 }
 
 console.log(`\n결과: PASS ${pass} / FAIL ${fail}\n`);
