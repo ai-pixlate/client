@@ -44,3 +44,26 @@ test('마우스가 있는 단에서만 막대가 그려지고, 내용 폭은 움
   await page.mouse.move(5, 5);
   await expect.poll(async () => (await gutter(major)).equals(majorIdle)).toBe(true);
 });
+
+test('N1 입력 패널도 hover 때만 막대가 그려지고, 입력칸 폭은 Figma 474를 유지한다', async ({ page, browserName }) => {
+  test.skip(browserName !== 'chromium', '--hide-scrollbars는 Chromium 인자다');
+  await page.setViewportSize({ width: 1440, height: 800 });
+  await page.goto('/jobs/new');
+  const panel = page.getByTestId('n1-input-panel');
+  const gutter = async () => {
+    const box = (await panel.boundingBox())!;
+    return page.screenshot({ clip: { x: box.x + box.width - 7, y: box.y + 8, width: 6, height: box.height - 16 } });
+  };
+  await expect.poll(() => panel.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+  expect(await panel.evaluate((el) => (el as HTMLElement).offsetWidth - el.clientWidth - 2)).toBe(6);
+  expect((await page.getByPlaceholder('상품 이름을 입력해주세요').boundingBox())!.width).toBe(474);
+
+  await page.mouse.move(5, 5);
+  const idle = await gutter();
+  await panel.hover();
+  await expect.poll(async () => (await gutter()).equals(idle)).toBe(false);
+  await page.mouse.move(5, 5);
+  await expect.poll(async () => (await gutter()).equals(idle)).toBe(true);
+  await page.getByPlaceholder('상품 이름을 입력해주세요').focus();
+  await expect.poll(async () => (await gutter()).equals(idle)).toBe(false);
+});

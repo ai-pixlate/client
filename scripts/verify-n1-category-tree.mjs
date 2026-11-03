@@ -9,7 +9,8 @@
  */
 
 import { buildCategoryTree, filterCategoryTree, findCategoryPath, firstBranchPath, formatCategoryPath, isCategoryLeaf } from '../app/jobs/new/_lib/category-tree.ts';
-import { N1_SIZE_CHANGE_BLOCK_LINES, getN1MissingFields, isN1Ready, resolveN1BrandId } from '../app/jobs/new/_lib/n1-readiness.ts';
+import { isImeComposingKeyEvent } from '../app/jobs/new/_lib/ime.ts';
+import { N1_SIZE_CHANGE_BLOCK_LINES, getN1MissingFields, getN1SubmitBlockMessages, isN1Ready, resolveN1BrandId } from '../app/jobs/new/_lib/n1-readiness.ts';
 import { INITIAL_SIZE_SELECTION, sanitizeSizeInput, sizeSelectionReducer } from '../app/jobs/new/_lib/size-selection.ts';
 
 let pass = 0;
@@ -106,6 +107,21 @@ check('실서버는 쿼리가 없으면 값을 만들지 않는다', resolveN1Br
 
 check('사이즈 변경이면 필수값이 모두 있어도 진행 불가', !isN1Ready({ ...ready, sizeTab: 'change' }));
 check('사이즈 변경은 입력 누락이 아니라 별도 안내로 알린다', getN1MissingFields({ ...ready, sizeTab: 'change' }).length === 0 && N1_SIZE_CHANGE_BLOCK_LINES.length === 2);
+
+console.log('\ngetN1SubmitBlockMessages');
+const idle = { ...ready, isSubmitting: false, isUploadBusy: false };
+check('막는 이유가 없으면 빈 배열', getN1SubmitBlockMessages(idle).length === 0);
+check('입력 누락을 알린다', getN1SubmitBlockMessages({ ...idle, targetCountry: '' })[0] === '입력이 필요해요: 국가');
+check('사이즈 변경을 알린다', getN1SubmitBlockMessages({ ...idle, sizeTab: 'change' })[0] === N1_SIZE_CHANGE_BLOCK_LINES.join(' '));
+check('입력이 다 있어도 업로드 처리 중을 알린다', getN1SubmitBlockMessages({ ...idle, isUploadBusy: true })[0].includes('이미지를 처리'));
+check('제출 중을 알린다', getN1SubmitBlockMessages({ ...idle, isSubmitting: true, isUploadBusy: true }).join().includes('작업을 만들고'));
+check('여러 이유를 함께 알린다', getN1SubmitBlockMessages({ ...idle, productName: '', sizeTab: 'change' }).length === 2);
+
+console.log('\nisImeComposingKeyEvent');
+check('isComposing이면 조합 중', isImeComposingKeyEvent({ isComposing: true, keyCode: 13 }));
+check('keyCode 229면 조합 중', isImeComposingKeyEvent({ isComposing: false, keyCode: 229 }));
+check('Chrome macOS 조합 확정 Enter', isImeComposingKeyEvent({ isComposing: true, keyCode: 229 }));
+check('조합이 끝난 Enter는 일반 입력', !isImeComposingKeyEvent({ isComposing: false, keyCode: 13 }));
 
 console.log('\nfilterCategoryTree');
 const searchTree = buildCategoryTree([

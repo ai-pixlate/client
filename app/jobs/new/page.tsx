@@ -26,7 +26,8 @@ import {
   isCategoryLeaf,
   type CategoryNode,
 } from './_lib/category-tree';
-import { N1_SIZE_CHANGE_BLOCK_LINES, getN1MissingFields, isN1Ready, resolveN1BrandId, requiresOtcType } from './_lib/n1-readiness';
+import { isImeComposingKeyEvent } from './_lib/ime';
+import { N1_SIZE_CHANGE_BLOCK_LINES, getN1SubmitBlockMessages, isN1Ready, resolveN1BrandId, requiresOtcType } from './_lib/n1-readiness';
 import { INITIAL_SIZE_SELECTION, sizeSelectionReducer } from './_lib/size-selection';
 import { useSourceImageUploads } from './_lib/use-source-image-uploads';
 import { StepNav } from '../[jobId]/_components/step-nav';
@@ -281,7 +282,7 @@ function CategoryColumn({
         ref={scrollerRef}
         onScroll={handleScroll}
         data-testid={`n1-category-scroller-${heading}`}
-        className="n1-category-scroll min-h-0 w-full flex-1"
+        className="n1-hover-scroll min-h-0 w-full flex-1"
       >
         {items.map((item) => {
           const isSelected = item.id === selectedId;
@@ -570,8 +571,13 @@ function NewJobPageInner() {
   const selectedCategoryLabel = selectedCategoryPath ? formatCategoryPath(selectedCategoryPath) : null;
   const categoryInputValue = categoryInputDraft ?? selectedCategoryLabel ?? '';
 
+  const categoryInputRef = useRef<HTMLInputElement>(null);
+  const isCategoryInputComposingRef = useRef(false);
+
   const openCategorySearch = () => {
-    const query = categoryInputValue.trim();
+    // 조합 중에 아이콘을 누르면 먼저 조합을 끝내고, 확정된 입력칸 값을 읽는다
+    if (isCategoryInputComposingRef.current) categoryInputRef.current?.blur();
+    const query = (categoryInputRef.current?.value ?? categoryInputValue).trim();
     if (!query) return;
     setCategorySearchQuery(query);
     setCategoryModalOpen(true);
@@ -645,7 +651,6 @@ function NewJobPageInner() {
     imageCount: images.length,
     sizeTab: sizeSelection.tab,
   };
-  const missingFields = getN1MissingFields(readinessInput);
   const isValid = isN1Ready(readinessInput);
   const isSizeChangeSelected = sizeSelection.tab === 'change';
   const showProductNameError = touched.productName && productName.trim() === '';
@@ -685,6 +690,10 @@ function NewJobPageInner() {
   // 그 사이에 POST /jobs가 여러 번 나가지 않도록 ref로 한 번 더 막는다.
   const submitInFlightRef = useRef(false);
 
+  // 버튼 상태와 안내 문구의 정본
+  const submitBlockMessages = getN1SubmitBlockMessages({ ...readinessInput, isSubmitting, isUploadBusy });
+  const canSubmit = submitBlockMessages.length === 0;
+
   const handleSubmit = async () => {
     if (!isValid) {
       // 막힌 [다음]을 눌렀을 때 비어 있는 필드의 오류 문구를 모두 보여준다
@@ -693,8 +702,9 @@ function NewJobPageInner() {
       if (isSizeChangeSelected) requestAnimationFrame(() => sizeSectionRef.current?.scrollIntoView({ block: 'nearest' }));
       return;
     }
-    if (isSubmitting || isUploadBusy || submitInFlightRef.current) return;
+    if (!canSubmit || submitInFlightRef.current) return;
     submitInFlightRef.current = true;
+    let isLeaving = false;
     setSubmitError(null);
     setIsSubmitting(true);
     try {
@@ -729,16 +739,18 @@ function NewJobPageInner() {
       });
       await syncServerOrder(jobId);
       await analyzeMutation.mutateAsync(jobId);
+      // analyze가 접수된 뒤에는 이 draft를 다시 고칠 수 없다(PATCH 409). 화면이 바뀔 때까지 [다음]을 막아 둔다
+      isLeaving = true;
       router.push(`/jobs/${jobId}`);
     } catch (error) {
       setSubmitError(error);
     } finally {
-      submitInFlightRef.current = false;
-      setIsSubmitting(false);
+      if (!isLeaving) {
+        submitInFlightRef.current = false;
+        setIsSubmitting(false);
+      }
     }
   };
-
-  const canSubmit = isValid && !isSubmitting && !isUploadBusy;
 
   const handleExitConfirm = () => {
     // TODO: M1 보관함 route가 바뀌면 함께 교체
@@ -1071,7 +1083,9 @@ function NewJobPageInner() {
               가용 공간보다 클 때만" 나오는 안전장치다 — 평소 뷰포트에서는
               나타나지 않는다. 블록 간격은 최신 Figma(1170:7877) gap 52 · 첫 묶음 안 gap 16. */}
           <div className="flex min-h-0 w-[516px] shrink-0 flex-col">
-            <div className="flex min-h-0 flex-1 flex-col gap-[52px] overflow-y-auto rounded-[8px] border border-[#eaeaea] p-5">
+            {/* 스크롤바 자리 6px을 오른쪽 여백에서 빼고 안쪽 폭을 474로 고정해, Figma 폭과 정렬이 유지된다 */}
+            <div className="n1-hover-scroll min-h-0 flex-1 overflow-y-auto rounded-[8px] border border-[#eaeaea] py-5 pr-[14px] pl-5" data-testid="n1-input-panel">
+              <div className="flex w-[474px] flex-col gap-[52px]">
               <div className="flex flex-col gap-4 pt-2">
                 <div className="flex flex-col gap-1">
                   <FieldLabel required>상품명</FieldLabel>
@@ -1113,6 +1127,7 @@ function NewJobPageInner() {
                       className="flex h-[39px] min-w-0 flex-1 items-center gap-2 rounded-[6px] border border-[#eaeaea] bg-white pr-[14px] pl-[14px] focus-within:border-[#ff6a38]"
                     >
                       <input
+                        ref={categoryInputRef}
                         type="search"
                         aria-label="카테고리 검색"
                         aria-describedby={showCategoryError ? 'n1-category-error' : undefined}
@@ -1121,8 +1136,16 @@ function NewJobPageInner() {
                         title={categoryInputValue || undefined}
                         placeholder="검색하기"
                         onChange={(e) => setCategoryInputDraft(e.target.value)}
+                        onCompositionStart={() => {
+                          isCategoryInputComposingRef.current = true;
+                        }}
+                        onCompositionEnd={() => {
+                          isCategoryInputComposingRef.current = false;
+                        }}
                         onKeyDown={(e) => {
                           if (e.key !== 'Enter') return;
+                          // 조합 중 Enter는 글자 확정만 한다. 여기서 창을 열면 포커스가 옮겨 가며 마지막 음절이 중복된다
+                          if (isCategoryInputComposingRef.current || isImeComposingKeyEvent(e.nativeEvent)) return;
                           e.preventDefault();
                           openCategorySearch();
                         }}
@@ -1315,6 +1338,7 @@ function NewJobPageInner() {
                   </div>
                 )}
               </div>
+              </div>
             </div>
 
             {(submitError != null || hasUploadFailed || uploadNotice) && (
@@ -1391,22 +1415,21 @@ function NewJobPageInner() {
                   type="button"
                   onClick={handleSubmit}
                   aria-disabled={!canSubmit}
-                  aria-describedby={isValid ? undefined : 'n1-next-tooltip'}
+                  aria-describedby={canSubmit ? undefined : 'n1-next-tooltip'}
                   className="h-[45px] w-[148px] shrink-0 rounded-[6px] bg-[#171717] px-8 py-3.5 text-[14px] leading-[normal] font-medium tracking-[-0.03em] text-white transition-opacity aria-disabled:cursor-not-allowed aria-disabled:opacity-40"
                 >
                   {isSubmitting ? '생성 중...' : '다음'}
                 </button>
-                {!isValid && (
+                {!canSubmit && (
                   <div
                     id="n1-next-tooltip"
                     role="tooltip"
                     data-testid="n1-next-tooltip"
-                    className="invisible absolute right-0 bottom-[calc(100%-3px)] z-10 w-[193px] rounded-[8px] break-keep border border-[#ff6a38] bg-white p-2.5 text-[12px] leading-[normal] font-light tracking-[-0.04em] text-[#ff6a38] group-focus-within:visible group-hover:visible"
+                    className="invisible absolute right-0 bottom-[calc(100%-3px)] z-10 flex w-[193px] flex-col gap-1 rounded-[8px] break-keep border border-[#ff6a38] bg-white p-2.5 text-[12px] leading-[normal] font-light tracking-[-0.04em] text-[#ff6a38] group-focus-within:visible group-hover:visible"
                   >
-                    {missingFields.length > 0 && <p>입력이 필요해요: {missingFields.join(', ')}</p>}
-                    {isSizeChangeSelected && (
-                      <p className={missingFields.length > 0 ? 'mt-1' : undefined}>{N1_SIZE_CHANGE_BLOCK_LINES.join(' ')}</p>
-                    )}
+                    {submitBlockMessages.map((message) => (
+                      <p key={message}>{message}</p>
+                    ))}
                     <TooltipArrow className="left-[90px]" />
                   </div>
                 )}

@@ -129,6 +129,52 @@ test.describe('카테고리 검색', () => {
   });
 });
 
+test.describe('카테고리 검색 — IME 조합', () => {
+  // Chrome 전용 CDP로 조합 이벤트를 만든다. 실제 macOS 한글 입력기를 그대로 재현하지는 않는다
+  test('조합 중 Enter는 검색하지 않고 preventDefault도 하지 않으며, 확정 뒤 Enter로 정확한 값을 검색한다', async ({ page, browserName, context }) => {
+    test.skip(browserName !== 'chromium', 'CDP IME는 Chromium에서만 쓴다');
+    await page.goto('/jobs/new');
+    await categoryInput(page).click();
+    await page.evaluate(() => {
+      const el = document.querySelector<HTMLInputElement>('input[type=search]')!;
+      const w = window as unknown as { __prevented: boolean[] };
+      w.__prevented = [];
+      window.addEventListener('keydown', (e) => w.__prevented.push(e.defaultPrevented));
+      el.dataset.ready = 'true';
+    });
+    const cdp = await context.newCDPSession(page);
+    for (const text of ['ㅋ', '크', '클', '크리', '크림']) {
+      await cdp.send('Input.imeSetComposition', { text, selectionStart: text.length, selectionEnd: text.length });
+    }
+    await cdp.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 229, nativeVirtualKeyCode: 229 });
+    await expect(categoryModal(page)).toHaveCount(0);
+    expect(await page.evaluate(() => (window as unknown as { __prevented: boolean[] }).__prevented)).toEqual([false]);
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 229 });
+    await cdp.send('Input.insertText', { text: '크림' });
+    await expect(categoryInput(page)).toHaveValue('크림');
+
+    await page.keyboard.press('Enter');
+    await expect(categoryModal(page)).toBeVisible();
+    await expect(categoryInput(page)).toHaveValue('크림');
+    await expect(columnButtons(page, '소분류')).toHaveText(['크림', '아이크림']);
+  });
+
+  test('조합 중 아이콘을 눌러도 글자가 중복·유실되지 않고 그 값으로 검색한다', async ({ page, browserName, context }) => {
+    test.skip(browserName !== 'chromium', 'CDP IME는 Chromium에서만 쓴다');
+    await page.goto('/jobs/new');
+    await categoryInput(page).click();
+    const cdp = await context.newCDPSession(page);
+    for (const text of ['ㅅ', '스', '슥', '스키', '스킨']) {
+      await cdp.send('Input.imeSetComposition', { text, selectionStart: text.length, selectionEnd: text.length });
+    }
+    await page.getByTestId('n1-category-search').click();
+    await expect(categoryModal(page)).toBeVisible();
+    await expect(categoryModal(page).getByRole('status')).toHaveCount(0);
+    await expect(categoryInput(page)).toHaveValue('스킨');
+    await expect(columnButtons(page, '대분류').first()).toHaveText('스킨케어');
+  });
+});
+
 test.describe('카테고리 창 — Figma 1192×468 고정', () => {
   test('Figma 위치·크기를 지키고, 항목 수가 달라도 외곽 크기는 그대로다', async ({ page }) => {
     await page.goto('/jobs/new');
@@ -375,6 +421,37 @@ test.describe('[다음] — brandId 쿼리 없는 Mock 진입', () => {
     await expect(tooltip).toHaveText('입력이 필요해요: 국가, 언어, 이미지, 카테고리, 규제 분류, 책임 동의');
     await page.screenshot({ path: test.info().outputPath('n1-next-tooltip.png') });
   });
+});
+
+test('analyze 뒤 화면 이동이 늦어도 [다음]을 다시 보낼 수 없고, 이유를 보여 준 뒤 N2로 간다', async ({ page }) => {
+  // dev 서버의 첫 컴파일처럼 /jobs/1 이동이 늦은 상황을 만든다
+  await page.addInitScript(() => {
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+      if (headers.has('rsc') && !headers.has('next-router-prefetch') && /\/jobs\/1/.test(url)) {
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+      }
+      return originalFetch(input, init);
+    };
+  });
+  const patches: string[] = [];
+  page.on('request', (r) => {
+    if (r.method() === 'PATCH') patches.push(new URL(r.url()).pathname);
+  });
+  await page.goto('/jobs/new');
+  await fillRequired(page);
+  await nextButton(page).click();
+  const pending = page.getByRole('button', { name: '생성 중...' });
+  await expect(pending).toBeDisabled();
+  await page.waitForTimeout(500);
+  await expect(page).toHaveURL(/\/jobs\/new$/);
+  await pending.click({ force: true });
+  await expect(page.getByTestId('n1-next-tooltip')).toHaveText('작업을 만들고 있습니다. 잠시만 기다려 주세요.');
+  await expect(page).toHaveURL(/\/jobs\/1$/, { timeout: 15_000 });
+  expect(patches).toEqual(['/jobs/1']);
+  await expect(page.getByRole('heading', { name: '이미지 분석' })).toBeVisible();
 });
 
 test('1920×1080 — Figma 525:3023 주요 좌표', async ({ page }) => {

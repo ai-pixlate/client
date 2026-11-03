@@ -60,6 +60,20 @@ export function getN1MissingFields(input: N1ReadinessInput): string[] {
   return missing;
 }
 
+/**
+ * [다음]을 지금 누를 수 없는 이유를 화면 문구로 돌려준다. 비어 있으면 제출할 수 있다.
+ * 버튼 상태와 안내를 같은 값에서 만들어, 막혔는데 이유가 없는 상태를 없앤다.
+ */
+export function getN1SubmitBlockMessages(input: N1ReadinessInput & { isSubmitting: boolean; isUploadBusy: boolean }): string[] {
+  const messages: string[] = [];
+  if (input.isSubmitting) messages.push('작업을 만들고 있습니다. 잠시만 기다려 주세요.');
+  else if (input.isUploadBusy) messages.push('이미지를 처리하고 있습니다. 끝나면 다시 눌러 주세요.');
+  const missing = getN1MissingFields(input);
+  if (missing.length > 0) messages.push(`입력이 필요해요: ${missing.join(', ')}`);
+  if (input.sizeTab !== 'original') messages.push(N1_SIZE_CHANGE_BLOCK_LINES.join(' '));
+  return messages;
+}
+
 export function isN1Ready(input: N1ReadinessInput): boolean {
   return getN1MissingFields(input).length === 0 && input.sizeTab === 'original';
 }
