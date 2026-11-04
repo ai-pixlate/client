@@ -145,6 +145,96 @@ test('1440×900 에서 가로·세로 넘침 없이 폼과 소셜 버튼이 겹�
   expect(social.y + social.height).toBeLessThanOrEqual(900);
 });
 
+/** DOM 실측 세로 여백 — 위 요소 아래 경계에서 아래 요소 위 경계까지 */
+async function verticalGaps(page: Page) {
+  const rect = async (id: string) => {
+    const b = await box(page, id);
+    return { top: b.y, bottom: b.y + b.height };
+  };
+  const [micro, headline, subcopy, leftLogo, logo, heading, fields, remember, button, links, social] = await Promise.all(
+    ['g1-brand-micro', 'g1-brand-headline', 'g1-brand-subcopy', 'g1-brand-logo', 'g1-auth-logo', 'g1-heading', 'g1-fields', 'g1-remember', 'g1-submit', 'g1-links', 'g1-social'].map(rect),
+  );
+  return {
+    leftTop: leftLogo.top,
+    rightTop: logo.top,
+    microToHeadline: headline.top - micro.bottom,
+    headlineToSubcopy: subcopy.top - headline.bottom,
+    logoToHeading: heading.top - logo.bottom,
+    headingToFields: fields.top - heading.bottom,
+    rememberToButton: button.top - remember.bottom,
+    buttonToLinks: links.top - button.bottom,
+    linksToSocial: social.top - links.bottom,
+    socialBottom: social.bottom,
+  };
+}
+
+test('1920×1080 세로 여백이 Figma 값이고 위치가 그대로다', async ({ page }) => {
+  await open(page);
+  const gaps = await verticalGaps(page);
+  console.log(`[gap] 1920×1080 ${JSON.stringify(gaps)}`);
+  expect(gaps.leftTop).toBe(120);
+  expect(gaps.rightTop).toBe(120);
+  expect(Math.abs(gaps.microToHeadline - 91.19)).toBeLessThanOrEqual(1);
+  expect(Math.abs(gaps.headlineToSubcopy - 32.24)).toBeLessThanOrEqual(1);
+  expect(gaps.logoToHeading).toBe(115);
+  expect(gaps.headingToFields).toBe(60);
+  expect(gaps.rememberToButton).toBe(60);
+  expect(gaps.buttonToLinks).toBe(32);
+  expect(gaps.linksToSocial).toBe(148);
+  for (const [id, y] of [['g1-heading', 274], ['g1-fields', 398], ['g1-remember', 536], ['g1-submit', 616], ['g1-links', 693], ['g1-social', 858]] as const) {
+    expect((await box(page, id)).y, id).toBe(y);
+  }
+});
+
+// 1728×885·918 은 실제 노트북 Chrome 창(1728×1005, 내장 화면 1728×1117)에서 브라우저 상단 UI 높이를 뺀 값의 범위다
+for (const [width, height] of [[1440, 900], [1728, 918], [1728, 885], [1512, 860]] as const) {
+  test(`${width}×${height} 에서 여백이 같은 비율로 줄고 겹치지 않는다`, async ({ page }) => {
+    await page.setViewportSize({ width, height });
+    await open(page);
+    const gaps = await verticalGaps(page);
+    console.log(`[gap] ${width}×${height} ${JSON.stringify(gaps)}`);
+
+    // 내부 여백은 하나의 배율을 공유해 Figma 비율을 유지한다
+    const scale = gaps.headingToFields / 60;
+    expect(scale).toBeLessThan(1);
+    expect(Math.abs(gaps.logoToHeading - 115 * scale)).toBeLessThanOrEqual(1);
+    expect(Math.abs(gaps.rememberToButton - 60 * scale)).toBeLessThanOrEqual(1);
+    expect(Math.abs(gaps.buttonToLinks - 32 * scale)).toBeLessThanOrEqual(1);
+    expect(Math.abs(gaps.microToHeadline - 91.19 * scale)).toBeLessThanOrEqual(1);
+    expect(gaps.logoToHeading).toBeGreaterThanOrEqual(80);
+    expect(gaps.headingToFields).toBeGreaterThanOrEqual(40);
+    expect(gaps.buttonToLinks).toBeGreaterThanOrEqual(24);
+
+    // 제목과 보조 문구 묶음은 유지하고, 양쪽 로고 높이는 같다
+    expect(Math.abs(gaps.headlineToSubcopy - 32.24)).toBeLessThanOrEqual(1);
+    expect(gaps.leftTop).toBe(gaps.rightTop);
+
+    // 스크롤 없이 들어오고 소셜과 겹치지 않으며 아래 여백이 위 여백과 같다
+    expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBe(height);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
+    expect(gaps.linksToSocial).toBeGreaterThan(gaps.logoToHeading * 0.8);
+    expect(Math.abs(height - gaps.socialBottom - gaps.rightTop)).toBeLessThanOrEqual(1);
+
+    // 요소 크기와 글자는 줄지 않는다
+    expect((await email(page).boundingBox())!.height).toBe(39);
+    expect((await box(page, 'g1-submit')).height).toBe(45);
+    expect((await box(page, 'g1-social-kakao')).height).toBe(45);
+    expect((await box(page, 'g1-form')).width).toBe(432);
+    await expect(page.getByTestId('g1-brand-headline')).toHaveCSS('font-size', '46px');
+    await expect(page.getByRole('heading', { level: 1 })).toHaveCSS('font-size', '32px');
+  });
+}
+
+test('낮은 화면에서 오류 문구가 늘어나도 소셜 버튼과 겹치지 않는다', async ({ page }) => {
+  await page.setViewportSize({ width: 1728, height: 885 });
+  await open(page);
+  await submit(page).click();
+  await expect(page.getByTestId('login-password-error')).toBeVisible();
+  const gaps = await verticalGaps(page);
+  expect(gaps.linksToSocial).toBeGreaterThanOrEqual(24);
+  expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBe(885);
+});
+
 test('이메일·비밀번호는 실제 input 이며 비밀번호는 가려진다', async ({ page }) => {
   await open(page);
   await expect(email(page)).toHaveAttribute('type', 'email');
