@@ -189,6 +189,9 @@ function resolveN4Presentation(
   return { rows: FIVE_STEP_STATES_BY_N4_STAGE[stage], activeStages: [stage] };
 }
 
+// 전체 실패 안내(Figma 795:4820). 서버 응답에 사용자용 문구가 없어(errorCode 뿐) 실패 단계를 추측하지 않고 이 문구를 쓴다
+const N4_ERROR = { sectionLabel: 'TRANSLATION STATUS', title: '번역을 완료하지 못했습니다', description: '번역 처리 중 오류가 발생했습니다.' };
+
 function buildFiveSteps(states: ProcessingStep['state'][]): ProcessingStep[] {
   return FIVE_STEP_META.map((step, i) => ({ ...step, state: states[i] }));
 }
@@ -197,9 +200,12 @@ export function N4ProcessingView({
   jobId,
   status,
   isCompleted = false,
+  isFailed = false,
 }: {
   jobId: string;
   status: ApiJobTaskStatus;
+  /** N4 전체 실패(currentStep=N4 && jobStatus=failed) — page.tsx 가 그 조건으로만 넘긴다. 일부 항목 실패만으로는 true 가 아니다 */
+  isFailed?: boolean;
   /**
    * 서버가 이미 N4 를 끝냈다(currentStep=N5 응답) — page.tsx 가 N5 로 넘어가기 직전 완료 표시를 하는
    * 동안만 true 로 넘긴다. 그때 status 는 그 N5 응답이다.
@@ -251,6 +257,7 @@ export function N4ProcessingView({
       progressHint={isCompleted ? N4_COMPLETION_COPY.progressHint : N4_AUTO_ADVANCE_NOTICE}
       pauseButtonTitle={N4_PAUSE_BUTTON_TITLE}
       failedItems={failedItems}
+      error={isFailed ? N4_ERROR : undefined}
     />
   );
 }

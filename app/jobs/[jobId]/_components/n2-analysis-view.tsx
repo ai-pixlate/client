@@ -48,9 +48,8 @@ import { useDisplayedProgress } from './processing/use-displayed-progress';
 const HEADLINE_FALLBACK = '상세페이지의 구조와 문맥을 읽고 있습니다.';
 const AUTO_ADVANCE_NOTICE = '분석이 끝나면 섹션 확인 단계로 자동 이동합니다.';
 const PAUSE_BUTTON_TITLE = '분석 중단 기능은 아직 제공되지 않습니다.';
-const FAILED_HEADLINE = '이미지 분석을 완료하지 못했습니다.';
-const FAILED_NOTICE = '분석을 완료하지 못해 다음 단계로 자동 이동하지 않습니다.';
-const FAILED_CAPTION = { title: '분석 실패', description: '이미지 분석을 완료하지 못했습니다.' };
+// 전체 실패 안내(Figma 793:4890). 서버 응답에 사용자용 문구가 없어(errorCode 뿐) 실패 단계를 추측하지 않고 이 문구를 쓴다
+const N2_ERROR = { sectionLabel: 'ANALYSIS STATUS', title: '분석이 중단되었습니다', description: '이미지 분석 중 오류가 발생했습니다.' };
 
 const FIVE_STEP_META: { no: string; label: string }[] = [
   { no: '01', label: '콘텐츠 영역 나누기' },
@@ -184,7 +183,7 @@ const JUDGE_CAPTION_BY_STATUS: Record<ApiAnalysisProgress['status'], { title: st
   waiting: { title: '영역별 판정 대기 중', description: '영역별 판정 시작을 기다리고 있습니다.' },
   retrying: { title: '영역별 판정 재시도 대기 중', description: '일부 영역 판정을 다시 시도하기 전입니다.' },
   running: { title: '영역별 판정 중', description: '영역마다 번역 대상과 현지 적합성을 확인하고 있습니다.' },
-  // 판정 실행 실패 종료 — 전체 실패 표시(FAILED_CAPTION)는 isFailed 일 때만이고, 여기선 "판정 중"이라고만 하지 않는다
+  // 판정 실행 실패 종료 — 전체 실패 화면은 isFailed 일 때만이고, 여기선 "판정 중"이라고만 하지 않는다
   failed: { title: '영역별 판정 중단', description: '영역별 판정을 마치지 못했습니다.' },
 };
 
@@ -303,15 +302,8 @@ export function N2AnalysisView({
   const detail = isCompleted ? undefined : status.analysisProgress;
   // analysisProgress 가 있으면 행도 그 값으로, 없을 때만 기존 coarse stages 해석(레거시 응답 그대로).
   const stepStates = detail ? resolveAnalysisProgressStepStates(detail) : FIVE_STEP_STATES_BY_COARSE_STAGE[coarseStage];
-  // 전체 실패면 진행 중인 행이 없다 — 별도 실패 행 디자인이 없어 "진행 중"만 "대기"로 낮춘다(완료 행은 그대로).
-  const steps = buildFiveSteps(stepStates.map((state) => (isFailed && state === 'active' ? 'pending' : state)));
-  const caption = isFailed
-    ? FAILED_CAPTION
-    : isCompleted
-      ? N2_COMPLETION_CAPTION
-      : detail
-        ? resolveDetailCaption(detail)
-        : resolveOverlayCaption(coarseStage);
+  const steps = buildFiveSteps(stepStates);
+  const caption = isCompleted ? N2_COMPLETION_CAPTION : detail ? resolveDetailCaption(detail) : resolveOverlayCaption(coarseStage);
   // 서버가 analysisProgress 로 대기·재시도 대기·실패라고 알린 동안만 숫자를 그 자리에 둔다(running 이 오면 그 값에서
   // 이어서 오른다). status=failed 는 표시 % 정지일 뿐 전체 실패 판정(isFailed)에 쓰지 않는다. analysisProgress 가 없는
   // 레거시 응답에서는 대기를 추정하지 않는다.
@@ -331,11 +323,11 @@ export function N2AnalysisView({
         title: '이미지 분석',
         description: '등록한 이미지의 텍스트와 구조를 분석하고 있습니다.',
       }}
-      statusTagLabel={isFailed ? '분석 실패' : isCompleted ? N2_COMPLETION_COPY.statusTag : '진행중'}
+      statusTagLabel={isCompleted ? N2_COMPLETION_COPY.statusTag : '진행중'}
       visual={{
         // 공용 GIF — N2/N4가 같은 자산을 쓴다(별도 복사본 금지).
         src: '/process/ai-processing.gif',
-        headline: isFailed ? FAILED_HEADLINE : isCompleted ? N2_COMPLETION_COPY.headline : HEADLINE_FALLBACK,
+        headline: isCompleted ? N2_COMPLETION_COPY.headline : HEADLINE_FALLBACK,
         description: isCompleted
           ? N2_COMPLETION_COPY.visualDescription
           : '텍스트만 추출하지 않고, 번역에 필요한 섹션과 판단 근거를 함께 정리합니다.',
@@ -350,10 +342,10 @@ export function N2AnalysisView({
       }}
       steps={steps}
       progressPercent={progressPercent}
-      progressHint={isFailed ? FAILED_NOTICE : isCompleted ? N2_COMPLETION_COPY.progressHint : AUTO_ADVANCE_NOTICE}
+      progressHint={isCompleted ? N2_COMPLETION_COPY.progressHint : AUTO_ADVANCE_NOTICE}
       pauseButtonTitle={PAUSE_BUTTON_TITLE}
       failedItems={failedItems}
-      failedItemsTitle={isFailed ? '이미지 분석에 실패했습니다' : undefined}
+      error={isFailed ? N2_ERROR : undefined}
     />
   );
 }

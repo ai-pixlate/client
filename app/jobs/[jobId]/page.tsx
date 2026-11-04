@@ -93,6 +93,8 @@ export default function Page({
   // N2 전체 분석 실패 SSOT — currentStep=N2 && jobStatus=failed 뿐이다. failedCount·stages·progress·
   // analysisProgress.status 는 보지 않는다(LOCAL_JUDGE_FAILED 부분 제외는 실패가 아니다).
   const isN2Failed = !completion && currentStep === 'N2' && tasksQuery.data?.jobStatus === 'failed';
+  // N4 전체 실패도 같은 기준이다. items 에 실패가 있어도 job 이 진행 중이면 부분 실패다
+  const isN4Failed = !completion && currentStep === 'N4' && tasksQuery.data?.jobStatus === 'failed';
   const meta = (displayStep && STEP_META[displayStep]) || STEP_META_FALLBACK;
   const hasScreen = SCREEN_STEPS.includes(displayStep);
 
@@ -156,6 +158,7 @@ export default function Page({
                   jobId={jobId}
                   status={completion?.status ?? tasksQuery.data}
                   isCompleted={completion?.step === 'N4'}
+                  isFailed={isN4Failed}
                 />
               )}
               {displayStep === 'N5' && <N5View jobId={jobId} />}
