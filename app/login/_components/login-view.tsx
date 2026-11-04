@@ -6,6 +6,9 @@ import { type CSSProperties, type FormEvent, useRef, useState } from 'react';
 
 import { CompactCheckbox } from '@/app/_components/library/library-controls';
 import { type LoginFormErrors, validateLoginForm } from '@/lib/auth/login-form';
+import { splitGraphemes } from '@/lib/auth/login-gif-contrast';
+
+import { useLoginGifContrast } from './use-login-gif-contrast';
 
 /**
  * 세로 리듬(Figma 1920×1080 기준). 높이가 1080 이상이면 Figma 값 그대로이고, 낮아지면 요소·글자 크기는 두고 여백만 줄인다.
@@ -24,14 +27,39 @@ const VERTICAL_RHYTHM = {
   '--g1-edge': 'max(24px, calc(120 * var(--g1-outer)))',
 } as CSSProperties;
 
+const LOGIN_GIF_SRC = '/auth/pixlate_login.gif';
+
+/** 오른쪽 입력·버튼 묶음의 폭(Figma 432). 폼과 소셜이 같은 값을 쓰고, 패널이 더 좁을 때만 줄어든다 */
+const AUTH_CONTROL_WIDTH = 'w-[432px] max-w-full';
+
+/** 글자별로 색이 바뀌는 보조 문구 한 줄. 읽기는 문장 단위로 하도록 글자 span 은 보조기기에서 숨긴다. 색만 바뀌어 위치가 변하지 않는다 */
+function ContrastLine({ text }: { text: string }) {
+  return (
+    <p role="group" aria-label={text}>
+      {splitGraphemes(text).map((grapheme, index) => (
+        <span key={index} aria-hidden="true" data-g1-grapheme="" className="text-[#999] transition-colors duration-[80ms] ease-linear data-[on-orange]:text-[#171717]">
+          {grapheme}
+        </span>
+      ))}
+    </p>
+  );
+}
+
 function BrandLayer() {
+  const panelRef = useRef<HTMLElement>(null);
+  const imageRef = useRef<HTMLImageElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  useLoginGifContrast(LOGIN_GIF_SRC, panelRef, imageRef, canvasRef);
+
   return (
     <section
+      ref={panelRef}
       data-testid="g1-brand-layer"
       className="relative min-h-screen w-[min(1120px,58.3334%)] shrink-0 overflow-hidden bg-black"
     >
       {/* Figma IMAGE FILL 과 같은 의미. 장식이므로 대체 텍스트를 비운다. 파일이 없어도 검은 배경 위 문구는 유지된다 */}
-      <img data-testid="g1-brand-gif" alt="" src="/auth/pixlate_login.gif" className="absolute inset-0 size-full max-w-none object-cover" />
+      <img ref={imageRef} data-testid="g1-brand-gif" alt="" src={LOGIN_GIF_SRC} className="absolute inset-0 size-full max-w-none object-cover" />
+      <canvas ref={canvasRef} hidden aria-hidden="true" data-testid="g1-brand-gif-canvas" className="absolute inset-0 size-full object-cover" />
       {/* 오른쪽 로고와 같은 위쪽 여백을 쓴다. 문구는 한 흐름이라 줄이 바뀌어도 겹치지 않는다 */}
       <div className="absolute inset-x-[60px] top-[var(--g1-edge)]">
         <img data-testid="g1-brand-logo" alt="pix/ate" src="/auth/pixlate-wordmark-on-dark.svg" className="block h-[39.22px] w-[128px] max-w-none" />
@@ -43,9 +71,9 @@ function BrandLayer() {
           <p>현지에 맞게 완성하는 것까지.</p>
         </div>
         {/* 제목과 보조 문구는 한 묶음이라 줄이지 않는다 */}
-        <div data-testid="g1-brand-subcopy" className="mt-[32.24px] text-[16px] leading-[19px] tracking-[-0.48px] text-[#999]">
-          <p>AI가 분석하고 번역하고 검수합니다.</p>
-          <p>필요한 순간, 당신 옆엔 픽슬레이트</p>
+        <div data-testid="g1-brand-subcopy" className="mt-[32.24px] text-[16px] leading-[19px] tracking-[-0.48px]">
+          <ContrastLine text="AI가 분석하고 번역하고 검수합니다." />
+          <ContrastLine text="필요한 순간, 당신 옆엔 픽슬레이트" />
         </div>
       </div>
       <p data-testid="g1-brand-footer" className="absolute bottom-[64px] left-[60px] text-[12px] font-light leading-[14px] tracking-[-0.48px] whitespace-nowrap text-[#999]">
@@ -113,7 +141,7 @@ const FOCUS_RING = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus
 
 function SocialButtons() {
   return (
-    <div data-testid="g1-social" className="flex w-full max-w-[432px] flex-col gap-3">
+    <div data-testid="g1-social" className={`flex ${AUTH_CONTROL_WIDTH} flex-col gap-3`}>
       <button
         {...INERT_BUTTON}
         data-testid="g1-social-kakao"
@@ -174,7 +202,7 @@ export function LoginView() {
           data-testid="g1-form"
           noValidate
           onSubmit={handleSubmit}
-          className="mb-6 mt-[var(--g1-logo-to-heading)] flex w-full max-w-[432px] flex-col gap-[var(--g1-section)]"
+          className={`mb-6 mt-[var(--g1-logo-to-heading)] flex ${AUTH_CONTROL_WIDTH} flex-col gap-[var(--g1-section)]`}
         >
           <div data-testid="g1-heading" className="flex flex-col gap-3">
             <p className="text-[12px] font-light leading-[14px] tracking-[-0.48px] text-[#999]">WELCOME BACK</p>
