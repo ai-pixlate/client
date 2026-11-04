@@ -11,6 +11,8 @@ import {
   openTypesetMeasurer,
 } from '@/lib/n5/typeset-measurement';
 
+import { TypesetQaPanel } from './qa-panel';
+
 export interface TypesetHarnessApi {
   fontReadiness: typeof checkTypesetFontReady;
   /** 측정기를 열지 못하면 실패 결과를 그대로 돌려준다(폰트 미준비 경로 검증용 family 지정 가능) */
@@ -60,7 +62,11 @@ export function TypesetMeasureHarness() {
       <p ref={statusRef} className="mb-6 text-sm text-gray-500" data-testid="typeset-harness-status">
         조판 측정 harness(dev 전용)
       </p>
-      <div ref={hostRef} data-testid="typeset-host" className="bg-white" />
+      {/* 자동 테스트가 엔진을 호출해 그리는 영역. 글자가 아래 QA 화면과 겹치면 픽셀 비교가 틀어지므로 높이를 비워 둔다 */}
+      <div className="h-[260px]">
+        <div ref={hostRef} data-testid="typeset-host" className="bg-white" />
+      </div>
+      <TypesetQaPanel />
     </main>
   );
 }
