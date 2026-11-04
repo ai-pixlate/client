@@ -367,3 +367,92 @@ test('1920×1080 레이아웃이 Figma 743:6039 좌표와 맞다', async ({ page
   expect(save.x + save.width).toBe(divider.x + divider.width);
   expect(save.y + save.height).toBe(1027);
 });
+
+/** DOM 실측 가로 값 */
+async function horizontalGeometry(page: Page) {
+  return page.evaluate(() => {
+    const rect = (id: string) => document.querySelector(`[data-testid=${id}]`)!.getBoundingClientRect();
+    const scroller = document.querySelector('[data-testid=m2-form]')!;
+    const form = rect('m2-form');
+    const panel = rect('m2-logo-panel');
+    const ko = rect('m2-name-ko');
+    const en = rect('m2-name-en');
+    const divider = rect('m2-header-divider');
+    const card = document.querySelector('[data-testid=m2-logo-card]')!.getBoundingClientRect();
+    return {
+      contentLeft: divider.x,
+      contentWidth: divider.width,
+      formX: form.x,
+      formWidth: form.width,
+      formInnerWidth: scroller.clientWidth,
+      centerGap: panel.x - form.right,
+      panelX: panel.x,
+      panelWidth: panel.width,
+      cardX: card.x,
+      cardWidth: card.width,
+      cardHeight: card.height,
+      koWidth: ko.width,
+      koHeight: ko.height,
+      nameGap: en.x - ko.right,
+      enWidth: en.width,
+      overflowX: document.documentElement.scrollWidth - window.innerWidth,
+    };
+  });
+}
+
+test('1920×1080 가로 비율은 972 : 120 : 568 과 405 : 162 : 405 다', async ({ page }) => {
+  const g = await horizontalGeometry(page);
+  console.log(`[m2-width] 1920×1080 ${JSON.stringify(g)}`);
+  expect([g.contentLeft, g.contentWidth]).toEqual([119, 1680]);
+  expect([g.formX, g.formWidth, g.centerGap]).toEqual([119, 972, 120]);
+  expect([g.panelX, g.panelWidth]).toEqual([1211, 568]);
+  expect([g.cardX, g.cardWidth, g.cardHeight]).toEqual([1211, 568, 200]);
+  expect([g.koWidth, g.nameGap, g.enWidth]).toEqual([405, 162, 405]);
+  expect(g.overflowX).toBe(0);
+});
+
+for (const [width, height] of [[1728, 885], [1512, 860], [1440, 900]] as const) {
+  test(`${width}×${height} 가로 치수가 같은 배율로 줄고 넘치지 않는다`, async ({ page }) => {
+    await page.setViewportSize({ width, height });
+    const g = await horizontalGeometry(page);
+    const scale = (width - 240) / 1680;
+    console.log(`[m2-width] ${width}×${height} scale ${scale.toFixed(4)} ${JSON.stringify(g)}`);
+    expect(g.contentLeft).toBe(119);
+    expect(g.contentWidth).toBe(width - 240);
+    const close = (actual: number, expected: number, name: string) => expect(Math.abs(actual - expected), name).toBeLessThanOrEqual(1);
+    close(g.formWidth, 972 * scale, 'form');
+    close(g.centerGap, 120 * scale, 'gap');
+    close(g.panelWidth, 568 * scale, 'panel');
+    close(g.cardWidth, 568 * scale, 'card');
+    // 세로 스크롤막대가 있으면 폼 안쪽 폭을 기준으로 같은 405 : 162 : 405 다
+    const inner = g.formInnerWidth / 972;
+    close(g.koWidth, 405 * inner, 'nameKo');
+    close(g.nameGap, 162 * inner, 'nameGap');
+    close(g.enWidth, 405 * inner, 'nameEn');
+    expect(g.koWidth).toBeGreaterThanOrEqual(160);
+    // 높이는 줄이지 않는다
+    expect(g.koHeight).toBe(40);
+    expect(g.cardHeight).toBe(200);
+    expect(g.overflowX).toBe(0);
+    await expect(page.getByTestId('m2-overview')).toHaveCSS('height', '132px');
+    await expect(page.getByTestId('m2-target-customer')).toHaveCSS('height', '112px');
+    await expect(page.getByRole('heading', { name: '브랜드 정보' })).toHaveCSS('font-size', '32px');
+    await expect(page.getByTestId('m2-name-ko')).toHaveCSS('font-size', '14px');
+  });
+}
+
+test('좁은 화면 수정 모드에서도 비율을 유지하고 로고 카드가 찌그러지지 않는다', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.getByTestId('m2-edit').click();
+  const g = await horizontalGeometry(page);
+  expect(g.centerGap).toBeGreaterThan(80);
+  expect(g.nameGap).toBeGreaterThan(100);
+  expect(g.overflowX).toBe(0);
+  const image = (await page.getByTestId('m2-logo-image').first().boundingBox())!;
+  const card = (await logoCards(page).first().boundingBox())!;
+  expect(image.x).toBeGreaterThanOrEqual(card.x);
+  expect(image.x + image.width).toBeLessThanOrEqual(card.x + card.width);
+  await expect(page.getByTestId('m2-logo-image').first()).toHaveCSS('object-fit', 'contain');
+  const uploader = (await page.getByTestId('m2-logo-uploader').boundingBox())!;
+  expect(uploader.x + uploader.width).toBeLessThanOrEqual(card.x + card.width + 0.5);
+});
