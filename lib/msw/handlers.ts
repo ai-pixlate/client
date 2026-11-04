@@ -13,7 +13,6 @@ import {
   mockN6Validation,
 } from '@/lib/mock-api/fixtures';
 import { mockN5Job, mockN5Blocks, mockN5PreviewSections, buildMockN5Preview } from '@/lib/mock-api/n5-fixtures';
-import { MOCK_LOGIN_REJECTED_PASSWORD, mockLoginRejected, mockLoginResponse } from '@/lib/mock-api/auth-fixtures';
 import { mockLibraryCards } from '@/lib/mock-api/library-fixtures';
 import { mockMasterCountries, mockMasterLanguages } from '@/lib/mock-api/master-fixtures';
 import type { ApiJob, ApiJobAsyncTaskItem, ApiTextBlock } from '@/lib/api/n5-schema';
@@ -710,13 +709,6 @@ function sortedDraftImages(draft: MockN1Draft): ApiSourceImage[] {
 // ─────────────────────────────────────────────
 
 export const handlers = [
-  // G1 로그인 — Mock 전용 성공·실패. 실제 인증 검증이 아니다
-  http.post('/auth/login', async ({ request }) => {
-    const body = (await request.json()) as { password?: string };
-    if (body.password === MOCK_LOGIN_REJECTED_PASSWORD) return HttpResponse.json(mockLoginRejected, { status: 401 });
-    return HttpResponse.json(mockLoginResponse);
-  }),
-
 
   // ── health (기존 유지). N1→N6 화면 흐름과 무관한 MSW 자체 점검용
   // 엔드포인트라 오늘 /api 경로 정리 대상이 아니다 — 실제 OpenAPI에도 대응

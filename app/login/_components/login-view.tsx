@@ -5,19 +5,7 @@
 import { type FormEvent, useRef, useState } from 'react';
 
 import { CompactCheckbox } from '@/app/_components/library/library-controls';
-import { type LoginFailureKind, loginWithEmail } from '@/lib/api/auth';
 import { type LoginFormErrors, validateLoginForm } from '@/lib/auth/login-form';
-
-const FAILURE_MESSAGE: Record<LoginFailureKind, string> = {
-  'invalid-credentials': '이메일 또는 비밀번호가 올바르지 않아요.',
-  'invalid-request': '입력한 내용을 다시 확인해주세요.',
-  unavailable: '지금은 로그인할 수 없어요. 잠시 후 다시 시도해주세요.',
-};
-
-/** 로그인 후 이동 경로와 세션 연결이 확정되지 않아 화면을 옮기지 않고 결과만 알린다 */
-const SUCCESS_MESSAGE = '로그인 정보를 확인했어요. 로그인 후 이동은 아직 연결되지 않았어요.';
-
-type SubmitState = { status: 'idle' } | { status: 'pending' } | { status: 'success' } | { status: 'failed'; message: string };
 
 function BrandLayer() {
   return (
@@ -60,7 +48,6 @@ function TextField({
   autoComplete,
   error,
   inputRef,
-  readOnly,
   onChange,
 }: {
   id: string;
@@ -71,7 +58,6 @@ function TextField({
   autoComplete: string;
   error?: string;
   inputRef: React.RefObject<HTMLInputElement | null>;
-  readOnly: boolean;
   onChange: (value: string) => void;
 }) {
   const errorId = `${id}-error`;
@@ -89,7 +75,6 @@ function TextField({
         value={value}
         placeholder={placeholder}
         autoComplete={autoComplete}
-        readOnly={readOnly}
         aria-invalid={error ? true : undefined}
         aria-describedby={error ? errorId : undefined}
         onChange={(event) => onChange(event.currentTarget.value)}
@@ -106,7 +91,7 @@ function TextField({
   );
 }
 
-/** 라우트·계약이 아직 없는 동작. 가짜 이동이나 가짜 로그인을 만들지 않으려고 눌러도 아무 일도 일어나지 않게 둔다 */
+/** 라우트·서버 기능이 아직 없는 동작. 가짜 이동이나 가짜 로그인을 만들지 않으려고 눌러도 아무 일도 일어나지 않게 둔다 */
 const INERT_BUTTON = { type: 'button', 'aria-disabled': true } as const;
 const FOCUS_RING = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ff6a38]';
 
@@ -135,35 +120,29 @@ function SocialButtons() {
   );
 }
 
+/**
+ * G1 로그인(Figma 835:6511) — 화면만 구현한다. 로그인 API 가 실제 서버에 없어 어떤 요청도 보내지 않는다.
+ * 제출은 입력 검증만 하고, 값이 유효해도 이동·성공 표시·저장을 하지 않는다. 실제 인증은 API 가 나오면 별도 작업으로 연결한다.
+ */
 export function LoginView() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   // 자동 로그인의 세션 유지 의미가 요구사항에 없어 화면 상태로만 둔다. 저장소에 쓰거나 서버로 보내지 않는다
   const [remember, setRemember] = useState(false);
   const [errors, setErrors] = useState<LoginFormErrors>({});
-  const [submit, setSubmit] = useState<SubmitState>({ status: 'idle' });
   const emailRef = useRef<HTMLInputElement>(null);
   const passwordRef = useRef<HTMLInputElement>(null);
-  const pending = submit.status === 'pending';
 
-  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (pending) return;
     const nextErrors = validateLoginForm({ email, password });
     setErrors(nextErrors);
-    if (nextErrors.email || nextErrors.password) {
-      setSubmit({ status: 'idle' });
-      (nextErrors.email ? emailRef : passwordRef).current?.focus();
-      return;
-    }
-    setSubmit({ status: 'pending' });
-    const result = await loginWithEmail({ email: email.trim(), password });
-    setSubmit(result.ok ? { status: 'success' } : { status: 'failed', message: FAILURE_MESSAGE[result.kind] });
+    if (nextErrors.email) emailRef.current?.focus();
+    else if (nextErrors.password) passwordRef.current?.focus();
   };
 
-  const clearFeedback = (field: keyof LoginFormErrors) => {
+  const clearError = (field: keyof LoginFormErrors) => {
     setErrors((current) => (current[field] ? { ...current, [field]: undefined } : current));
-    setSubmit((current) => (current.status === 'pending' ? current : { status: 'idle' }));
   };
 
   return (
@@ -179,7 +158,6 @@ export function LoginView() {
           data-testid="g1-form"
           noValidate
           onSubmit={handleSubmit}
-          aria-busy={pending}
           className="mb-6 mt-[min(115px,10.65vh)] flex w-full max-w-[432px] flex-col gap-[60px]"
         >
           <div className="flex flex-col gap-3">
@@ -197,10 +175,9 @@ export function LoginView() {
               autoComplete="email"
               error={errors.email}
               inputRef={emailRef}
-              readOnly={pending}
               onChange={(value) => {
                 setEmail(value);
-                clearFeedback('email');
+                clearError('email');
               }}
             />
             <TextField
@@ -212,10 +189,9 @@ export function LoginView() {
               autoComplete="current-password"
               error={errors.password}
               inputRef={passwordRef}
-              readOnly={pending}
               onChange={(value) => {
                 setPassword(value);
-                clearFeedback('password');
+                clearError('password');
               }}
             />
             <div data-testid="g1-remember" className="flex h-5 items-center gap-2 self-start">
@@ -224,28 +200,15 @@ export function LoginView() {
                 자동 로그인
               </label>
             </div>
-            {/* 내용이 없을 때는 자리를 차지하지 않아 Figma 기본 상태 위치가 유지된다 */}
-            {submit.status === 'failed' && (
-              <p role="alert" data-testid="g1-form-error" className="text-[12px] leading-[14px] tracking-[-0.48px] text-[#e5484d]">
-                {submit.message}
-              </p>
-            )}
-            {submit.status === 'success' && (
-              <p role="status" data-testid="g1-form-success" className="text-[12px] leading-[14px] tracking-[-0.48px] text-[#707070]">
-                {SUCCESS_MESSAGE}
-              </p>
-            )}
           </div>
 
           <div className="flex flex-col items-center gap-8">
-            {/* Figma Button LG Primary. Loading variant(57:1427)은 loader 20 + gap 8 이며 높이는 45 로 고정해 눌렀을 때 아래가 밀리지 않게 한다 */}
+            {/* Figma Button LG Primary */}
             <button
               type="submit"
               data-testid="g1-submit"
-              aria-disabled={pending}
-              className={`box-border flex h-[45px] w-full items-center justify-center gap-2 rounded-[6px] bg-[#171717] text-[14px] font-medium leading-[17px] tracking-[-0.42px] text-white ${FOCUS_RING} ${pending ? 'cursor-default' : 'cursor-pointer'}`}
+              className={`box-border flex h-[45px] w-full cursor-pointer items-center justify-center rounded-[6px] bg-[#171717] text-[14px] font-medium leading-[17px] tracking-[-0.42px] text-white ${FOCUS_RING}`}
             >
-              {pending && <img data-testid="g1-submit-loader" alt="" src="/auth/button-loader-20.svg" className="block size-5 max-w-none motion-safe:animate-spin" />}
               로그인
             </button>
             <div data-testid="g1-links" className="flex items-center gap-[18px]">
