@@ -18,7 +18,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('1920×1080 — 핵심 container가 Figma 좌표에 있다', async ({ page }) => {
-  const exit = (await page.getByRole('link', { name: '보관함으로 나가기' }).boundingBox())!;
+  const exit = (await page.getByRole('button', { name: '작업 취소' }).boundingBox())!;
   expect([exit.x, exit.y, exit.width, exit.height]).toEqual([40, 40, 40, 40]);
 
   const stepNav = (await page.getByText('정보 입력', { exact: true }).boundingBox())!;

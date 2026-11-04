@@ -356,8 +356,8 @@ test.describe('N1 실제 원본 업로드 — draft-first', () => {
 const countOf = (calls: ApiCall[], method: string, path: string) =>
   calls.filter((c) => c.method === method && c.path === path).length;
 const nextButton = (page: Page) => page.getByRole('button', { name: '다음', exact: true });
-const exitButton = (page: Page) => page.getByRole('button', { name: '보관함으로 나가기' });
-const exitDialog = (page: Page) => page.getByTestId('n1-exit-dialog');
+const exitButton = (page: Page) => page.getByTestId('s0-exit');
+const exitDialog = (page: Page) => page.getByTestId('s0-exit-dialog');
 
 /** 화면의 모든 입력 상호작용을 거쳐도 [다음] 전에는 쓰기 요청이 하나도 없다 */
 async function expectNoServerWrites(calls: ApiCall[]) {
@@ -530,6 +530,28 @@ test.describe('N1 ✕ — 작업 유무에 따른 이탈', () => {
     return failName;
   }
 
+  test('POST /jobs 응답 전에는 ✕를 막아 나간 뒤 작업이 남지 않게 한다', async ({ page }) => {
+    await page.addInitScript(() => {
+      const w = window as unknown as { __releaseCreate: () => void };
+      const gate = new Promise<void>((resolve) => {
+        w.__releaseCreate = resolve;
+      });
+      const original = window.fetch.bind(window);
+      window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (init?.method === 'POST' && new URL(url, location.href).pathname === '/jobs') await gate;
+        return original(input, init);
+      };
+    });
+    await page.goto(`/jobs/new?brandId=${MOCK_BRAND_ID}`);
+    await addFiles(page, [png('a.png', 1)]);
+    await fillRequired(page);
+    await expect(exitButton(page)).toBeEnabled();
+    await nextButton(page).click();
+    await expect(exitButton(page)).toBeDisabled();
+    await page.evaluate(() => (window as unknown as { __releaseCreate: () => void }).__releaseCreate());
+  });
+
   test('작업이 생긴 뒤에는 작업 취소 확인 → DELETE /jobs/{jobId} 성공 후 보관함으로 간다', async ({ page }) => {
     const calls = await recordApiCalls(page);
     await page.goto(`/jobs/new?brandId=${MOCK_BRAND_ID}`);
@@ -539,7 +561,11 @@ test.describe('N1 ✕ — 작업 유무에 따른 이탈', () => {
     await exitButton(page).click();
     const dialog = exitDialog(page);
     await expect(dialog).toHaveAccessibleName('작업을 취소할까요?');
-    await expect(dialog).toContainText('이미 만든 작업과 올린 이미지가 삭제되고 보관함으로 이동합니다.');
+    await expect(exitButton(page)).toHaveAccessibleName('작업 취소');
+    for (const target of ['원본 이미지', '섹션 분해 결과', '인페인팅 결과', '번역문', '판정 근거', '수정 전후 문구', '되돌릴 수 없습니다']) {
+      await expect(dialog).toContainText(target);
+    }
+    await expect(dialog).toContainText('취소 후 보관함으로 이동합니다.');
     await expect(dialog).not.toContainText('저장되지 않습니다');
     await dialog.getByRole('button', { name: '작업 취소' }).click();
 
@@ -576,7 +602,7 @@ test.describe('N1 ✕ — 작업 유무에 따른 이탈', () => {
     expect(calls.filter((c) => c.method === 'DELETE').map((c) => c.status)).toEqual([500]);
 
     // 닫고 다시 열어도 작업이 있는 상태 그대로다(실패 문구는 지워진다)
-    await dialog.getByRole('button', { name: '계속 작성' }).click();
+    await dialog.getByRole('button', { name: '계속하기' }).click();
     await expect(page.getByRole('button', { name: `${failName} 다시 시도` })).toBeVisible();
     await exitButton(page).click();
     await expect(dialog).toHaveAccessibleName('작업을 취소할까요?');
