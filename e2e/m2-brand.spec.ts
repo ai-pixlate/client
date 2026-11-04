@@ -56,7 +56,7 @@ test('기본 화면은 저장된 Mock을 읽기 전용으로 보여 준다', asy
     await expect.poll(() => image.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
   }
   await expect(page.getByTestId('m2-logo-uploader')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: /삭제/ })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /로고 삭제$/ })).toHaveCount(0);
   await expect(page.getByTestId('m2-save')).toHaveCount(0);
   await expect(page.getByTestId('m2-cancel')).toHaveCount(0);
   await expect(page.getByTestId('m2-apply-notice')).toHaveText(
@@ -65,14 +65,11 @@ test('기본 화면은 저장된 Mock을 읽기 전용으로 보여 준다', asy
 
   // 범위 밖이거나 PRD와 다른 Figma 항목
   await expect(page.getByText('부가 정보')).toHaveCount(0);
-  await expect(page.getByText('새 브랜드 추가')).toHaveCount(0);
-  await expect(page.getByText('브랜드 삭제')).toHaveCount(0);
-  await expect(page.getByText('로고 변경')).toHaveCount(0);
   await expect(page.getByText(/AI|벡터/)).toHaveCount(0);
   await expect(page.getByRole('checkbox')).toHaveCount(0);
 });
 
-test('정보 수정을 누르면 입력과 로고 조작이 열리고 저장은 변경 전까지 비활성이다', async ({ page }) => {
+test('정보수정을 누르면 입력과 로고 조작이 열리고 저장은 변경 전까지 비활성이다', async ({ page }) => {
   await enterEdit(page);
   for (const field of ['m2-name-ko', 'm2-name-en', 'm2-overview', 'm2-target-customer']) {
     await expect(page.getByTestId(field)).toBeEditable();
@@ -80,7 +77,7 @@ test('정보 수정을 누르면 입력과 로고 조작이 열리고 저장은 
   await expect(page.getByTestId('m2-name-ko')).toBeFocused();
   await expect(page.getByTestId('m2-logo-uploader')).toBeVisible();
   await expect(page.getByRole('button', { name: '워드마크 로고 삭제' })).toBeVisible();
-  await expect(page.getByTestId('m2-edit')).toHaveCount(0);
+  await expect(page.getByTestId('m2-edit')).toBeHidden();
   await expect(page.getByTestId('m2-save')).toBeDisabled();
 });
 
@@ -455,4 +452,125 @@ test('좁은 화면 수정 모드에서도 비율을 유지하고 로고 카드�
   await expect(page.getByTestId('m2-logo-image').first()).toHaveCSS('object-fit', 'contain');
   const uploader = (await page.getByTestId('m2-logo-uploader').boundingBox())!;
   expect(uploader.x + uploader.width).toBeLessThanOrEqual(card.x + card.width + 0.5);
+});
+
+const UNCONNECTED_BUTTONS = [
+  { testId: 'm2-new-brand', text: '새 브랜드 추가', border: 'rgb(234, 234, 234)', color: 'rgb(23, 23, 23)' },
+  { testId: 'm2-delete-brand', text: '브랜드 삭제', border: 'rgb(229, 72, 77)', color: 'rgb(229, 72, 77)' },
+  { testId: 'm2-logo-change', text: '로고 변경', border: 'rgb(234, 234, 234)', color: 'rgb(23, 23, 23)' },
+  { testId: 'm2-logo-delete-action', text: '삭제', border: 'rgb(229, 72, 77)', color: 'rgb(229, 72, 77)' },
+];
+
+test('왼쪽 폼은 스크롤막대가 보이지 않지만 휠과 키보드로 스크롤된다', async ({ page }) => {
+  await page.setViewportSize({ width: 1728, height: 700 });
+  const form = page.getByTestId('m2-form');
+  const metrics = () =>
+    form.evaluate((el) => ({
+      scrollTop: el.scrollTop,
+      scrollable: el.scrollHeight > el.clientHeight,
+      bar: el.getBoundingClientRect().width - el.clientWidth,
+      overflowY: getComputedStyle(el).overflowY,
+      scrollbarWidth: getComputedStyle(el).scrollbarWidth,
+      webkitBar: getComputedStyle(el, '::-webkit-scrollbar').display,
+    }));
+  const before = await metrics();
+  expect(before).toMatchObject({ scrollTop: 0, scrollable: true, overflowY: 'auto', scrollbarWidth: 'none', webkitBar: 'none' });
+  expect(before.bar).toBeLessThan(1);
+
+  await form.hover();
+  await page.mouse.wheel(0, 120);
+  await expect.poll(async () => (await metrics()).scrollTop).toBeGreaterThan(0);
+
+  await form.evaluate((el) => el.scrollTo(0, 0));
+  await page.getByTestId('m2-target-customer').focus();
+  await expect.poll(async () => (await metrics()).scrollTop).toBeGreaterThan(0);
+
+  // 페이지 전체가 아니라 폼만 움직인다
+  expect(await page.evaluate(() => window.scrollY)).toBe(0);
+});
+
+test('미연결 버튼은 enabled 모습으로 Figma 위치·크기에 있다', async ({ page }) => {
+  for (const { testId, text, border, color } of UNCONNECTED_BUTTONS) {
+    const button = page.getByTestId(testId);
+    await expect(button).toHaveText(text);
+    await expect(button).toBeVisible();
+    await expect(button).toHaveCSS('opacity', '1');
+    await expect(button).toHaveCSS('background-color', 'rgb(255, 255, 255)');
+    await expect(button).toHaveCSS('border-color', border);
+    await expect(button).toHaveCSS('color', color);
+    await expect(button).toHaveCSS('border-radius', '4px');
+    await expect(button).toHaveCSS('font-size', '12px');
+    expect(await button.evaluate((el: HTMLButtonElement) => [el.disabled, el.type, getComputedStyle(el).cursor])).toEqual([false, 'button', 'default']);
+  }
+  const box = async (id: string) => (await page.getByTestId(id).boundingBox())!;
+  const newBrand = await box('m2-new-brand');
+  const edit = await box('m2-edit');
+  const deleteBrand = await box('m2-delete-brand');
+  const change = await box('m2-logo-change');
+  const remove = await box('m2-logo-delete-action');
+  console.log(`[m2-buttons] ${JSON.stringify({ newBrand, edit, deleteBrand, change, remove })}`);
+  expect([newBrand.width, newBrand.height]).toEqual([120, 36]);
+  expect(edit.x + edit.width).toBe(1799);
+  expect(edit.x - (newBrand.x + newBrand.width)).toBe(14);
+  expect(edit.height).toBe(30);
+  expect(Math.abs(edit.width - 81)).toBeLessThanOrEqual(1);
+  await expect(page.getByTestId('m2-edit')).toHaveText('정보수정');
+  await expect(page.getByTestId('m2-edit')).toHaveCSS('border-top-width', '0px');
+  expect([deleteBrand.x, deleteBrand.y + deleteBrand.height, deleteBrand.height]).toEqual([119, 1025, 30]);
+  expect(Math.abs(deleteBrand.width - 94)).toBeLessThanOrEqual(1);
+  expect([change.height, remove.height]).toEqual([24, 24]);
+  expect(Math.abs(change.width - 68)).toBeLessThanOrEqual(1);
+  expect(Math.abs(remove.width - 45)).toBeLessThanOrEqual(1);
+  expect(remove.x - (change.x + change.width)).toBe(8);
+  expect(remove.x + remove.width).toBe(1779);
+});
+
+for (const mode of ['view', 'edit-dirty'] as const) {
+  test(`${mode} 에서 미연결 버튼을 눌러도 요청·이동·상태 변화가 없다`, async ({ page }) => {
+    if (mode === 'edit-dirty') {
+      await enterEdit(page);
+      await page.getByTestId('m2-name-ko').fill('변경한 이름');
+    }
+    const url = page.url();
+    const logoCount = await logoCards(page).count();
+    const nameKo = await page.getByTestId('m2-name-ko').inputValue();
+    const requests: string[] = [];
+    page.on('request', (r) => {
+      if (!/\/_next\/|\.(png|svg|jpg)$/.test(r.url())) requests.push(`${r.method()} ${r.url()}`);
+    });
+
+    for (const { testId } of UNCONNECTED_BUTTONS) {
+      const button = page.getByTestId(testId);
+      await expect(button).toHaveAttribute('aria-disabled', 'true');
+      // aria-disabled 는 Playwright 가 비활성으로 봐서 force 로 실제 클릭을 보낸다
+      await button.click({ force: true });
+    }
+    await page.waitForTimeout(200);
+
+    expect(page.url()).toBe(url);
+    expect(requests).toEqual([]);
+    expect(brandApiRequests).toEqual([]);
+    await expect(logoCards(page)).toHaveCount(logoCount);
+    await expect(page.getByTestId('m2-name-ko')).toHaveValue(nameKo);
+    await expect(status(page)).toHaveAttribute('data-m2-status', mode);
+    await expect(page.getByTestId('m2-unsaved-dialog')).toHaveCount(0);
+    await expect(status(page).getByRole('alert')).toHaveCount(0);
+  });
+}
+
+test('미연결 버튼도 키보드 포커스가 보인다', async ({ page }) => {
+  const button = page.getByTestId('m2-new-brand');
+  await page.getByTestId('m2-back').focus();
+  await page.keyboard.press('Tab');
+  await expect(button).toBeFocused();
+  await expect(button).toHaveCSS('outline-style', 'solid');
+});
+
+test('수정 모드로 바꿔도 헤더 버튼 위치가 그대로이고 숨은 버튼에는 포커스가 가지 않는다', async ({ page }) => {
+  const before = (await page.getByTestId('m2-new-brand').boundingBox())!;
+  await enterEdit(page);
+  expect(await page.getByTestId('m2-new-brand').boundingBox()).toEqual(before);
+  await page.getByTestId('m2-new-brand').focus();
+  await page.keyboard.press('Tab');
+  await expect(page.getByTestId('m2-edit')).not.toBeFocused();
 });
