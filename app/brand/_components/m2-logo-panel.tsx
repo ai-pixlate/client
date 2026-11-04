@@ -36,7 +36,7 @@ export function M2LogoPanel({
   };
 
   return (
-    <section aria-labelledby="m2-logo-title" className="mr-[20px] flex w-[568px] shrink-0 flex-col gap-3">
+    <section aria-labelledby="m2-logo-title" data-testid="m2-logo-panel" className="col-start-3 flex min-h-0 min-w-0 flex-col gap-3">
       <div className="flex shrink-0 flex-col gap-1 leading-[normal]">
         <h2 id="m2-logo-title" className="text-[18px] leading-[21px] font-medium tracking-[-0.54px] text-[#171717]">
           브랜드 로고

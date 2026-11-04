@@ -28,6 +28,7 @@ import { useUnsavedNavigationGuard, type BlockedNavigation } from './use-unsaved
 //   Divider            y186
 //   왼쪽 폼(1102:12496) x119 y219, 972×700, 넘칠 때만 세로 스크롤
 //   오른쪽 로고         y219, w568, 폼과 간격 120(1211~1779)
+//   가로 비율           1680 = 폼 972 + 간격 120 + 로고 568 + 오른쪽 안쪽 20. 좁은 화면에서는 모두 같은 배율로 줄어든다(세로·글자는 그대로)
 //   하단(753:6362)     w688, 오른쪽 끝 1799(Divider와 같은 선), 아래 끝 1027
 //   Figma CSS의 right·bottom은 프레임 테두리 1px 안쪽 기준이라, 화면 기준으로는 각각 2px씩 더 안쪽이다.
 //
@@ -196,14 +197,19 @@ export default function M2BrandView() {
 
         <div data-testid="m2-header-divider" className="mt-10 h-px shrink-0 bg-[#eaeaea]" />
 
-        <div className="mt-8 flex max-h-[700px] min-h-0 flex-1 justify-between gap-12">
-          <div className="min-w-0 max-w-[972px] flex-1">
+        {/* 열 폭을 Figma 값 비율로 직접 정한다. 1680 폭에서는 1fr 이 정확히 1px 이다 */}
+        <div
+          data-testid="m2-columns"
+          className="mt-8 grid max-h-[700px] min-h-0 flex-1 grid-cols-[minmax(0,972fr)_minmax(0,120fr)_minmax(0,568fr)_minmax(0,20fr)] grid-rows-[minmax(0,1fr)]"
+        >
+          <div className="col-start-1 min-w-0">
             <div data-testid="m2-form" className="flex h-full flex-col gap-8 overflow-x-hidden overflow-y-auto">
               <section aria-labelledby="m2-name-title" className="flex shrink-0 flex-col gap-3">
                 <h2 id="m2-name-title" className="flex gap-1 text-[18px] leading-[21px] font-medium tracking-[-0.54px] text-[#171717]">
                   브랜드명 <span className="text-[#ff6a38]" aria-hidden="true">*</span>
                 </h2>
-                <div className="flex items-start justify-between gap-4">
+                {/* 405 : 162 : 405. 입력창은 Text Input 최소 폭 160 아래로 줄지 않는다 */}
+                <div className="grid grid-cols-[minmax(160px,405fr)_minmax(16px,162fr)_minmax(160px,405fr)] items-start">
                   <NameField
                     id="m2-name-ko"
                     label="한글명"
@@ -214,6 +220,7 @@ export default function M2BrandView() {
                     onChange={(next) => updateField('nameKo', next)}
                   />
                   <NameField
+                    className="col-start-3"
                     id="m2-name-en"
                     label="영문명"
                     value={value.nameEn}
@@ -291,6 +298,7 @@ export default function M2BrandView() {
 }
 
 function NameField({
+  className = '',
   id,
   label,
   value,
@@ -299,6 +307,7 @@ function NameField({
   onChange,
   inputRef,
 }: {
+  className?: string;
   id: string;
   label: string;
   value: string;
@@ -309,7 +318,7 @@ function NameField({
 }) {
   const errorId = `${id}-error`;
   return (
-    <div className="flex min-w-0 max-w-[405px] flex-1 flex-col gap-2">
+    <div className={`flex min-w-0 flex-col gap-2 ${className}`}>
       <label htmlFor={id} className="text-[14px] leading-[17px] tracking-[-0.14px] text-[#707070]">
         {label}
       </label>
