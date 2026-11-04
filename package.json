@@ -23,6 +23,7 @@
     "verify:library-view": "node --experimental-strip-types scripts/verify-library-view.mjs",
     "verify:msw-flag": "node --experimental-strip-types scripts/verify-msw-mocking-flag.mjs",
     "verify:displayed-progress": "node --experimental-strip-types scripts/verify-displayed-progress.mjs",
+    "verify:auth-login": "node --experimental-strip-types scripts/verify-auth-login.mjs",
     "typecheck": "tsc --noEmit",
     "test:e2e": "playwright test"
   },
