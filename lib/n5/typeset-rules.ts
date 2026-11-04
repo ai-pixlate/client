@@ -111,6 +111,9 @@ export interface OverflowSides {
   any: boolean;
 }
 
+/** 넘친 방향이 하나도 없는 값 — 그린 글자가 없거나 최종 출력에 없는 블록의 평가에 쓴다 */
+export const NO_OVERFLOW_SIDES: Readonly<OverflowSides> = { left: false, right: false, top: false, bottom: false, any: false };
+
 function overflowSides(left: boolean, right: boolean, top: boolean, bottom: boolean): OverflowSides {
   return { left, right, top, bottom, any: left || right || top || bottom };
 }
@@ -128,8 +131,8 @@ export function inkOverflowSides(ink: InkBounds, box: BoundingBox): OverflowSide
 /**
  * 최종 이미지 경계 이탈 감지 — 블록 박스 overflow 와 별개다.
  * ink 는 섹션 로컬 원본 px, sectionOffset 은 그 섹션 원점이 최종 이미지에서 놓이는 위치(원본 px)다.
- * 섹션 배치값을 어떻게 구하는지(displayTop 등)는 호출자가 정한다.
- * 감지만 한다 — N5 확정·N6 저장·다운로드 차단 정책(PM 미승인)과 연결하지 않는다.
+ * 최종 출력 기준 평가는 typeset-final-output.ts 의 evaluateFinalImageBoundary 로 호출한다(/preview 의 displayTop 을 넣지 않는다).
+ * 감지만 한다 — N5 확정 차단·N6 오류는 서버 계약이 온 뒤 별도 단계에서 연결한다.
  */
 export function imageBoundaryViolation(
   ink: InkBounds,
@@ -148,7 +151,7 @@ export function imageBoundaryViolation(
   };
 }
 
-/** 조판 텍스트 CSS 계약(React style 객체 형태). 화면에 연결하는 곳은 아직 없다 */
+/** 조판 텍스트 CSS 계약(React style 객체 형태). 화면에는 TypesetBlock·측정기가 typesetBlockStyle 을 거쳐 쓴다 */
 export interface TypesetTextStyle {
   fontFamily: string;
   fontSize: string;
@@ -179,5 +182,63 @@ export function typesetTextStyle(
     textAlign: TYPESET_COMMON.textAlignFallback,
     whiteSpace: TYPESET_COMMON.whiteSpace,
     fontKerning: TYPESET_COMMON.fontKerning,
+  };
+}
+
+/** 조판 블록 한 개를 그리는 데 필요한 입력 — API DTO 가 아니다 */
+export interface TypesetBlockStyleInput {
+  role: TypesetRole;
+  sourceImageWidth: number;
+  userFontScale?: number;
+  /** 섹션 로컬 원본 px. 조정 박스/원본 선택은 호출자가 resolveActiveBBox 로 한다 */
+  bbox: BoundingBox;
+  /** 없으면 TYPESET_COMMON.textAlignFallback */
+  textAlign?: 'left' | 'center' | 'right';
+}
+
+/**
+ * 조판 블록의 완성 CSS — TypesetBlock(표시)과 측정기(측정)가 같은 값을 쓰게 하는 단일 정본이다.
+ * 앱 전역 CSS 가 값을 바꾸지 못하도록 줄바꿈·글꼴에 영향을 주는 속성을 모두 명시한다.
+ * 모든 값이 문자열이라 React style 과 element.style 어디에 넣어도 같은 결과다.
+ */
+export function typesetBlockStyle(
+  input: TypesetBlockStyleInput,
+  fontFamily: string = TYPESET_COMMON.fontFamily,
+): Record<string, string> | null {
+  const style = typesetTextStyle(input.role, input.sourceImageWidth, input.userFontScale);
+  if (!style) return null;
+  const { bbox } = input;
+  return {
+    position: 'absolute',
+    left: `${bbox.x}px`,
+    top: `${bbox.y}px`,
+    width: `${bbox.width}px`,
+    height: `${bbox.height}px`,
+    boxSizing: 'border-box',
+    margin: '0px',
+    padding: '0px',
+    border: '0px',
+    overflow: 'visible',
+    fontFamily: `"${fontFamily}"`,
+    fontSize: style.fontSize,
+    fontWeight: String(style.fontWeight),
+    fontStyle: 'normal',
+    fontKerning: style.fontKerning,
+    fontFeatureSettings: 'normal',
+    fontVariant: 'normal',
+    fontSynthesis: 'none',
+    letterSpacing: style.letterSpacing,
+    wordSpacing: 'normal',
+    lineHeight: String(style.lineHeight),
+    color: style.color,
+    textAlign: input.textAlign ?? style.textAlign,
+    whiteSpace: style.whiteSpace,
+    wordBreak: 'normal',
+    overflowWrap: 'normal',
+    lineBreak: 'auto',
+    hyphens: 'manual',
+    textTransform: 'none',
+    textIndent: '0px',
+    direction: 'ltr',
   };
 }

@@ -24,10 +24,11 @@ import {
   type InkBounds,
   type OverflowSides,
   type TypesetRole,
+  NO_OVERFLOW_SIDES,
   TYPESET_COMMON,
   inkOverflowSides,
   isTypesetRole,
-  typesetTextStyle,
+  typesetBlockStyle,
 } from './typeset-rules.ts';
 
 /** FE 내부 측정 입력 — API DTO 가 아니다 */
@@ -112,8 +113,6 @@ export type TypesetFontReadiness =
 
 /** 조판에 쓰는 weight — ROLE_STYLE_DEFAULTS 의 400/600 */
 export const TYPESET_FONT_WEIGHTS = [400, 600] as const;
-
-const NO_OVERFLOW: OverflowSides = { left: false, right: false, top: false, bottom: false, any: false };
 
 function union(items: LocalRect[]): LocalRect | null {
   if (items.length === 0) return null;
@@ -273,8 +272,8 @@ export async function openTypesetMeasurer(options: OpenTypesetMeasurerOptions = 
     if (!isTypesetRole(input.role) || ![bbox.x, bbox.y, bbox.width, bbox.height].every(Number.isFinite)) {
       return { ok: false, reason: 'invalid-input', detail: `role=${String(input.role)} bbox=${JSON.stringify(bbox)}` };
     }
-    const style = typesetTextStyle(input.role, input.sourceImageWidth, input.userFontScale);
-    if (!style) return { ok: false, reason: 'invalid-input', detail: `sourceImageWidth=${input.sourceImageWidth}` };
+    const blockStyle = typesetBlockStyle(input, family);
+    if (!blockStyle) return { ok: false, reason: 'invalid-input', detail: `sourceImageWidth=${input.sourceImageWidth}` };
 
     const hostRect = host.getBoundingClientRect();
     const scale = hostRect.width / HOST_PROBE_WIDTH;
@@ -288,41 +287,8 @@ export async function openTypesetMeasurer(options: OpenTypesetMeasurerOptions = 
       bottom: r.bottom - hostRect.top,
     });
 
-    // 조판 CSS — 앱 전역 CSS 가 값을 바꾸지 못하도록 줄바꿈·글꼴에 영향을 주는 속성을 모두 명시한다
     block.style.cssText = '';
-    Object.assign(block.style, {
-      position: 'absolute',
-      left: `${bbox.x}px`,
-      top: `${bbox.y}px`,
-      width: `${bbox.width}px`,
-      height: `${bbox.height}px`,
-      boxSizing: 'border-box',
-      margin: '0px',
-      padding: '0px',
-      border: '0px',
-      overflow: 'visible',
-      fontFamily: familyCss,
-      fontSize: style.fontSize,
-      fontWeight: String(style.fontWeight),
-      fontStyle: 'normal',
-      fontKerning: style.fontKerning,
-      fontFeatureSettings: 'normal',
-      fontVariant: 'normal',
-      fontSynthesis: 'none',
-      letterSpacing: style.letterSpacing,
-      wordSpacing: 'normal',
-      lineHeight: String(style.lineHeight),
-      color: style.color,
-      textAlign: input.textAlign ?? style.textAlign,
-      whiteSpace: style.whiteSpace,
-      wordBreak: 'normal',
-      overflowWrap: 'normal',
-      lineBreak: 'auto',
-      hyphens: 'manual',
-      textTransform: 'none',
-      textIndent: '0px',
-      direction: 'ltr',
-    });
+    Object.assign(block.style, blockStyle);
     block.textContent = input.text;
 
     const computed = getComputedStyle(block);
@@ -470,7 +436,7 @@ export async function openTypesetMeasurer(options: OpenTypesetMeasurerOptions = 
       domBounds: union(measured.map((l) => l.rect)),
       lines: measured,
       ink,
-      overflow: ink ? inkOverflowSides(ink, bbox) : NO_OVERFLOW,
+      overflow: ink ? inkOverflowSides(ink, bbox) : NO_OVERFLOW_SIDES,
     };
   };
 

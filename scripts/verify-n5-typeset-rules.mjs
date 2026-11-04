@@ -20,6 +20,7 @@ import {
   resolveActiveBBox,
   resolveFinalFontPx,
   resolveRoleBaseFontPx,
+  typesetBlockStyle,
   typesetTextStyle,
 } from '../lib/n5/typeset-rules.ts';
 import { N5_FONT_SCALE_STEP, effectiveFontSize, nextUserScale } from '../lib/n5/layout-edit.ts';
@@ -150,6 +151,18 @@ for (const [side, ink, sideOffset] of [
 }
 check('블록 박스 overflow와 이미지 이탈은 별개(박스는 넘쳐도 이미지 안)',
   isInkOverflow({ ...edge, right: edge.right + 1 }, box) && !imageBoundaryViolation({ ...edge, right: edge.right + 1 }, { x: 0, y: 0 }, image).any);
+
+console.log('\n[9] 블록 CSS — 표시와 측정이 함께 쓰는 정본');
+const blockBox = { x: 10.125, y: 20.375, width: 100.5, height: 40.0625 };
+const blockStyle = typesetBlockStyle({ role: 'body', sourceImageWidth: 750, userFontScale: 1.5, bbox: blockBox });
+check('박스 소수를 그대로 쓴다', blockStyle.left === '10.125px' && blockStyle.top === '20.375px' && blockStyle.width === '100.5px' && blockStyle.height === '40.0625px');
+check('글자 크기는 역할 × 폭 배율 × 사용자 배율(32 × 1.5)', blockStyle.fontSize === '48px', blockStyle.fontSize);
+check('자간·행간·개행·kerning은 typesetTextStyle 값', blockStyle.letterSpacing === '-0.03em' && blockStyle.lineHeight === '1.2' && blockStyle.whiteSpace === 'pre-line' && blockStyle.fontKerning === 'normal');
+check('정렬 미지정 → left', blockStyle.textAlign === 'left');
+check('정렬 명시 → 그 값', typesetBlockStyle({ role: 'body', sourceImageWidth: 375, bbox: blockBox, textAlign: 'center' }).textAlign === 'center');
+check('글자를 자르거나 강제 분해하지 않는다', blockStyle.overflow === 'visible' && blockStyle.wordBreak === 'normal' && blockStyle.overflowWrap === 'normal' && blockStyle.hyphens === 'manual');
+check('family 지정은 따옴표로 감싼다', blockStyle.fontFamily === '"Pretendard"' && typesetBlockStyle({ role: 'body', sourceImageWidth: 375, bbox: blockBox }, 'X').fontFamily === '"X"');
+check('원본 폭이 잘못되면 style 없음', typesetBlockStyle({ role: 'body', sourceImageWidth: 0, bbox: blockBox }) === null);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);
