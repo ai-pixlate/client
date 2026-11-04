@@ -10,12 +10,12 @@ import { pickRegulatoryClass, regulatoryClassListbox, regulatoryClassTrigger } f
 
 test.use({ viewport: { width: 1920, height: 1080 } });
 
-const LABELS = ['화장품', 'OTC 화장품', '화장품+OTC 복합', '잘모름'];
+const LABELS = ['화장품', 'OTC 의약품', '화장품+OTC 복합', '잘 모름'];
 const ENUM_BY_LABEL: Record<string, string> = {
   화장품: 'cosmetic',
-  'OTC 화장품': 'otc',
+  'OTC 의약품': 'otc',
   '화장품+OTC 복합': 'combination',
-  잘모름: 'unknown',
+  '잘 모름': 'unknown',
 };
 
 const TINY_PNG = Buffer.from(
@@ -72,7 +72,7 @@ test.describe('규제 분류 드롭다운', () => {
     await expect(page.getByRole('button', { name: '다음', exact: true })).toBeInViewport({ ratio: 1 });
     await page.keyboard.press('End');
     await page.keyboard.press('Enter');
-    await expect(regulatoryClassTrigger(page)).toHaveText('잘모름');
+    await expect(regulatoryClassTrigger(page)).toHaveText('잘 모름');
     await page.screenshot({ path: test.info().outputPath('n1-regulatory-open-1440x800.png') });
   });
 
@@ -111,13 +111,13 @@ test.describe('규제 분류 드롭다운', () => {
     await page.keyboard.press('ArrowDown');
     await page.keyboard.press('Enter');
     await expect(regulatoryClassListbox(page)).toHaveCount(0);
-    await expect(trigger).toHaveText('OTC 화장품');
+    await expect(trigger).toHaveText('OTC 의약품');
 
     await page.keyboard.press(' ');
     await expect(regulatoryClassListbox(page)).toBeVisible();
     await page.keyboard.press('End');
     await page.keyboard.press(' ');
-    await expect(trigger).toHaveText('잘모름');
+    await expect(trigger).toHaveText('잘 모름');
   });
 
   test('고르지 않고 닫으면 「규제 분류를 선택해 주세요.」가 보이고, 처음에는 오류가 없다', async ({ page }) => {
@@ -127,17 +127,17 @@ test.describe('규제 분류 드롭다운', () => {
     await page.keyboard.press('Escape');
     await expect(error).toBeVisible();
     await expect(regulatoryClassTrigger(page)).toHaveAttribute('aria-invalid', 'true');
-    await pickRegulatoryClass(page, '잘모름');
+    await pickRegulatoryClass(page, '잘 모름');
     await expect(error).toHaveCount(0);
   });
 
-  test('잘모름·복합 안내 문구', async ({ page }) => {
+  test('잘 모름·복합 안내 문구', async ({ page }) => {
     const unknownHelper = page.getByText('잘 모름을 선택하면 화장품 기준으로 검사됩니다.');
     const combinationHelper = page.getByText('복합 제품은 고른 OTC 종류와 같은 기준으로 검사합니다(화장품 규칙 포함).', { exact: false });
     await pickRegulatoryClass(page, '화장품');
     await expect(unknownHelper).toHaveCount(0);
     await expect(combinationHelper).toHaveCount(0);
-    await pickRegulatoryClass(page, '잘모름');
+    await pickRegulatoryClass(page, '잘 모름');
     await expect(unknownHelper).toBeVisible();
     await pickRegulatoryClass(page, '화장품+OTC 복합');
     await expect(combinationHelper).toBeVisible();
@@ -191,7 +191,7 @@ test.describe('규제 분류 → API enum', () => {
       await modal.getByRole('button', { name: '확인' }).click();
       await page.getByRole('checkbox', { name: /외부 AI 서비스로 전송됨을 확인했습니다/ }).check();
       await page.locator('#image-upload').setInputFiles({ name: 'rc.png', mimeType: 'image/png', buffer: TINY_PNG });
-      // 잘모름도 유효한 선택이라 진행을 막지 않는다
+      // 잘 모름도 유효한 선택이라 진행을 막지 않는다
       const next = page.getByRole('button', { name: '다음', exact: true });
       await expect(next).toBeEnabled();
       await next.click();

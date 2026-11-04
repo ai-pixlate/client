@@ -43,7 +43,7 @@ async function fillRequired(page: Page) {
   await page.getByPlaceholder('상품 이름을 입력해주세요').fill('N1 재정합 상품');
   await page.getByRole('combobox').nth(0).selectOption('US');
   await page.getByRole('combobox').nth(1).selectOption('en');
-  await pickRegulatoryClass(page, '잘모름');
+  await pickRegulatoryClass(page, '잘 모름');
   await page.getByRole('button', { name: '선택하기' }).click();
   await categoryModal(page).getByRole('button', { name: '선케어', exact: true }).click();
   await categoryModal(page).getByRole('button', { name: '선크림', exact: true }).click();

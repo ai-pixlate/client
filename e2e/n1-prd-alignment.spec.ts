@@ -299,7 +299,7 @@ test.describe('N1 입력 전수 interaction', () => {
     await page.getByRole('combobox').nth(0).selectOption('US');
     await page.getByRole('combobox').nth(1).selectOption('en');
     await expect(nextButton(page)).toBeDisabled();
-    await pickRegulatoryClass(page, '잘모름');
+    await pickRegulatoryClass(page, '잘 모름');
     await expect(nextButton(page)).toBeDisabled();
     await pickCategory(page, ['선케어', '선크림']);
     await expect(nextButton(page)).toBeDisabled();
@@ -313,13 +313,13 @@ test.describe('N1 입력 전수 interaction', () => {
 test.describe('규제 분류 · OTC 종류', () => {
   const otcGroup = (page: Page) => page.getByRole('radiogroup', { name: 'OTC 종류' });
 
-  test('화장품·잘모름은 OTC 종류가 없고, OTC 화장품·복합은 4종이 보인다', async ({ page }) => {
+  test('화장품·잘 모름은 OTC 종류가 없고, OTC 의약품·복합은 4종이 보인다', async ({ page }) => {
     await page.getByRole('combobox').nth(0).selectOption('US');
-    for (const label of ['화장품', '잘모름']) {
+    for (const label of ['화장품', '잘 모름']) {
       await pickRegulatoryClass(page, label);
       await expect(otcGroup(page)).toHaveCount(0);
     }
-    for (const label of ['OTC 화장품', '화장품+OTC 복합']) {
+    for (const label of ['OTC 의약품', '화장품+OTC 복합']) {
       await pickRegulatoryClass(page, label);
       await expect(otcGroup(page).getByRole('radio')).toHaveText([
         '선크림 (Sunscreen)',
@@ -328,17 +328,17 @@ test.describe('규제 분류 · OTC 종류', () => {
         '피부보호제 (Skin Protectant)',
       ]);
     }
-    // 복합만 PRD 한계 고지, OTC 화장품에는 없다
+    // 복합만 PRD 한계 고지, OTC 의약품에는 없다
     const helper = page.getByTestId('n1-regulatory-helper');
     await expect(helper).toContainText('복합 제품은 고른 OTC 종류와 같은 기준으로 검사합니다(화장품 규칙 포함).');
     await expect(helper).toContainText('제품이 그 OTC 기준(성분 · 함량 · 시험)을 실제로 충족하는지는 확인하지 않습니다.');
-    await pickRegulatoryClass(page, 'OTC 화장품');
+    await pickRegulatoryClass(page, 'OTC 의약품');
     await expect(helper).toHaveCount(0);
   });
 
   test('태그는 하나만 선택되고, 국가를 바꾸면 규제 분류와 OTC 종류를 다시 고른다', async ({ page }) => {
     await page.getByRole('combobox').nth(0).selectOption('US');
-    await pickRegulatoryClass(page, 'OTC 화장품');
+    await pickRegulatoryClass(page, 'OTC 의약품');
     const sunscreen = otcGroup(page).getByRole('radio', { name: '선크림 (Sunscreen)' });
     const acne = otcGroup(page).getByRole('radio', { name: '여드름 (Acne)' });
     await sunscreen.click();
@@ -353,14 +353,14 @@ test.describe('규제 분류 · OTC 종류', () => {
     await page.getByRole('combobox').nth(0).selectOption('JP');
     await expect(regulatoryClassTrigger(page)).toHaveText('선택');
     await page.getByRole('combobox').nth(0).selectOption('US');
-    await pickRegulatoryClass(page, 'OTC 화장품');
+    await pickRegulatoryClass(page, 'OTC 의약품');
     await expect(otcGroup(page).locator('[aria-checked="true"]')).toHaveCount(0);
   });
 
-  test('OTC 화장품은 OTC 종류를 골라야 [다음]이 열리고, 요청에는 OTC 종류 필드를 넣지 않는다', async ({ page }) => {
+  test('OTC 의약품은 OTC 종류를 골라야 [다음]이 열리고, 요청에는 OTC 종류 필드를 넣지 않는다', async ({ page }) => {
     const calls = await recordApiCalls(page);
     await page.goto(`/jobs/new?brandId=${MOCK_BRAND_ID}`);
-    await fillBase(page, 'OTC 화장품');
+    await fillBase(page, 'OTC 의약품');
     await pickCategory(page, ['선케어', '선크림']);
     await page.getByRole('checkbox', { name: CONSENT }).check();
     await expect(nextButton(page)).toBeDisabled();

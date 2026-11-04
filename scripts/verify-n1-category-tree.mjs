@@ -83,7 +83,7 @@ const ready = {
   sizeTab: 'original',
 };
 check('필수값이 모두 있으면 진행 가능', isN1Ready(ready));
-check('잘모름(unknown)도 유효', isN1Ready({ ...ready, regulatoryClass: 'unknown' }));
+check('잘 모름(unknown)도 유효', isN1Ready({ ...ready, regulatoryClass: 'unknown' }));
 check('공백만 있는 상품명은 빈 값', !isN1Ready({ ...ready, productName: '   ' }));
 check('카테고리 미선택이면 불가', !isN1Ready({ ...ready, categoryId: null }));
 check('규제 분류 미선택이면 불가', !isN1Ready({ ...ready, regulatoryClass: '' }));
