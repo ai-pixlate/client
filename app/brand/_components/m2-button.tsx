@@ -1,6 +1,6 @@
 /* eslint-disable @next/next/no-img-element -- 고정 크기 Figma glyph 라 next/image 최적화 대상이 아니다 */
 
-import type { Ref } from 'react';
+import { type Ref, useId } from 'react';
 
 /**
  * Figma Button(708:5827) 중 M2 가 쓰는 variant. 프로젝트에 공용 Button 이 없어 M2 안에서만 재현한다.
@@ -8,7 +8,12 @@ import type { Ref } from 'react';
  *
  * onClick 이 없으면 미연결 버튼이다. 모습은 enabled 그대로이고 포커스도 받지만 눌러도 아무 일이 일어나지 않으며,
  * 보조기기에는 aria-disabled 로 동작이 없음을 알린다. 시각 표현은 aria-disabled 에 반응하지 않는다.
+ *
+ * future 는 제품 범위가 후속인 버튼이다. 포인터를 올리거나 키보드로 포커스하면 툴팁을 보여 준다.
+ * API 가 없어 local 로 동작하는 현재 범위 기능에는 쓰지 않는다.
  */
+const FUTURE_TOOLTIP = '3차 구현 예정';
+
 const VARIANT = {
   secondary: 'border border-[#eaeaea] text-[#171717]',
   tertiary: 'text-[#171717]',
@@ -29,6 +34,7 @@ export function M2Button({
   testId,
   buttonRef,
   box,
+  future = false,
   className = '',
 }: {
   variant: keyof typeof VARIANT;
@@ -40,20 +46,23 @@ export function M2Button({
   buttonRef?: Ref<HTMLButtonElement>;
   /** Figma 인스턴스가 variant 기본 크기를 덮어쓸 때 넘긴다 */
   box?: string;
+  future?: boolean;
   /** 배치 보정만 넘긴다 */
   className?: string;
 }) {
   const { box: defaultBox, padding, label: labelClass } = SIZE[size];
-  return (
+  const tooltipId = useId();
+  const button = (
     <button
       ref={buttonRef}
       type="button"
       onClick={onClick}
       aria-disabled={onClick ? undefined : true}
+      aria-describedby={future ? tooltipId : undefined}
       data-testid={testId}
       className={`box-border flex shrink-0 items-center justify-center rounded-[4px] bg-white text-[12px] leading-[14px] tracking-[-0.24px] whitespace-nowrap focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ff6a38] ${VARIANT[variant]} ${box ?? defaultBox} ${
         variant === 'tertiary' ? padding.plain : padding.bordered
-      } ${onClick ? 'hover:bg-[#f5f5f5]' : ''} ${className}`}
+      } ${onClick ? 'hover:bg-[#f5f5f5]' : ''} ${future ? 'peer' : ''} ${className}`}
     >
       {leadingPlus && (
         <span aria-hidden="true" className="relative -mr-1 block size-3.5 shrink-0 overflow-hidden">
@@ -66,5 +75,19 @@ export function M2Button({
       )}
       <span className={labelClass}>{label}</span>
     </button>
+  );
+  if (!future) return button;
+  return (
+    <span className="relative inline-flex shrink-0">
+      {button}
+      {/* 프로젝트·Figma 에 Tooltip 이 없어 최소 형태로 둔다. 마우스 클릭 뒤 포커스로 남지 않도록 focus-visible 에만 반응한다 */}
+      <span
+        id={tooltipId}
+        role="tooltip"
+        className="pointer-events-none invisible absolute bottom-full left-1/2 z-10 mb-1.5 -translate-x-1/2 rounded-[4px] bg-[#171717] px-2 py-1 text-[12px] leading-[14px] tracking-[-0.24px] whitespace-nowrap text-white peer-hover:visible peer-focus-visible:visible"
+      >
+        {FUTURE_TOOLTIP}
+      </span>
+    </span>
   );
 }

@@ -46,9 +46,9 @@ export function M2LogoPanel({
           </h2>
           <p className="text-[12px] font-light tracking-[-0.48px] text-[#707070]">SVG, PNG, JPG 파일을 등록할 수 있습니다.</p>
         </div>
-        {/* Figma 로고 액션(743:6088). 로고 API 전까지 미연결이며, 실제 로컬 삭제는 카드의 삭제 버튼이 맡는다 */}
+        {/* Figma 로고 액션(743:6088). 변경은 교체 의미·계약이 없는 후속 범위다. 삭제는 현재 범위지만 대상을 고르는 체크박스가 없어 미연결이며, 실제 로컬 삭제는 카드의 삭제 버튼이 맡는다 */}
         <div className="flex shrink-0 items-center gap-2">
-          <M2Button variant="secondary" size="xs" label="로고 변경" testId="m2-logo-change" />
+          <M2Button variant="secondary" size="xs" label="로고 변경" future testId="m2-logo-change" />
           <M2Button variant="danger" size="xs" label="삭제" testId="m2-logo-delete-action" />
         </div>
       </div>

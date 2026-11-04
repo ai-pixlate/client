@@ -37,7 +37,8 @@ import { useUnsavedNavigationGuard, type BlockedNavigation } from './use-unsaved
 //   서버 저장은 없다 — 새로고침하거나 화면을 나가면 fixture 값으로 돌아간다. 저장 성공 toast를 두지 않는다.
 //
 // Figma에 있지만 넣지 않은 것: 부가 정보(F-BRD-08, PRD v3.5.10 이후 범위), 로고 카드 체크박스(의미 미확정).
-// [새 브랜드 추가]·[브랜드 삭제]·[로고 변경]·[삭제]는 Figma 모습만 보여 주는 미연결 버튼이다(기능은 M0 12월·로고 API 이후).
+// [새 브랜드 추가]·[브랜드 삭제]·[로고 변경]은 후속 범위라 Figma 모습만 보여 주고 "3차 구현 예정" 툴팁을 단다.
+// 헤더 [삭제]는 현재 범위인 로고 삭제지만 대상을 고르는 체크박스가 없어 미연결이고, 실제 로컬 삭제는 카드의 삭제 버튼이 맡는다.
 // 빈 개요·고객층 placeholder는 Figma에 없어 F-TRN-02b(비면 중립 톤) 근거로 보완했다.
 // ─────────────────────────────────────────────────────────────────
 
@@ -185,7 +186,7 @@ export default function M2BrandView() {
             </p>
           </div>
           <div className="flex items-center gap-[14px]">
-            <M2Button variant="secondary" size="sm" label="새 브랜드 추가" leadingPlus testId="m2-new-brand" box="h-9 w-[120px]" />
+            <M2Button variant="secondary" size="sm" label="새 브랜드 추가" leadingPlus future testId="m2-new-brand" box="h-9 w-[120px]" />
             {/* 수정 모드에서는 숨기되 자리는 남겨 옆 버튼이 움직이지 않게 한다 */}
             <M2Button
               variant="tertiary"
@@ -268,11 +269,17 @@ export default function M2BrandView() {
         </div>
       </div>
 
-      {/* Figma 브랜드 삭제(x119, bottom 53). 미연결 버튼이라 어떤 모드에서도 눌러도 동작이 없다 */}
-      <M2Button variant="danger" size="sm" label="브랜드 삭제" testId="m2-delete-brand" className="absolute bottom-[55px] left-[119px]" />
+      {/* Figma 브랜드 삭제(x119, bottom 53) */}
+      <div className="absolute bottom-[55px] left-[119px]">
+        <M2Button variant="danger" size="sm" label="브랜드 삭제" future testId="m2-delete-brand" />
+      </div>
 
-      <footer className="mt-6 mr-[121px] mb-[53px] ml-auto flex h-[37px] w-[688px] max-w-[calc(100%-240px)] shrink-0 items-center justify-between gap-4">
-        <p data-testid="m2-apply-notice" className="min-w-0 text-[12px] leading-[normal] font-light tracking-[-0.48px] text-[#ff6a38]">
+      {/* 보기 모드는 버튼이 없어 안내만 오른쪽 끝에 붙고, 수정 모드는 Figma 688px 묶음(안내 + 버튼)이다 */}
+      <footer
+        data-testid="m2-footer"
+        className={`mt-6 mr-[121px] mb-[53px] ml-auto flex h-[37px] max-w-[calc(100%-240px)] shrink-0 items-center gap-4 ${editable ? 'w-[688px] justify-between' : 'justify-end'}`}
+      >
+        <p data-testid="m2-apply-notice" className="min-w-0 text-right text-[12px] leading-[normal] font-light tracking-[-0.48px] whitespace-nowrap text-[#ff6a38]">
           변경한 브랜드 정보는 새로 시작하는 작업부터 적용되며, 이미 완료된 작업에는 자동 반영되지 않습니다.
         </p>
         {editable && (
