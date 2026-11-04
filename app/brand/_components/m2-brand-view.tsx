@@ -16,6 +16,7 @@ import {
 } from '@/lib/brand/m2-form';
 import { M2_BRAND_MOCK } from '@/lib/mock-api/m2-brand-fixtures';
 
+import { M2Button } from './m2-button';
 import { M2LogoPanel } from './m2-logo-panel';
 import { M2UnsavedDialog } from './m2-unsaved-dialog';
 import { useUnsavedNavigationGuard, type BlockedNavigation } from './use-unsaved-navigation-guard';
@@ -35,7 +36,8 @@ import { useUnsavedNavigationGuard, type BlockedNavigation } from './use-unsaved
 // ★ M2 API를 아직 연결하지 않았다. 저장은 화면 안의 baseline을 바꾸는 local mock persistence뿐이고
 //   서버 저장은 없다 — 새로고침하거나 화면을 나가면 fixture 값으로 돌아간다. 저장 성공 toast를 두지 않는다.
 //
-// Figma에 있지만 넣지 않은 것: 부가 정보(F-BRD-08, PRD v3.5.10 이후 범위), [새 브랜드 추가]·[브랜드 삭제](M0 12월).
+// Figma에 있지만 넣지 않은 것: 부가 정보(F-BRD-08, PRD v3.5.10 이후 범위), 로고 카드 체크박스(의미 미확정).
+// [새 브랜드 추가]·[브랜드 삭제]·[로고 변경]·[삭제]는 Figma 모습만 보여 주는 미연결 버튼이다(기능은 M0 12월·로고 API 이후).
 // 빈 개요·고객층 placeholder는 Figma에 없어 F-TRN-02b(비면 중립 톤) 근거로 보완했다.
 // ─────────────────────────────────────────────────────────────────
 
@@ -182,17 +184,19 @@ export default function M2BrandView() {
               번역과 이미지 처리에 공통으로 사용되는 브랜드 기준을 관리합니다.
             </p>
           </div>
-          {!editable && (
-            <button
-              ref={editButtonRef}
-              type="button"
+          <div className="flex items-center gap-[14px]">
+            <M2Button variant="secondary" size="sm" label="새 브랜드 추가" leadingPlus testId="m2-new-brand" box="h-9 w-[120px]" />
+            {/* 수정 모드에서는 숨기되 자리는 남겨 옆 버튼이 움직이지 않게 한다 */}
+            <M2Button
+              variant="tertiary"
+              size="sm"
+              label="정보수정"
+              testId="m2-edit"
+              buttonRef={editButtonRef}
               onClick={() => setMode('edit')}
-              data-testid="m2-edit"
-              className="rounded-[4px] bg-white px-5 py-2 text-[12px] leading-[normal] tracking-[-0.24px] whitespace-nowrap text-[#171717] hover:bg-[#f5f5f5]"
-            >
-              정보 수정
-            </button>
-          )}
+              className={editable ? 'invisible' : ''}
+            />
+          </div>
         </header>
 
         <div data-testid="m2-header-divider" className="mt-10 h-px shrink-0 bg-[#eaeaea]" />
@@ -203,7 +207,8 @@ export default function M2BrandView() {
           className="mt-8 grid max-h-[700px] min-h-0 flex-1 grid-cols-[minmax(0,972fr)_minmax(0,120fr)_minmax(0,568fr)_minmax(0,20fr)] grid-rows-[minmax(0,1fr)]"
         >
           <div className="col-start-1 min-w-0">
-            <div data-testid="m2-form" className="flex h-full flex-col gap-8 overflow-x-hidden overflow-y-auto">
+            {/* 스크롤은 그대로 되고 막대만 보이지 않는다. Figma 에서 막대가 두 열 사이 구분선처럼 보이지 않도록 한다 */}
+            <div data-testid="m2-form" className="n3-scroll-hidden flex h-full flex-col gap-8 overflow-x-hidden overflow-y-auto">
               <section aria-labelledby="m2-name-title" className="flex shrink-0 flex-col gap-3">
                 <h2 id="m2-name-title" className="flex gap-1 text-[18px] leading-[21px] font-medium tracking-[-0.54px] text-[#171717]">
                   브랜드명 <span className="text-[#ff6a38]" aria-hidden="true">*</span>
@@ -262,6 +267,9 @@ export default function M2BrandView() {
           />
         </div>
       </div>
+
+      {/* Figma 브랜드 삭제(x119, bottom 53). 미연결 버튼이라 어떤 모드에서도 눌러도 동작이 없다 */}
+      <M2Button variant="danger" size="sm" label="브랜드 삭제" testId="m2-delete-brand" className="absolute bottom-[55px] left-[119px]" />
 
       <footer className="mt-6 mr-[121px] mb-[53px] ml-auto flex h-[37px] w-[688px] max-w-[calc(100%-240px)] shrink-0 items-center justify-between gap-4">
         <p data-testid="m2-apply-notice" className="min-w-0 text-[12px] leading-[normal] font-light tracking-[-0.48px] text-[#ff6a38]">

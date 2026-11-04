@@ -5,6 +5,8 @@ import { useRef, useState, type DragEvent } from 'react';
 import { PlusGlyph16 } from '@/app/_components/library/library-controls';
 import { M2_LOGO_ACCEPT, type M2BrandLogo } from '@/lib/brand/m2-form';
 
+import { M2Button } from './m2-button';
+
 // M2 브랜드 로고 영역 (Figma 753:6373, 폭 568)
 //   로고 카드(753:6286): 568×200, BG #F5F5F5, radius 6. 표시 칸은 Figma 워드마크 폭(263)·심볼 높이(120).
 //   FileUploader Compact(1100:11870·273:1953·273:1963): Default / DragOver / Invalid.
@@ -37,11 +39,18 @@ export function M2LogoPanel({
 
   return (
     <section aria-labelledby="m2-logo-title" data-testid="m2-logo-panel" className="col-start-3 flex min-h-0 min-w-0 flex-col gap-3">
-      <div className="flex shrink-0 flex-col gap-1 leading-[normal]">
-        <h2 id="m2-logo-title" className="text-[18px] leading-[21px] font-medium tracking-[-0.54px] text-[#171717]">
-          브랜드 로고
-        </h2>
-        <p className="text-[12px] font-light tracking-[-0.48px] text-[#707070]">SVG, PNG, JPG 파일을 등록할 수 있습니다.</p>
+      <div className="flex shrink-0 items-center justify-between gap-2">
+        <div className="flex min-w-0 flex-col gap-1 leading-[normal]">
+          <h2 id="m2-logo-title" className="text-[18px] leading-[21px] font-medium tracking-[-0.54px] text-[#171717]">
+            브랜드 로고
+          </h2>
+          <p className="text-[12px] font-light tracking-[-0.48px] text-[#707070]">SVG, PNG, JPG 파일을 등록할 수 있습니다.</p>
+        </div>
+        {/* Figma 로고 액션(743:6088). 로고 API 전까지 미연결이며, 실제 로컬 삭제는 카드의 삭제 버튼이 맡는다 */}
+        <div className="flex shrink-0 items-center gap-2">
+          <M2Button variant="secondary" size="xs" label="로고 변경" testId="m2-logo-change" />
+          <M2Button variant="danger" size="xs" label="삭제" testId="m2-logo-delete-action" />
+        </div>
       </div>
 
       {/* 로고가 많아지면 이 목록만 스크롤한다 */}
