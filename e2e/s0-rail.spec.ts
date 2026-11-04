@@ -23,13 +23,14 @@ async function openStep(page: Page, step: (typeof STEPS)[number]) {
   } else {
     await page.addInitScript(
       ({ forced, jobId }) => {
+        (window as unknown as { __s0Step: string }).__s0Step = forced;
         const original = window.fetch.bind(window);
         window.fetch = async (input, init) => {
           const response = await original(input, init);
           const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
           if (new URL(url, location.href).pathname !== `/jobs/${jobId}/tasks` || !response.ok) return response;
           const body = await response.json();
-          return new Response(JSON.stringify({ ...body, currentStep: forced, jobStatus: 'running' }), { status: 200, headers: { 'content-type': 'application/json' } });
+          return new Response(JSON.stringify({ ...body, currentStep: (window as unknown as { __s0Step: string }).__s0Step, jobStatus: 'running' }), { status: 200, headers: { 'content-type': 'application/json' } });
         };
       },
       { forced: step, jobId: MOCK_JOB_ID },
@@ -266,4 +267,226 @@ test('N2·N4 의 [중단] 은 S0 와 별개로 그대로다', async ({ page }) =
   await page.keyboard.press('Escape');
   await expect(page).toHaveURL(new RegExp(`/jobs/${MOCK_JOB_ID}$`));
   await expect(page.getByRole('heading', { name: '이미지 분석' })).toBeVisible();
+});
+
+const setServerStep = (page: Page, step: string) =>
+  page.evaluate((next) => {
+    (window as unknown as { __s0Step: string }).__s0Step = next;
+  }, step);
+
+const LOADING_TEXT = '작업 상태를 확인하고 있습니다.';
+
+for (const [from, to, heading] of [['N2', 'N3', '섹션 확인'], ['N4', 'N5', null]] as const) {
+  test(`${from}→${to} 자동 전환에도 확인창이 유지되고 [계속하기]로 ${to} 에 머문다`, async ({ page }) => {
+    await openStep(page, from);
+    await exit(page).click();
+    await expect(dialog(page)).toBeVisible();
+    await page.keyboard.press('Tab');
+    const buttons = dialog(page).getByRole('button');
+    await expect(buttons.nth(0)).toBeFocused();
+
+    await setServerStep(page, to);
+    // 뒤 화면이 다음 단계로 바뀐다(완료 표시 뒤). 확인창은 그대로다
+    await expect(stepButton(page, STEPS.indexOf(to))).toHaveAttribute('aria-current', 'step', { timeout: 10_000 });
+    await expect(dialog(page)).toBeVisible();
+    await expect(dialog(page)).toHaveAccessibleName('작업을 취소할까요?');
+    if (heading) await expect(page.getByRole('heading', { name: heading })).toBeVisible();
+    if (to === 'N5') await expect(page.getByTestId('n5-viewport')).toBeVisible();
+
+    // focus trap 과 배경 비활성이 풀리지 않는다
+    await expect(buttons.nth(0)).toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(buttons.nth(1)).toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(buttons.nth(0)).toBeFocused();
+    expect(await page.getByTestId('s0-rail').evaluate((el) => (el.nextElementSibling as HTMLElement).inert)).toBe(true);
+
+    await buttons.nth(0).click();
+    await expect(dialog(page)).toHaveCount(0);
+    await expect(exit(page)).toBeFocused();
+    await expect(page).toHaveURL(new RegExp(`/jobs/${MOCK_JOB_ID}$`));
+    await expect(stepButton(page, STEPS.indexOf(to))).toHaveAttribute('aria-current', 'step');
+    expect(await page.getByTestId('s0-rail').evaluate((el) => (el.nextElementSibling as HTMLElement).inert)).toBe(false);
+  });
+}
+
+/** DELETE 응답을 잡아 두고 호출·중단 여부를 기록한다. window.__releaseDelete(실패 여부)로 푼다 */
+async function holdCancel(page: Page) {
+  await page.addInitScript(() => {
+    const w = window as unknown as { __deleteCalls: number; __deleteSignals: (AbortSignal | null | undefined)[]; __releaseDelete: (fail: boolean) => void };
+    w.__deleteCalls = 0;
+    w.__deleteSignals = [];
+    const original = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (init?.method !== 'DELETE' || !/^\/jobs\/[^/]+$/.test(new URL(url, location.href).pathname)) return original(input, init);
+      w.__deleteCalls += 1;
+      w.__deleteSignals.push(init.signal);
+      const fail = await new Promise<boolean>((resolve) => {
+        w.__releaseDelete = resolve;
+      });
+      if (fail) {
+        return new Response(JSON.stringify({ error: { code: 'INTERNAL_ERROR', message: 'fail', retryable: true, traceId: 't' } }), {
+          status: 500,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return original(input, init);
+    };
+  });
+}
+const releaseDelete = (page: Page, fail: boolean) => page.evaluate((f) => (window as unknown as { __releaseDelete: (fail: boolean) => void }).__releaseDelete(f), fail);
+const deleteCalls = (page: Page) => page.evaluate(() => (window as unknown as { __deleteCalls: number }).__deleteCalls);
+
+test('취소 요청 중 자동 전환되어도 요청을 유지하고 성공하면 보관함으로 간다', async ({ page }) => {
+  await holdCancel(page);
+  await openStep(page, 'N4');
+  await exit(page).click();
+  await dialog(page).getByRole('button', { name: '작업 취소' }).click();
+  await expect(dialog(page).getByRole('button', { name: '취소 중...' })).toBeVisible();
+
+  await setServerStep(page, 'N5');
+  await expect(stepButton(page, 4)).toHaveAttribute('aria-current', 'step', { timeout: 10_000 });
+  await expect(dialog(page).getByRole('button', { name: '취소 중...' })).toBeVisible();
+  // 진행 중에는 Esc 로 닫히지 않는다
+  await page.keyboard.press('Escape');
+  await expect(dialog(page)).toBeVisible();
+  expect(await deleteCalls(page)).toBe(1);
+  expect(await page.evaluate(() => (window as unknown as { __deleteSignals: (AbortSignal | undefined)[] }).__deleteSignals.every((s) => !s?.aborted))).toBe(true);
+
+  await releaseDelete(page, false);
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole('heading', { name: '보관함' })).toBeVisible();
+  expect(await deleteCalls(page)).toBe(1);
+});
+
+test('취소 요청 중 자동 전환된 뒤 실패하면 다음 화면에서 확인창을 유지하고 다시 시도할 수 있다', async ({ page }) => {
+  await holdCancel(page);
+  await openStep(page, 'N2');
+  await exit(page).click();
+  await dialog(page).getByRole('button', { name: '작업 취소' }).click();
+  await setServerStep(page, 'N3');
+  await expect(stepButton(page, 2)).toHaveAttribute('aria-current', 'step', { timeout: 10_000 });
+  await releaseDelete(page, true);
+
+  await expect(dialog(page).getByRole('alert')).toHaveText('작업을 취소하지 못했습니다. 다시 시도해 주세요.');
+  await expect(page).toHaveURL(new RegExp(`/jobs/${MOCK_JOB_ID}$`));
+  await expect(page.getByRole('heading', { name: '섹션 확인' })).toBeVisible();
+
+  await dialog(page).getByRole('button', { name: '작업 취소' }).click();
+  await expect.poll(() => deleteCalls(page)).toBe(2);
+  await releaseDelete(page, false);
+  await expect(page).toHaveURL(/\/$/);
+});
+
+/** tasks 첫 응답을 잡아 둔다. window.__releaseTasks() 로 푼다 */
+async function holdTasks(page: Page) {
+  await page.addInitScript((jobId) => {
+    const w = window as unknown as { __releaseTasks: () => void };
+    const gate = new Promise<void>((resolve) => {
+      w.__releaseTasks = resolve;
+    });
+    const original = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (new URL(url, location.href).pathname === `/jobs/${jobId}/tasks`) await gate;
+      return original(input, init);
+    };
+  }, MOCK_JOB_ID);
+}
+
+/** tasks 를 항상 500 으로 돌려준다 */
+async function failTasks(page: Page) {
+  await page.addInitScript((jobId) => {
+    const original = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (new URL(url, location.href).pathname === `/jobs/${jobId}/tasks`) {
+        return new Response(JSON.stringify({ error: { code: 'INTERNAL_ERROR', message: '상태 조회 실패', retryable: true, traceId: 't' } }), {
+          status: 500,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return original(input, init);
+    };
+  }, MOCK_JOB_ID);
+}
+
+test('상태 조회 중 — ✕ 만 있고 단계를 추측하지 않으며 안내 위치는 그대로다', async ({ page }) => {
+  await holdTasks(page);
+  await page.goto(`/jobs/${MOCK_JOB_ID}`);
+  const loading = page.getByText(LOADING_TEXT);
+  await expect(loading).toBeVisible();
+  expect(await exit(page).boundingBox()).toEqual({ x: 40, y: 40, width: 40, height: 40 });
+  await expect(exit(page)).toHaveAccessibleName('작업 취소');
+  await expect(nav(page)).toHaveCount(0);
+  // 단계 라벨을 추측해 보이지 않는다
+  await expect(page.locator('header')).toHaveCount(0);
+  // 안내 문구는 기존처럼 헤더(56) 아래 영역 가운데다
+  const box = (await loading.boundingBox())!;
+  expect(Math.abs(box.x + box.width / 2 - 960)).toBeLessThanOrEqual(1);
+  expect(Math.abs(box.y + box.height / 2 - (56 + 1024 / 2))).toBeLessThanOrEqual(1);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBe(0);
+
+  // 확인창을 연 채 응답이 오면 진행단계가 나타나고 확인창은 그대로다
+  await exit(page).click();
+  await expect(dialog(page)).toHaveAccessibleName('작업을 취소할까요?');
+  await page.evaluate(() => (window as unknown as { __releaseTasks: () => void }).__releaseTasks());
+  await expect(nav(page)).toBeVisible();
+  await expect(dialog(page)).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(dialog(page)).toHaveCount(0);
+  await expect(exit(page)).toBeFocused();
+  expect(await exit(page).boundingBox()).toEqual({ x: 40, y: 40, width: 40, height: 40 });
+});
+
+test('상태 조회 중에도 작업을 취소할 수 있다', async ({ page }) => {
+  await holdTasks(page);
+  const deletes: string[] = [];
+  page.on('request', (r) => {
+    if (r.method() === 'DELETE') deletes.push(new URL(r.url()).pathname);
+  });
+  await page.goto(`/jobs/${MOCK_JOB_ID}`);
+  await expect(page.getByText(LOADING_TEXT)).toBeVisible();
+  await exit(page).click();
+  await dialog(page).getByRole('button', { name: '작업 취소' }).click();
+  await expect(page).toHaveURL(/\/$/);
+  expect(deletes).toEqual([`/jobs/${MOCK_JOB_ID}`]);
+});
+
+test('상태 조회 실패 — 오류와 ✕ 만 보이고 취소 실패 시 오류 화면과 확인창을 유지한다', async ({ page }) => {
+  await failTasks(page);
+  await failCancel(page, 1);
+  const deletes: string[] = [];
+  page.on('request', (r) => {
+    if (r.method() === 'DELETE') deletes.push(new URL(r.url()).pathname);
+  });
+  await page.goto(`/jobs/${MOCK_JOB_ID}`);
+  const message = page.getByText('상태 조회 실패');
+  await expect(message).toBeVisible({ timeout: 15_000 });
+  expect(await exit(page).boundingBox()).toEqual({ x: 40, y: 40, width: 40, height: 40 });
+  await expect(exit(page)).toHaveAccessibleName('작업 취소');
+  await expect(nav(page)).toHaveCount(0);
+  await expect(page.locator('header')).toHaveCount(0);
+
+  await exit(page).focus();
+  await page.keyboard.press('Enter');
+  await expect(dialog(page)).toHaveAccessibleName('작업을 취소할까요?');
+  await dialog(page).getByRole('button', { name: '작업 취소' }).click();
+  await expect(dialog(page).getByRole('alert')).toHaveText('작업을 취소하지 못했습니다. 다시 시도해 주세요.');
+  await expect(page).toHaveURL(new RegExp(`/jobs/${MOCK_JOB_ID}$`));
+  await expect(message).toBeAttached();
+
+  await dialog(page).getByRole('button', { name: '작업 취소' }).click();
+  await expect(page).toHaveURL(/\/$/);
+  expect(deletes).toEqual([`/jobs/${MOCK_JOB_ID}`]);
+});
+
+test('낮은 화면에서도 상태 조회 중 ✕ 위치가 같고 넘치지 않는다', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await holdTasks(page);
+  await page.goto(`/jobs/${MOCK_JOB_ID}`);
+  await expect(page.getByText(LOADING_TEXT)).toBeVisible();
+  expect(await exit(page).boundingBox()).toEqual({ x: 40, y: 40, width: 40, height: 40 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBe(0);
 });
