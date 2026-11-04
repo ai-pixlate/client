@@ -100,5 +100,37 @@ isGraphemeOnOrange({ left: 84, top: 0, width: 6, height: 6 }, laptop, (x, y) => 
 });
 check('cover crop 을 반영한 원본 좌표를 읽음', Math.abs(seen[0][0] - (56 + 85 / laptop.scale)) < 1e-9 && Math.abs(seen[0][1] - 1 / laptop.scale) < 1e-9);
 
+console.log('\n[7] 문구별 글자 판정 — 작은 문구·보조 문구·하단 문구');
+/** 한 줄을 글자 폭으로 나눈 패널 좌표 상자. orange 는 원본 좌표 x 범위 */
+function darkGraphemes(text, line, glyphWidth, cover, orange) {
+  const chars = splitGraphemes(text);
+  const read = (x, y) => (orange && x >= orange.from && x < orange.to && y >= orange.top && y < orange.bottom ? ORANGE : BLACK);
+  return chars.flatMap((ch, i) => {
+    const rect = { left: line.left + i * glyphWidth, top: line.top, width: glyphWidth, height: line.height };
+    return ch.trim() && isGraphemeOnOrange(rect, cover, read) ? [i] : [];
+  });
+}
+const everywhere = { top: -1e6, bottom: 1e6 };
+const LINES = [
+  ['micro', 'AI LOCALIZATION WORKSPACE', { left: 60, top: 178.81, height: 13 }, 7],
+  ['subcopy', 'AI가 분석하고 번역하고 검수합니다.', { left: 60, top: 433, height: 19 }, 13],
+  ['footer', 'LOCALIZE · VERIFY · EXPORT', { left: 60, top: 1002, height: 14 }, 6],
+];
+for (const [name, text, line, glyph] of LINES) {
+  check(`${name} 주황 없음 → 전부 normal`, darkGraphemes(text, line, glyph, same, null).length === 0);
+  const from = line.left + 3 * glyph;
+  const dark = darkGraphemes(text, line, glyph, same, { from, to: from + 3 * glyph, ...everywhere });
+  const expectedDark = [3, 4, 5].filter((i) => splitGraphemes(text)[i].trim());
+  check(`${name} 일부 주황 → 그 글자만 dark`, JSON.stringify(dark) === JSON.stringify(expectedDark), JSON.stringify(dark));
+  check(`${name} 다른 세로 위치의 주황 → normal`, darkGraphemes(text, line, glyph, same, { from: 0, to: 1120, top: line.top + 200, bottom: line.top + 300 }).length === 0);
+}
+const footerOnLaptop = computeCoverMapping({ width: 1008, height: 885 }, source);
+const footerText = 'LOCALIZE · VERIFY · EXPORT';
+const footerLine = { left: 60, top: 885 - 64 - 14, height: 14 };
+const footerSourceY = footerOnLaptop.sourceY + footerLine.top / footerOnLaptop.scale;
+const footerFrom = footerOnLaptop.sourceX + (60 + 11 * 6) / footerOnLaptop.scale;
+const footerDark = darkGraphemes(footerText, footerLine, 6, footerOnLaptop, { from: footerFrom, to: footerFrom + (2 * 6) / footerOnLaptop.scale, top: footerSourceY - 1, bottom: footerSourceY + 20 });
+check('footer 는 bottom 기준 위치와 cover crop 을 반영한다', JSON.stringify(footerDark) === '[11,12]', JSON.stringify(footerDark));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

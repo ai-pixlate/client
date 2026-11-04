@@ -87,7 +87,7 @@ test('1920×1080 위치가 Figma 와 일치한다', async ({ page }) => {
     ['g1-brand-layer', { x: 0, y: 0, width: 1120, height: 1080 }],
     ['g1-auth-panel', { x: 1120, y: 0, width: 800, height: 1080 }],
     ['g1-brand-logo', { x: 60, y: 120, width: 128 }],
-    ['g1-brand-micro', { x: 60 }],
+    ['g1-brand-micro', { x: 60, y: 178.81, height: 13 }],
     ['g1-brand-headline', { x: 60, y: 283 }],
     ['g1-brand-subcopy', { x: 60, y: 433, height: 38 }],
     ['g1-brand-footer', { x: 60, y: 1002 }],
@@ -266,6 +266,7 @@ test('패널이 432px 보다 좁을 때만 줄어들고 넘치지 않는다', as
 });
 
 const SUBCOPY_LINES = ['AI가 분석하고 번역하고 검수합니다.', '필요한 순간, 당신 옆엔 픽슬레이트'];
+const CONTRAST_LINES = ['AI LOCALIZATION WORKSPACE', ...SUBCOPY_LINES, 'LOCALIZE · VERIFY · EXPORT'];
 const graphemes = (page: Page) => page.getByTestId('g1-brand-subcopy').locator('[data-g1-grapheme]');
 
 /** 지정한 원본 좌표 사각형만 주황인 프레임을 주는 ImageDecoder 대역. 실제 GIF 프레임 타이밍에 의존하지 않는다 */
@@ -296,11 +297,11 @@ async function useSyntheticGif(page: Page) {
 }
 
 /** 글자 index 범위를 덮는 원본 좌표 사각형을 cover 식으로 직접 계산해 주황으로 칠한다 */
-async function paintOrangeBehind(page: Page, from: number, to: number) {
+async function paintOrangeBehind(page: Page, from: number, to: number, testId = 'g1-brand-subcopy') {
   await page.evaluate(
-    ([start, end]) => {
+    ([start, end, scope]) => {
       const panel = document.querySelector('[data-testid=g1-brand-layer]')!.getBoundingClientRect();
-      const spans = Array.from(document.querySelectorAll('[data-testid=g1-brand-subcopy] [data-g1-grapheme]')).slice(start, end);
+      const spans = Array.from(document.querySelectorAll(`[data-testid=${scope}] [data-g1-grapheme]`)).slice(start as number, end as number);
       const rects = spans.map((s) => s.getBoundingClientRect());
       const left = Math.min(...rects.map((r) => r.left)) - panel.left;
       const right = Math.max(...rects.map((r) => r.right)) - panel.left;
@@ -311,18 +312,20 @@ async function paintOrangeBehind(page: Page, from: number, to: number) {
       const cropY = (1080 - panel.height / scale) / 2;
       (window as unknown as { __orange: unknown }).__orange = { x: cropX + left / scale, y: cropY + top / scale, w: (right - left) / scale, h: (bottom - top) / scale };
     },
-    [from, to],
+    [from, to, testId] as const,
   );
 }
 
-const darkIndexes = (page: Page) =>
-  page.evaluate(() =>
-    Array.from(document.querySelectorAll('[data-testid=g1-brand-subcopy] [data-g1-grapheme]')).flatMap((s, i) => (s.hasAttribute('data-on-orange') ? [i] : [])),
+const darkIndexes = (page: Page, testId = 'g1-brand-subcopy') =>
+  page.evaluate(
+    (scope) => Array.from(document.querySelectorAll(`[data-testid=${scope}] [data-g1-grapheme]`)).flatMap((s, i) => (s.hasAttribute('data-on-orange') ? [i] : [])),
+    testId,
   );
+const allDarkCount = (page: Page) => page.evaluate(() => document.querySelectorAll('[data-on-orange]').length);
 
-test('보조 문구는 글자 span 으로 그려지고 문장 이름을 유지하며 줄 폭이 그대로다', async ({ page }) => {
+test('GIF 위 문구 4줄은 글자 span 으로 그려지고 문장 이름을 유지하며 줄 폭이 그대로다', async ({ page }) => {
   await open(page);
-  for (const line of SUBCOPY_LINES) {
+  for (const line of CONTRAST_LINES) {
     const group = page.getByRole('group', { name: line });
     await expect(group).toHaveText(line);
     expect(await group.locator('[data-g1-grapheme]').count()).toBe(Array.from(line).length);
@@ -335,7 +338,7 @@ test('보조 문구는 글자 span 으로 그려지고 문장 이름을 유지�
       const plain = document.createElement('span');
       plain.textContent = text;
       plain.style.whiteSpace = 'nowrap';
-      p.after(plain);
+      p.append(plain);
       const whole = plain.getBoundingClientRect().width;
       plain.remove();
       return { split, whole };
@@ -343,9 +346,19 @@ test('보조 문구는 글자 span 으로 그려지고 문장 이름을 유지�
     expect(Math.abs(widths.split - widths.whole)).toBeLessThanOrEqual(0.5);
   }
   await expect(graphemes(page).first()).toHaveCSS('color', 'rgb(153, 153, 153)');
-  // 다른 문구는 글자 단위로 나누지 않는다
-  await expect(page.getByTestId('g1-brand-micro').locator('[data-g1-grapheme]')).toHaveCount(0);
-  await expect(page.getByTestId('g1-brand-footer').locator('[data-g1-grapheme]')).toHaveCount(0);
+  // 제목은 흰색 그대로이며 대상이 아니다
+  await expect(page.getByTestId('g1-brand-headline').locator('[data-g1-grapheme]')).toHaveCount(0);
+  // 글자를 나눠도 Figma typography 와 기본 색은 그대로다
+  const micro = page.getByTestId('g1-brand-micro').locator('[data-g1-grapheme]').first();
+  await expect(micro).toHaveCSS('font-size', '11px');
+  await expect(micro).toHaveCSS('font-weight', '300');
+  await expect(micro).toHaveCSS('letter-spacing', '0.88px');
+  await expect(micro).toHaveCSS('color', 'rgb(153, 153, 153)');
+  const footer = page.getByTestId('g1-brand-footer').locator('[data-g1-grapheme]').first();
+  await expect(footer).toHaveCSS('font-size', '12px');
+  await expect(footer).toHaveCSS('font-weight', '300');
+  await expect(footer).toHaveCSS('letter-spacing', '-0.48px');
+  await expect(footer).toHaveCSS('color', 'rgb(153, 153, 153)');
 });
 
 for (const [width, height] of [[1920, 1080], [1440, 900], [1728, 885]] as const) {
@@ -380,6 +393,70 @@ for (const [width, height] of [[1920, 1080], [1440, 900], [1728, 885]] as const)
     await expect(graphemes(page).nth(5)).toHaveCSS('color', 'rgb(153, 153, 153)');
   });
 }
+
+for (const [width, height] of [[1920, 1080], [1728, 885]] as const) {
+  test(`${width}×${height} 작은 문구와 하단 문구도 주황 뒤의 글자만 바뀌고 돌아온다`, async ({ page }) => {
+    await page.setViewportSize({ width, height });
+    await useSyntheticGif(page);
+    await open(page);
+    await expect(page.getByTestId('g1-brand-layer')).toHaveAttribute('data-gif-contrast', 'running');
+    await expect.poll(() => allDarkCount(page)).toBe(0);
+    const positions = () =>
+      page.evaluate(() => Array.from(document.querySelectorAll('[data-g1-grapheme]')).map((s) => { const r = s.getBoundingClientRect(); return [r.x, r.y, r.width, r.height].join(); }).join('|'));
+    const before = await positions();
+
+    // "LOC" (AI 다음 index 3~5)
+    await paintOrangeBehind(page, 3, 6, 'g1-brand-micro');
+    await expect.poll(() => darkIndexes(page, 'g1-brand-micro')).toEqual([3, 4, 5]);
+    expect(await allDarkCount(page)).toBe(3);
+    await expect(page.getByTestId('g1-brand-micro').locator('[data-g1-grapheme]').nth(4)).toHaveCSS('color', 'rgb(23, 23, 23)');
+    await expect(page.getByTestId('g1-brand-micro').locator('[data-g1-grapheme]').nth(6)).toHaveCSS('color', 'rgb(153, 153, 153)');
+    expect(await positions()).toBe(before);
+
+    // "VE" (index 11~12). 하단 문구는 bottom 기준이므로 패널 높이에 따라 위치가 다르다
+    await paintOrangeBehind(page, 11, 13, 'g1-brand-footer');
+    await expect.poll(() => darkIndexes(page, 'g1-brand-footer')).toEqual([11, 12]);
+    expect(await darkIndexes(page, 'g1-brand-micro')).toEqual([]);
+    expect(await allDarkCount(page)).toBe(2);
+    await expect(page.getByTestId('g1-brand-footer').locator('[data-g1-grapheme]').nth(12)).toHaveCSS('color', 'rgb(23, 23, 23)');
+    expect(await positions()).toBe(before);
+
+    await page.evaluate(() => {
+      (window as unknown as { __orange: unknown }).__orange = null;
+    });
+    await expect.poll(() => allDarkCount(page)).toBe(0);
+    await expect(page.getByTestId('g1-brand-footer').locator('[data-g1-grapheme]').nth(12)).toHaveCSS('color', 'rgb(153, 153, 153)');
+  });
+}
+
+test('문구가 늘어도 GIF fetch 와 디코더는 하나다', async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as unknown as { __signals: AbortSignal[]; __decoders: number; ImageDecoder: new (...args: unknown[]) => object };
+    w.__signals = [];
+    w.__decoders = 0;
+    const original = window.fetch.bind(window);
+    window.fetch = (input, init) => {
+      if (String(input).includes('pixlate_login.gif') && init?.signal) w.__signals.push(init.signal);
+      return original(input, init);
+    };
+    const Real = w.ImageDecoder;
+    w.ImageDecoder = class extends Real {
+      constructor(...args: unknown[]) {
+        super(...args);
+        w.__decoders += 1;
+      }
+    };
+  });
+  await open(page);
+  await expect(page.getByTestId('g1-brand-layer')).toHaveAttribute('data-gif-contrast', 'running');
+  await page.waitForTimeout(500);
+  // 개발 모드 Strict Mode 는 effect 를 두 번 실행해 첫 요청을 취소한다. 살아 있는 요청과 디코더는 하나여야 한다
+  const live = await page.evaluate(() => {
+    const w = window as unknown as { __signals: AbortSignal[]; __decoders: number };
+    return { fetches: w.__signals.filter((signal) => !signal.aborted).length, decoders: w.__decoders };
+  });
+  expect(live).toEqual({ fetches: 1, decoders: 1 });
+});
 
 test('창 크기가 바뀌면 글자 위치와 crop 을 다시 계산한다', async ({ page }) => {
   await useSyntheticGif(page);
@@ -466,7 +543,9 @@ test('모션 감소 환경은 추적을 멈추고 #999 를 유지한다', async 
   await paintOrangeBehind(page, 4, 7);
   await page.waitForTimeout(300);
   await expect(page.getByTestId('g1-brand-gif-canvas')).toBeHidden();
-  expect(await darkIndexes(page)).toEqual([]);
+  expect(await allDarkCount(page)).toBe(0);
+  await expect(page.getByTestId('g1-brand-micro').locator('[data-g1-grapheme]').first()).toHaveCSS('color', 'rgb(153, 153, 153)');
+  await expect(page.getByTestId('g1-brand-footer').locator('[data-g1-grapheme]').first()).toHaveCSS('color', 'rgb(153, 153, 153)');
 });
 
 test('이메일·비밀번호는 실제 input 이며 비밀번호는 가려진다', async ({ page }) => {
