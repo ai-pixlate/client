@@ -24,6 +24,7 @@
     "verify:n5-history": "node --experimental-strip-types scripts/verify-n5-history.mjs",
     "verify:n5-failed-drafts": "node --experimental-strip-types scripts/verify-n5-failed-drafts.mjs",
     "verify:n5-typeset": "node --experimental-strip-types scripts/verify-n5-typeset-rules.mjs",
+    "verify:n5-final-output": "node --experimental-strip-types scripts/verify-n5-typeset-final-output.mjs",
     "verify:library-adapter": "node --experimental-strip-types scripts/verify-library-adapter.mjs",
     "verify:library-view": "node --experimental-strip-types scripts/verify-library-view.mjs",
     "verify:msw-flag": "node --experimental-strip-types scripts/verify-msw-mocking-flag.mjs",
