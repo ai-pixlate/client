@@ -198,8 +198,7 @@ export default function M2BrandView() {
 
         <div className="mt-8 flex max-h-[700px] min-h-0 flex-1 justify-between gap-12">
           <div className="min-w-0 max-w-[972px] flex-1">
-            {/* 스크롤바 자리 6px을 폭 밖으로 빼 폼 폭 972를 유지한다 */}
-            <div data-testid="m2-form" className="pix-hover-scroll flex h-full w-[calc(100%+6px)] flex-col gap-8">
+            <div data-testid="m2-form" className="flex h-full flex-col gap-8 overflow-x-hidden overflow-y-auto">
               <section aria-labelledby="m2-name-title" className="flex shrink-0 flex-col gap-3">
                 <h2 id="m2-name-title" className="flex gap-1 text-[18px] leading-[21px] font-medium tracking-[-0.54px] text-[#171717]">
                   브랜드명 <span className="text-[#ff6a38]" aria-hidden="true">*</span>

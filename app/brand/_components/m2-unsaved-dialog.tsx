@@ -4,7 +4,7 @@ import { useRef, type RefObject } from 'react';
 
 import { useModalDialog } from '@/app/_components/use-modal-dialog';
 
-// M2 미저장 이탈 확인창(F-BRD-07). 전용 Figma 프레임이 없어 N1 ✕ 확인창과 같은 Modal 값·동작을 쓴다
+// M2 미저장 이탈 확인창(F-BRD-07). 전용 Figma 프레임이 없어 M1 다운로드 모달과 같은 Modal 값·동작을 쓴다
 // (Figma 1056:9744 기준, useModalDialog: 배경 inert, focus trap, Escape=머무름).
 // API가 없어 [저장하고 나가기]는 두지 않는다 — 저장하려면 창을 닫고 화면의 [변경사항 저장]을 누른다.
 export function M2UnsavedDialog({

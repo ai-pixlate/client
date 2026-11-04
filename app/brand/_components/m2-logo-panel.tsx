@@ -44,8 +44,8 @@ export function M2LogoPanel({
         <p className="text-[12px] font-light tracking-[-0.48px] text-[#707070]">SVG, PNG, JPG 파일을 등록할 수 있습니다.</p>
       </div>
 
-      {/* 스크롤바 자리 6px을 폭 밖으로 빼 카드 폭 568을 유지한다. 로고가 많아지면 이 목록만 스크롤한다. */}
-      <div className="pix-hover-scroll min-h-0 w-[calc(100%+6px)] flex-initial">
+      {/* 로고가 많아지면 이 목록만 스크롤한다 */}
+      <div className="min-h-0 flex-initial overflow-x-hidden overflow-y-auto">
         {logos.length > 0 ? (
           <ul data-testid="m2-logo-list" className="flex flex-col gap-3">
             {logos.map((logo) => (
