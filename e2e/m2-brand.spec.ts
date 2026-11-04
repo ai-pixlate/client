@@ -574,3 +574,127 @@ test('수정 모드로 바꿔도 헤더 버튼 위치가 그대로이고 숨은 
   await page.keyboard.press('Tab');
   await expect(page.getByTestId('m2-edit')).not.toBeFocused();
 });
+
+const FUTURE_BUTTONS = ['m2-new-brand', 'm2-delete-brand', 'm2-logo-change'];
+const tooltip = (page: Page) => page.getByRole('tooltip');
+
+const VIEWPORTS = [[1920, 1080], [1728, 885], [1512, 860], [1440, 900]] as const;
+
+for (const [width, height] of VIEWPORTS) {
+  test(`${width}×${height} 보기 모드 안내는 버튼 자리 없이 content 오른쪽 끝에 붙는다`, async ({ page }) => {
+    await page.setViewportSize({ width, height });
+    await expect(page.getByTestId('m2-cancel')).toHaveCount(0);
+    await expect(page.getByTestId('m2-save')).toHaveCount(0);
+    const notice = (await page.getByTestId('m2-apply-notice').boundingBox())!;
+    const footer = (await page.getByTestId('m2-footer').boundingBox())!;
+    const divider = (await page.getByTestId('m2-header-divider').boundingBox())!;
+    const form = (await page.getByTestId('m2-form').boundingBox())!;
+    const deleteBrand = (await page.getByTestId('m2-delete-brand').boundingBox())!;
+    console.log(`[m2-notice] ${width}×${height} ${JSON.stringify({ notice, right: divider.x + divider.width, formBottom: form.y + form.height })}`);
+    expect(Math.abs(notice.x + notice.width - (divider.x + divider.width))).toBeLessThanOrEqual(0.5);
+    expect(footer.x).toBe(notice.x);
+    expect(footer.width).toBe(notice.width);
+    expect(notice.height).toBeLessThan(20);
+    expect(notice.y).toBeGreaterThanOrEqual(form.y + form.height);
+    expect(deleteBrand.y).toBeGreaterThanOrEqual(form.y + form.height);
+    expect(deleteBrand.x + deleteBrand.width).toBeLessThan(notice.x);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBe(0);
+  });
+
+  test(`${width}×${height} 수정 모드는 안내와 버튼이 Figma 묶음으로 오른쪽에 있다`, async ({ page }) => {
+    await page.setViewportSize({ width, height });
+    await enterEdit(page);
+    const notice = (await page.getByTestId('m2-apply-notice').boundingBox())!;
+    const cancel = (await page.getByTestId('m2-cancel').boundingBox())!;
+    const save = (await page.getByTestId('m2-save').boundingBox())!;
+    const footer = (await page.getByTestId('m2-footer').boundingBox())!;
+    const divider = (await page.getByTestId('m2-header-divider').boundingBox())!;
+    expect(footer.width).toBe(688);
+    expect(footer.x).toBe(notice.x);
+    expect(notice.height).toBeLessThan(20);
+    expect(notice.x + notice.width).toBeLessThanOrEqual(cancel.x);
+    expect(cancel.x + cancel.width).toBeLessThanOrEqual(save.x);
+    expect(Math.abs(save.x + save.width - (divider.x + divider.width))).toBeLessThanOrEqual(0.5);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBe(0);
+  });
+}
+
+for (const testId of FUTURE_BUTTONS) {
+  test(`${testId} 는 hover 와 키보드 focus 에 3차 구현 예정을 보여 주고 벗어나면 사라진다`, async ({ page }) => {
+    const button = page.getByTestId(testId);
+    await expect(tooltip(page)).toHaveCount(0);
+
+    await button.hover();
+    await expect(tooltip(page)).toHaveCount(1);
+    await expect(tooltip(page)).toHaveText('3차 구현 예정');
+    const hint = (await tooltip(page).boundingBox())!;
+    const box = (await button.boundingBox())!;
+    expect(hint.y + hint.height).toBeLessThanOrEqual(box.y);
+    expect(hint.x).toBeGreaterThanOrEqual(0);
+    await expect(tooltip(page)).toHaveCSS('background-color', 'rgb(23, 23, 23)');
+    await expect(tooltip(page)).toHaveCSS('color', 'rgb(255, 255, 255)');
+    await expect(button).toHaveCSS('opacity', '1');
+    await expect(button).toHaveAccessibleDescription('3차 구현 예정');
+    await page.mouse.move(5, 5);
+    await expect(tooltip(page)).toHaveCount(0);
+
+    // 키보드로 이동해 포커스한다
+    await page.evaluate((id) => {
+      const target = document.querySelector<HTMLElement>(`[data-testid=${id}]`)!;
+      const focusable = Array.from(document.querySelectorAll<HTMLElement>('button, input, textarea'));
+      focusable[focusable.indexOf(target) - 1]?.focus();
+    }, testId);
+    await page.keyboard.press('Tab');
+    await expect(button).toBeFocused();
+    await expect(tooltip(page)).toHaveText('3차 구현 예정');
+    await page.keyboard.press('Tab');
+    await expect(tooltip(page)).toHaveCount(0);
+
+    // 마우스로 눌러도 포인터가 벗어나면 남지 않고, 눌러도 동작이 없다
+    await button.click({ force: true });
+    await page.mouse.move(5, 5);
+    await expect(tooltip(page)).toHaveCount(0);
+    expect(brandApiRequests).toEqual([]);
+  });
+}
+
+test('현재 범위 버튼에는 3차 구현 예정이 없다', async ({ page }) => {
+  await page.getByTestId('m2-logo-delete-action').hover();
+  await expect(tooltip(page)).toHaveCount(0);
+  await page.getByTestId('m2-edit').hover();
+  await expect(tooltip(page)).toHaveCount(0);
+  await page.getByTestId('m2-edit').focus();
+  await expect(tooltip(page)).toHaveCount(0);
+
+  await enterEdit(page);
+  for (const locator of [
+    page.getByTestId('m2-cancel'),
+    page.getByTestId('m2-save'),
+    page.getByRole('button', { name: '심볼 로고 삭제' }),
+    page.getByRole('button', { name: '파일 선택' }),
+    page.getByTestId('m2-logo-delete-action'),
+  ]) {
+    await locator.hover({ force: true });
+    await expect(tooltip(page)).toHaveCount(0);
+    await locator.focus();
+    await expect(tooltip(page)).toHaveCount(0);
+  }
+  await expect(page.getByText('3차 구현 예정', { exact: true }).locator('visible=true')).toHaveCount(0);
+});
+
+test('로고 삭제는 수정 모드에서 계속 동작하고 후속 버튼과 구분된다', async ({ page }) => {
+  await enterEdit(page);
+  await page.getByRole('button', { name: '심볼 로고 삭제' }).click();
+  await expect(logoCards(page)).toHaveCount(1);
+  await expect(page.getByTestId('m2-logo-delete-action')).not.toHaveAttribute('aria-describedby', /.+/);
+  await expect(page.getByTestId('m2-delete-brand')).toHaveAttribute('aria-describedby', /.+/);
+});
+
+test('부가 정보는 만들지 않고 폼 아래에 빈 공간도 두지 않는다', async ({ page }) => {
+  for (const text of ['부가 정보', '담당자', '소속', '사업장 주소', '제조사 정보']) {
+    await expect(page.getByText(text, { exact: true })).toHaveCount(0);
+  }
+  const form = page.getByTestId('m2-form');
+  const lastBottom = await form.evaluate((el) => el.lastElementChild!.getBoundingClientRect().bottom + el.scrollTop - el.getBoundingClientRect().top);
+  expect(await form.evaluate((el) => el.scrollHeight)).toBeLessThanOrEqual(Math.max(lastBottom + 1, (await form.boundingBox())!.height));
+});
