@@ -6,6 +6,15 @@
 
 import { shouldBootstrapBackendSession } from '../lib/api/session.ts';
 import { validateLoginForm } from '../lib/auth/login-form.ts';
+import {
+  LOGIN_GIF_GRAPHEME_ORANGE_RATIO,
+  computeCoverMapping,
+  graphemeSamplePoints,
+  isGraphemeOnOrange,
+  isLoginGifOrangePixel,
+  shouldDarkenGrapheme,
+  splitGraphemes,
+} from '../lib/auth/login-gif-contrast.ts';
 
 let pass = 0;
 let fail = 0;
@@ -39,6 +48,57 @@ check('/login 만 제외', shouldBootstrapBackendSession('/login') === false);
 for (const path of ['/', '/brand', '/jobs/new', '/jobs/1', '/login-help']) {
   check(`${path} 는 유지`, shouldBootstrapBackendSession(path) === true);
 }
+
+console.log('\n[3] 주황 판별 — pixlate_login.gif 실측 색');
+check('검정 → false', !isLoginGifOrangePixel(0, 0, 0));
+check('어두운 번짐(43,17,8) → false', !isLoginGifOrangePixel(43, 17, 8));
+check('대비 전환점 아래(135,56,29) → false', !isLoginGifOrangePixel(135, 56, 29));
+check('대비 전환점(148,60,33) → true', isLoginGifOrangePixel(148, 60, 33));
+check('GIF 대표 주황(254,105,55) → true', isLoginGifOrangePixel(254, 105, 55));
+check('GIF 최대값(255,107,58) → true', isLoginGifOrangePixel(255, 107, 58));
+check('흰색 → false', !isLoginGifOrangePixel(255, 255, 255));
+check('회색 → false', !isLoginGifOrangePixel(153, 153, 153));
+check('따뜻한 밝은 회색(200,190,180) → false', !isLoginGifOrangePixel(200, 190, 180));
+check('노란색(254,229,0) → false', !isLoginGifOrangePixel(254, 229, 0));
+check('빨강(255,0,0) → false(G>B 아님)', !isLoginGifOrangePixel(255, 0, 0));
+
+console.log('\n[4] 글자 전환 기준');
+check('기준 0.5', LOGIN_GIF_GRAPHEME_ORANGE_RATIO === 0.5);
+check('0/9 → normal', !shouldDarkenGrapheme(0, 9));
+check('4/9 → normal', !shouldDarkenGrapheme(4, 9));
+check('5/9 → dark', shouldDarkenGrapheme(5, 9));
+check('9/9 → dark', shouldDarkenGrapheme(9, 9));
+check('샘플 없음 → normal', !shouldDarkenGrapheme(0, 0));
+
+console.log('\n[5] grapheme');
+check('한글 음절 단위', splitGraphemes('검수합니다.').join('|') === '검|수|합|니|다|.');
+check('공백·쉼표 유지, 이어 붙이면 원문', splitGraphemes('필요한 순간, 당신').join('') === '필요한 순간, 당신');
+check('조합형 한글(ᄒ+ᅡ+ᆫ)은 한 글자', splitGraphemes('\u1112\u1161\u11ab').length === 1);
+check('이모지 결합은 한 글자', splitGraphemes('👩‍💻').length === 1);
+
+console.log('\n[6] object-fit: cover 좌표');
+const source = { width: 1120, height: 1080 };
+const same = computeCoverMapping(source, source);
+check('1120×1080 → 1:1, crop 없음', same.scale === 1 && same.sourceX === 0 && same.sourceY === 0);
+const laptop = computeCoverMapping({ width: 840, height: 900 }, source);
+check('840×900 → 높이 기준 배율, 좌우 crop 56', Math.abs(laptop.scale - 900 / 1080) < 1e-9 && Math.abs(laptop.sourceX - 56) < 1e-9 && laptop.sourceY === 0);
+const wide = computeCoverMapping({ width: 1120, height: 800 }, source);
+check('1120×800 → 폭 기준 배율, 위아래 crop 140', wide.scale === 1 && wide.sourceX === 0 && wide.sourceY === 140);
+check('샘플 3×3 = 9지점', graphemeSamplePoints({ left: 0, top: 0, width: 12, height: 18 }).length === 9);
+check('샘플은 상자 안', graphemeSamplePoints({ left: 10, top: 20, width: 12, height: 18 }).every((p) => p.x > 10 && p.x < 22 && p.y > 20 && p.y < 38));
+const ORANGE = [254, 105, 55];
+const BLACK = [0, 0, 0];
+const glyph = { left: 100, top: 100, width: 12, height: 18 };
+check('전부 주황 → dark', isGraphemeOnOrange(glyph, same, () => ORANGE));
+check('전부 검정 → normal', !isGraphemeOnOrange(glyph, same, () => BLACK));
+check('왼쪽 1칸만 주황(3/9) → normal', !isGraphemeOnOrange(glyph, same, (x) => (x < 104 ? ORANGE : BLACK)));
+check('왼쪽 2칸 주황(6/9) → dark', isGraphemeOnOrange(glyph, same, (x) => (x < 108 ? ORANGE : BLACK)));
+const seen = [];
+isGraphemeOnOrange({ left: 84, top: 0, width: 6, height: 6 }, laptop, (x, y) => {
+  seen.push([x, y]);
+  return BLACK;
+});
+check('cover crop 을 반영한 원본 좌표를 읽음', Math.abs(seen[0][0] - (56 + 85 / laptop.scale)) < 1e-9 && Math.abs(seen[0][1] - 1 / laptop.scale) < 1e-9);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

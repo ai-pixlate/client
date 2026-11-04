@@ -235,6 +235,240 @@ test('낮은 화면에서 오류 문구가 늘어나도 소셜 버튼과 겹치�
   expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBe(885);
 });
 
+test('입력과 버튼 폭은 모두 432px 이고 x 위치가 같다', async ({ page }) => {
+  for (const [width, height, x] of [[1920, 1080, 1276], [1728, 885, null], [1512, 860, null], [1440, 900, null]] as const) {
+    await page.setViewportSize({ width, height });
+    await open(page);
+    const controls = [email(page), password(page), submit(page), page.getByTestId('g1-social-kakao'), page.getByTestId('g1-social-google'), page.getByTestId('g1-form'), page.getByTestId('g1-social')];
+    const boxes = await Promise.all(controls.map(async (c) => (await c.boundingBox())!));
+    console.log(`[width] ${width}×${height} ${boxes.map((b) => b.width).join(', ')} / x ${boxes[0].x}`);
+    for (const b of boxes) {
+      expect(Math.abs(b.width - 432), `${width}×${height}`).toBeLessThanOrEqual(0.5);
+      expect(b.x).toBe(boxes[0].x);
+    }
+    if (x !== null) {
+      expect(boxes[0].x).toBe(x);
+      expect(boxes[0].x + boxes[0].width).toBe(1708);
+    }
+  }
+});
+
+test('패널이 432px 보다 좁을 때만 줄어들고 넘치지 않는다', async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 800 });
+  await open(page);
+  const panel = await box(page, 'g1-auth-panel');
+  const form = await box(page, 'g1-form');
+  const social = await box(page, 'g1-social');
+  expect(form.width).toBeLessThan(432);
+  expect(form.width).toBe(social.width);
+  expect(form.x + form.width).toBeLessThanOrEqual(panel.x + panel.width);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(900);
+});
+
+const SUBCOPY_LINES = ['AI가 분석하고 번역하고 검수합니다.', '필요한 순간, 당신 옆엔 픽슬레이트'];
+const graphemes = (page: Page) => page.getByTestId('g1-brand-subcopy').locator('[data-g1-grapheme]');
+
+/** 지정한 원본 좌표 사각형만 주황인 프레임을 주는 ImageDecoder 대역. 실제 GIF 프레임 타이밍에 의존하지 않는다 */
+async function useSyntheticGif(page: Page) {
+  await page.addInitScript(() => {
+    const w = window as unknown as { __orange: { x: number; y: number; w: number; h: number } | null; ImageDecoder: unknown };
+    w.__orange = null;
+    w.ImageDecoder = class {
+      static isTypeSupported() {
+        return Promise.resolve(true);
+      }
+      completed = Promise.resolve();
+      tracks = { ready: Promise.resolve(), selectedTrack: { frameCount: 1 } };
+      async decode() {
+        const canvas = new OffscreenCanvas(1120, 1080);
+        const g = canvas.getContext('2d')!;
+        g.fillStyle = '#000';
+        g.fillRect(0, 0, 1120, 1080);
+        if (w.__orange) {
+          g.fillStyle = '#FF6B3A';
+          g.fillRect(w.__orange.x, w.__orange.y, w.__orange.w, w.__orange.h);
+        }
+        return { image: new VideoFrame(canvas, { timestamp: 0, duration: 40_000 }) };
+      }
+      close() {}
+    };
+  });
+}
+
+/** 글자 index 범위를 덮는 원본 좌표 사각형을 cover 식으로 직접 계산해 주황으로 칠한다 */
+async function paintOrangeBehind(page: Page, from: number, to: number) {
+  await page.evaluate(
+    ([start, end]) => {
+      const panel = document.querySelector('[data-testid=g1-brand-layer]')!.getBoundingClientRect();
+      const spans = Array.from(document.querySelectorAll('[data-testid=g1-brand-subcopy] [data-g1-grapheme]')).slice(start, end);
+      const rects = spans.map((s) => s.getBoundingClientRect());
+      const left = Math.min(...rects.map((r) => r.left)) - panel.left;
+      const right = Math.max(...rects.map((r) => r.right)) - panel.left;
+      const top = Math.min(...rects.map((r) => r.top)) - panel.top;
+      const bottom = Math.max(...rects.map((r) => r.bottom)) - panel.top;
+      const scale = Math.max(panel.width / 1120, panel.height / 1080);
+      const cropX = (1120 - panel.width / scale) / 2;
+      const cropY = (1080 - panel.height / scale) / 2;
+      (window as unknown as { __orange: unknown }).__orange = { x: cropX + left / scale, y: cropY + top / scale, w: (right - left) / scale, h: (bottom - top) / scale };
+    },
+    [from, to],
+  );
+}
+
+const darkIndexes = (page: Page) =>
+  page.evaluate(() =>
+    Array.from(document.querySelectorAll('[data-testid=g1-brand-subcopy] [data-g1-grapheme]')).flatMap((s, i) => (s.hasAttribute('data-on-orange') ? [i] : [])),
+  );
+
+test('보조 문구는 글자 span 으로 그려지고 문장 이름을 유지하며 줄 폭이 그대로다', async ({ page }) => {
+  await open(page);
+  for (const line of SUBCOPY_LINES) {
+    const group = page.getByRole('group', { name: line });
+    await expect(group).toHaveText(line);
+    expect(await group.locator('[data-g1-grapheme]').count()).toBe(Array.from(line).length);
+    await expect(group.locator('[data-g1-grapheme]').first()).toHaveAttribute('aria-hidden', 'true');
+    // 글자를 나눠도 자간·kerning 이 유지되어 통문장과 폭이 같다. 차이는 span 별 1/64px 반올림 누적뿐이다
+    const widths = await group.evaluate((p, text) => {
+      const range = document.createRange();
+      range.selectNodeContents(p);
+      const split = range.getBoundingClientRect().width;
+      const plain = document.createElement('span');
+      plain.textContent = text;
+      plain.style.whiteSpace = 'nowrap';
+      p.after(plain);
+      const whole = plain.getBoundingClientRect().width;
+      plain.remove();
+      return { split, whole };
+    }, line);
+    expect(Math.abs(widths.split - widths.whole)).toBeLessThanOrEqual(0.5);
+  }
+  await expect(graphemes(page).first()).toHaveCSS('color', 'rgb(153, 153, 153)');
+  // 다른 문구는 글자 단위로 나누지 않는다
+  await expect(page.getByTestId('g1-brand-micro').locator('[data-g1-grapheme]')).toHaveCount(0);
+  await expect(page.getByTestId('g1-brand-footer').locator('[data-g1-grapheme]')).toHaveCount(0);
+});
+
+for (const [width, height] of [[1920, 1080], [1440, 900], [1728, 885]] as const) {
+  test(`${width}×${height} 주황 뒤의 글자만 #171717 이 되고 지나가면 #999 로 돌아오며 위치는 그대로다`, async ({ page }) => {
+    await page.setViewportSize({ width, height });
+    await useSyntheticGif(page);
+    await open(page);
+    await expect(page.getByTestId('g1-brand-layer')).toHaveAttribute('data-gif-contrast', 'running');
+    await expect.poll(() => darkIndexes(page)).toEqual([]);
+    const rectsBefore = await graphemes(page).evaluateAll((all) => all.map((s) => { const r = s.getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; }));
+
+    // "분석하" (index 4~6)
+    await paintOrangeBehind(page, 4, 7);
+    await expect.poll(() => darkIndexes(page)).toEqual([4, 5, 6]);
+    await expect(graphemes(page).nth(5)).toHaveCSS('color', 'rgb(23, 23, 23)');
+    await expect(graphemes(page).nth(3)).toHaveCSS('color', 'rgb(153, 153, 153)');
+    await expect(graphemes(page).nth(7)).toHaveCSS('color', 'rgb(153, 153, 153)');
+    const weight = await graphemes(page).nth(5).evaluate((s) => getComputedStyle(s).fontWeight);
+    expect(weight).toBe(await graphemes(page).nth(0).evaluate((s) => getComputedStyle(s).fontWeight));
+    const rectsDuring = await graphemes(page).evaluateAll((all) => all.map((s) => { const r = s.getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; }));
+    expect(rectsDuring).toEqual(rectsBefore);
+
+    // 둘째 줄로 이동하면 첫 줄은 복귀한다
+    const firstLineCount = Array.from(SUBCOPY_LINES[0]).length;
+    await paintOrangeBehind(page, firstLineCount, firstLineCount + 2);
+    await expect.poll(() => darkIndexes(page)).toEqual([firstLineCount, firstLineCount + 1]);
+
+    await page.evaluate(() => {
+      (window as unknown as { __orange: unknown }).__orange = null;
+    });
+    await expect.poll(() => darkIndexes(page)).toEqual([]);
+    await expect(graphemes(page).nth(5)).toHaveCSS('color', 'rgb(153, 153, 153)');
+  });
+}
+
+test('창 크기가 바뀌면 글자 위치와 crop 을 다시 계산한다', async ({ page }) => {
+  await useSyntheticGif(page);
+  await open(page);
+  await expect(page.getByTestId('g1-brand-layer')).toHaveAttribute('data-gif-contrast', 'running');
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await paintOrangeBehind(page, 4, 7);
+  await expect.poll(() => darkIndexes(page)).toEqual([4, 5, 6]);
+});
+
+test('실제 GIF 를 canvas 로 재생하고 프레임이 첫 프레임에 멈추지 않는다', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await open(page);
+  await expect(page.getByTestId('g1-brand-layer')).toHaveAttribute('data-gif-contrast', 'running');
+  await expect(page.getByTestId('g1-brand-gif-canvas')).toBeVisible();
+  await expect(page.getByTestId('g1-brand-gif-canvas')).toHaveCSS('object-fit', 'cover');
+  const fingerprint = () =>
+    page.getByTestId('g1-brand-gif-canvas').evaluate((c: HTMLCanvasElement) => {
+      const small = document.createElement('canvas');
+      small.width = 56;
+      small.height = 54;
+      const g = small.getContext('2d')!;
+      g.drawImage(c, 0, 0, 56, 54);
+      return Array.from(g.getImageData(0, 0, 56, 54).data).reduce((h, v) => (h * 31 + v) | 0, 0);
+    });
+  const first = await fingerprint();
+  await expect.poll(fingerprint).not.toBe(first);
+  expect(errors).toEqual([]);
+});
+
+test('GIF 를 받지 못하면 문구는 #999 로 남고 오류가 나지 않는다', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.route('**/auth/pixlate_login.gif', (route) => route.abort());
+  // MSW service worker 를 거치는 fetch 는 page.route 로 막히지 않아 fetch 자체를 실패시킨다
+  await page.addInitScript(() => {
+    const original = window.fetch.bind(window);
+    window.fetch = (input, init) => (String(input).includes('pixlate_login.gif') ? Promise.reject(new TypeError('network')) : original(input, init));
+  });
+  await open(page);
+  await page.waitForTimeout(300);
+  await expect(page.getByTestId('g1-brand-gif-canvas')).toBeHidden();
+  expect(await darkIndexes(page)).toEqual([]);
+  await expect(graphemes(page).first()).toHaveCSS('color', 'rgb(153, 153, 153)');
+  expect(errors).toEqual([]);
+});
+
+test('재생 중 디코딩이 실패하면 img 와 #999 로 돌아간다', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await useSyntheticGif(page);
+  await open(page);
+  await expect(page.getByTestId('g1-brand-layer')).toHaveAttribute('data-gif-contrast', 'running');
+  await paintOrangeBehind(page, 4, 7);
+  await expect.poll(() => darkIndexes(page)).toEqual([4, 5, 6]);
+  await page.evaluate(() => {
+    (window as unknown as { __orange: unknown }).__orange = 'break';
+    OffscreenCanvas.prototype.getContext = () => {
+      throw new Error('decode failed');
+    };
+  });
+  await expect(page.getByTestId('g1-brand-gif-canvas')).toBeHidden();
+  await expect(page.getByTestId('g1-brand-gif')).toBeVisible();
+  expect(await darkIndexes(page)).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+test('ImageDecoder 미지원 브라우저는 img 로 재생하고 문구는 #999 다', async ({ page }) => {
+  await page.addInitScript(() => {
+    delete (window as unknown as { ImageDecoder?: unknown }).ImageDecoder;
+  });
+  await open(page);
+  await page.waitForTimeout(300);
+  await expect(page.getByTestId('g1-brand-gif')).toBeVisible();
+  await expect(page.getByTestId('g1-brand-gif-canvas')).toBeHidden();
+  expect(await darkIndexes(page)).toEqual([]);
+});
+
+test('모션 감소 환경은 추적을 멈추고 #999 를 유지한다', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await useSyntheticGif(page);
+  await open(page);
+  await paintOrangeBehind(page, 4, 7);
+  await page.waitForTimeout(300);
+  await expect(page.getByTestId('g1-brand-gif-canvas')).toBeHidden();
+  expect(await darkIndexes(page)).toEqual([]);
+});
+
 test('이메일·비밀번호는 실제 input 이며 비밀번호는 가려진다', async ({ page }) => {
   await open(page);
   await expect(email(page)).toHaveAttribute('type', 'email');
