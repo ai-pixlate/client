@@ -1,12 +1,11 @@
 'use client';
 
-import { Fragment, Suspense, useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { Fragment, Suspense, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
 import {
   useCreateJobMutation,
   useAnalyzeJobMutation,
-  useCancelJobMutation,
   useMasterCategoriesQuery,
   usePatchJobMutation,
 } from '@/lib/queries/pixlate';
@@ -14,7 +13,6 @@ import type { ApiRegulatoryClass } from '@/lib/api/job-schema';
 import { isApiMockingEnabled } from '@/lib/api/session';
 import { REGULATORY_CLASS_LABELS } from '@/lib/job/regulatory-class-labels';
 import { MOCK_BRAND_ID } from '@/lib/mock-api/fixtures';
-import { N1ExitDialog } from './_components/n1-exit-dialog';
 import { RegulatoryClassDropdown, type RegulatoryClassOption } from './_components/regulatory-class-dropdown';
 import { SizeSelection } from './_components/size-selection';
 import { SourceImageUploadStatus } from './_components/source-image-upload-status';
@@ -31,7 +29,7 @@ import { isImeComposingKeyEvent } from './_lib/ime';
 import { N1_SIZE_CHANGE_BLOCK_LINES, getN1SubmitBlockMessages, isN1Ready, resolveN1BrandId, requiresOtcType } from './_lib/n1-readiness';
 import { INITIAL_SIZE_SELECTION, sizeSelectionReducer } from './_lib/size-selection';
 import { useSourceImageUploads } from './_lib/use-source-image-uploads';
-import { StepNav } from '../[jobId]/_components/step-nav';
+import { S0Rail } from '../_components/s0-rail';
 
 // ─────────────────────────────────────────────────────────────────
 // UI용 임시 상수 — 실제 백엔드 연결 시 API 데이터로 교체할 것
@@ -514,7 +512,6 @@ function NewJobPageInner() {
   const createMutation = useCreateJobMutation();
   const patchMutation = usePatchJobMutation();
   const analyzeMutation = useAnalyzeJobMutation();
-  const cancelJobMutation = useCancelJobMutation();
 
   // ── 폼 상태 ─────────────────────────────────────────────────────
   const [targetCountry, setTargetCountry] = useState('');
@@ -545,17 +542,6 @@ function NewJobPageInner() {
   const [productCode, setProductCode] = useState('');
 
   const [isDragOver, setIsDragOver] = useState(false);
-
-  // ── 나가기 확인 ─────────────────────────────────────────────────
-  // ✕는 draft job 유무로 동작이 갈린다(N1ExitDialog 주석) — 작업이 있으면 DELETE /jobs/{jobId} 성공 뒤에만 나간다.
-  const [showExitConfirm, setShowExitConfirm] = useState(false);
-  const exitButtonRef = useRef<HTMLButtonElement>(null);
-  const { reset: resetCancelJob, isPending: isCancellingJob } = cancelJobMutation;
-  const closeExitConfirm = useCallback(() => {
-    if (isCancellingJob) return;
-    setShowExitConfirm(false);
-    resetCancelJob();
-  }, [isCancellingJob, resetCancelJob, setShowExitConfirm]);
 
   // ── 카테고리 선택 모달 (Figma 381:6293) ─────────────────────────
   const [categoryModalOpen, setCategoryModalOpen] = useState(false);
@@ -751,15 +737,6 @@ function NewJobPageInner() {
     }
   };
 
-  const handleExitConfirm = () => {
-    // TODO: M1 보관함 route가 바뀌면 함께 교체
-    if (!draftJobId) {
-      router.push('/');
-      return;
-    }
-    cancelJobMutation.mutate(draftJobId, { onSuccess: () => router.push('/') });
-  };
-
   const handleRetryUpload = (localId: string) => {
     if (draftJobId) void retryImage(draftJobId, localId);
   };
@@ -780,39 +757,8 @@ function NewJobPageInner() {
     // 별도로 <link>를 넣거나 font-family를 다시 걸지 않는다(body에서
     // 상속받는다).
     <div className="flex h-screen w-full bg-white">
-      {/* N1 Figma 재정합(재수정) — Figma(525:3023) 실측: X 버튼(608:1434)
-          x=40,y=40,w=40,h=40 → bottom=80. StepNav(608:1440) x=36,y=150,
-          w=44,h=860(1080 프레임 기준). 이전 시도는 "top:calc(50%+40px)
-          -translate-y-1/2"로 Figma의 1080-프레임 공식을 그대로 옮겼는데,
-          이 공식은 뷰포트 높이가 1080보다 많이 작아지면(예: 800px) 계산된
-          top이 X 버튼의 bottom(80)보다 작아져 1번 step이 X 버튼 뒤로
-          들어가 버린다(실측 확인: 1440×800에서 겹침 재현). Figma의 860px
-          자체를 억지로 재현하는 대신, X 버튼 bottom(80)+여유 20px=100px를
-          "항상 지켜야 할 최소 상단 여백"으로 고정하고, 그 아래 남는 공간을
-          모두 StepNav에 준다 — 뷰포트가 얼마나 짧아지든 1번 step은 X
-          버튼보다 항상 아래에서 시작한다(공식이 아니라 고정 오프셋 + 남는
-          공간 채우기라 음수가 될 수 없다). */}
-      <div className="relative ml-9 h-full w-[44px] shrink-0">
-        <button
-          type="button"
-          ref={exitButtonRef}
-          onClick={() => setShowExitConfirm(true)}
-          // [다음] 처리 중(POST /jobs 응답 전 포함)에는 막는다 — 나간 뒤 작업이 생겨 남는 것을 피한다
-          disabled={isSubmitting}
-          aria-label="보관함으로 나가기"
-          className="absolute top-10 left-1 z-20 flex size-10 shrink-0 items-center justify-center rounded-md border border-[#eaeaea] bg-white text-[#171717] transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          {/* Figma(925:2530 "보관함으로 나가기") 실측: 16px Glyph 박스
-              안에서 inset-1/4(사방 25%=4px)만큼 들여 그려진다 — 실제
-              X선은 박스 전체가 아니라 가운데 8×8 영역(4~12)에만 있다. */}
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path d="M4 4L12 12M12 4L4 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-          </svg>
-        </button>
-        <div className="absolute inset-0 pt-[max(100px,calc(100vh-930px))] pb-[70px]">
-          <StepNav currentStep="N1" />
-        </div>
-      </div>
+      {/* [다음] 처리 중(POST /jobs 응답 전 포함)에는 ✕를 막는다 — 나간 뒤 작업이 생겨 남는 것을 피한다 */}
+      <S0Rail currentStep="N1" jobId={draftJobId} exitDisabled={isSubmitting} />
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {/* 헤더 — X 버튼이 좌측 rail로 옮겨가면서, 여기는 이제 제목/설명 행만
@@ -1457,17 +1403,6 @@ function NewJobPageInner() {
         />
       )}
 
-      {/* 나가기 / 작업 취소 확인 */}
-      {showExitConfirm && (
-        <N1ExitDialog
-          hasDraftJob={draftJobId !== null}
-          isCancelling={isCancellingJob}
-          cancelFailed={cancelJobMutation.isError}
-          onDismiss={closeExitConfirm}
-          onConfirm={handleExitConfirm}
-          returnFocusRef={exitButtonRef}
-        />
-      )}
     </div>
   );
 }

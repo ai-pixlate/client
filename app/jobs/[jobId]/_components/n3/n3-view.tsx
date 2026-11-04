@@ -1,7 +1,6 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import Link from 'next/link';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { ApiRequestError } from '@/lib/api/pixlate';
@@ -23,7 +22,7 @@ import {
   N3_LIST_DETAIL_GAP,
   N3_LIST_WIDTH,
 } from '@/lib/n3/layout';
-import { StepNav } from '../step-nav';
+import { S0Rail } from '@/app/jobs/_components/s0-rail';
 import { DetailPanel } from './detail-panel';
 import { SectionCropThumbnail } from './section-crop-thumbnail';
 import { SectionListCard } from './section-list-card';
@@ -32,7 +31,7 @@ import { SectionListCard } from './section-list-card';
 // N3 — 섹션 확인 (Figma 1422:10176 「N3 섹션 확인 / 디폴트」, PRD v3.5.10 F-SEC-02·03)
 //
 // 구조:
-// - 좌측 rail(나가기 버튼 + StepNav)
+// - 좌측 rail(S0Rail)
 // - 섹션 목록(sectionOrder 순 단일 목록 — 포함/제외를 나누지 않고 재정렬도 없다)
 // - 선택 섹션 판정 상세(DetailPanel)
 // - 선택 섹션 이미지(SourceImage + bbox crop)
@@ -104,16 +103,6 @@ function ProceedBubble({
   );
 }
 
-function ExitIcon() {
-  // N2(n2-analysis-view.tsx)와 동일 패턴 재사용 — Figma(849:7241) glyph는
-  // 7일 만료 원격 asset이라 커밋 코드에 하드링크하지 않는다.
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path d="M4 4L12 12M12 4L4 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 export function N3View({ jobId }: { jobId: string }) {
   const queryClient = useQueryClient();
   const sectionsQuery = useSectionsQuery(jobId);
@@ -170,19 +159,7 @@ export function N3View({ jobId }: { jobId: string }) {
 
   return (
     <div className="flex h-full w-full bg-white">
-      {/* 좌측 rail — 나가기 버튼 + StepNav (N2와 동일 패턴 재사용) */}
-      <div className="relative ml-9 h-full w-[44px] shrink-0">
-        <Link
-          href="/"
-          aria-label="보관함으로 나가기"
-          className="absolute top-10 left-1/2 z-20 flex size-10 -translate-x-1/2 shrink-0 items-center justify-center rounded-md border border-[#eaeaea] bg-white text-[#171717] transition-colors hover:bg-gray-50"
-        >
-          <ExitIcon />
-        </Link>
-        <div className="absolute inset-0 pt-[100px] pb-6">
-          <StepNav currentStep="N3" />
-        </div>
-      </div>
+      <S0Rail currentStep="N3" jobId={jobId} />
 
       <div
         className="flex min-h-0 min-w-0 flex-1 flex-col pt-[60px] pr-8 pb-[clamp(24px,5.56vh,60px)]"

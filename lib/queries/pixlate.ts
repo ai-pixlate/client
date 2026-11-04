@@ -124,8 +124,11 @@ export function usePatchJobMutation() {
 }
 
 export function useCancelJobMutation() {
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (jobId: string) => cancelJob(jobId),
+    // 저장된 작업을 취소하면 보관함 카드도 사라진다
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: pixlateKeys.library() }),
   });
 }
 

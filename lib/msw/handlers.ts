@@ -752,6 +752,7 @@ interface MockN1Draft {
 }
 
 let n1Draft: MockN1Draft | null = null;
+let mockJobCancelled = false;
 
 /** 계약: JPG·PNG만 허용 (그 외는 파일별 UNSUPPORTED_FORMAT 실패) */
 function isAcceptedSourceImage(file: File): boolean {
@@ -788,6 +789,7 @@ export const handlers = [
     // (리셋 기준값이 N2인 이유는 위 jobState 선언부 주석 참고)
     resetJobState();
     n1Draft = { patch: {}, sourceImages: [], nextSourceImageId: 101, failedOnce: new Set() };
+    mockJobCancelled = false;
 
     const draft: ApiJob = {
       ...jobState,
@@ -905,10 +907,11 @@ export const handlers = [
     return HttpResponse.json(response);
   }),
 
-  // 작업 취소 (API-JOB-04) — 204 본문 없음. N1 draft를 버린다(이후 같은 jobId 요청은 404).
+  // 작업 취소 (API-JOB-04) — 204 본문 없음. 어느 단계의 작업이든 취소된다. 취소한 작업을 다시 취소하면 404 다.
   http.delete('/jobs/:jobId', ({ params }) => {
     const jobId = params.jobId as string;
-    if (jobId !== MOCK_JOB_ID || !n1Draft) return contractError(404, 'NOT_FOUND', `Job '${jobId}' not found`);
+    if (jobId !== MOCK_JOB_ID || mockJobCancelled) return contractError(404, 'NOT_FOUND', `Job '${jobId}' not found`);
+    mockJobCancelled = true;
     n1Draft = null;
     return new HttpResponse(null, { status: 204 });
   }),

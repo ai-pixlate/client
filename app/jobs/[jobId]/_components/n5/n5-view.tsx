@@ -1,7 +1,6 @@
 'use client';
 
 import { useState } from 'react';
-import Link from 'next/link';
 
 import { REGULATORY_CLASS_LABELS } from '@/lib/job/regulatory-class-labels';
 import {
@@ -16,7 +15,7 @@ import {
 import { buildSectionStatus, getBlockTaskFailures, toBlockViewModel, toJobMetaViewModel, toPreviewViewModel } from '@/lib/n5/adapter';
 import type { BlockTaskFailures, BlockViewModel, JobMetaViewModel, PreviewViewModel, SectionStatusViewModel } from '@/lib/n5/adapter';
 import type { N5ViewMode } from '@/lib/n5/viewport';
-import { StepNav } from '../step-nav';
+import { S0Rail } from '@/app/jobs/_components/s0-rail';
 import { N5Viewport } from './n5-viewport';
 import { N5Panel } from './n5-panel';
 
@@ -109,40 +108,7 @@ function N5Loaded({
 
   return (
     <div className="flex h-full w-full bg-white">
-      {/* 좌측 rail — 나가기 버튼 + StepNav. Figma(544:3168) 실측: 나가기
-          버튼(849:7253)은 x=40,y=40,w=40,h=40로 StepNav와 별개의 떠 있는
-          요소이고, StepNav(585:3283)는 세로 중앙(top:calc(50%+40px))에
-          온다 — N1/N2/N4(processing-stage-layout.tsx)가 이미 쓰는 같은
-          rail 패턴을 그대로 재사용한다(새 레이아웃을 만들지 않는다). 이전
-          구조는 나가기 버튼을 본문 위 헤더 줄로 올려서, 그 아래 gray
-          workspace가 Figma처럼 세로 꽉 채움(top:0, height:1080)이 아니라
-          헤더 높이만큼 아래로 밀려 있었다. */}
-      <div className="relative ml-9 h-full w-[44px] shrink-0">
-        <Link
-          href="/"
-          aria-label="보관함으로 나가기"
-          className="absolute top-10 left-1 z-20 flex size-10 shrink-0 items-center justify-center rounded-md border border-[#eaeaea] bg-white text-[#171717] transition-colors hover:bg-gray-50"
-        >
-          {/* N5 3차 디테일 정렬 — Figma(849:7253 "Card/Navigation/Close", 16px
-              glyph) 실제 asset을 내려받아 좌표를 확인했다: X선은 16px 박스
-              전체가 아니라 가운데 8×8 영역(4~12, inset 25%)에만 있고,
-              stroke-width는 1.25다. 기존엔 2~14(12×12, inset 12.5%) +
-              strokeWidth 1.5라 Figma보다 크고 굵었다. */}
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path
-              d="M4 4L12 12M12 4L4 12"
-              stroke="currentColor"
-              strokeWidth="1.25"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </Link>
-        {/* Figma 586:4807 — y150~1010(860). 낮은 창은 나가기 버튼 아래 100을 최소로 유지한다(N1과 같은 규칙) */}
-        <div className="absolute inset-0 pt-[max(100px,calc(100vh-930px))] pb-[70px]">
-          <StepNav currentStep="N5" />
-        </div>
-      </div>
+      <S0Rail currentStep="N5" jobId={jobId} />
 
       {/* 본문: 중앙 viewer + 우측 panel. 세로 padding을 주지 않는다 — Figma의
           gray workspace(602:4953)가 top:0, height:1080(뷰포트 전체)이라,
@@ -203,8 +169,11 @@ export function N5View({ jobId }: { jobId: string }) {
 
   if (isLoading) {
     return (
-      <div className="flex flex-1 items-center justify-center bg-white">
-        <span className="text-sm text-gray-400">검수 데이터를 불러오는 중...</span>
+      <div className="flex h-full w-full bg-white">
+        <S0Rail currentStep="N5" jobId={jobId} />
+        <div className="flex min-w-0 flex-1 items-center justify-center">
+          <span className="text-sm text-gray-400">검수 데이터를 불러오는 중...</span>
+        </div>
       </div>
     );
   }
@@ -212,10 +181,13 @@ export function N5View({ jobId }: { jobId: string }) {
   if (isError) {
     const err = jobQuery.error ?? blocksQuery.error ?? previewQuery.error;
     return (
-      <div className="flex flex-1 items-center justify-center bg-white">
-        <p className="text-sm text-red-500">
-          {err instanceof Error ? err.message : '오류가 발생했습니다.'}
-        </p>
+      <div className="flex h-full w-full bg-white">
+        <S0Rail currentStep="N5" jobId={jobId} />
+        <div className="flex min-w-0 flex-1 items-center justify-center">
+          <p className="text-sm text-red-500">
+            {err instanceof Error ? err.message : '오류가 발생했습니다.'}
+          </p>
+        </div>
       </div>
     );
   }

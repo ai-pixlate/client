@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import Link from 'next/link';
 
 import {
   useJobTasksQuery,
@@ -21,7 +20,7 @@ import {
   resolveSaveFileName,
   writeFileToDirectory,
 } from '@/lib/n6/directory-save';
-import { StepNav } from './step-nav';
+import { S0Rail } from '@/app/jobs/_components/s0-rail';
 import { ZoomControls } from './n5/n5-toolbar';
 
 // ─────────────────────────────────────────────────────────────────
@@ -830,27 +829,7 @@ export function N6ResultView({ jobId }: { jobId: string }) {
 
   return (
     <div className="flex h-full w-full bg-white">
-      {/* 좌측 rail — 나가기 버튼 + StepNav. 9/23 Figma 정렬: node 849:7259(나가기)는
-          x≈39,y≈39,40×40로 StepNav(585:3392)와 별개의 떠 있는 요소이고, N5(n5-view.tsx)가
-          이미 쓰는 rail 패턴(ml-9 + 44px 컬럼 + 버튼 절대 중앙 배치)과 정확히 같은 값이다 —
-          같은 패턴을 그대로 재사용한다. 이전 구조는 나가기 버튼을 헤더 줄 위에 mb-6로
-          쌓아, 헤더 텍스트가 Figma보다 아래로(버튼 높이+여백만큼) 밀려 보였다. */}
-      <div className="relative ml-9 h-full w-[44px] shrink-0">
-        <Link
-          href="/"
-          aria-label="보관함으로 나가기"
-          className="absolute top-10 left-1/2 z-20 flex size-10 -translate-x-1/2 shrink-0 items-center justify-center rounded-md border border-[#eaeaea] bg-white text-[#171717] transition-colors hover:bg-gray-50"
-        >
-          {/* n5-view.tsx와 같은 실측 asset 좌표(가운데 8×8, strokeWidth 1.25) —
-              화면마다 다른 X 아이콘을 새로 그리지 않고 그대로 재사용한다. */}
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path d="M4 4L12 12M12 4L4 12" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </Link>
-        <div className="absolute inset-0 pt-[100px] pb-6">
-          <StepNav currentStep="N6" />
-        </div>
-      </div>
+      <S0Rail currentStep="N6" jobId={jobId} />
 
       {/* 본문 — 헤더 텍스트(655:6107)와 Final Preview(643:5526)가 Figma에서 같은
           x(=140)에서 시작한다. 9/23 재확인 — 이전엔 이 pl에 N5(n5-view.tsx)의

@@ -1,6 +1,6 @@
-import Link from 'next/link';
 
-import { StepNav, type StepNavStep } from '../step-nav';
+import { S0Rail } from '@/app/jobs/_components/s0-rail';
+import type { StepNavStep } from '@/app/jobs/_components/step-nav';
 
 // ─────────────────────────────────────────────────────────────────
 // N2/N4 공용 processing 화면 레이아웃 (Figma 660:4139 "N2 / 분석중" ·
@@ -34,8 +34,9 @@ export interface ProcessingFailedItem {
 }
 
 export interface ProcessingStageLayoutProps {
-  /** 좌측 StepNav의 현재 단계 — N1~N6 공용 StepNav를 그대로 쓴다. */
+  /** S0 rail 의 현재 단계 */
   currentStep: StepNavStep;
+  jobId: string;
   header: {
     title: string;
     description: string;
@@ -65,17 +66,6 @@ export interface ProcessingStageLayoutProps {
   failedItems: ProcessingFailedItem[];
   /** 실패 안내 배너 제목 — 기본은 부분 실패 문구다. */
   failedItemsTitle?: string;
-}
-
-function ExitIcon() {
-  // Figma("보관함으로 나가기") glyph는 7일 만료 원격 asset이라 커밋
-  // 코드에 하드링크하지 않는다 — N1/N2가 이미 같은 위치·크기의 아이콘을
-  // 이 inline SVG로 재구현해 뒀으므로 그 패턴을 그대로 재사용한다.
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path d="M4 4L12 12M12 4L4 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-    </svg>
-  );
 }
 
 function PauseIcon() {
@@ -126,6 +116,7 @@ function StageRow({ no, label, state }: ProcessingStep) {
 }
 
 export function ProcessingStageLayout({
+  jobId,
   currentStep,
   header,
   statusTagLabel,
@@ -140,19 +131,7 @@ export function ProcessingStageLayout({
 }: ProcessingStageLayoutProps) {
   return (
     <div className="flex h-full w-full bg-white">
-      {/* 좌측 rail — 나가기 버튼 + StepNav (N1과 같은 패턴 재사용). */}
-      <div className="relative ml-9 h-full w-[44px] shrink-0">
-        <Link
-          href="/"
-          aria-label="보관함으로 나가기"
-          className="absolute top-10 left-1/2 z-20 flex size-10 -translate-x-1/2 shrink-0 items-center justify-center rounded-md border border-[#eaeaea] bg-white text-[#171717] transition-colors hover:bg-gray-50"
-        >
-          <ExitIcon />
-        </Link>
-        <div className="absolute inset-0 pt-[100px] pb-6">
-          <StepNav currentStep={currentStep} />
-        </div>
-      </div>
+      <S0Rail currentStep={currentStep} jobId={jobId} />
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {/* 헤더 — Figma("N1 / Header") 그대로 고정값이다. */}
