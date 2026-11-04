@@ -64,6 +64,9 @@ Secret(JWT, access token, password 등)은 절대 Git에 커밋하지 않습니�
 | `npm run verify:library-view` | M1 보관함 화면 로직(검색·국가 필터·최신순·선택·날짜 포맷) 자동 검증 (브라우저 불필요) |
 | `npm run verify:msw-flag` | `isApiMockingEnabled()`(MSW on/off SSOT)가 `NEXT_PUBLIC_API_MOCKING` 값 조합에서 `NODE_ENV`와 무관하게 정확히 동작하는지 자동 검증 (브라우저 불필요) |
 | `npm run verify:displayed-progress` | N2·N4 처리 화면 표시 %(관측 단계는 상한만 염·점프·감소 없음·처리 중 100 없음·실패 시 멈춤·완료 응답 뒤 100 표시) 순수 계산 자동 검증 (브라우저 불필요) |
+| `npm run verify:login-form` | G1 로그인 입력 검증(이메일 빈 값·형식, 비밀번호 빈 값), 보조 문구 GIF 대비 판별(주황 판별·글자 전환 기준·cover 좌표), 개발용 자동 로그인 제외 경로 순수 함수 자동 검증 (브라우저 불필요) |
+| `npx playwright test e2e/g1-login.spec.ts --project=chromium` | G1 로그인 화면(`/login`, UI 전용) 검증 — Figma 835:6511 위치, GIF 로드, 입력 검증, 키보드, 비동작 버튼, 인증 요청 0건 (Chromium, dev 서버 필요) |
+| `E2E_REAL_BACKEND_MODE=1 npx playwright test e2e/g1-login-backend-mode.spec.ts --project=chromium` | Mock을 끈 dev 서버(`NEXT_PUBLIC_API_MOCKING=disabled npm run dev`)에서 `/login`은 인증 요청 0건, 다른 화면은 개발용 자동 로그인 유지인지 검증 |
 | `npm run generate:openapi-types` | 최신 OpenAPI 계약(`ai-pixlate.github.io/server/openapi.yaml`)에서 타입 재생성 → `lib/api/generated/openapi.d.ts` (직접 수정 금지, 재실행으로만 갱신) |
 | `npm run make:ruler` | 스파이크용 눈금 테스트 이미지 재생성 |
 | `npm run make:n5-section-fixtures` | N5 실제 계약(v3.4.2, 섹션별 원문/렌더 이미지) mock fixture 이미지 재생성 |

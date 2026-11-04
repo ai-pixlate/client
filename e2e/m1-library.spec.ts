@@ -24,6 +24,9 @@ async function cardOrder(page: import('@playwright/test').Page) {
     .evaluateAll((els) => els.map((el) => Number(el.getAttribute('data-testid')!.replace('library-card-', ''))));
 }
 
+const ORANGE_BORDER = 'rgb(255, 106, 56)';
+const GRAY_BORDER = 'rgb(234, 234, 234)';
+
 test.use({ viewport: { width: 1920, height: 1080 } });
 
 test.beforeEach(async ({ page }) => {
@@ -763,6 +766,109 @@ test('10페이지 이상이면 두 자리 번호를 이어 붙여도 pagination�
   await page.getByTestId('library-page-prev').click();
   expect(await pageLabels(page)).toEqual(['1', 'more', '9', 'more', '12']);
   await check();
+});
+
+// ─────────────────────────────────────────────────────────────────
+// Checkbox/Compact(1063:5156) 실측 — 20×20 frame, 18×18 visual, 1px border, radius 4, check 16×16.
+// 평상시에는 outline·shadow가 없고, 포커스 링은 키보드 포커스에서만 켜진다.
+// ─────────────────────────────────────────────────────────────────
+
+async function expectCheckboxGeometry(page: import('@playwright/test').Page, testId: string, color: string) {
+  const input = page.getByTestId(testId);
+  const visual = input.locator('xpath=following-sibling::span[1]');
+  const frame = await box(input.locator('xpath=parent::span'));
+  const inner = await box(visual);
+  expect([frame.width, frame.height]).toEqual([20, 20]);
+  expect([inner.width, inner.height]).toEqual([18, 18]);
+  expect([inner.x - frame.x, inner.y - frame.y]).toEqual([1, 1]);
+  await expect(input).toHaveCSS('opacity', '0');
+  await expect(visual).toHaveCSS('border-top-width', '1px');
+  await expect(visual).toHaveCSS('border-top-color', color);
+  await expect(visual).toHaveCSS('border-top-left-radius', '4px');
+  await expect(visual).toHaveCSS('background-color', 'rgb(255, 255, 255)');
+  await expect(visual).toHaveCSS('outline-style', 'none');
+  await expect(visual).toHaveCSS('box-shadow', 'none');
+}
+
+async function mouseClick(page: import('@playwright/test').Page, testId: string) {
+  const target = await box(page.getByTestId(testId));
+  await page.mouse.click(target.x + target.width / 2, target.y + target.height / 2);
+}
+
+test('카드·전체선택 checkbox는 같은 Figma 값을 쓴다 — unchecked / checked', async ({ page }) => {
+  await expectCheckboxGeometry(page, 'library-card-select-9003', GRAY_BORDER);
+  await expectCheckboxGeometry(page, 'library-select-all', GRAY_BORDER);
+  await expect(card(page, 9003)).toHaveCSS('border-top-width', '1px');
+
+  await mouseClick(page, 'library-card-select-9003');
+  await expectCheckboxGeometry(page, 'library-card-select-9003', ORANGE_BORDER);
+  await expect(card(page, 9003)).toHaveCSS('border-top-width', '1px');
+  await expect(card(page, 9003)).toHaveCSS('border-top-color', ORANGE_BORDER);
+  await expect(card(page, 9003)).toHaveCSS('outline-style', 'none');
+  await expect(card(page, 9003)).toHaveCSS('box-shadow', 'none');
+
+  const glyph = await box(page.getByTestId('library-card-select-9003').locator('xpath=following-sibling::span[1]').getByTestId('checkbox-check-glyph'));
+  expect([glyph.width, glyph.height]).toEqual([16, 16]);
+
+  await mouseClick(page, 'library-select-all');
+  await expectCheckboxGeometry(page, 'library-select-all', ORANGE_BORDER);
+});
+
+test('마우스로 고른 뒤 modifier 키를 눌러도 포커스 링이 켜지지 않는다 — checkbox·label 클릭 모두', async ({ page }) => {
+  await mouseClick(page, 'library-card-select-9003');
+  await page.keyboard.press('Shift');
+  await page.keyboard.press('Meta');
+  await expectCheckboxGeometry(page, 'library-card-select-9003', ORANGE_BORDER);
+
+  await mouseClick(page, 'library-select-all-label');
+  await expect(page.getByTestId('library-select-all')).toBeChecked();
+  await page.keyboard.press('Shift');
+  await expectCheckboxGeometry(page, 'library-select-all', ORANGE_BORDER);
+});
+
+test('키보드 포커스에서는 링이 보이고 Space로 토글되며, visual 크기는 그대로다', async ({ page }) => {
+  const input = page.getByTestId('library-card-select-9003');
+  const visual = input.locator('xpath=following-sibling::span[1]');
+  await input.focus();
+  await expect(visual).toHaveCSS('outline-style', 'solid');
+
+  await page.keyboard.press('Space');
+  await expect(input).toBeChecked();
+  await expect(input).toBeFocused();
+  await expect(visual).toHaveCSS('outline-style', 'solid');
+  const inner = await box(visual);
+  expect([inner.width, inner.height]).toEqual([18, 18]);
+
+  await page.keyboard.press('Space');
+  await expect(input).not.toBeChecked();
+  await page.keyboard.press('Tab');
+  await expect(visual).toHaveCSS('outline-style', 'none');
+});
+
+test('마우스 선택 흐름 — 선택·해제·다중 선택·전체선택·전체해제와 선택 수', async ({ page }) => {
+  const count = page.getByTestId('library-selected-count');
+
+  await mouseClick(page, 'library-card-select-9001');
+  await expect(page.getByTestId('library-card-select-9001')).toBeChecked();
+  await expect(count).toContainText('1');
+
+  await mouseClick(page, 'library-card-select-9003');
+  await expect(count).toContainText('2');
+  await expect(card(page, 9001)).toHaveCSS('border-top-color', ORANGE_BORDER);
+  await expect(card(page, 9003)).toHaveCSS('border-top-color', ORANGE_BORDER);
+
+  await mouseClick(page, 'library-card-select-9001');
+  await expect(page.getByTestId('library-card-select-9001')).not.toBeChecked();
+  await expect(count).toContainText('1');
+  await expect(card(page, 9001)).toHaveCSS('border-top-color', GRAY_BORDER);
+
+  await mouseClick(page, 'library-select-all');
+  await expect(count).toContainText('4');
+  for (const id of [9001, 9002, 9003, 9004]) await expect(page.getByTestId(`library-card-select-${id}`)).toBeChecked();
+
+  await mouseClick(page, 'library-select-all');
+  await expect(page.getByTestId('library-select-all')).not.toBeChecked();
+  for (const id of [9001, 9002, 9003, 9004]) await expect(page.getByTestId(`library-card-select-${id}`)).not.toBeChecked();
 });
 
 // ─────────────────────────────────────────────────────────────────
