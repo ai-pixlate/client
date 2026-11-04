@@ -1,10 +1,12 @@
-import { Fragment } from 'react';
+'use client';
+
+import { Fragment, useId } from 'react';
 
 // ─────────────────────────────────────────────────────────────────
-// 좌측 진행 단계 네비게이션 (표시 전용, 클릭 이동 불가)
-// N1(Figma 525:3023) / N3(555:4792) / N5(585:3283)가 동일한 6단계 구조를
-// 공유한다 — currentStep 이전은 done, 해당 단계는 current, 이후는 upcoming으로
-// 파생한다. N4/N6도 이 컴포넌트를 그대로 재사용할 수 있다.
+// 좌측 진행 단계 네비게이션 (PRD F-NAV-01) — MVP 는 단계 이동이 없다. 눌러도 이동하지 않고 툴팁으로 12월 기능임을 알린다.
+// F-NAV-02(이전 단계 이동)가 오기 전까지 단계 상태에 따라 이동 가능 여부를 나누지 않는다.
+// Figma 진행단계(298:2872)의 6개 variant 를 하나로 그린다 — currentStep 이전은 done,
+// 해당 단계는 current, 이후는 upcoming으로 파생한다. 화면에서는 S0Rail 을 거쳐 쓴다.
 //
 // 세로 line은 원(배지) 사이의 "빈 구간"에만 존재하는 실제 형제 엘리먼트다
 // (flex-1인 1px div) — absolute 오버레이 + z-index로 라벨 뒤에 깔던 이전
@@ -30,6 +32,8 @@ const STEPS: { id: StepNavStep; label: string }[] = [
 
 type StepStatus = 'done' | 'current' | 'upcoming';
 
+const STEP_MOVE_TOOLTIP = '단계 이동은 12월 구현 예정입니다.';
+
 export function StepNav({ currentStep }: { currentStep: StepNavStep }) {
   const currentIndex = STEPS.findIndex((s) => s.id === currentStep);
 
@@ -45,16 +49,7 @@ export function StepNav({ currentStep }: { currentStep: StepNavStep }) {
                 className={`w-px flex-1 ${i <= currentIndex ? 'bg-[#ff6a38]' : 'bg-[#eaeaea]'}`}
               />
             )}
-            <div className="flex flex-col items-center gap-3.5">
-              <StepBadge index={i + 1} status={status} />
-              <p
-                className={`w-11 text-center text-[12px] tracking-[-0.04em] ${
-                  status === 'current' ? 'font-normal text-[#171717]' : 'font-light text-[#707070]'
-                }`}
-              >
-                {step.label}
-              </p>
-            </div>
+            <StepItem label={step.label} index={i + 1} status={status} />
           </Fragment>
         );
       })}
@@ -62,10 +57,52 @@ export function StepNav({ currentStep }: { currentStep: StepNavStep }) {
   );
 }
 
+function StepItem({ label, index, status }: { label: string; index: number; status: StepStatus }) {
+  const tooltipId = useId();
+  return (
+    <div className="relative flex flex-col items-center">
+      <button
+        type="button"
+        aria-current={status === 'current' ? 'step' : undefined}
+        aria-disabled="true"
+        aria-describedby={tooltipId}
+        data-step-status={status}
+        // Safari 는 클릭해도 버튼에 포커스를 주지 않는다. 눌렀을 때 안내가 남도록 직접 옮긴다
+        onClick={(event) => event.currentTarget.focus()}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') event.currentTarget.blur();
+        }}
+        className="peer flex cursor-default flex-col items-center gap-3.5 rounded-[4px] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ff6a38]"
+      >
+        <StepBadge index={index} status={status} />
+        <span
+          className={`block w-11 text-center text-[12px] tracking-[-0.04em] ${
+            status === 'current' ? 'font-normal text-[#171717]' : 'font-light text-[#707070]'
+          }`}
+        >
+          {label}
+        </span>
+      </button>
+      {/* N1 인증 마크·N3 진행 말풍선과 같은 모양. rail 이 왼쪽 끝이라 단계 오른쪽에 둔다 */}
+      <div
+        id={tooltipId}
+        role="tooltip"
+        className="pointer-events-none invisible absolute top-3 left-full z-40 ml-[14px] -translate-y-1/2 rounded-[8px] border border-[#ff6a38] bg-white p-2.5 text-[12px] leading-[normal] font-light tracking-[-0.04em] whitespace-nowrap text-[#ff6a38] peer-hover:visible peer-focus:visible"
+      >
+        {STEP_MOVE_TOOLTIP}
+        <span
+          aria-hidden="true"
+          className="absolute top-1/2 left-0 size-2.5 -translate-x-1/2 -translate-y-1/2 rotate-45 border-b border-l border-[#ff6a38] bg-white"
+        />
+      </div>
+    </div>
+  );
+}
+
 function StepBadge({ index, status }: { index: number; status: StepStatus }) {
   if (status === 'done') {
     return (
-      <div className="flex size-6 shrink-0 items-center justify-center rounded-xl bg-[#171717]">
+      <span className="flex size-6 shrink-0 items-center justify-center rounded-xl bg-[#171717]">
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden>
           <path
             d="M2.5 6.2 5 8.7 9.5 3.5"
@@ -75,21 +112,21 @@ function StepBadge({ index, status }: { index: number; status: StepStatus }) {
             strokeLinejoin="round"
           />
         </svg>
-      </div>
+      </span>
     );
   }
 
   if (status === 'current') {
     return (
-      <div className="flex size-6 shrink-0 items-center justify-center rounded-xl bg-[#ff6a38] text-[12px] font-medium text-white">
+      <span className="flex size-6 shrink-0 items-center justify-center rounded-xl bg-[#ff6a38] text-[12px] font-medium text-white">
         {index}
-      </div>
+      </span>
     );
   }
 
   return (
-    <div className="flex size-6 shrink-0 items-center justify-center rounded-xl border border-[#eaeaea] bg-white text-[12px] font-light text-[#707070]">
+    <span className="flex size-6 shrink-0 items-center justify-center rounded-xl border border-[#eaeaea] bg-white text-[12px] font-light text-[#707070]">
       {index}
-    </div>
+    </span>
   );
 }
