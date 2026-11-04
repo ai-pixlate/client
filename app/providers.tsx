@@ -3,7 +3,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
-import { ensureBackendSession, isApiMockingEnabled } from "@/lib/api/session";
+import { ensureBackendSession, isApiMockingEnabled, shouldBootstrapBackendSession } from "@/lib/api/session";
 
 /**
  * 서버에서 가져오는 모든 데이터는 TanStack Query를 통해서만 다룹니다.
@@ -70,7 +70,7 @@ export default function Providers({ children }: { children: React.ReactNode }) {
   // 실행하면 된다. 실백엔드 모드에서는 그 직후 개발용 JWT를 받아 둔다.
   useEffect(() => {
     enableMocking()
-      .then(() => (isApiMockingEnabled() ? Promise.resolve() : ensureBackendSession()))
+      .then(() => (isApiMockingEnabled() || !shouldBootstrapBackendSession(window.location.pathname) ? Promise.resolve() : ensureBackendSession()))
       .then(() => setMockingReady(true))
       .catch((err) => {
         console.error(err);

@@ -24,6 +24,14 @@ export function setAccessToken(token: string | null): void {
   else sessionStorage.removeItem(TOKEN_KEY);
 }
 
+/**
+ * 앱 시작 때 개발용 자동 로그인을 실행할 화면인지 판단한다. 로그인 화면은 서버 인증 요청을 보내지 않아야 하므로 제외한다.
+ * 다른 화면의 동작은 그대로이고, 로그인 화면에서 넘어가도 첫 API 호출 때 authorizedFetch 가 세션을 만든다.
+ */
+export function shouldBootstrapBackendSession(pathname: string): boolean {
+  return pathname !== '/login';
+}
+
 export function ensureBackendSession(): Promise<void> {
   if (isApiMockingEnabled()) return Promise.resolve();
   if (typeof window === 'undefined') return Promise.resolve();
