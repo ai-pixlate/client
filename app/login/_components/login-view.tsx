@@ -2,10 +2,27 @@
 
 /* eslint-disable @next/next/no-img-element -- GIF 와 고정 크기 Figma 자산은 next/image 최적화 대상이 아니다 */
 
-import { type FormEvent, useRef, useState } from 'react';
+import { type CSSProperties, type FormEvent, useRef, useState } from 'react';
 
 import { CompactCheckbox } from '@/app/_components/library/library-controls';
 import { type LoginFormErrors, validateLoginForm } from '@/lib/auth/login-form';
+
+/**
+ * 세로 리듬(Figma 1920×1080 기준). 높이가 1080 이상이면 Figma 값 그대로이고, 낮아지면 요소·글자 크기는 두고 여백만 줄인다.
+ *   --g1-unit  : 내부 여백 공통 배율. 모든 내부 여백이 같은 비율(115 : 60 : 60 : 32)로 줄어든다.
+ *   --g1-outer : 바깥 큰 여백(위 120 · 폼과 소셜 사이 148 · 아래 120) 배율. 내부 여백을 뺀 남은 높이를 나눠 쓴다.
+ * 고정 높이 425 = 로고 39 + 제목 64 + 입력 158 + 버튼 45 + 링크 17 + 소셜 102, 바깥 여백 합 388 = 120 + 148 + 120.
+ * 0.0926vh·424.9px 는 1080 에서 1px 을 살짝 넘겨 min() 이 정확히 1px 을 고르게 하는 값이다(부동소수 오차로 0.02px 줄어드는 것 방지).
+ */
+const VERTICAL_RHYTHM = {
+  '--g1-unit': 'min(1px, 0.0926vh)',
+  '--g1-logo-to-heading': 'max(80px, calc(115 * var(--g1-unit)))',
+  '--g1-section': 'max(40px, calc(60 * var(--g1-unit)))',
+  '--g1-button-to-links': 'max(24px, calc(32 * var(--g1-unit)))',
+  '--g1-micro-to-headline': 'max(64px, calc(91.19 * var(--g1-unit)))',
+  '--g1-outer': 'min(1px, calc((100vh - 424.9px - var(--g1-logo-to-heading) - 2 * var(--g1-section) - var(--g1-button-to-links)) / 388))',
+  '--g1-edge': 'max(24px, calc(120 * var(--g1-outer)))',
+} as CSSProperties;
 
 function BrandLayer() {
   return (
@@ -15,22 +32,21 @@ function BrandLayer() {
     >
       {/* Figma IMAGE FILL 과 같은 의미. 장식이므로 대체 텍스트를 비운다. 파일이 없어도 검은 배경 위 문구는 유지된다 */}
       <img data-testid="g1-brand-gif" alt="" src="/auth/pixlate_login.gif" className="absolute inset-0 size-full max-w-none object-cover" />
-      <img
-        data-testid="g1-brand-logo"
-        alt="pix/ate"
-        src="/auth/pixlate-wordmark-on-dark.svg"
-        className="absolute left-[60px] top-[120px] h-[39.22px] w-[128px] max-w-none"
-      />
-      <p data-testid="g1-brand-micro" className="absolute left-[60px] top-[178.81px] text-[11px] font-light leading-[13px] tracking-[0.88px] whitespace-nowrap text-[#999]">
-        AI LOCALIZATION WORKSPACE
-      </p>
-      <div data-testid="g1-brand-headline" className="absolute left-[60px] top-[283px] max-w-[calc(100%-120px)] text-[46px] font-semibold leading-[1.28] text-white">
-        <p>상세페이지를 번역하는 것에서,</p>
-        <p>현지에 맞게 완성하는 것까지.</p>
-      </div>
-      <div data-testid="g1-brand-subcopy" className="absolute left-[60px] top-[433px] text-[16px] leading-[19px] tracking-[-0.48px] text-[#999]">
-        <p>AI가 분석하고 번역하고 검수합니다.</p>
-        <p>필요한 순간, 당신 옆엔 픽슬레이트</p>
+      {/* 오른쪽 로고와 같은 위쪽 여백을 쓴다. 문구는 한 흐름이라 줄이 바뀌어도 겹치지 않는다 */}
+      <div className="absolute inset-x-[60px] top-[var(--g1-edge)]">
+        <img data-testid="g1-brand-logo" alt="pix/ate" src="/auth/pixlate-wordmark-on-dark.svg" className="block h-[39.22px] w-[128px] max-w-none" />
+        <p data-testid="g1-brand-micro" className="mt-[19.59px] text-[11px] font-light leading-[13px] tracking-[0.88px] whitespace-nowrap text-[#999]">
+          AI LOCALIZATION WORKSPACE
+        </p>
+        <div data-testid="g1-brand-headline" className="mt-[var(--g1-micro-to-headline)] text-[46px] font-semibold leading-[1.28] text-white">
+          <p>상세페이지를 번역하는 것에서,</p>
+          <p>현지에 맞게 완성하는 것까지.</p>
+        </div>
+        {/* 제목과 보조 문구는 한 묶음이라 줄이지 않는다 */}
+        <div data-testid="g1-brand-subcopy" className="mt-[32.24px] text-[16px] leading-[19px] tracking-[-0.48px] text-[#999]">
+          <p>AI가 분석하고 번역하고 검수합니다.</p>
+          <p>필요한 순간, 당신 옆엔 픽슬레이트</p>
+        </div>
       </div>
       <p data-testid="g1-brand-footer" className="absolute bottom-[64px] left-[60px] text-[12px] font-light leading-[14px] tracking-[-0.48px] whitespace-nowrap text-[#999]">
         LOCALIZE · VERIFY · EXPORT
@@ -146,11 +162,11 @@ export function LoginView() {
   };
 
   return (
-    <main data-testid="g1-login" className="flex min-h-screen w-full">
+    <main data-testid="g1-login" style={VERTICAL_RHYTHM} className="flex min-h-screen w-full">
       <BrandLayer />
       <section
         data-testid="g1-auth-panel"
-        className="flex min-w-0 flex-1 flex-col bg-white pl-[min(156px,8.1251vw)] pr-6 pt-[min(120px,11.12vh)] pb-[min(120px,11.12vh)]"
+        className="flex min-w-0 flex-1 flex-col bg-white pl-[min(156px,8.1251vw)] pr-6 pt-[var(--g1-edge)] pb-[var(--g1-edge)]"
       >
         <img data-testid="g1-auth-logo" alt="pix/ate" src="/auth/pixlate-wordmark-on-light.svg" className="block h-[39px] w-[128px] max-w-none shrink-0" />
 
@@ -158,14 +174,14 @@ export function LoginView() {
           data-testid="g1-form"
           noValidate
           onSubmit={handleSubmit}
-          className="mb-6 mt-[min(115px,10.65vh)] flex w-full max-w-[432px] flex-col gap-[60px]"
+          className="mb-6 mt-[var(--g1-logo-to-heading)] flex w-full max-w-[432px] flex-col gap-[var(--g1-section)]"
         >
-          <div className="flex flex-col gap-3">
+          <div data-testid="g1-heading" className="flex flex-col gap-3">
             <p className="text-[12px] font-light leading-[14px] tracking-[-0.48px] text-[#999]">WELCOME BACK</p>
             <h1 className="text-[32px] font-bold leading-[38px] tracking-[-0.64px] text-[#171717]">다시 만나서 반가워요.</h1>
           </div>
 
-          <div className="flex flex-col gap-3">
+          <div data-testid="g1-fields" className="flex flex-col gap-3">
             <TextField
               id="login-email"
               label="이메일"
@@ -202,7 +218,7 @@ export function LoginView() {
             </div>
           </div>
 
-          <div className="flex flex-col items-center gap-8">
+          <div className="flex flex-col items-center gap-[var(--g1-button-to-links)]">
             {/* Figma Button LG Primary */}
             <button
               type="submit"
