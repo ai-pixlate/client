@@ -1,3 +1,7 @@
+'use client';
+
+import { useRef } from 'react';
+
 // M1 보관함 공용 컨트롤 — Figma 719:7428 안의 디자인 시스템 인스턴스를 옮긴다.
 //
 // 이 프로젝트에는 공용 디자인 시스템 컴포넌트 디렉터리가 없어 화면이 Figma 컴포넌트를
@@ -16,6 +20,10 @@ export const UNSELECTED_BORDER_CLASS = 'border-[#eaeaea]';
  *   Checked(1063:5146):   border #FF6A38 + Card/Action/Check 16 glyph(visual 좌상단 0,0 기준 — Figma inside
  *                         stroke라 CSS border 안쪽 기준으로는 −1px)
  *   disabled: N6 산출물 checkbox와 같은 표현 — border #EAEAEA + bg #F5F5F5, check 없음, not-allowed
+ *
+ * 포커스 링(outline)은 Figma에 없는 키보드 전용 표현이다. 마우스로 고른 뒤 input에 포커스가 남으면 Shift·Cmd만
+ * 눌러도 Chrome이 :focus-visible로 바꿔 링이 켜지고, 선택 상태가 26px 이중 사각형처럼 보였다(실측).
+ * 그래서 Space가 아닌 경로(마우스·label 클릭)로 바뀌면 포커스를 놓아 평상시에는 Figma의 1px border만 남긴다.
  */
 export function CompactCheckbox({
   id,
@@ -33,6 +41,8 @@ export function CompactCheckbox({
   label?: string;
   testId?: string;
 }) {
+  const toggledBySpace = useRef(false);
+
   return (
     <span className="relative flex size-5 shrink-0 items-center justify-center">
       <input
@@ -40,7 +50,14 @@ export function CompactCheckbox({
         id={id}
         checked={checked}
         disabled={disabled}
-        onChange={onChange}
+        onKeyDown={(event) => {
+          toggledBySpace.current = event.key === ' ';
+        }}
+        onChange={(event) => {
+          onChange();
+          if (!toggledBySpace.current) event.currentTarget.blur();
+          toggledBySpace.current = false;
+        }}
         aria-label={label}
         data-testid={testId}
         className="peer absolute inset-0 size-5 cursor-pointer opacity-0 disabled:cursor-not-allowed"
