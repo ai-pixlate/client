@@ -32,10 +32,10 @@ const LOGIN_GIF_SRC = '/auth/pixlate_login.gif';
 /** 오른쪽 입력·버튼 묶음의 폭(Figma 432). 폼과 소셜이 같은 값을 쓰고, 패널이 더 좁을 때만 줄어든다 */
 const AUTH_CONTROL_WIDTH = 'w-[432px] max-w-full';
 
-/** 글자별로 색이 바뀌는 보조 문구 한 줄. 읽기는 문장 단위로 하도록 글자 span 은 보조기기에서 숨긴다. 색만 바뀌어 위치가 변하지 않는다 */
-function ContrastLine({ text }: { text: string }) {
+/** 글자별로 색이 바뀌는 GIF 위 문구 한 줄. 읽기는 문장 단위로 하도록 글자 span 은 보조기기에서 숨긴다. 색만 바뀌어 위치가 변하지 않는다 */
+function ContrastLine({ text, className, testId }: { text: string; className?: string; testId?: string }) {
   return (
-    <p role="group" aria-label={text}>
+    <p role="group" aria-label={text} data-testid={testId} className={className}>
       {splitGraphemes(text).map((grapheme, index) => (
         <span key={index} aria-hidden="true" data-g1-grapheme="" className="text-[#999] transition-colors duration-[80ms] ease-linear data-[on-orange]:text-[#171717]">
           {grapheme}
@@ -63,9 +63,7 @@ function BrandLayer() {
       {/* 오른쪽 로고와 같은 위쪽 여백을 쓴다. 문구는 한 흐름이라 줄이 바뀌어도 겹치지 않는다 */}
       <div className="absolute inset-x-[60px] top-[var(--g1-edge)]">
         <img data-testid="g1-brand-logo" alt="pix/ate" src="/auth/pixlate-wordmark-on-dark.svg" className="block h-[39.22px] w-[128px] max-w-none" />
-        <p data-testid="g1-brand-micro" className="mt-[19.59px] text-[11px] font-light leading-[13px] tracking-[0.88px] whitespace-nowrap text-[#999]">
-          AI LOCALIZATION WORKSPACE
-        </p>
+        <ContrastLine testId="g1-brand-micro" text="AI LOCALIZATION WORKSPACE" className="mt-[19.59px] text-[11px] font-light leading-[13px] tracking-[0.88px] whitespace-nowrap" />
         <div data-testid="g1-brand-headline" className="mt-[var(--g1-micro-to-headline)] text-[46px] font-semibold leading-[1.28] text-white">
           <p>상세페이지를 번역하는 것에서,</p>
           <p>현지에 맞게 완성하는 것까지.</p>
@@ -76,9 +74,7 @@ function BrandLayer() {
           <ContrastLine text="필요한 순간, 당신 옆엔 픽슬레이트" />
         </div>
       </div>
-      <p data-testid="g1-brand-footer" className="absolute bottom-[64px] left-[60px] text-[12px] font-light leading-[14px] tracking-[-0.48px] whitespace-nowrap text-[#999]">
-        LOCALIZE · VERIFY · EXPORT
-      </p>
+      <ContrastLine testId="g1-brand-footer" text="LOCALIZE · VERIFY · EXPORT" className="absolute bottom-[64px] left-[60px] text-[12px] font-light leading-[14px] tracking-[-0.48px] whitespace-nowrap" />
     </section>
   );
 }

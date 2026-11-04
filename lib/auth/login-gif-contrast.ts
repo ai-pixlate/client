@@ -1,5 +1,5 @@
 /**
- * G1 왼쪽 보조 문구의 GIF 대비 계산 — 순수 계산(scripts/verify-login-form.mjs 로 Node 에서 검증).
+ * G1 왼쪽 GIF 위 문구의 대비 계산 — 순수 계산(scripts/verify-login-form.mjs 로 Node 에서 검증).
  * 기준값은 pixlate_login.gif 100프레임 실측값이다. 다른 GIF 로 바뀌면 다시 재야 한다.
  */
 
