@@ -3,6 +3,8 @@
 import { use, useEffect, useState } from 'react';
 import Link from 'next/link';
 
+import { S0Rail } from '@/app/jobs/_components/s0-rail';
+import type { StepNavStep } from '@/app/jobs/_components/step-nav';
 import { useJobTasksQuery } from '@/lib/queries/pixlate';
 import type { ApiJobTaskStatus } from '@/lib/api/job-schema';
 import { COMPLETION_PRESENTATION_MS } from '@/lib/processing/displayed-progress';
@@ -51,6 +53,13 @@ const STEP_META: Record<string, { label: string; desc: string }> = {
 };
 const STEP_META_FALLBACK = STEP_META.N2;
 
+/** 화면이 rail 옆을 차지하는 단계 */
+const SCREEN_STEPS: readonly (string | undefined)[] = ['N2', 'N3', 'N4', 'N5', 'N6'];
+
+function toStepNavStep(step: string | undefined): StepNavStep | null {
+  return step === 'N1' || SCREEN_STEPS.includes(step) ? (step as StepNavStep) : null;
+}
+
 export default function Page({
   params,
 }: {
@@ -85,16 +94,13 @@ export default function Page({
   // analysisProgress.status 는 보지 않는다(LOCAL_JUDGE_FAILED 부분 제외는 실패가 아니다).
   const isN2Failed = !completion && currentStep === 'N2' && tasksQuery.data?.jobStatus === 'failed';
   const meta = (displayStep && STEP_META[displayStep]) || STEP_META_FALLBACK;
+  const hasScreen = SCREEN_STEPS.includes(displayStep);
 
   return (
-    <div className="flex h-screen flex-col bg-gray-50">
-      {/* 상단 헤더 — N2/N3/N4/N5/N6는 Figma 기준 자체 헤더(StepNav+나가기)를 가지므로 숨긴다 */}
-      {displayStep !== 'N2' &&
-        displayStep !== 'N3' &&
-        displayStep !== 'N4' &&
-        displayStep !== 'N5' &&
-        displayStep !== 'N6' && (
-        <header className="flex h-14 shrink-0 items-center gap-4 border-b bg-white px-6 shadow-sm">
+    <div className="relative flex h-screen flex-col bg-gray-50">
+      {/* 상단 헤더 — 단계를 아는데 자체 화면이 없을 때(N1)만 쓴다. 상태를 모르는 동안에는 단계 라벨을 추측해 보이지 않는다. 왼쪽은 ✕ 자리다 */}
+      {displayStep && !hasScreen && (
+        <header className="flex h-14 shrink-0 items-center gap-4 border-b bg-white pr-6 pl-24 shadow-sm">
           <Link
             href="/"
             className="text-sm text-gray-500 transition-colors hover:text-gray-700"
@@ -111,46 +117,52 @@ export default function Page({
         </header>
       )}
 
-      {/* 본문 */}
-      <div className="flex flex-1 flex-col overflow-hidden">
-        {tasksQuery.isLoading && (
-          <div className="flex flex-1 items-center justify-center">
-            <span className="text-sm text-gray-400">작업 상태를 확인하고 있습니다.</span>
-          </div>
-        )}
+      {/* S0 rail 은 단계 화면 밖에 한 번만 그린다 — 자동 전환에도 작업 취소 확인창과 요청이 유지된다(S0Rail 주석).
+          화면이 없는 동안(상태 조회 중·실패·N1)은 겹쳐 놓아 본문 위치를 바꾸지 않는다. */}
+      <div className={`flex min-h-0 flex-1 ${hasScreen ? 'bg-white' : ''}`}>
+        <S0Rail currentStep={toStepNavStep(displayStep)} jobId={jobId} overlay={!hasScreen} />
 
-        {tasksQuery.isError && (
-          <div className="flex flex-1 items-center justify-center">
-            <p className="text-sm text-red-500">
-              {tasksQuery.error instanceof Error
-                ? tasksQuery.error.message
-                : '오류가 발생했습니다.'}
-            </p>
-          </div>
-        )}
+        {/* 본문. 상태를 모르는 동안 헤더 높이를 비워 두어 안내 문구가 기존 위치에 있게 한다 */}
+        <div className={`flex min-w-0 flex-1 flex-col overflow-hidden ${displayStep ? '' : 'pt-14'}`}>
+          {tasksQuery.isLoading && (
+            <div className="flex flex-1 items-center justify-center">
+              <span className="text-sm text-gray-400">작업 상태를 확인하고 있습니다.</span>
+            </div>
+          )}
 
-        {tasksQuery.data && (
-          <>
-            {displayStep === 'N2' && (
-              <N2AnalysisView
-                jobId={jobId}
-                status={completion?.status ?? tasksQuery.data}
-                isCompleted={completion?.step === 'N2'}
-                isFailed={isN2Failed}
-              />
-            )}
-            {displayStep === 'N3' && <N3View jobId={jobId} />}
-            {displayStep === 'N4' && (
-              <N4ProcessingView
-                jobId={jobId}
-                status={completion?.status ?? tasksQuery.data}
-                isCompleted={completion?.step === 'N4'}
-              />
-            )}
-            {displayStep === 'N5' && <N5View jobId={jobId} />}
-            {displayStep === 'N6' && <N6ResultView jobId={jobId} />}
-          </>
-        )}
+          {tasksQuery.isError && (
+            <div className="flex flex-1 items-center justify-center">
+              <p className="text-sm text-red-500">
+                {tasksQuery.error instanceof Error
+                  ? tasksQuery.error.message
+                  : '오류가 발생했습니다.'}
+              </p>
+            </div>
+          )}
+
+          {tasksQuery.data && (
+            <>
+              {displayStep === 'N2' && (
+                <N2AnalysisView
+                  jobId={jobId}
+                  status={completion?.status ?? tasksQuery.data}
+                  isCompleted={completion?.step === 'N2'}
+                  isFailed={isN2Failed}
+                />
+              )}
+              {displayStep === 'N3' && <N3View jobId={jobId} />}
+              {displayStep === 'N4' && (
+                <N4ProcessingView
+                  jobId={jobId}
+                  status={completion?.status ?? tasksQuery.data}
+                  isCompleted={completion?.step === 'N4'}
+                />
+              )}
+              {displayStep === 'N5' && <N5View jobId={jobId} />}
+              {displayStep === 'N6' && <N6ResultView jobId={jobId} />}
+            </>
+          )}
+        </div>
       </div>
     </div>
   );

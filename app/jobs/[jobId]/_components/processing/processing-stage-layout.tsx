@@ -1,6 +1,4 @@
 
-import { S0Rail } from '@/app/jobs/_components/s0-rail';
-import type { StepNavStep } from '@/app/jobs/_components/step-nav';
 
 // ─────────────────────────────────────────────────────────────────
 // N2/N4 공용 processing 화면 레이아웃 (Figma 660:4139 "N2 / 분석중" ·
@@ -34,9 +32,6 @@ export interface ProcessingFailedItem {
 }
 
 export interface ProcessingStageLayoutProps {
-  /** S0 rail 의 현재 단계 */
-  currentStep: StepNavStep;
-  jobId: string;
   header: {
     title: string;
     description: string;
@@ -116,8 +111,6 @@ function StageRow({ no, label, state }: ProcessingStep) {
 }
 
 export function ProcessingStageLayout({
-  jobId,
-  currentStep,
   header,
   statusTagLabel,
   visual,
@@ -131,8 +124,6 @@ export function ProcessingStageLayout({
 }: ProcessingStageLayoutProps) {
   return (
     <div className="flex h-full w-full bg-white">
-      <S0Rail currentStep={currentStep} jobId={jobId} />
-
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {/* 헤더 — Figma("N1 / Header") 그대로 고정값이다. */}
         <div className="shrink-0 px-10 pt-10 pb-6">

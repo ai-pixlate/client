@@ -225,8 +225,6 @@ export function N4ProcessingView({
 
   return (
     <ProcessingStageLayout
-      currentStep="N4"
-      jobId={jobId}
       header={{
         title: '번역 중',
         description: '확정한 섹션을 번역하고 이미지에 적용하고 있습니다.',

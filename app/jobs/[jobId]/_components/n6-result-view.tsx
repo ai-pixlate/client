@@ -20,7 +20,6 @@ import {
   resolveSaveFileName,
   writeFileToDirectory,
 } from '@/lib/n6/directory-save';
-import { S0Rail } from '@/app/jobs/_components/s0-rail';
 import { ZoomControls } from './n5/n5-toolbar';
 
 // ─────────────────────────────────────────────────────────────────
@@ -829,8 +828,6 @@ export function N6ResultView({ jobId }: { jobId: string }) {
 
   return (
     <div className="flex h-full w-full bg-white">
-      <S0Rail currentStep="N6" jobId={jobId} />
-
       {/* 본문 — 헤더 텍스트(655:6107)와 Final Preview(643:5526)가 Figma에서 같은
           x(=140)에서 시작한다. 9/23 재확인 — 이전엔 이 pl에 N5(n5-view.tsx)의
           calc(6.25vw-80px) 공식을 그대로 재사용했는데, N5와 N6는 Figma 좌측

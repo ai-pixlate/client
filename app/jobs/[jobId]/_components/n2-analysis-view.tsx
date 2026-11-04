@@ -327,8 +327,6 @@ export function N2AnalysisView({
 
   return (
     <ProcessingStageLayout
-      currentStep="N2"
-      jobId={jobId}
       header={{
         title: '이미지 분석',
         description: '등록한 이미지의 텍스트와 구조를 분석하고 있습니다.',

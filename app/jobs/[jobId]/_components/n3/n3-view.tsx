@@ -22,7 +22,6 @@ import {
   N3_LIST_DETAIL_GAP,
   N3_LIST_WIDTH,
 } from '@/lib/n3/layout';
-import { S0Rail } from '@/app/jobs/_components/s0-rail';
 import { DetailPanel } from './detail-panel';
 import { SectionCropThumbnail } from './section-crop-thumbnail';
 import { SectionListCard } from './section-list-card';
@@ -31,7 +30,6 @@ import { SectionListCard } from './section-list-card';
 // N3 — 섹션 확인 (Figma 1422:10176 「N3 섹션 확인 / 디폴트」, PRD v3.5.10 F-SEC-02·03)
 //
 // 구조:
-// - 좌측 rail(S0Rail)
 // - 섹션 목록(sectionOrder 순 단일 목록 — 포함/제외를 나누지 않고 재정렬도 없다)
 // - 선택 섹션 판정 상세(DetailPanel)
 // - 선택 섹션 이미지(SourceImage + bbox crop)
@@ -159,8 +157,6 @@ export function N3View({ jobId }: { jobId: string }) {
 
   return (
     <div className="flex h-full w-full bg-white">
-      <S0Rail currentStep="N3" jobId={jobId} />
-
       <div
         className="flex min-h-0 min-w-0 flex-1 flex-col pt-[60px] pr-8 pb-[clamp(24px,5.56vh,60px)]"
         style={{ paddingLeft: N3_CONTENT_LEFT_INSET }}

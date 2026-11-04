@@ -15,7 +15,6 @@ import {
 import { buildSectionStatus, getBlockTaskFailures, toBlockViewModel, toJobMetaViewModel, toPreviewViewModel } from '@/lib/n5/adapter';
 import type { BlockTaskFailures, BlockViewModel, JobMetaViewModel, PreviewViewModel, SectionStatusViewModel } from '@/lib/n5/adapter';
 import type { N5ViewMode } from '@/lib/n5/viewport';
-import { S0Rail } from '@/app/jobs/_components/s0-rail';
 import { N5Viewport } from './n5-viewport';
 import { N5Panel } from './n5-panel';
 
@@ -108,8 +107,6 @@ function N5Loaded({
 
   return (
     <div className="flex h-full w-full bg-white">
-      <S0Rail currentStep="N5" jobId={jobId} />
-
       {/* 본문: 중앙 viewer + 우측 panel. 세로 padding을 주지 않는다 — Figma의
           gray workspace(602:4953)가 top:0, height:1080(뷰포트 전체)이라,
           이 행 자체가 위아래 여백 없이 h-full을 그대로 채워야 workspace도
@@ -170,7 +167,6 @@ export function N5View({ jobId }: { jobId: string }) {
   if (isLoading) {
     return (
       <div className="flex h-full w-full bg-white">
-        <S0Rail currentStep="N5" jobId={jobId} />
         <div className="flex min-w-0 flex-1 items-center justify-center">
           <span className="text-sm text-gray-400">검수 데이터를 불러오는 중...</span>
         </div>
@@ -182,7 +178,6 @@ export function N5View({ jobId }: { jobId: string }) {
     const err = jobQuery.error ?? blocksQuery.error ?? previewQuery.error;
     return (
       <div className="flex h-full w-full bg-white">
-        <S0Rail currentStep="N5" jobId={jobId} />
         <div className="flex min-w-0 flex-1 items-center justify-center">
           <p className="text-sm text-red-500">
             {err instanceof Error ? err.message : '오류가 발생했습니다.'}
