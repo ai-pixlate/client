@@ -65,7 +65,9 @@ Secret(JWT, access token, password 등)은 절대 Git에 커밋하지 않습니�
 | `npm run verify:n5-failed-drafts` | N5 번역문 미저장 초안(편집·저장 성공/실패 전이, 실패 칸 집계) 자동 검증 (브라우저 불필요) |
 | `npm run verify:n5-review-issues` | N5 저장 전 확인 항목 집계(F-CFM-09)·겹침 진단 계산 자동 검증 (브라우저 불필요) |
 | `npm run verify:n5-typeset` | N5 HTML/CSS 조판 확정 규칙(역할별 기준 style·원본 폭 배율·사용자 글자 배율·박스 선택·ink overflow 경계와 방향·최종 이미지 경계 이탈 감지·CSS 계약) 순수 함수 자동 검증 (브라우저 불필요) |
+| `npm run verify:n5-final-output` | 조판 최종 출력 좌표(include 섹션만 `sectionOrder` 순서로 누적)·최종 이미지 경계 평가·블록 넘침과의 분리·렌더 모델 변환 순수 함수 자동 검증 (브라우저 불필요) |
 | `npx playwright test e2e/n5-typeset-measurement.spec.ts --project=chromium` | N5 조판 브라우저 측정 엔진(`lib/n5/typeset-measurement.ts`) 검증 — dev 전용 harness `/spike/typeset-measure`에서 실제 줄바꿈·DOM baseline·Canvas ink·Pretendard 로딩을 확인하고 픽셀·clean 문서와 대조 (Chromium, dev 서버·Pretendard CDN 필요) |
+| `npx playwright test e2e/n5-typeset-qa-harness.spec.ts --project=chromium` | 조판 QA 화면(`/spike/typeset-measure`, dev 전용) 검증 — `TypesetBlock` 표시와 측정의 일치, 섹션 제외에 따른 `finalOutputOffset` 변화, 블록 넘침·이미지 이탈, 폰트 미준비·글리프 대체 실패 (Chromium, dev 서버 필요) |
 | `npm run verify:library-adapter` | M1 보관함 Adapter(LibraryCard → 카드 ViewModel) 자동 검증 (브라우저 불필요) |
 | `npm run verify:library-view` | M1 보관함 화면 로직(검색·국가 필터·최신순·선택·날짜 포맷) 자동 검증 (브라우저 불필요) |
 | `npm run verify:m2-form` | M2 브랜드 정보 화면 로직(dirty 판정·필수값·변경 항목 열거·로고 파일 형식) 자동 검증 (브라우저 불필요) |
