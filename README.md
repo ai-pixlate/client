@@ -69,6 +69,7 @@ Secret(JWT, access token, password 등)은 절대 Git에 커밋하지 않습니�
 | `npx playwright test e2e/n5-typeset-measurement.spec.ts --project=chromium` | N5 조판 브라우저 측정 엔진(`lib/n5/typeset-measurement.ts`) 검증 — dev 전용 harness `/spike/typeset-measure`에서 실제 줄바꿈·DOM baseline·Canvas ink·Pretendard 로딩을 확인하고 픽셀·clean 문서와 대조 (Chromium, dev 서버·Pretendard CDN 필요) |
 | `npx playwright test e2e/n5-typeset-qa-harness.spec.ts --project=chromium` | 조판 QA 화면(`/spike/typeset-measure`, dev 전용) 검증 — `TypesetBlock` 표시와 측정의 일치, 섹션 제외에 따른 `finalOutputOffset` 변화, 블록 넘침·이미지 이탈, 폰트 미준비·글리프 대체 실패 (Chromium, dev 서버 필요) |
 | `npx playwright test e2e/s0-rail.spec.ts --project=chromium` | S0 전역 프로세스 바(N1~N6) 검증 — 위치, 단계 상태, 단계 이동 안내 툴팁, ✕ 나가기·작업 취소 확인창과 실패 처리 (Chromium, dev 서버 필요) |
+| `npx playwright test e2e/processing-error.spec.ts --project=chromium` | N2·N4 전체 실패 화면 검증 — 표시 조건, 부분 실패 구분, 진행률 정지, 미연결 [다시 시도]·[중단], S0 취소 (Chromium, dev 서버 필요) |
 | `npm run verify:library-adapter` | M1 보관함 Adapter(LibraryCard → 카드 ViewModel) 자동 검증 (브라우저 불필요) |
 | `npm run verify:library-view` | M1 보관함 화면 로직(검색·국가 필터·최신순·선택·날짜 포맷) 자동 검증 (브라우저 불필요) |
 | `npm run verify:msw-flag` | `isApiMockingEnabled()`(MSW on/off SSOT)가 `NEXT_PUBLIC_API_MOCKING` 값 조합에서 `NODE_ENV`와 무관하게 정확히 동작하는지 자동 검증 (브라우저 불필요) |

@@ -247,7 +247,7 @@ test('N4 C — 첫 render 관측이 progress=0.9 여도 04·05 를 함께 render
   expect(log.every((e) => JSON.stringify(e.rows) === JSON.stringify(rowsOf(D, D, D, A, A))), JSON.stringify(log)).toBe(true);
 });
 
-test('N4 D — jobStatus=failed·render=done·progress=1 이어도 완료가 아니고 N4 실패 안내에 머문다', async ({ page }) => {
+test('N4 D — jobStatus=failed·render=done·progress=1 이어도 완료가 아니고 N4 오류 화면에 머문다', async ({ page }) => {
   test.setTimeout(60_000);
   await page.clock.install();
   await setN4Script(page, [
@@ -272,11 +272,11 @@ test('N4 D — jobStatus=failed·render=done·progress=1 이어도 완료가 아
       fail: true,
     },
   ]);
-  await recordN4Snapshots(page);
   await reachN4(page);
   await expect(page.getByRole('heading', { name: '번역 중' })).toBeVisible({ timeout: 5_000 });
 
-  await expect(page.getByText('일부 항목을 처리하지 못했습니다')).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByTestId('processing-error')).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText('번역을 완료하지 못했습니다')).toBeVisible();
   const atFailure = await readProgress(page);
   expect(atFailure).toBeLessThan(100);
 
@@ -285,7 +285,6 @@ test('N4 D — jobStatus=failed·render=done·progress=1 이어도 완료가 아
   expect(await readProgress(page)).toBe(atFailure);
   await expect(page.getByRole('heading', { name: '번역 중' })).toBeVisible();
   await expect(page.locator('[data-testid="n5-panel"]')).toHaveCount(0);
-  expectN4Invariants(await n4Log(page));
 });
 
 // ── 로딩 표현 안정화: 서버 관측 단계 · 표시 % · 실제 완료(N5) 를 분리 ──

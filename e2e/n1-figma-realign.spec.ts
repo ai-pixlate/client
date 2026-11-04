@@ -404,6 +404,24 @@ test.describe('[다음] — brandId 쿼리 없는 Mock 진입', () => {
     expect(posts).toHaveLength(1);
   });
 
+  for (const [width, height] of [[1920, 1080], [1728, 885], [1440, 900]] as const) {
+    test(`${width}×${height} [다음] 툴팁과 화살표가 버튼 중심에 있고 화면 안에 있다`, async ({ page }) => {
+      await page.setViewportSize({ width, height });
+      await page.goto('/jobs/new');
+      await nextButton(page).hover();
+      const tooltip = page.getByTestId('n1-next-tooltip');
+      await expect(tooltip).toBeVisible();
+      await expect(tooltip).toBeInViewport({ ratio: 1 });
+      const center = (b: { x: number; width: number }) => b.x + b.width / 2;
+      const button = center((await nextButton(page).boundingBox())!);
+      const box = center((await tooltip.boundingBox())!);
+      const arrow = center((await tooltip.locator('svg').boundingBox())!);
+      console.log(`[n1-tooltip] ${width}×${height} button ${button} tooltip ${box} arrow ${arrow}`);
+      expect(Math.abs(button - box)).toBeLessThanOrEqual(1);
+      expect(Math.abs(button - arrow)).toBeLessThanOrEqual(1);
+    });
+  }
+
   test('막힌 [다음]은 빠진 항목을 알려 주고, 눌러도 요청 없이 필드 오류를 보여 준다', async ({ page }) => {
     await page.goto('/jobs/new');
     const tooltip = page.getByTestId('n1-next-tooltip');

@@ -302,17 +302,13 @@ test.describe('N2 analysisProgress 상세 진행', () => {
       },
     ]);
 
-    await expect(page.getByText('분석 실패', { exact: true }).first()).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText('이미지 분석에 실패했습니다')).toBeVisible();
-    await expect(page.getByText('이미지 분석을 완료하지 못했습니다.', { exact: true }).first()).toBeVisible();
+    await expect(page.getByTestId('processing-error')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('오류', { exact: true })).toBeVisible();
+    await expect(page.getByText('분석이 중단되었습니다')).toBeVisible();
+    await expect(page.getByText('이미지 분석 중 오류가 발생했습니다.')).toBeVisible();
+    // 진행 안내와 자동 이동 문구는 남기지 않는다
     await expect(page.getByText('상세페이지의 구조와 문맥을 읽고 있습니다.')).toHaveCount(0);
-    await expect(page.getByText('분석을 완료하지 못해 다음 단계로 자동 이동하지 않습니다.')).toBeVisible();
     await expect(page.getByText('분석이 끝나면 섹션 확인 단계로 자동 이동합니다.')).toHaveCount(0);
-    // 서버가 준 판정 실패 값은 그대로 보인다
-    await expect(logCaption(page)).toHaveText('판정 대상 5개 · 완료 2 · 자동 제외 0 · 진행 중 0 · 대기 0 · 실패 1 · 취소 2');
-    // 5단계 목록은 그대로 있고, 실패 상태에서 "진행 중" 행을 남기지 않는다
-    await expectFigmaFiveRows(page);
-    expect(Object.values((await rowsLog(page)).at(-1)!)).not.toContain('진행 중');
     // 화면은 N2 그대로(서버 currentStep 정본)
     await expect(page.getByRole('heading', { name: '이미지 분석' })).toBeVisible();
 
@@ -324,7 +320,7 @@ test.describe('N2 analysisProgress 상세 진행', () => {
     expect(responses.length, '실패 응답 뒤 추가 polling 없음').toBe(countAtFailure);
   });
 
-  test('G-2. analysisProgress 가 없는 레거시 실패 응답에서도 5단계 중 "진행 중" 행을 남기지 않는다', async ({ page }) => {
+  test('G-2. analysisProgress 가 없는 레거시 실패 응답도 전체 실패 화면으로 바뀌고 진행 중 표시를 남기지 않는다', async ({ page }) => {
     await setup(page, [
       { progress: 0, stages: stages('running', 'pending', 'pending'), items: [item(9001, 'ocr', 'job', 'running')] },
       // OpenAPI JobTasksN2Failed 에서 analysisProgress 만 뺀 응답
@@ -336,12 +332,11 @@ test.describe('N2 analysisProgress 상세 진행', () => {
       },
     ]);
 
-    await expect(page.getByText('이미지 분석에 실패했습니다')).toBeVisible({ timeout: 15_000 });
-    await expectFigmaFiveRows(page);
-    await expect(logCaption(page)).toHaveText(DEFAULT_LOG_CAPTION);
+    await expect(page.getByTestId('processing-error')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('이미지 분석 중 오류가 발생했습니다.')).toBeVisible();
     const rows = await rowsLog(page);
     expect(rows.some((r) => Object.values(r).includes('진행 중')), '실패 전에는 진행 중 행이 있었다').toBe(true);
-    expect(Object.values(rows.at(-1)!), JSON.stringify(rows)).not.toContain('진행 중');
+    await expect(page.getByText('진행 중', { exact: true })).toHaveCount(0);
   });
 
   test('H. analysisProgress 를 보이다 N3 로 넘어가면 완료 표시를 거쳐 N3 로 이동한다', async ({ page }) => {
