@@ -1,39 +1,23 @@
 import { type Page, expect, test } from '@playwright/test';
 
 // ─────────────────────────────────────────────────────────────────
-// G1 로그인 (Figma 835:6511) — Chromium, MSW Mock.
-// 실제 백엔드 로그인을 검증하지 않는다. MSW 는 page.route 로 가로챌 수 없어 window.fetch 를 감싸 호출을 기록·제어한다.
+// G1 로그인 (Figma 835:6511) — UI 전용, Chromium.
+// 로그인 API 가 실제 서버에 없어 화면·입력 검증·키보드·비동작 버튼과 "인증 요청 0건"만 확인한다.
+// Mock 을 끈 환경의 자동 로그인 범위는 g1-login-backend-mode.spec.ts 가 맡는다.
 // ─────────────────────────────────────────────────────────────────
 
 test.skip(({ browserName }) => browserName !== 'chromium', 'G1 검증은 Chromium 기준이다');
 test.use({ viewport: { width: 1920, height: 1080 } });
 
-type AuthCall = { url: string; method: string; credentials?: string; body: string | null };
-
-/** hold=true 면 window.__releaseLogin() 전까지 응답을 잡아 둔다 */
-async function recordFetch(page: Page, options: { hold?: boolean; networkError?: boolean } = {}) {
-  await page.addInitScript((opts) => {
-    const w = window as unknown as { __calls: AuthCall[]; __releaseLogin: () => void };
-    w.__calls = [];
-    const original = window.fetch.bind(window);
-    let release = () => {};
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    w.__releaseLogin = () => release();
-    window.fetch = async (input, init) => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-      if (/\/auth\//.test(url)) {
-        w.__calls.push({ url, method: init?.method ?? 'GET', credentials: init?.credentials, body: typeof init?.body === 'string' ? init.body : null });
-        if (opts.hold) await gate;
-        if (opts.networkError) throw new TypeError('network');
-      }
-      return original(input, init);
-    };
-  }, options);
+/** public/auth 의 정적 자산을 뺀 /auth/* 요청 — 서버 인증 API 호출이다 */
+function recordAuthRequests(page: Page): string[] {
+  const requests: string[] = [];
+  page.on('request', (request) => {
+    const { pathname } = new URL(request.url());
+    if (pathname.startsWith('/auth/') && !/\.(gif|svg)$/.test(pathname)) requests.push(`${request.method()} ${pathname}`);
+  });
+  return requests;
 }
-
-const authCalls = (page: Page) => page.evaluate(() => (window as unknown as { __calls: AuthCall[] }).__calls);
 
 async function open(page: Page) {
   await page.goto('/login');
@@ -174,39 +158,34 @@ test('이메일·비밀번호는 실제 input 이며 비밀번호는 가려진�
   await expect(page.locator('body')).not.toContainText('secret');
 });
 
-test('자동 로그인은 화면 상태만 바꾸고 저장소·요청에 남기지 않는다', async ({ page }) => {
-  await recordFetch(page);
+test('자동 로그인은 화면 상태만 바꾸고 어디에도 저장하지 않는다', async ({ page }) => {
   await open(page);
-  const box20 = (await page.getByTestId('g1-remember-checkbox').boundingBox())!;
-  expect([box20.width, box20.height]).toEqual([20, 20]);
+  const checkbox = page.getByTestId('g1-remember-checkbox');
+  const frame = (await checkbox.boundingBox())!;
+  expect([frame.width, frame.height]).toEqual([20, 20]);
   const visual = page.getByTestId('g1-remember').locator('[data-checkbox-visual]');
   await expect(visual).toHaveCSS('width', '18px');
   await expect(visual).toHaveCSS('border-radius', '4px');
   await expect(visual).toHaveCSS('border-color', 'rgb(234, 234, 234)');
 
   await page.getByText('자동 로그인', { exact: true }).click();
-  await expect(page.getByTestId('g1-remember-checkbox')).toBeChecked();
+  await expect(checkbox).toBeChecked();
   await expect(visual).toHaveCSS('border-color', 'rgb(255, 106, 56)');
-  // 마우스로 선택한 뒤 modifier 키를 눌러도 포커스 링이 켜지지 않는다
+  // 마우스로 선택한 뒤 modifier 키를 눌러도 포커스 링이 켜지지 않는다(M1 공용 규칙)
   await page.keyboard.press('Shift');
   await expect(visual).toHaveCSS('outline-style', 'none');
 
   await email(page).fill('seller@example.com');
   await password(page).fill('secret');
   await submit(page).click();
-  await expect(page.getByTestId('g1-form-success')).toBeVisible();
-  const [call] = await authCalls(page);
-  expect(JSON.parse(call.body!)).toEqual({ email: 'seller@example.com', password: 'secret' });
-  const storage = await page.evaluate(() => [JSON.stringify(localStorage), JSON.stringify(sessionStorage)].join());
-  expect(storage).not.toContain('mock-access-token');
-  expect(storage).not.toMatch(/remember|자동/);
+  const saved = await page.evaluate(() => [JSON.stringify(localStorage), JSON.stringify(sessionStorage), document.cookie].join('|'));
+  expect(saved).not.toMatch(/seller@example\.com|secret|token|remember/i);
 
-  await page.getByTestId('g1-remember-checkbox').uncheck();
-  await expect(page.getByTestId('g1-remember-checkbox')).not.toBeChecked();
+  await checkbox.uncheck();
+  await expect(checkbox).not.toBeChecked();
 });
 
-test('빈 값과 잘못된 이메일을 막고 요청을 보내지 않는다', async ({ page }) => {
-  await recordFetch(page);
+test('빈 값과 잘못된 이메일에만 오류를 표시한다', async ({ page }) => {
   await open(page);
   // 오류가 없으면 helper 자리를 차지하지 않는다
   await expect(page.getByTestId('login-email-error')).toHaveCount(0);
@@ -227,79 +206,43 @@ test('빈 값과 잘못된 이메일을 막고 요청을 보내지 않는다', a
   await submit(page).click();
   await expect(page.getByTestId('login-email-error')).toHaveCount(0);
   await expect(password(page)).toBeFocused();
-  expect(await authCalls(page)).toEqual([]);
 });
 
-test('Enter 로 제출되고 응답 전에는 loading 상태이며 중복 제출되지 않는다', async ({ page }) => {
-  await recordFetch(page, { hold: true });
+test('유효한 제출은 이동·결과 문구·요청 없이 끝난다', async ({ page }) => {
+  const auth = recordAuthRequests(page);
   await open(page);
+  expect(auth).toEqual([]);
+  const before = await page.getByTestId('g1-auth-panel').innerText();
+
   await email(page).fill('seller@example.com');
   await password(page).fill('secret');
-  const before = await box(page, 'g1-submit');
-  await password(page).press('Enter');
-
-  await expect(page.getByTestId('g1-submit-loader')).toBeVisible();
-  await expect(submit(page)).toHaveAttribute('aria-disabled', 'true');
-  await expect(page.getByTestId('g1-form')).toHaveAttribute('aria-busy', 'true');
-  expect(await box(page, 'g1-submit')).toEqual(before);
-
-  await password(page).press('Enter');
-  // aria-disabled 는 Playwright 가 비활성으로 봐서 force 로 실제 클릭을 보낸다
-  await submit(page).click({ force: true });
-  const calls = await authCalls(page);
-  expect(calls).toHaveLength(1);
-  expect(calls[0].method).toBe('POST');
-  expect(calls[0].credentials).toBe('include');
-  expect(new URL(calls[0].url, page.url()).pathname).toBe('/auth/login');
-
-  await page.evaluate(() => (window as unknown as { __releaseLogin: () => void }).__releaseLogin());
-  await expect(page.getByTestId('g1-form-success')).toBeVisible();
-  await expect(page.getByTestId('g1-submit-loader')).toHaveCount(0);
-});
-
-test('Mock 성공은 토큰을 저장하지 않고 임의 화면으로 이동하지 않는다', async ({ page }) => {
-  await open(page);
-  const dbNames = () => page.evaluate(async () => ((await indexedDB.databases?.()) ?? []).map((d) => d.name));
-  const dbsBefore = await dbNames();
-  await email(page).fill(' seller@example.com ');
-  await password(page).fill('secret');
   await submit(page).click();
-  await expect(page.getByTestId('g1-form-success')).toBeVisible();
+  await page.waitForTimeout(300);
+
   expect(new URL(page.url()).pathname).toBe('/login');
-  const stored = await page.evaluate(() => ({ local: JSON.stringify(localStorage), session: JSON.stringify(sessionStorage) }));
-  expect(`${stored.local}${stored.session}`).not.toContain('mock-access-token');
-  expect(stored.session).not.toContain('pixlate.accessToken');
-  expect(await dbNames()).toEqual(dbsBefore);
-});
-
-test('401 은 자격 증명 오류를 보여주고 입력값을 유지하며 다시 시도할 수 있다', async ({ page }) => {
-  await open(page);
-  await email(page).fill('seller@example.com');
-  await password(page).fill('wrong-password');
-  await submit(page).click();
-  await expect(page.getByTestId('g1-form-error')).toHaveText('이메일 또는 비밀번호가 올바르지 않아요.');
-  await expect(page.getByTestId('g1-form-success')).toHaveCount(0);
+  expect(await page.getByTestId('g1-auth-panel').innerText()).toBe(before);
+  await expect(page.getByTestId('login-email-error')).toHaveCount(0);
+  await expect(page.getByTestId('login-password-error')).toHaveCount(0);
+  await expect(page.getByTestId('g1-auth-panel').locator('[role="alert"], [role="status"]')).toHaveCount(0);
   await expect(email(page)).toHaveValue('seller@example.com');
-  await expect(password(page)).toHaveValue('wrong-password');
-  await expect(submit(page)).not.toHaveAttribute('aria-disabled', 'true');
-
-  await password(page).fill('secret');
-  await expect(page.getByTestId('g1-form-error')).toHaveCount(0);
-  await submit(page).click();
-  await expect(page.getByTestId('g1-form-success')).toBeVisible();
+  expect(auth).toEqual([]);
 });
 
-test('네트워크 실패를 성공처럼 보이지 않는다', async ({ page }) => {
-  await recordFetch(page, { networkError: true });
+test('Enter 는 입력창과 로그인 버튼에서 제출되어 검증을 실행한다', async ({ page }) => {
+  const auth = recordAuthRequests(page);
   await open(page);
+  await password(page).press('Enter');
+  await expect(page.getByTestId('login-email-error')).toBeVisible();
+
   await email(page).fill('seller@example.com');
-  await password(page).fill('secret');
-  await submit(page).click();
-  await expect(page.getByTestId('g1-form-error')).toHaveText('지금은 로그인할 수 없어요. 잠시 후 다시 시도해주세요.');
+  await submit(page).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('login-password-error')).toBeVisible();
+  expect(auth).toEqual([]);
 });
 
 test('소셜·비밀번호 찾기·회원가입은 눌러도 요청이나 이동이 없다', async ({ page }) => {
-  await recordFetch(page);
+  const auth = recordAuthRequests(page);
   await open(page);
   const requests: string[] = [];
   page.on('request', (r) => {
@@ -309,27 +252,34 @@ test('소셜·비밀번호 찾기·회원가입은 눌러도 요청이나 이동
     const button = page.getByTestId(id);
     await expect(button).toHaveAttribute('aria-disabled', 'true');
     await expect(button).toHaveAttribute('type', 'button');
+    // aria-disabled 는 Playwright 가 비활성으로 봐서 force 로 실제 클릭을 보낸다
     await button.click({ force: true });
   }
+  await page.waitForTimeout(300);
   expect(new URL(page.url()).pathname).toBe('/login');
-  expect(await authCalls(page)).toEqual([]);
   expect(requests).toEqual([]);
-  await expect(page.getByTestId('g1-form-success')).toHaveCount(0);
+  expect(auth).toEqual([]);
   await expect(page.getByTestId('login-email-error')).toHaveCount(0);
   await expect(page.locator('a[href="#"]')).toHaveCount(0);
+  await expect(page.locator('a')).toHaveCount(0);
 });
 
-test('키보드 포커스가 보이고 입력창 포커스는 Figma Focus 색을 쓴다', async ({ page }) => {
+test('Tab·Shift+Tab 이동과 Space 토글이 동작하고 포커스가 보인다', async ({ page }) => {
   await open(page);
   await email(page).focus();
   await expect(email(page)).toHaveCSS('border-color', 'rgb(255, 106, 56)');
   await email(page).press('Tab');
   await expect(password(page)).toBeFocused();
+  await password(page).press('Shift+Tab');
+  await expect(email(page)).toBeFocused();
+  await email(page).press('Tab');
   await password(page).press('Tab');
-  await expect(page.getByTestId('g1-remember-checkbox')).toBeFocused();
+  const checkbox = page.getByTestId('g1-remember-checkbox');
+  await expect(checkbox).toBeFocused();
   await page.keyboard.press('Space');
-  await expect(page.getByTestId('g1-remember-checkbox')).toBeChecked();
-  await expect(page.getByTestId('g1-remember-checkbox')).toBeFocused();
+  await expect(checkbox).toBeChecked();
+  await expect(checkbox).toBeFocused();
+  await expect(page.getByTestId('g1-remember').locator('[data-checkbox-visual]')).toHaveCSS('outline-style', 'solid');
   await page.keyboard.press('Tab');
   await expect(submit(page)).toBeFocused();
   await expect(submit(page)).toHaveCSS('outline-style', 'solid');
