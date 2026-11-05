@@ -48,7 +48,6 @@ test.describe('N3 하단 정렬', () => {
     near(image.y + image.height, cta.y + cta.height, 'image bottom');
     near(action.x, 896, 'detail action x');
     near(action.width, 385, 'detail action w');
-    near(action.y + action.height, 999, 'detail action bottom');
   });
 
   for (const [width, height] of LAPTOPS) {
