@@ -48,6 +48,13 @@ cp .env.example .env.local
 | `NEXT_PUBLIC_API_MOCKING` | `enabled` / 미설정(또는 그 외 값) | `enabled`면 MSW(Mock Service Worker)를 사용합니다. 미설정 또는 그 외 값이면 실제 backend를 사용합니다(`NODE_ENV`와는 무관합니다). |
 | `NEXT_PUBLIC_DEV_SELLER_EMAIL` | 이메일 문자열 | 실백엔드 개발 세션 로그인용 이메일입니다. 미설정 시 코드 기본값을 사용합니다. |
 
+Mock(`NEXT_PUBLIC_API_MOCKING=enabled`)에서만 동작하는 확인용 주소입니다. Mock이 꺼져 있으면 무시됩니다.
+
+| 주소 | 용도 |
+| --- | --- |
+| `/jobs/1?qaTypeset=1` | N5 Mock 조판 미리보기. 렌더 이미지 대신 글자 없는 면 위에 조판 규칙으로 번역문을 그려 줄바꿈·Auto Height·글자 크기를 눈으로 확인합니다. |
+| `/jobs/1?scenario=n2-error` · `/jobs/1?scenario=n4-error` | N2·N4 전체 오류 화면 고정 |
+
 Secret(JWT, access token, password 등)은 절대 Git에 커밋하지 않습니다 (`.env`, `.env.local`은 `.gitignore` 처리됨).
 
 ## 명령어

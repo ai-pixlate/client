@@ -33,6 +33,7 @@ import {
   n5ErrorRestoredSectionDetail,
   n5ErrorRestoredSectionListItem,
 } from '@/lib/mock-api/n5-error-fixtures';
+import { isTypesetQaUrl } from '@/lib/n5/typeset-render-model';
 import { mockLibraryCards } from '@/lib/mock-api/library-fixtures';
 import { mockMasterCountries, mockMasterLanguages } from '@/lib/mock-api/master-fixtures';
 import { mockMasterCategories } from '@/lib/mock-api/category-fixtures';
@@ -1223,6 +1224,11 @@ export const handlers = [
         stages: [],
         items: [],
       });
+    }
+
+    // ?qaTypeset=1 — Mock 조판 미리보기로 바로 들어간다. N5 이전 단계만 건너뛰고, 확정 뒤 N6 흐름은 그대로 둔다
+    if (isTypesetQaUrl(request.referrer) && ['N1', 'N2', 'N3', 'N4'].includes(jobState.currentStep ?? '')) {
+      jobState = { ...jobState, currentStep: N4_NEXT_STEP, userFacingStatus: N4_NEXT_USER_FACING_STATUS, status: 'review' };
     }
 
     const items: ApiJobAsyncTaskItem[] = [];

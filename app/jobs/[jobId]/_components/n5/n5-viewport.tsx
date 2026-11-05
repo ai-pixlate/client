@@ -2,7 +2,10 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, Fragment } from 'react';
 
+import { TypesetBlock } from '@/app/_components/typeset/typeset-block';
 import { isApiMockingEnabled } from '@/lib/api/session';
+import { isTypesetQaUrl, type TypesetRenderModel } from '@/lib/n5/typeset-render-model';
+import { isTypesetRole } from '@/lib/n5/typeset-rules';
 import { canRestoreSectionInN5, getSectionCanvasHeaderHeight } from '@/lib/n5/adapter';
 import { computeBlockOverlaps, type BlockOverlap } from '@/lib/n5/overlap';
 import type { BlockViewModel, JobMetaViewModel, PreviewSectionViewModel, PreviewViewModel, SectionStatusViewModel } from '@/lib/n5/adapter';
@@ -738,6 +741,7 @@ function ImageLayer({
   failedSectionId,
   isEditLocked,
   fontScaleDrafts,
+  typesetQaModels,
   onExcludeSection,
   onRestoreSection,
   scale,
@@ -769,6 +773,8 @@ function ImageLayer({
   /** 서버 실행 취소·다시 실행 진행 중 — 제외하기·되돌리기를 잠시 막는다 */
   isEditLocked: boolean;
   fontScaleDrafts: ReadonlyMap<number, number>;
+  /** Mock 조판 미리보기(?qaTypeset=1). 켜져 있으면 렌더 이미지 대신 글자 없는 면 위에 실제 조판 블록을 그린다 */
+  typesetQaModels: ReadonlyMap<number, TypesetRenderModel[]> | null;
   onExcludeSection: (sectionId: number) => void;
   onRestoreSection: (sectionId: number) => void;
   scale: number;
@@ -786,10 +792,13 @@ function ImageLayer({
         const status = sectionStatusById.get(slice.sectionId);
         const renderFailed = status?.failedStages.includes('render') ?? false;
         // 렌더링 실패 섹션은 원본 그대로 결과물에 들어간다(PRD N4 부분 실패) — 번역 후 화면도 원본을 보인다
+        const isTypesetQa = typesetQaModels !== null && mode === 'translated';
         const url =
           mode === 'original'
             ? slice.originalUrl
-            : slice.render.status === 'ready'
+            : isTypesetQa
+              ? null
+              : slice.render.status === 'ready'
               ? slice.render.url
               : renderFailed
                 ? slice.originalUrl
@@ -800,7 +809,7 @@ function ImageLayer({
         // 경우 — 상위(N5View)가 이 상태면 번역 후 자체를 disabled 처리하므로
         // 실제로는 거의 도달하지 않지만, 방어적으로 안내 문구를 보여준다(빈
         // 배경으로 조용히 실패 처리하지 않는다).
-        const isPending = mode === 'translated' && !isExcluded && slice.render.status === 'unresolved' && !renderFailed;
+        const isPending = mode === 'translated' && !isTypesetQa && !isExcluded && slice.render.status === 'unresolved' && !renderFailed;
         const blockRects = isExcluded
           ? []
           : buildBlockRects(blocksBySection.get(slice.sectionId) ?? [], scale, zoom, slice);
@@ -837,12 +846,26 @@ function ImageLayer({
             style={{
               height: slice.height,
               width: slice.width,
-              backgroundColor: '#e5e5e5',
+              backgroundColor: isTypesetQa ? '#ffffff' : '#e5e5e5',
               backgroundImage: url ? `url(${url})` : 'none',
               backgroundSize: '100% 100%',
               backgroundRepeat: 'no-repeat',
             }}
           >
+            {isTypesetQa && !isExcluded && (
+              // TypesetBlock 은 가장 가까운 positioned 조상을 section 원점으로 삼아 원본 px 로 그린다 — 이미지와 같은 배율 하나만 준다.
+              // z-[1]: section 아래로 넘친 글이 다음 section 면에 가리지 않게 한다(넘침을 눈으로 보는 도구다)
+              <div
+                data-testid={`n5-qa-text-layer-${slice.sectionId}`}
+                aria-hidden="true"
+                className="pointer-events-none absolute top-0 left-0 z-[1]"
+                style={{ width: slice.width / scale, height: slice.height / scale, transform: `scale(${scale})`, transformOrigin: '0 0' }}
+              >
+                {(typesetQaModels.get(slice.sectionId) ?? []).map((model) => (
+                  <TypesetBlock key={model.blockId} model={model} />
+                ))}
+              </div>
+            )}
             {isPending && (
               <div className="absolute inset-0 flex items-center justify-center text-center text-[12px] text-[#999]">
                 {status?.progressLabel ?? '렌더 대기 중'}
@@ -1492,6 +1515,32 @@ export function N5Viewport({
     return new URLSearchParams(window.location.search).get('debugSnap') === '1';
   });
   const [snapDebug, setSnapDebug] = useState<SnapDebugValues | null>(null);
+  // Mock 조판 미리보기 — Mock에서 ?qaTypeset=1일 때만 켠다. production 조판 연결이 아니라 사람이 줄바꿈을 눈으로 보는 도구다.
+  const [isTypesetQa] = useState(() => typeof window !== 'undefined' && isApiMockingEnabled() && isTypesetQaUrl(window.location.href));
+  const typesetQaModels = useMemo(() => {
+    if (!isTypesetQa) return null;
+    const bySection = new Map<number, TypesetRenderModel[]>();
+    for (const block of serverBlocks) {
+      const section = preview.sections.find((s) => s.id === block.sectionId);
+      if (!section || !block.bbox || !isTypesetRole(block.role)) continue;
+      const model: TypesetRenderModel = {
+        blockId: block.id,
+        sectionId: block.sectionId,
+        revision: block.revision,
+        text: editSession.translationDrafts.get(block.id)?.draft ?? block.translatedText,
+        role: block.role,
+        originalBBox: block.bbox,
+        adjustedBBox: bboxDrafts.get(block.id) ?? null,
+        sourceImageWidth: section.width,
+        userFontScale: editSession.fontScaleDrafts.get(block.id) ?? 1,
+        textAlign: block.textAlign,
+        excluded: false,
+      };
+      bySection.set(block.sectionId, [...(bySection.get(block.sectionId) ?? []), model]);
+    }
+    return bySection;
+  }, [isTypesetQa, serverBlocks, preview.sections, bboxDrafts, editSession.translationDrafts, editSession.fontScaleDrafts]);
+
   const selectedBlockForOverlap = blocks.find((b) => b.id === selectedBlockId);
   // 선택 block의 Auto Height 가능 여부와 지금 박스의 넘침. 잴 수 없으면 null이고 자유 크기 조절을 쓴다
   const selectedAutoFit =
@@ -1634,6 +1683,20 @@ export function N5Viewport({
               통과하게 한다. */}
           <JobMetaTags meta={jobMeta} />
           {isSnapDebug && <SnapDebugHud values={snapDebug} />}
+          {isTypesetQa && viewMode === 'translated' && (
+            <div
+              data-testid="n5-qa-badge"
+              className="pointer-events-none absolute top-[84px] left-8 z-10 flex flex-col gap-0.5 rounded-[6px] border border-[#eaeaea] bg-white px-3 py-2 text-[12px] leading-[normal] text-[#171717]"
+            >
+              <p className="font-medium">Mock 조판 미리보기</p>
+              <p className="text-[#707070]">서버 렌더 결과가 아닙니다. 글자 없는 면 위에 조판 규칙으로 그립니다.</p>
+              {selectedAutoFit?.overflow && (
+                <p data-testid="n5-qa-overflow" className="text-[#ff6a38]">
+                  선택 block의 글이 section 아래로 넘칩니다.
+                </p>
+              )}
+            </div>
+          )}
           {isOverlapDebug && (
             <div
               data-testid="n5-overlap-hud"
@@ -1733,6 +1796,7 @@ export function N5Viewport({
               failedSectionId={editSession.failedSectionId}
               isEditLocked={isEditLocked}
               fontScaleDrafts={editSession.fontScaleDrafts}
+              typesetQaModels={typesetQaModels}
               onExcludeSection={(sectionId) => editSession.saveSectionBucket(sectionId, 'exclude')}
               onRestoreSection={(sectionId) => editSession.saveSectionBucket(sectionId, 'include')}
               scale={preview.scale}

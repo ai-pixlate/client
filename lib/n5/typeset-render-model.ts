@@ -49,3 +49,13 @@ export function toTypesetMeasureInput(model: TypesetRenderModel): TypesetMeasure
     textAlign: model.textAlign,
   };
 }
+
+/** ?qaTypeset=1 — Mock 조판 미리보기 주소인지. Mock 켜짐 여부는 호출부가 함께 본다 */
+export function isTypesetQaUrl(url: string): boolean {
+  if (!url) return false;
+  try {
+    return new URL(url).searchParams.get('qaTypeset') === '1';
+  } catch {
+    return false;
+  }
+}
