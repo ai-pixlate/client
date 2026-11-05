@@ -9,6 +9,8 @@
 
 import {
   getFontScaleToolbarLeft,
+  FONT_HANDLE_CENTER_TOP_PX,
+  overlapsFontHandleHitArea,
   screenDeltaToBboxDelta,
   computeSectionDisplayTops,
   getBlockDisplayRect,
@@ -310,6 +312,17 @@ console.log('\ngetFontScaleToolbarLeft');
   check('오른쪽 변이 workspace 밖이어도 block이 보이면 안에 남는다', left(500, 1400) === 881, String(left(500, 1400)));
   check('block이 완전히 나가면 block과 함께 움직인다', left(1200, 1400) === 1081, String(left(1200, 1400)));
   check('왼쪽으로 나간 block은 뒤집지 않고 그대로 오른쪽이다', left(-500, -300) === -275, String(left(-500, -300)));
+}
+
+console.log('\n[글자크기 손잡이] 위치는 고정, 누르는 영역만 나눈다');
+{
+  check('중심은 block 위에서 18', FONT_HANDLE_CENTER_TOP_PX === 18);
+  check('높은 block(높이 80)의 e(40)는 겹치지 않는다', !overlapsFontHandleHitArea(40));
+  check('높이 36의 e(18)는 정확히 포개진다', overlapsFontHandleHitArea(18));
+  check('높이 60의 e(30)는 일부 겹친다', overlapsFontHandleHitArea(30));
+  check('높이 66의 e(33)는 경계라 겹치지 않는다', !overlapsFontHandleHitArea(33));
+  check('위 모서리 ne(0)는 겹치지 않는다', !overlapsFontHandleHitArea(0));
+  check('높이 20의 se(20)는 겹친다', overlapsFontHandleHitArea(20));
 }
 
 console.log(`\n결과: PASS ${pass} / FAIL ${fail}\n`);

@@ -11,7 +11,15 @@ import { computeBlockOverlaps, type BlockOverlap } from '@/lib/n5/overlap';
 import type { BlockViewModel, JobMetaViewModel, PreviewSectionViewModel, PreviewViewModel, SectionStatusViewModel } from '@/lib/n5/adapter';
 import type { BoundingBox } from '@/lib/api/types';
 import { N5_SAVE_NOTICE_MESSAGES } from '@/lib/n5/messages';
-import { getBlockDisplayRect, getBlockHitRect, getFontScaleToolbarLeft, screenDeltaToBboxDelta, type DisplayRect } from '@/lib/n5/coordinates';
+import {
+  FONT_HANDLE_CENTER_TOP_PX,
+  getBlockDisplayRect,
+  getBlockHitRect,
+  getFontScaleToolbarLeft,
+  overlapsFontHandleHitArea,
+  screenDeltaToBboxDelta,
+  type DisplayRect,
+} from '@/lib/n5/coordinates';
 import {
   canDecreaseScale,
   canIncreaseScale,
@@ -380,12 +388,6 @@ const HANDLE_POSITIONS: { key: ResizeHandle; x: number; y: number; cursor: strin
 // Figma 1512:23496 실측(화면 px) — action handle 중심은 block 오른쪽 변 위, block 위에서 18. 툴바는 block 오른쪽 25
 /** 이만큼 움직여야 클릭이 아니라 끌기로 본다(화면 px) */
 const BLOCK_DRAG_START_DISTANCE_PX = 3;
-const FONT_HANDLE_CENTER_TOP_PX = 18;
-/**
- * 이보다 낮은 block에서는 action handle이 오른쪽(e)·모서리(se) 손잡이를 덮어 폭을 넓힐 수 없다(누르는 영역 각 16). Auto Height로 박스가
- * 한두 줄 높이가 되면 흔한 경우라 block 위쪽으로 같은 거리만큼 올린다. Figma에는 낮은 block 표본이 없어 보완한 값이다.
- */
-const FONT_HANDLE_MIN_BLOCK_HEIGHT_PX = 68;
 const FONT_HANDLE_SIZE_PX = 12;
 const FONT_TOOLBAR_GAP_PX = 25;
 const FONT_TOOLBAR_TAIL_WIDTH_PX = 11;
@@ -516,8 +518,10 @@ function BlockSelectionChrome({
     gap: FONT_TOOLBAR_GAP_PX,
     maxRight: usableWidth,
   });
-  // 툴바 꼬리는 handle 높이에 맞춘다
-  const handleCenterTop = rect.height * zoom >= FONT_HANDLE_MIN_BLOCK_HEIGHT_PX ? FONT_HANDLE_CENTER_TOP_PX : -FONT_HANDLE_CENTER_TOP_PX;
+  // 위치는 block 높이와 무관하다. 낮은 block에서 겹치는 오른쪽 손잡이는 위치가 아니라 누르는 영역으로 나눈다
+  const blockScreenHeight = rect.height * zoom;
+  const overlapsHandle = (x: number, y: number) => x === 1 && overlapsFontHandleHitArea(blockScreenHeight * y);
+  const isFontHandleHitNarrowed = HANDLE_POSITIONS.some(({ x, y }) => overlapsHandle(x, y));
   const stopPropagation = (e: React.SyntheticEvent) => e.stopPropagation();
   return (
     <div data-testid="n5-block-selection" data-auto-height={fitAutoHeight ? 'true' : 'false'} data-auto-height-overflow={autoHeightOverflow} className="pointer-events-none absolute inset-0">
@@ -528,7 +532,9 @@ function BlockSelectionChrome({
           aria-hidden="true"
           data-testid={`n5-block-handle-${key}`}
           // 8px는 잡기에 작아 before로 잡는 영역만 넓힌다. pointer만 쓰는 조작이라 aria-hidden을 유지한다
-          className="pointer-events-auto absolute z-[5] box-border size-[7.667px] touch-none rounded-[1.355px] border border-[#ff6a38] bg-white before:absolute before:-inset-[4px]"
+          className={`pointer-events-auto absolute z-[5] box-border size-[7.667px] touch-none rounded-[1.355px] border border-[#ff6a38] bg-white before:absolute ${
+            overlapsHandle(x, y) ? 'before:-inset-x-[12px] before:-inset-y-[4px]' : 'before:-inset-[4px]'
+          }`}
           style={{
             left: rect.left + rect.width * x,
             top: rect.top + rect.height * y,
@@ -547,11 +553,13 @@ function BlockSelectionChrome({
         data-testid="n5-font-scale-handle"
         aria-label="글자크기 조절"
         aria-expanded={isToolbarOpen}
-        // 12px는 누르기에 작아 before로 누르는 영역만 16px로 넓힌다(낮은 block에서 옆 손잡이를 덮지 않는 선)
-        className="pointer-events-auto absolute z-[21] cursor-pointer rounded-[2.6px] bg-[#ff6a38] before:absolute before:-inset-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ff6a38]"
+        // 12px는 누르기에 작아 before로 누르는 영역을 16px로 넓힌다. 오른쪽 손잡이와 겹치는 낮은 block에서는 보이는 12px만 받는다
+        className={`pointer-events-auto absolute z-[21] cursor-pointer rounded-[2.6px] bg-[#ff6a38] before:absolute ${
+          isFontHandleHitNarrowed ? 'before:inset-0' : 'before:-inset-0.5'
+        } focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ff6a38]`}
         style={{
           left: rect.left + rect.width,
-          top: rect.top + handleCenterTop / zoom,
+          top: rect.top + FONT_HANDLE_CENTER_TOP_PX / zoom,
           width: FONT_HANDLE_SIZE_PX,
           height: FONT_HANDLE_SIZE_PX,
           transform: `translate(-50%, -50%) ${inverseScale}`,
@@ -573,7 +581,7 @@ function BlockSelectionChrome({
           onClick={stopPropagation}
           style={{
             left: (toolbarLeft - panX) / zoom,
-            top: rect.top + (handleCenterTop - BLOCK_FONT_SCALE_TOOLBAR_SIZE.height / 2) / zoom,
+            top: rect.top + (FONT_HANDLE_CENTER_TOP_PX - BLOCK_FONT_SCALE_TOOLBAR_SIZE.height / 2) / zoom,
             transform: inverseScale,
             transformOrigin: '0 0',
           }}

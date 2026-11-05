@@ -26,7 +26,8 @@ async function dragPoint(page: Page, from: { x: number; y: number }, dx: number,
 
 async function dragHandle(page: Page, handle: string, dx: number, dy: number) {
   const h = await box(page, `n5-block-handle-${handle}`);
-  await dragPoint(page, { x: h.x + h.width / 2, y: h.y + h.height / 2 }, dx, dy);
+  // 오른쪽 변 손잡이는 낮은 block에서 action handle과 겹친다 — 그 옆을 잡는다(누르는 영역 안)
+  await dragPoint(page, { x: h.x + h.width / 2 + (handle.includes('e') ? 6.5 : 0), y: h.y + h.height / 2 }, dx, dy);
 }
 
 /** block 안쪽(왼쪽 위 손잡이·번호와 오른쪽 action handle을 피한 지점)을 잡아 끈다 */

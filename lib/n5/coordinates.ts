@@ -215,3 +215,18 @@ export function getFontScaleToolbarLeft(options: {
   const { blockLeft, blockRight, toolbarWidth, gap, maxRight } = options;
   return Math.min(blockRight + gap, Math.max(maxRight, blockLeft) - toolbarWidth);
 }
+
+/** 글자크기 action handle 중심 — block 오른쪽 변, 위에서 18(화면 px, Figma 1512:23496). block 높이와 무관하다 */
+export const FONT_HANDLE_CENTER_TOP_PX = 18;
+/** 평소 누르는 영역 절반: 손잡이 약 7(테두리 안쪽 기준 inset 4), action handle 8 */
+const RESIZE_HANDLE_HIT_HALF_PX = 7;
+const FONT_HANDLE_HIT_HALF_PX = 8;
+
+/**
+ * 오른쪽 변 손잡이(e·se)의 누르는 영역이 action handle과 겹치는지. 겹치면 위치는 그대로 두고 누르는 영역만 나눈다 —
+ * action handle은 보이는 12px만 받고, 손잡이는 영역을 좌우로 넓혀 action handle 양옆에서 잡히게 한다.
+ * @param handleCenterTop block 위에서 손잡이 중심까지(화면 px)
+ */
+export function overlapsFontHandleHitArea(handleCenterTop: number): boolean {
+  return Math.abs(handleCenterTop - FONT_HANDLE_CENTER_TOP_PX) < RESIZE_HANDLE_HIT_HALF_PX + FONT_HANDLE_HIT_HALF_PX;
+}

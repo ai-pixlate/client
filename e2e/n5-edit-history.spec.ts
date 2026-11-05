@@ -50,7 +50,8 @@ async function dragBody(page: Page, blockId: number, dx: number, dy: number) {
 
 async function dragHandle(page: Page, key: string, dx: number, dy: number) {
   const h = (await page.getByTestId(`n5-block-handle-${key}`).boundingBox())!;
-  await drag(page, h.x + h.width / 2, h.y + h.height / 2, dx, dy);
+  // 오른쪽 변 손잡이는 낮은 block에서 action handle과 겹친다 — 그 옆을 잡는다(누르는 영역 안)
+  await drag(page, h.x + h.width / 2 + (key.includes('e') ? 6.5 : 0), h.y + h.height / 2, dx, dy);
 }
 
 async function selectWithToolbar(page: Page, blockId: number) {
