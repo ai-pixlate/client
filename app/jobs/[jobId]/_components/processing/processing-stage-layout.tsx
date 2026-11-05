@@ -88,13 +88,13 @@ function StageRow({ no, label, state }: ProcessingStep) {
   const dotClass = isActive ? 'bg-[#ff6a38]' : isDone ? 'bg-[#171717]' : 'border border-[#eaeaea] bg-transparent';
 
   const titleClass = isActive
-    ? "font-['Pretendard:SemiBold'] text-[14px] text-[#171717]"
-    : `font-['Pretendard:Regular'] text-[14px] tracking-[-0.01em] ${isDone ? 'text-[#171717]' : 'text-[#999]'}`;
+    ? "font-semibold leading-[normal] text-[14px] text-[#171717]"
+    : `font-normal leading-[normal] text-[14px] tracking-[-0.01em] ${isDone ? 'text-[#171717]' : 'text-[#999]'}`;
 
   const captionText = isDone ? '완료' : isActive ? '진행 중' : '대기';
   const captionClass = isActive
-    ? "font-['Pretendard:Regular'] text-[12px] text-[#ff6a38]"
-    : "font-['Pretendard:Light'] text-[12px] tracking-[-0.04em] text-[#999]";
+    ? "font-normal leading-[normal] text-[12px] text-[#ff6a38]"
+    : "font-light leading-[normal] text-[12px] tracking-[-0.04em] text-[#999]";
 
   // 68px(Figma 1920 기준)를 상한으로, 패널 자신의 렌더링 폭(cqw)과
   // 세로 크기(cqh) 중 더 작은 쪽에 비례해 줄어든다 — 가로만 넓고 세로가
@@ -127,13 +127,14 @@ export function ProcessingStageLayout({
   return (
     <div className="flex h-full w-full bg-white">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        {/* 헤더 — Figma("N1 / Header") 그대로 고정값이다. */}
-        <div className="shrink-0 px-10 pt-10 pb-6">
+        {/* 헤더 — Figma("N1 / Header") x140 y60. 패널 왼쪽 +20을 유지하고, 낮은 화면에서는 ✕와 맞추며 위로 올린다.
+            높이 94는 아래 패널 위치 계산(10vh - 94px)의 기준이라 바꾸지 않는다. */}
+        <div className="h-[94px] shrink-0 pt-[clamp(46px,calc(10vh_-_48px),60px)] pr-10 pl-[calc(clamp(0px,calc(6.25vw_-_80px),40px)_+_20px)]">
           <div className="flex items-center gap-4">
-            <h1 className="font-['Pretendard:SemiBold'] text-[20px] tracking-[-0.02em] text-[#171717]">
+            <h1 className="font-semibold leading-[normal] text-[20px] tracking-[-0.02em] text-[#171717]">
               {header.title}
             </h1>
-            <p className="font-['Pretendard:Regular'] text-[14px] tracking-[-0.01em] text-[#707070]">
+            <p className="font-normal leading-[normal] text-[14px] tracking-[-0.01em] text-[#707070]">
               {header.description}
             </p>
           </div>
@@ -207,15 +208,15 @@ export function ProcessingStageLayout({
                 <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-[clamp(16px,min(3.350cqw,7cqh),54px)]">
                   <div className="flex max-w-[820px] shrink-0 flex-col gap-[clamp(8px,min(1.241cqw,2.6cqh),20px)]">
                     <div className="flex h-[26px] w-fit items-center justify-center rounded-[6px] bg-[#f5f5f5] px-2">
-                      <p className="font-['Pretendard:Regular'] text-[12px] leading-[14px] text-[#171717]">
+                      <p className="font-normal text-[12px] leading-[14px] text-[#171717]">
                         {statusTagLabel}
                       </p>
                     </div>
                     <div className="flex flex-col gap-[clamp(5px,min(0.744cqw,1.55cqh),12px)]">
-                      <p className="font-['Pretendard:SemiBold'] text-[28px] tracking-[-0.015em] text-[#171717]">
+                      <p className="font-semibold leading-[normal] text-[28px] tracking-[-0.015em] text-[#171717]">
                         {visual.headline}
                       </p>
-                      <p className="font-['Pretendard:Regular'] text-[14px] tracking-[-0.01em] text-[#999]">
+                      <p className="font-normal leading-[normal] text-[14px] tracking-[-0.01em] text-[#999]">
                         {visual.description}
                       </p>
                     </div>
@@ -250,7 +251,7 @@ export function ProcessingStageLayout({
                         aria-hidden="true"
                         className="absolute inset-0 size-full object-contain opacity-[0.97]"
                       />
-                      <p className="absolute top-7 left-6 whitespace-pre font-['Pretendard:Light'] text-[12px] tracking-[-0.04em] text-white/[58%]">
+                      <p className="absolute top-7 left-6 whitespace-pre font-light leading-[normal] text-[12px] tracking-[-0.04em] text-white/[58%]">
                         {visual.overlayTopLabel}
                       </p>
                       {/* 9/23 — 흰색 description은 Figma처럼 항상 한 줄이다. 실측
@@ -264,10 +265,10 @@ export function ProcessingStageLayout({
                           넘어가지 않도록 max-w-[calc(100%-48px)](좌우 6 inset
                           상쇄)를 안전 상한으로만 둔다. */}
                       <div className="absolute right-6 bottom-6 flex w-max max-w-[calc(100%-48px)] flex-col items-end gap-2 text-right">
-                        <p className="whitespace-nowrap font-['Pretendard:Medium'] text-[13px] text-[#ff6a38]">
+                        <p className="whitespace-nowrap font-medium leading-[normal] text-[13px] text-[#ff6a38]">
                           {visual.overlayBottomTitle}
                         </p>
-                        <p className="whitespace-nowrap font-['Pretendard:Regular'] text-[12px] text-white/[58%]">
+                        <p className="whitespace-nowrap font-normal leading-[normal] text-[12px] text-white/[58%]">
                           {visual.overlayBottomDescription}
                         </p>
                       </div>
@@ -285,18 +286,18 @@ export function ProcessingStageLayout({
                     경우에 대한 안전장치로만 min-width 300px을 둔다. */}
                 <div className="flex w-[max(300px,25cqw)] shrink-0 flex-col gap-[clamp(16px,min(3.226cqw,6.7cqh),52px)]">
                   <div className="flex max-w-[370px] flex-col gap-[clamp(8px,min(1.489cqw,3.1cqh),24px)]">
-                    <p className="font-['Pretendard:Regular'] text-[12px] tracking-[-0.02em] text-[#999]">
+                    <p className="font-normal leading-[normal] text-[12px] tracking-[-0.02em] text-[#999]">
                       {log.sectionLabel}
                     </p>
                     <div className="flex flex-col gap-[clamp(5px,min(0.744cqw,1.55cqh),12px)]">
-                      <h2 className="font-['Pretendard:SemiBold'] text-[20px] tracking-[-0.02em] text-[#171717]">
+                      <h2 className="font-semibold leading-[normal] text-[20px] tracking-[-0.02em] text-[#171717]">
                         {log.heading}
                       </h2>
                       {/* Figma처럼 항상 한 줄이다 — 긴 동적 문구(N2 analysisProgress)가 줄바꿈되면 아래 5단계·
                           progress가 통째로 밀리므로 말줄임으로 자른다. 텍스트는 DOM에 그대로 있어 보조기기는
                           전체를 읽고, 잘린 내용은 title로 확인한다. */}
                       <p
-                        className="truncate font-['Pretendard:Light'] text-[12px] tracking-[-0.04em] text-[#999]"
+                        className="truncate font-light leading-[normal] text-[12px] tracking-[-0.04em] text-[#999]"
                         title={log.description}
                         data-testid="processing-log-description"
                       >
@@ -326,10 +327,10 @@ export function ProcessingStageLayout({
                           absolute 좌표로 흉내내지 않는다. */}
                       <div className="flex items-center justify-between">
                         <div className="flex items-baseline">
-                          <span className="font-['Pretendard:SemiBold'] text-[58px] leading-[64px] text-[#171717]">
+                          <span className="font-semibold text-[58px] leading-[64px] text-[#171717]">
                             {progressPercent}
                           </span>
-                          <span className="font-['Pretendard:Medium'] text-[18px] tracking-[-0.03em] text-[#999]">%</span>
+                          <span className="font-medium leading-[normal] text-[18px] tracking-[-0.03em] text-[#999]">%</span>
                         </div>
 
                         {/* 중단 API가 계약에 없어(범위 밖) 클릭해도 아무 일도
@@ -345,7 +346,7 @@ export function ProcessingStageLayout({
                           <PauseIcon />
                         </button>
                       </div>
-                      <p className="font-['Pretendard:Light'] text-[12px] tracking-[-0.04em] text-[#999]">전체 분석</p>
+                      <p className="font-light leading-[normal] text-[12px] tracking-[-0.04em] text-[#999]">전체 분석</p>
                     </div>
 
                     {/* 396px은 Figma 1920 실측값을 max-width로만 쓴다 — 우측
@@ -365,7 +366,7 @@ export function ProcessingStageLayout({
                       />
                     </div>
 
-                    <p className="mt-[clamp(8px,min(1.489cqw,3.1cqh),24px)] font-['Pretendard:Light'] text-[12px] tracking-[-0.04em] text-[#999]">
+                    <p className="mt-[clamp(8px,min(1.489cqw,3.1cqh),24px)] font-light leading-[normal] text-[12px] tracking-[-0.04em] text-[#999]">
                       {progressHint}
                     </p>
                   </div>
