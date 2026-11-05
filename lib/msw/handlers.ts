@@ -345,6 +345,8 @@ function n5RevisionConflictResponse(current: ApiTextBlock) {
 let n6RenderTaskIdCounter = 80000;
 let n6LatestRenderTaskId: number | null = null;
 const n6RenderTaskState = new Map<number, { pollCount: number }>();
+/** N6 렌더 Mock이 끝나는 폴링 횟수 — 진행 모달을 실제로 볼 수 있는 길이다(production과 무관) */
+const N6_RENDER_DONE_POLLS = 3;
 
 function registerOrReuseN6RenderTask(): number {
   if (n6LatestRenderTaskId != null) {
@@ -359,7 +361,7 @@ function registerOrReuseN6RenderTask(): number {
 
 function isN6RenderDone(): boolean {
   if (n6LatestRenderTaskId == null) return false;
-  return (n6RenderTaskState.get(n6LatestRenderTaskId)?.pollCount ?? 0) >= 2;
+  return (n6RenderTaskState.get(n6LatestRenderTaskId)?.pollCount ?? 0) >= N6_RENDER_DONE_POLLS;
 }
 
 /**
@@ -1337,7 +1339,8 @@ export const handlers = [
       jobStatus: jobState.status,
       currentStep: jobState.currentStep,
       userFacingStatus: jobState.userFacingStatus,
-      progress: hasTaskItems ? items.filter((i) => i.status === 'done').length / items.length : jobProgress.progress,
+      progress:
+        n6RenderProgress ?? (hasTaskItems ? items.filter((i) => i.status === 'done').length / items.length : jobProgress.progress),
       total: hasTaskItems ? items.length : jobProgress.total,
       done: hasTaskItems ? items.filter((i) => i.status === 'done').length : jobProgress.done,
       failedCount: allItems.filter((i) => i.status === 'failed').length,
