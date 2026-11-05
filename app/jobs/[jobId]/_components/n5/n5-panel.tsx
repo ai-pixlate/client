@@ -907,7 +907,7 @@ export function N5Panel({
 }
 
 /**
- * 저장 전 확인창(Figma 1313:12384, F-CFM-09). 동작은 useModalDialog(배경 inert, focus trap, Escape=돌아가기, 닫히면
+ * 저장 전 확인창(Figma 1313:12384, F-CFM-09). 항목 수와 무관하게 518×710이고 낮은 화면에서만 줄어든다. 동작은 useModalDialog(배경 inert, focus trap, Escape=돌아가기, 닫히면
  * [저장하러 가기]로 포커스 복귀)를 쓴다. 항목이 많으면 목록만 스크롤하고 버튼은 남는다. 저장하지 못한 번역문은 Figma에 없는
  * 묶음이라 같은 형식으로 더했다.
  */
@@ -936,7 +936,7 @@ function ReviewIssuesDialog({
         aria-describedby="n5-review-description"
         tabIndex={-1}
         data-testid="n5-review-dialog"
-        className="flex max-h-[min(710px,calc(100vh-32px))] w-[518px] max-w-[calc(100vw-32px)] flex-col gap-8 rounded-[8px] bg-white p-8 shadow-[0_8px_12px_rgba(0,0,0,0.08)] outline-none"
+        className="flex h-[min(710px,calc(100vh-32px))] w-[518px] max-w-[calc(100vw-32px)] flex-col gap-8 rounded-[8px] bg-white p-8 shadow-[0_8px_12px_rgba(0,0,0,0.08)] outline-none"
       >
         <div className="flex min-h-0 flex-1 flex-col gap-4">
           <div className="flex shrink-0 flex-col items-center gap-1 text-center leading-[normal]">
