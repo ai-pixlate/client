@@ -172,3 +172,18 @@ export const n5ErrorRestoredSectionDetail: ApiSection = {
     reason: null,
   })),
 };
+
+/**
+ * ?scenario=n2-error · n4-error — 처리 오류 화면 직접 진입(Mock 전용). MSW 핸들러만 읽으므로 Mock이 꺼진 환경에서는
+ * 이 값을 읽는 코드 자체가 없다. 해당 단계의 전체 실패로 고정한다.
+ */
+const PROCESSING_ERROR_SCENARIO_STEPS: Record<string, 'N2' | 'N4'> = { 'n2-error': 'N2', 'n4-error': 'N4' };
+
+export function getProcessingErrorScenarioStep(referrer: string): 'N2' | 'N4' | null {
+  if (!referrer) return null;
+  try {
+    return PROCESSING_ERROR_SCENARIO_STEPS[new URL(referrer).searchParams.get('scenario') ?? ''] ?? null;
+  } catch {
+    return null;
+  }
+}

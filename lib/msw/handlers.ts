@@ -25,6 +25,7 @@ import {
   applyN5ErrorBlocks,
   applyN5OverlapBlock,
   getN5ErrorFailedItems,
+  getProcessingErrorScenarioStep,
   isN3CardVariantsScenario,
   isN5CleanScenario,
   isN5ErrorScenario,
@@ -1206,17 +1207,35 @@ export const handlers = [
     const jobId = params.jobId as string;
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
 
+    // ?scenario=n2-error·n4-error — 단계를 진행시키지 않고 전체 실패 화면에 고정한다
+    const errorScenarioStep = getProcessingErrorScenarioStep(request.referrer);
+    if (errorScenarioStep) {
+      return HttpResponse.json({
+        jobStatus: 'failed',
+        currentStep: errorScenarioStep,
+        userFacingStatus: 'failed',
+        progress: 0,
+        total: 0,
+        done: 0,
+        failedCount: 0,
+        stages: [],
+        items: [],
+      });
+    }
+
     const items: ApiJobAsyncTaskItem[] = [];
 
     if (isN5ErrorScenario(request.referrer) && jobState.currentStep === 'N5') {
       items.push(...getN5ErrorFailedItems());
     }
 
+    let n6RenderProgress: number | null = null;
     if (n6LatestRenderTaskId != null) {
       const state = n6RenderTaskState.get(n6LatestRenderTaskId);
       if (state) {
         state.pollCount += 1;
-        const done = state.pollCount >= 2;
+        const done = state.pollCount >= N6_RENDER_DONE_POLLS;
+        n6RenderProgress = done ? 1 : state.pollCount / N6_RENDER_DONE_POLLS;
         items.push({
           taskId: n6LatestRenderTaskId,
           taskType: 'render',
