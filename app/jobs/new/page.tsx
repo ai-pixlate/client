@@ -676,8 +676,9 @@ function NewJobPageInner() {
   const submitInFlightRef = useRef(false);
 
   // 버튼 상태와 안내 문구의 정본
-  const submitBlockMessages = getN1SubmitBlockMessages({ ...readinessInput, isSubmitting, isUploadBusy });
-  const canSubmit = submitBlockMessages.length === 0;
+  const submitBlockMessages = getN1SubmitBlockMessages({ ...readinessInput, isUploadBusy });
+  const hasSubmitBlock = submitBlockMessages.length > 0;
+  const canSubmit = !hasSubmitBlock && !isSubmitting;
 
   const handleSubmit = async () => {
     if (!isValid) {
@@ -1360,12 +1361,12 @@ function NewJobPageInner() {
                   type="button"
                   onClick={handleSubmit}
                   aria-disabled={!canSubmit}
-                  aria-describedby={canSubmit ? undefined : 'n1-next-tooltip'}
+                  aria-describedby={hasSubmitBlock ? 'n1-next-tooltip' : undefined}
                   className="h-[45px] w-[148px] shrink-0 rounded-[6px] bg-[#171717] px-8 py-3.5 text-[14px] leading-[normal] font-medium tracking-[-0.03em] text-white transition-opacity aria-disabled:cursor-not-allowed aria-disabled:opacity-40"
                 >
                   {isSubmitting ? '생성 중...' : '다음'}
                 </button>
-                {!canSubmit && (
+                {hasSubmitBlock && (
                   <div
                     id="n1-next-tooltip"
                     role="tooltip"

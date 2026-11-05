@@ -114,7 +114,7 @@ check('막는 이유가 없으면 빈 배열', getN1SubmitBlockMessages(idle).le
 check('입력 누락을 알린다', getN1SubmitBlockMessages({ ...idle, targetCountry: '' })[0] === '입력이 필요해요: 국가');
 check('사이즈 변경을 알린다', getN1SubmitBlockMessages({ ...idle, sizeTab: 'change' })[0] === N1_SIZE_CHANGE_BLOCK_LINES.join(' '));
 check('입력이 다 있어도 업로드 처리 중을 알린다', getN1SubmitBlockMessages({ ...idle, isUploadBusy: true })[0].includes('이미지를 처리'));
-check('제출 중을 알린다', getN1SubmitBlockMessages({ ...idle, isSubmitting: true, isUploadBusy: true }).join().includes('작업을 만들고'));
+check('제출 중은 막는 이유가 아니다', getN1SubmitBlockMessages({ ...idle, isSubmitting: true }).length === 0);
 check('여러 이유를 함께 알린다', getN1SubmitBlockMessages({ ...idle, productName: '', sizeTab: 'change' }).length === 2);
 
 console.log('\nisImeComposingKeyEvent');

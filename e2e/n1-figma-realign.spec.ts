@@ -441,7 +441,7 @@ test.describe('[다음] — brandId 쿼리 없는 Mock 진입', () => {
   });
 });
 
-test('analyze 뒤 화면 이동이 늦어도 [다음]을 다시 보낼 수 없고, 이유를 보여 준 뒤 N2로 간다', async ({ page }) => {
+test('analyze 뒤 화면 이동이 늦어도 [다음]을 다시 보낼 수 없고, 툴팁 없이 N2로 간다', async ({ page }) => {
   // dev 서버의 첫 컴파일처럼 /jobs/1 이동이 늦은 상황을 만든다
   await page.addInitScript(() => {
     const originalFetch = window.fetch.bind(window);
@@ -460,13 +460,17 @@ test('analyze 뒤 화면 이동이 늦어도 [다음]을 다시 보낼 수 없�
   });
   await page.goto('/jobs/new');
   await fillRequired(page);
+  // 입력이 끝나면 hover·focus에도 툴팁이 없다
+  await nextButton(page).hover();
+  await nextButton(page).focus();
+  await expect(page.getByTestId('n1-next-tooltip')).toHaveCount(0);
   await nextButton(page).click();
   const pending = page.getByRole('button', { name: '생성 중...' });
   await expect(pending).toBeDisabled();
   await page.waitForTimeout(500);
   await expect(page).toHaveURL(/\/jobs\/new$/);
   await pending.click({ force: true });
-  await expect(page.getByTestId('n1-next-tooltip')).toHaveText('작업을 만들고 있습니다. 잠시만 기다려 주세요.');
+  await expect(page.getByTestId('n1-next-tooltip')).toHaveCount(0);
   await expect(page).toHaveURL(/\/jobs\/1$/, { timeout: 15_000 });
   expect(patches).toEqual(['/jobs/1']);
   await expect(page.getByRole('heading', { name: '이미지 분석' })).toBeVisible();
