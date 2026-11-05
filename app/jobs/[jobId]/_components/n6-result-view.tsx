@@ -372,6 +372,19 @@ function ArtifactCheckbox({
   );
 }
 
+/** 행 오른쪽 동작 칸(Figma Button XS 폭 97). 다운로드·안내 문구가 모두 같은 가운데 축에 놓인다 */
+function ArtifactActionSlot({ type, children }: { type: string; children: React.ReactNode }) {
+  return (
+    <div data-testid={`n6-action-slot-${type}`} className="flex w-[97px] shrink-0 items-center justify-center">
+      {children}
+    </div>
+  );
+}
+
+function ComingSoonLabel() {
+  return <span className="text-center text-[12px] font-light tracking-[-0.04em] whitespace-nowrap text-[#999]">12월 제공 예정</span>;
+}
+
 /**
  * 행별 개별 다운로드 — POST /jobs/{jobId}/export {components:[type]} 로 그 구성요소를
  * 만든 뒤 응답 artifactId 로 GET /jobs/{jobId}/exports/{artifactId}/download 를 부른다
@@ -428,30 +441,32 @@ function ArtifactRow({
             </span>
           </label>
 
-          {isComingSoon ? (
-            <span className="w-[94px] shrink-0 text-[12px] font-light tracking-[-0.04em] text-[#999]">12월 제공 예정</span>
-          ) : downloadMutation.data ? (
-            <a
-              href={downloadMutation.data.url}
-              download={downloadMutation.data.fileName}
-              target="_blank"
-              rel="noreferrer"
-              data-testid={`n6-download-row-${type}`}
-              className="w-[97px] shrink-0 rounded-[4px] bg-white px-2.5 py-[5px] text-center text-[12px] text-[#ff6a38] hover:underline"
-            >
-              다운로드
-            </a>
-          ) : (
-            <button
-              type="button"
-              data-testid={`n6-download-row-${type}`}
-              onClick={startDownload}
-              disabled={disabled || downloadMutation.isPending}
-              className="w-[97px] shrink-0 rounded-[4px] bg-white px-2.5 py-[5px] text-[12px] text-[#171717] hover:bg-[#f5f5f5] disabled:cursor-not-allowed disabled:text-[#b8b8b8]"
-            >
-              {downloadMutation.isPending ? '준비 중...' : '개별 다운로드'}
-            </button>
-          )}
+          <ArtifactActionSlot type={type}>
+            {isComingSoon ? (
+              <ComingSoonLabel />
+            ) : downloadMutation.data ? (
+              <a
+                href={downloadMutation.data.url}
+                download={downloadMutation.data.fileName}
+                target="_blank"
+                rel="noreferrer"
+                data-testid={`n6-download-row-${type}`}
+                className="w-full rounded-[4px] bg-white px-2.5 py-[5px] text-center text-[12px] text-[#ff6a38] hover:underline"
+              >
+                다운로드
+              </a>
+            ) : (
+              <button
+                type="button"
+                data-testid={`n6-download-row-${type}`}
+                onClick={startDownload}
+                disabled={disabled || downloadMutation.isPending}
+                className="w-full rounded-[4px] bg-white px-2.5 py-[5px] text-[12px] text-[#171717] hover:bg-[#f5f5f5] disabled:cursor-not-allowed disabled:text-[#b8b8b8]"
+              >
+                {downloadMutation.isPending ? '준비 중...' : '개별 다운로드'}
+              </button>
+            )}
+          </ArtifactActionSlot>
         </div>
       </div>
 
