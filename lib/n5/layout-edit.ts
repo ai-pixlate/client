@@ -128,6 +128,26 @@ export function scaleBoxAndFont({
   };
 }
 
+/** [+][-] 한 번의 결과이자 실행 취소 값. FE 내부 값이며 API DTO 가 아니다 */
+export interface N5FontScaleValue {
+  bbox: BoundingBox;
+  fontScale: number;
+}
+
+/**
+ * [+][-] 한 번 — 다음 배율과 그에 맞춘 박스를 함께 계산한다. 할 수 없는 조작이면 null.
+ * 제품에서 쓰는 step 은 N5_FONT_SCALE_STEP 하나다.
+ */
+export function stepFontScale(
+  { bbox, fontScale }: N5FontScaleValue,
+  direction: 'increase' | 'decrease',
+  section: Size,
+): N5FontScaleValue | null {
+  const nextScale = nextUserScale(fontScale, N5_FONT_SCALE_STEP, direction);
+  const nextBox = scaleBoxAndFont({ box: bbox, currentScale: fontScale, nextScale, section });
+  return nextBox ? { bbox: nextBox, fontScale: nextScale } : null;
+}
+
 interface ScaleStepInput {
   box: BoundingBox;
   currentScale: number;

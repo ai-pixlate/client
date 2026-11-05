@@ -10,7 +10,10 @@ import type { BoundingBox } from '@/lib/api/types';
 import { N5_SAVE_NOTICE_MESSAGES } from '@/lib/n5/messages';
 import { getBlockDisplayRect, getBlockHitRect, getFontScaleToolbarLeft, screenDeltaToBboxDelta, type DisplayRect } from '@/lib/n5/coordinates';
 import {
+  canDecreaseScale,
+  canIncreaseScale,
   moveBoxWithCenterSnap,
+  N5_FONT_SCALE_STEP,
   N5_SNAP_ACQUIRE_SCREEN_PX,
   N5_SNAP_RELEASE_SCREEN_PX,
   resizeBoxWithinSection,
@@ -301,6 +304,7 @@ function BlockOverlay({
   visualRect,
   index,
   isSelected,
+  fontScale,
   onSelect,
   drag,
 }: {
@@ -308,6 +312,8 @@ function BlockOverlay({
   visualRect: DisplayRect;
   index: number;
   isSelected: boolean;
+  /** 사용자 글자 배율(세션 local). 화면에 보이지 않는 테스트 hook으로만 내보낸다 */
+  fontScale: number;
   /** block을 선택하는 클릭 동작 */
   onSelect: () => void;
   /** 본체 끌어 옮기기. 「번역 후」 화면에서만 있다 */
@@ -320,6 +326,7 @@ function BlockOverlay({
         tabIndex={0}
         aria-pressed={isSelected}
         data-testid={`n5-block-overlay-${block.id}`}
+        data-font-scale={fontScale}
         onClick={stopAndRun(onSelect)}
         onPointerDown={drag ? (e) => drag.onPointerDown(e, block) : undefined}
         onPointerMove={drag?.onPointerMove}
@@ -379,8 +386,9 @@ const FONT_TOOLBAR_TAIL_WIDTH_PX = 11;
  * 선택 block의 핸들 8개·글자크기 action handle·툴바(Figma 1512:23496). section 밖 canvas overlay에 그려서
  * section 경계와 무관하고, canvas transform을 함께 받아 zoom·pan을 그대로 따라간다. 화면 크기는 zoom과 무관하다.
  *
- * 핸들 8개(F-CFM-15)는 영역 크기만 바꾸고 section 밖으로 넓히지 못한다. 이 세션의 local 초안 bbox만 바꾼다 — 저장 계약이
- * 없어 서버 요청을 만들지 않는다.
+ * 핸들 8개(F-CFM-15)는 영역 크기만 바꾸고 section 밖으로 넓히지 못한다. [+][-]는 글자 배율과 박스를 함께 바꾼다.
+ * 둘 다 이 세션의 local 초안만 바꾼다 — 저장 계약이 없어 서버 요청을 만들지 않는다. 캔버스의 글자는 서버 렌더 이미지라
+ * 재렌더 계약이 생기기 전에는 이미지 속 글자 크기가 바뀌지 않는다.
  * 툴바 열림 상태는 block 하나의 상태라 호출부가 key를 block id로 준다. block이 바뀌거나 선택 UI가 사라지면 닫힌다.
  */
 function BlockSelectionChrome({
@@ -391,6 +399,8 @@ function BlockSelectionChrome({
   onResizeCommit,
   isEditLocked,
   onDragActiveChange,
+  fontScale,
+  onFontScaleChange,
   rect,
   zoom,
   panX,
@@ -409,6 +419,9 @@ function BlockSelectionChrome({
   isEditLocked: boolean;
   /** 끄는 동안 실행 취소·다시 실행이 끼어들지 않게 알린다 */
   onDragActiveChange: (active: boolean) => void;
+  /** 현재 사용자 글자 배율 */
+  fontScale: number;
+  onFontScaleChange: (direction: 'increase' | 'decrease') => void;
   /** canvas 기준 block 위치 */
   rect: DisplayRect;
   zoom: number;
@@ -547,7 +560,13 @@ function BlockSelectionChrome({
             transformOrigin: '0 0',
           }}
         >
-          <BlockFontScaleToolbar showTail={toolbarLeft - blockRight >= FONT_HANDLE_SIZE_PX / 2 + FONT_TOOLBAR_TAIL_WIDTH_PX} />
+          <BlockFontScaleToolbar
+            showTail={toolbarLeft - blockRight >= FONT_HANDLE_SIZE_PX / 2 + FONT_TOOLBAR_TAIL_WIDTH_PX}
+            canIncrease={!isEditLocked && canIncreaseScale({ box: bbox, currentScale: fontScale, step: N5_FONT_SCALE_STEP, section })}
+            canDecrease={!isEditLocked && canDecreaseScale({ box: bbox, currentScale: fontScale, step: N5_FONT_SCALE_STEP, section })}
+            onIncrease={() => onFontScaleChange('increase')}
+            onDecrease={() => onFontScaleChange('decrease')}
+          />
         </div>
       )}
     </div>
@@ -703,6 +722,7 @@ function ImageLayer({
   pendingSectionIds,
   failedSectionId,
   isEditLocked,
+  fontScaleDrafts,
   onExcludeSection,
   onRestoreSection,
   scale,
@@ -733,6 +753,7 @@ function ImageLayer({
   failedSectionId: number | null;
   /** 서버 실행 취소·다시 실행 진행 중 — 제외하기·되돌리기를 잠시 막는다 */
   isEditLocked: boolean;
+  fontScaleDrafts: ReadonlyMap<number, number>;
   onExcludeSection: (sectionId: number) => void;
   onRestoreSection: (sectionId: number) => void;
   scale: number;
@@ -833,6 +854,7 @@ function ImageLayer({
                 visualRect={visualRect}
                 index={blockIndexById.get(block.id) ?? 0}
                 isSelected={block.id === selectedBlockId}
+                fontScale={fontScaleDrafts.get(block.id) ?? 1}
                 onSelect={selectHandlerOf(block)}
                 drag={blockDrag}
               />
@@ -1692,6 +1714,7 @@ export function N5Viewport({
               pendingSectionIds={editSession.pendingSectionIds}
               failedSectionId={editSession.failedSectionId}
               isEditLocked={isEditLocked}
+              fontScaleDrafts={editSession.fontScaleDrafts}
               onExcludeSection={(sectionId) => editSession.saveSectionBucket(sectionId, 'exclude')}
               onRestoreSection={(sectionId) => editSession.saveSectionBucket(sectionId, 'include')}
               scale={preview.scale}
@@ -1712,6 +1735,11 @@ export function N5Viewport({
                 onResizeCommit={(before, after) => commitBoxEdit('box-resize', selectedBlockId, before, after)}
                 isEditLocked={isEditLocked}
                 onDragActiveChange={setLayoutDragging}
+                fontScale={editSession.fontScaleDrafts.get(selectedBlockId) ?? 1}
+                onFontScaleChange={(direction) => {
+                  const block = serverBlocks.find((candidate) => candidate.id === selectedBlockId);
+                  if (block) editSession.changeFontScale(block, direction);
+                }}
                 rect={selectedBlockCanvasRect}
                 zoom={transform.zoom}
                 panX={transform.pan.x}

@@ -102,7 +102,7 @@ test('선택 block은 테두리·번호·핸들 8개·action handle을 보이고
   expect((await box(page, 'n5-block-handle-nw')).y).not.toBe(firstHandle.y);
 });
 
-test('글자크기 버튼은 표시 전용이다 — 서버 요청이 없고 선택이 풀리지 않는다', async ({ page }) => {
+test('글자크기 버튼은 서버 요청 없이 동작하고 선택이 풀리지 않는다', async ({ page }) => {
   const writes: string[] = [];
   page.on('request', (r) => {
     if (r.method() !== 'GET' && new URL(r.url()).pathname.startsWith('/jobs')) writes.push(`${r.method()} ${r.url()}`);
@@ -110,9 +110,9 @@ test('글자크기 버튼은 표시 전용이다 — 서버 요청이 없고 선
   await page.getByTestId('n5-block-pin-9112').click();
   await page.getByTestId('n5-font-scale-handle').click();
   for (const id of ['n5-font-scale-increase', 'n5-font-scale-decrease']) {
-    await expect(page.getByTestId(id)).toBeDisabled();
-    await expect(page.getByTestId(id)).toHaveAttribute('title', '글자 크기 조정은 아직 저장할 수 없습니다.');
-    await page.getByTestId(id).click({ force: true });
+    await expect(page.getByTestId(id)).toBeEnabled();
+    await expect(page.getByTestId(id)).not.toHaveAttribute('title');
+    await page.getByTestId(id).click();
   }
   await expect(page.getByTestId('n5-block-selection')).toHaveCount(1);
   await expect(page.getByTestId('n5-font-scale-toolbar')).toBeVisible();

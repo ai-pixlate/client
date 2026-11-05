@@ -244,30 +244,57 @@ export function FitControls({
 // ─────────────────────────────────────────────────────────────────
 // BlockFontScaleToolbar — 선택 block의 글자크기 조작(Figma 1507:21925). 크기 119×38.
 //
-// 글자 크기 저장 계약(단위·기준점·재렌더)이 아직 없어 버튼은 disabled다. 삭제하기·실행 취소와
-// 같은 disabled + title 패턴이고, 서버 요청을 만들지 않는다.
+// [+][-]는 각각 따로 비활성이 된다(N5_FONT_SCALE_STEP, canIncreaseScale·canDecreaseScale). 저장 계약(단위·기준점·재렌더)이
+// 아직 없어 N5 편집 세션의 local 값만 바꾸고 서버 요청을 만들지 않는다. 버튼은 Figma 1507:21925(글자 #171717)와
+// Icon Button XS Disabled(116:982, 글자 #999) 값이다.
 // ─────────────────────────────────────────────────────────────────
 
 export const BLOCK_FONT_SCALE_TOOLBAR_SIZE = { width: 119, height: 38 };
 
-const FONT_SCALE_COMING_SOON = '글자 크기 조정은 아직 저장할 수 없습니다.';
-
-function FontScaleButton({ testId, label, isPlus }: { testId: string; label: string; isPlus: boolean }) {
+function FontScaleButton({
+  testId,
+  label,
+  isPlus,
+  enabled,
+  onClick,
+}: {
+  testId: string;
+  label: string;
+  isPlus: boolean;
+  enabled: boolean;
+  onClick: () => void;
+}) {
   return (
     <button
       type="button"
       data-testid={testId}
       aria-label={label}
-      title={FONT_SCALE_COMING_SOON}
-      disabled
-      className="flex size-7 shrink-0 cursor-not-allowed items-center justify-center rounded-[4px] bg-[#f5f5f5] text-[#999]"
+      disabled={!enabled}
+      onClick={onClick}
+      // Space는 window에서 pan 키로 먼저 잡는다. 이 버튼에서는 버튼 동작으로 쓴다
+      onKeyDown={(e) => {
+        if (e.code === 'Space') e.stopPropagation();
+      }}
+      className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-[4px] bg-[#f5f5f5] text-[#171717] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ff6a38] disabled:cursor-not-allowed disabled:text-[#999]"
     >
       <ZoomGlyph isPlus={isPlus} />
     </button>
   );
 }
 
-export function BlockFontScaleToolbar({ showTail }: { showTail: boolean }) {
+export function BlockFontScaleToolbar({
+  showTail,
+  canIncrease,
+  canDecrease,
+  onIncrease,
+  onDecrease,
+}: {
+  showTail: boolean;
+  canIncrease: boolean;
+  canDecrease: boolean;
+  onIncrease: () => void;
+  onDecrease: () => void;
+}) {
   return (
     <div
       data-testid="n5-font-scale-toolbar"
@@ -277,8 +304,8 @@ export function BlockFontScaleToolbar({ showTail }: { showTail: boolean }) {
       style={{ width: BLOCK_FONT_SCALE_TOOLBAR_SIZE.width }}
     >
       <p className="flex-1 text-[12px] leading-[normal] font-light tracking-[-0.04em] whitespace-nowrap text-[#ff6a38]">글자크기</p>
-      <FontScaleButton testId="n5-font-scale-increase" label="글자 크게" isPlus />
-      <FontScaleButton testId="n5-font-scale-decrease" label="글자 작게" isPlus={false} />
+      <FontScaleButton testId="n5-font-scale-increase" label="글자 크게" isPlus enabled={canIncrease} onClick={onIncrease} />
+      <FontScaleButton testId="n5-font-scale-decrease" label="글자 작게" isPlus={false} enabled={canDecrease} onClick={onDecrease} />
       {/* action handle을 가리키는 꼬리. workspace 끝에서 밀려 handle과 겹치면 그리지 않는다 */}
       {showTail && (
         <svg

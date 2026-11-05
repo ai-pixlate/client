@@ -28,7 +28,7 @@ import {
   type N5EditEvent,
   type N5EditSession,
 } from '@/lib/n5/history';
-import { isSameBox, pruneBlockDrafts } from '@/lib/n5/layout-edit';
+import { isSameBox, pruneBlockDrafts, stepFontScale, type N5FontScaleValue } from '@/lib/n5/layout-edit';
 import type { N5SaveNotice } from '@/lib/n5/messages';
 import type { N5ViewMode } from '@/lib/n5/viewport';
 import { pixlateKeys, usePatchN5BlockMutation, useUpdateSectionBucketMutation } from '@/lib/queries/pixlate';
@@ -40,7 +40,7 @@ import { pixlateKeys, usePatchN5BlockMutation, useUpdateSectionBucketMutation } 
 //
 // 저장 위치
 // - 번역문·섹션 제외·되돌리기: 기존 PATCH. 성공한 뒤에만 이력·pointer 가 움직인다.
-// - 박스 위치·크기: 저장 계약이 없어 세션 local 초안에 곧바로 적용한다. 서버 요청이 없다.
+// - 박스 위치·크기·글자 배율: 저장 계약이 없어 세션 local 초안에 곧바로 적용한다. 서버 요청이 없다.
 //
 // 잠금
 // - 서버 실행 취소·다시 실행이 진행 중이면(session.inFlight) 새 편집·실행 취소·다시 실행을 시작하지 않는다.
@@ -70,6 +70,10 @@ export interface N5EditSessionApi {
   bboxDrafts: ReadonlyMap<number, BoundingBox>;
   setBboxDraft: (blockId: number, next: BoundingBox) => void;
   commitBoxEdit: (kind: 'box-move' | 'box-resize', blockId: number, before: BoundingBox, after: BoundingBox) => void;
+  /** blockId → 사용자 글자 배율. 항목이 없으면 1.0 이다(서버에 사용자 배율 필드가 없다) */
+  fontScaleDrafts: ReadonlyMap<number, number>;
+  /** [+][-] 한 번 — 박스와 배율을 함께 바꾸고 이력 1단계를 남긴다 */
+  changeFontScale: (block: BlockViewModel, direction: 'increase' | 'decrease') => void;
   /** 박스를 끄는 동안에는 실행 취소·다시 실행을 시작하지 않는다 */
   setLayoutDragging: (dragging: boolean) => void;
 
@@ -139,13 +143,16 @@ export function useN5EditSession({
     layoutDraggingRef.current = dragging;
   }, []);
 
-  // ── 박스 local 초안 ─ 재조회·보기 전환으로 지우지 않는다. 서버에서 블록·섹션이 사라지면 그 초안만 정리한다
+  // ── 박스·글자 배율 local 초안 ─ 재조회·보기 전환으로 지우지 않는다. 서버에서 블록·섹션이 사라지면 그 초안만 정리한다
   const [bboxDrafts, setBboxDrafts] = useState<ReadonlyMap<number, BoundingBox>>(() => new Map());
-  if (bboxDrafts.size > 0) {
+  const [fontScaleDrafts, setFontScaleDrafts] = useState<ReadonlyMap<number, number>>(() => new Map());
+  if (bboxDrafts.size > 0 || fontScaleDrafts.size > 0) {
     const sectionIds = new Set(sections.map((section) => section.id));
     const validBlockIds = new Set(blocks.filter((block) => sectionIds.has(block.sectionId)).map((block) => block.id));
-    const pruned = pruneBlockDrafts(bboxDrafts, validBlockIds);
-    if (pruned !== bboxDrafts) setBboxDrafts(pruned);
+    const prunedBoxes = pruneBlockDrafts(bboxDrafts, validBlockIds);
+    if (prunedBoxes !== bboxDrafts) setBboxDrafts(prunedBoxes);
+    const prunedScales = pruneBlockDrafts(fontScaleDrafts, validBlockIds);
+    if (prunedScales !== fontScaleDrafts) setFontScaleDrafts(prunedScales);
   }
   const setBboxDraft = useCallback((blockId: number, next: BoundingBox) => {
     setBboxDrafts((drafts) => new Map(drafts).set(blockId, next));
@@ -156,6 +163,25 @@ export function useN5EditSession({
       dispatch({ type: 'edit-succeeded', command: { kind, target: { type: 'block', id: blockId }, before, after } });
     },
     [dispatch],
+  );
+
+  const changeFontScale = useCallback(
+    (block: BlockViewModel, direction: 'increase' | 'decrease') => {
+      if (!canStartSave(sessionRef.current)) return;
+      const section = sections.find((candidate) => candidate.id === block.sectionId);
+      const bbox = bboxDrafts.get(block.id) ?? block.bbox;
+      if (!section || !bbox) return;
+      const before: N5FontScaleValue = { bbox, fontScale: fontScaleDrafts.get(block.id) ?? 1 };
+      const after = stepFontScale(before, direction, section);
+      if (!after) return;
+      setBboxDraft(block.id, after.bbox);
+      setFontScaleDrafts((drafts) => new Map(drafts).set(block.id, after.fontScale));
+      dispatch({
+        type: 'edit-succeeded',
+        command: { kind: 'font-scale', target: { type: 'block', id: block.id }, before, after },
+      });
+    },
+    [bboxDrafts, dispatch, fontScaleDrafts, sections, setBboxDraft],
   );
 
   // ── 번역문 ─ 초안·재렌더 task·충돌을 여기 두어 패널의 저장과 실행 취소가 같은 값을 본다
@@ -329,8 +355,14 @@ export function useN5EditSession({
           revealBlock(command.target.id);
           settle(direction, command);
           return;
-        case 'font-scale':
+        case 'font-scale': {
+          const { bbox, fontScale } = value as N5FontScaleValue;
+          setBboxDraft(command.target.id, bbox);
+          setFontScaleDrafts((drafts) => new Map(drafts).set(command.target.id, fontScale));
+          revealBlock(command.target.id);
+          settle(direction, command);
           return;
+        }
       }
     },
     [isHistoryAvailable, revealBlock, runSectionCommand, runTranslationCommand, setBboxDraft, settle],
@@ -364,6 +396,8 @@ export function useN5EditSession({
     bboxDrafts,
     setBboxDraft,
     commitBoxEdit,
+    fontScaleDrafts,
+    changeFontScale,
     setLayoutDragging,
     pendingSectionIds,
     failedSectionId,
