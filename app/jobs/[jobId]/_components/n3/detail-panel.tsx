@@ -103,7 +103,8 @@ export function DetailPanel({
         data-testid="n3-detail-action"
         disabled={isMutating}
         onClick={onChangeBucket}
-        className="w-full shrink-0 rounded-[6px] border border-[#eaeaea] bg-white px-8 py-3.5 text-[14px] leading-[normal] font-medium tracking-[-0.03em] text-[#171717] transition-colors hover:bg-[#f5f5f5] disabled:cursor-not-allowed disabled:opacity-40"
+        // Figma 1619:10064 — 칼럼 안쪽 8, 칼럼 아래 20(1920에서 x896 w385 bottom 999)
+        className="mx-2 mb-5 w-[calc(100%-16px)] shrink-0 rounded-[6px] border border-[#eaeaea] bg-white px-8 py-3.5 text-[14px] leading-[normal] font-medium tracking-[-0.03em] text-[#171717] transition-colors hover:bg-[#f5f5f5] disabled:cursor-not-allowed disabled:opacity-40"
       >
         {state.actionLabel}
       </button>

@@ -33,7 +33,7 @@ import { SectionListCard } from './section-list-card';
 // - 섹션 목록(sectionOrder 순 단일 목록 — 포함/제외를 나누지 않고 재정렬도 없다)
 // - 선택 섹션 판정 상세(DetailPanel)
 // - 선택 섹션 이미지(SourceImage + bbox crop)
-// - 하단 CTA 「이대로 진행」(목록 폭)
+// - 하단 CTA 「이대로 진행」 — 목록과 한 칼럼이다(목록 아래 14). CTA와 이미지의 아래 끝이 같다(1920에서 1020)
 //
 // bucket 변경은 카드/상세의 버튼으로만 한다(기존 PATCH mutation 재사용, 드래그 없음).
 // 버튼은 선택을 바꾸지 않는다 — 옮긴 섹션이 그대로 선택된 채 상태만 바뀐다.
@@ -179,12 +179,11 @@ export function N3View({ jobId }: { jobId: string }) {
             </p>
           </div>
         ) : (
-          <>
-            <div className="flex min-h-0 flex-1">
+          <div className="flex min-h-0 flex-1">
+            <div className="flex h-full shrink-0 flex-col" style={{ width: N3_LIST_WIDTH }}>
               <div
                 data-testid="n3-section-list"
-                className="flex h-full shrink-0 flex-col gap-3 overflow-y-auto rounded-[4px] bg-[#f5f5f5] p-7"
-                style={{ width: N3_LIST_WIDTH }}
+                className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto rounded-[4px] bg-[#f5f5f5] p-7"
               >
                 {sections.map((section) => (
                   <SectionListCard
@@ -200,76 +199,77 @@ export function N3View({ jobId }: { jobId: string }) {
                 {sections.length === 0 && <p className="px-1 text-center text-xs text-[#999]">섹션이 없습니다.</p>}
               </div>
 
-              <div
-                className="h-full shrink-0 pt-[7px]"
-                style={{ width: N3_DETAIL_WIDTH, marginLeft: N3_LIST_DETAIL_GAP }}
-              >
-                <DetailPanel
-                  section={selectedSection}
-                  detail={detailQuery.data?.id === selectedSection?.id ? detailQuery.data : undefined}
-                  isDetailLoading={detailQuery.isLoading}
-                  isDetailError={detailQuery.isError}
-                  isMutating={mutation.isPending}
-                  onChangeBucket={() => selectedSection && changeBucket(selectedSection)}
-                />
-              </div>
-
-              <div
-                data-testid="n3-section-image"
-                data-section-id={selectedSection?.id ?? ''}
-                className="h-full shrink-0 overflow-x-hidden overflow-y-auto rounded-[4px]"
-                style={{ width: N3_IMAGE_WIDTH, marginLeft: N3_DETAIL_IMAGE_GAP }}
-              >
-                {selectedSection &&
-                  (sourceImagesQuery.isLoading ? (
-                    <p className="pt-4 text-center text-sm text-[#999]">원본 이미지를 불러오는 중...</p>
-                  ) : sourceImagesQuery.isError ? (
-                    <p className="pt-4 text-center text-sm text-[#999]">원본 이미지를 불러오지 못했습니다.</p>
-                  ) : (
-                    <SectionCropThumbnail
-                      key={selectedSection.id}
-                      sourceImage={selectedSourceImage}
-                      bbox={selectedSection.bbox}
-                      targetWidth="100%"
-                      alt={`섹션 ${selectedSection.sectionOrder ?? ''} 이미지`}
-                    />
-                  ))}
-              </div>
-            </div>
-
-            <div className="group relative mt-[14px] shrink-0" style={{ width: N3_LIST_WIDTH }}>
-              {/* Figma 1437:15953 — CTA 위 orange 말풍선. 서버가 거절한 진행 오류는 계속 보이고, 전 섹션 제외 안내는 hover·focus에만 보인다 */}
-              {proceedError ? (
-                <ProceedBubble role="alert" testId="n3-proceed-notice">
-                  {proceedError}
-                </ProceedBubble>
-              ) : (
-                hasNoIncluded && (
-                  <ProceedBubble
-                    role="tooltip"
-                    id="n3-proceed-tooltip"
-                    testId="n3-proceed-tooltip"
-                    className="hidden group-focus-within:block group-hover:block"
-                  >
-                    {NO_INCLUDED_SECTION_NOTICE}
+              <div className="group relative mt-[14px] shrink-0">
+                {/* Figma 1437:15953 — CTA 위 orange 말풍선. 서버가 거절한 진행 오류는 계속 보이고, 전 섹션 제외 안내는 hover·focus에만 보인다 */}
+                {proceedError ? (
+                  <ProceedBubble role="alert" testId="n3-proceed-notice">
+                    {proceedError}
                   </ProceedBubble>
-                )
-              )}
-              <button
-                type="button"
-                data-testid="n3-proceed"
-                disabled={isCtaDisabled}
-                aria-disabled={isCtaBlocked}
-                aria-describedby={hasNoIncluded && !proceedError ? 'n3-proceed-tooltip' : undefined}
-                onClick={handleProceed}
-                className={`w-full rounded-[6px] px-8 py-3.5 text-[14px] leading-[normal] font-medium tracking-[-0.03em] transition-colors ${
-                  isCtaBlocked ? 'cursor-not-allowed bg-[#f5f5f5] text-[#999]' : 'bg-[#171717] text-white'
-                }`}
-              >
-                {proceedMutation.isPending ? '진행하는 중...' : '이대로 진행'}
-              </button>
+                ) : (
+                  hasNoIncluded && (
+                    <ProceedBubble
+                      role="tooltip"
+                      id="n3-proceed-tooltip"
+                      testId="n3-proceed-tooltip"
+                      className="hidden group-focus-within:block group-hover:block"
+                    >
+                      {NO_INCLUDED_SECTION_NOTICE}
+                    </ProceedBubble>
+                  )
+                )}
+                <button
+                  type="button"
+                  data-testid="n3-proceed"
+                  disabled={isCtaDisabled}
+                  aria-disabled={isCtaBlocked}
+                  aria-describedby={hasNoIncluded && !proceedError ? 'n3-proceed-tooltip' : undefined}
+                  onClick={handleProceed}
+                  className={`w-full rounded-[6px] px-8 py-3.5 text-[14px] leading-[normal] font-medium tracking-[-0.03em] transition-colors ${
+                    isCtaBlocked ? 'cursor-not-allowed bg-[#f5f5f5] text-[#999]' : 'bg-[#171717] text-white'
+                  }`}
+                >
+                  {proceedMutation.isPending ? '진행하는 중...' : '이대로 진행'}
+                </button>
+              </div>
             </div>
-          </>
+
+            <div
+              className="h-full shrink-0 pt-[7px]"
+              style={{ width: N3_DETAIL_WIDTH, marginLeft: N3_LIST_DETAIL_GAP }}
+            >
+              <DetailPanel
+                section={selectedSection}
+                detail={detailQuery.data?.id === selectedSection?.id ? detailQuery.data : undefined}
+                isDetailLoading={detailQuery.isLoading}
+                isDetailError={detailQuery.isError}
+                isMutating={mutation.isPending}
+                onChangeBucket={() => selectedSection && changeBucket(selectedSection)}
+              />
+            </div>
+
+            <div
+              data-testid="n3-section-image"
+              data-section-id={selectedSection?.id ?? ''}
+              // Figma 1426:13551 — 목록보다 1 아래(y113)에서 시작해 CTA와 같은 곳에서 끝난다
+              className="mt-px h-[calc(100%-1px)] shrink-0 overflow-x-hidden overflow-y-auto rounded-[4px]"
+              style={{ width: N3_IMAGE_WIDTH, marginLeft: N3_DETAIL_IMAGE_GAP }}
+            >
+              {selectedSection &&
+                (sourceImagesQuery.isLoading ? (
+                  <p className="pt-4 text-center text-sm text-[#999]">원본 이미지를 불러오는 중...</p>
+                ) : sourceImagesQuery.isError ? (
+                  <p className="pt-4 text-center text-sm text-[#999]">원본 이미지를 불러오지 못했습니다.</p>
+                ) : (
+                  <SectionCropThumbnail
+                    key={selectedSection.id}
+                    sourceImage={selectedSourceImage}
+                    bbox={selectedSection.bbox}
+                    targetWidth="100%"
+                    alt={`섹션 ${selectedSection.sectionOrder ?? ''} 이미지`}
+                  />
+                ))}
+            </div>
+          </div>
         )}
       </div>
     </div>
