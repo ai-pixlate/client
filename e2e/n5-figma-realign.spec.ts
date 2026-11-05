@@ -82,11 +82,11 @@ test('선택 block은 테두리·번호·핸들 8개·action handle을 보이고
   near(se.y + se.height / 2, overlay.y + overlay.height, 1);
   near(nw.width, 7.667, 0.5);
 
-  // action handle은 오른쪽 변 위, block 위에서 18(Figma 1512:23496). 툴바는 눌러야 열린다
+  // action handle은 오른쪽 변 위. 낮은 block은 e·se 손잡이를 덮지 않게 block 위쪽 18에 둔다(높은 block은 아래 테스트). 툴바는 눌러야 열린다
   const handle = await box(page, 'n5-font-scale-handle');
   expect([handle.width, handle.height]).toEqual([12, 12]);
   near(handle.x + 6, overlay.x + overlay.width, 1);
-  near(handle.y + 6, overlay.y + 18, 1);
+  near(handle.y + 6, overlay.y - 18, 1);
   await expect(page.getByTestId('n5-font-scale-toolbar')).toHaveCount(0);
 
   // 번호 배지가 왼쪽 위 핸들보다 위에 그려지고, 잡기는 핸들이 받는다
@@ -187,6 +187,15 @@ test('section 오른쪽 끝 block — 툴바가 section 밖 오른쪽에 그대�
   await page.screenshot({ path: test.info().outputPath('n5-font-toolbar-overflow.png') });
 });
 
+test('높은 block의 action handle은 Figma 1512:23496대로 block 위에서 18이다', async ({ page }) => {
+  await page.getByTestId('n5-block-pin-9102').click();
+  const overlay = await box(page, 'n5-block-overlay-9102');
+  const handle = await box(page, 'n5-font-scale-handle');
+  expect(overlay.height).toBeGreaterThanOrEqual(68);
+  near(handle.x + 6, overlay.x + overlay.width, 1);
+  near(handle.y + 6, overlay.y + 18, 1);
+});
+
 test('zoom·pan — 툴바가 block과 함께 움직이고 화면 크기는 그대로다', async ({ page }) => {
   await page.getByTestId('n5-block-pin-9112').click();
   await page.getByTestId('n5-font-scale-handle').click();
@@ -203,8 +212,8 @@ test('zoom·pan — 툴바가 block과 함께 움직이고 화면 크기는 그�
   const zoomed = await relative();
   expect(zoomed.overlay.width).toBeGreaterThan(start.overlay.width);
   near(zoomed.dx, 25, 1);
-  near(zoomed.dy, -1, 1);
-  near(zoomed.handleY, 18, 1);
+  near(zoomed.dy, -37, 1);
+  near(zoomed.handleY, -18, 1);
   near(zoomed.rect.width, 119, 1);
   near(zoomed.rect.height, 38, 1);
 
@@ -214,7 +223,7 @@ test('zoom·pan — 툴바가 block과 함께 움직이고 화면 크기는 그�
   await expect.poll(async () => (await relative()).rect.y).not.toBe(zoomed.rect.y);
   const panned = await relative();
   near(panned.dx, 25, 1);
-  near(panned.dy, -1, 1);
+  near(panned.dy, -37, 1);
   near(panned.overlay.y - zoomed.overlay.y, panned.rect.y - zoomed.rect.y, 1);
 });
 

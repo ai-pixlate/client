@@ -91,9 +91,10 @@ test.describe('N5 확인창', () => {
   });
 
   test('항목이 많은 시나리오도 같은 크기이고 목록만 스크롤한다', async ({ page }) => {
-    await openDialog(page, 1440, 900, 'n5-error');
+    await openDialog(page, 1440, 900, 'n5-errors');
     const dialog = await box(page, 'n5-review-dialog');
     expect(dialog.height).toBe(710);
+    expect(Number((await page.getByTestId('n5-review-total').innerText()).replace('건', ''))).toBeGreaterThan(5);
     const scroll = await page.getByTestId('n5-review-dialog').evaluate((el) => el.scrollHeight <= el.clientHeight);
     expect(scroll).toBe(true);
     const list = page.getByTestId('n5-review-list');

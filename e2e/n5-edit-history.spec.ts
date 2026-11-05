@@ -114,7 +114,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.describe('글자 크기 [+][-]', () => {
-  test('0.05씩 바뀌고 박스도 같은 비율로 바뀌며 정렬 정보가 없으면 왼쪽 위를 유지하고 서버 요청이 없다', async ({ page }) => {
+  test('0.05씩 바뀌고 폭이 같은 비율로 바뀌며(높이는 Auto Height) 정렬 정보가 없으면 왼쪽 위를 유지하고 서버 요청이 없다', async ({ page }) => {
     const patches = trackPatches(page);
     await selectWithToolbar(page, 9112);
     const start = await localBox(page, 9112);
@@ -124,7 +124,6 @@ test.describe('글자 크기 [+][-]', () => {
     expect(await fontScale(page, 9112)).toBe('1.05');
     const up = await localBox(page, 9112);
     expect(Math.abs(up.width - start.width * 1.05)).toBeLessThanOrEqual(0.01);
-    expect(Math.abs(up.height - start.height * 1.05)).toBeLessThanOrEqual(0.01);
     expect(Math.abs(up.left - start.left)).toBeLessThanOrEqual(0.01);
     expect(Math.abs(up.top - start.top)).toBeLessThanOrEqual(0.01);
 

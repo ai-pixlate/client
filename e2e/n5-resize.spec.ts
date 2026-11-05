@@ -59,7 +59,14 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByTestId('n5-block-selection')).toBeVisible();
 });
 
+// 글이 있는 block의 Auto Height 는 e2e/n5-auto-height.spec.ts 에서 본다. 여기는 글이 비어 잴 수 없는 block의 자유 조절이다
+const useFreeResize = async (page: Page) => {
+  await page.getByTestId(`n5-block-editor-${BLOCK_ID}`).fill('');
+  await expect(page.getByTestId('n5-block-selection')).toHaveAttribute('data-auto-height', 'false');
+};
+
 test('resize — 방향별로 크기만 바뀌고 서버 요청이 없다', async ({ page }) => {
+  await useFreeResize(page);
   const sent = collectWrites(page);
   const start = await box(page, BLOCK);
 
@@ -99,6 +106,7 @@ test('resize — 방향별로 크기만 바뀌고 서버 요청이 없다', asyn
 });
 
 test('resize boundary — 네 방향과 모서리 모두 section 경계에서 멈춘다', async ({ page }) => {
+  await useFreeResize(page);
   const slice = inner(await box(page, SLICE));
 
   await dragHandle(page, 'e', 300, 0);
