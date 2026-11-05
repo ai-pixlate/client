@@ -18,9 +18,11 @@ import {
   moveBoxWithCenterSnap,
   moveBoxWithinSection,
   nextUserScale,
+  pruneBlockDrafts,
   resizeBoxWithinSection,
   scaleBoxAndFont,
   snapBoxToSectionCenter,
+  stepFontScale,
 } from '../lib/n5/layout-edit.ts';
 
 let pass = 0;
@@ -242,6 +244,38 @@ console.log('\nmoveBoxWithCenterSnap (acquire·release)');
   const back = moveBoxWithCenterSnap(wideStart, { x: 15, y: 0 }, section, wideDistance, left, left.candidate);
   check('벗어난 뒤 돌아오면 정확히 붙는다', back.snappedX && back.box.x === 50, JSON.stringify(back.box));
   check('같은 박스 비교', isSameBox(box, { ...box }) && !isSameBox(box, { ...box, x: 41 }));
+}
+
+console.log('\n[글자 크기] [+][-] 한 번의 결과');
+{
+  const section = { width: 1000, height: 400 };
+  const start = { bbox: { x: 40, y: 100, width: 500, height: 80 }, fontScale: 1 };
+  const up1 = stepFontScale(start, 'increase', section);
+  const up2 = stepFontScale(up1, 'increase', section);
+  const down = stepFontScale(up2, 'decrease', section);
+  check('1.00 → + → 1.05', up1.fontScale === 1.05, String(up1.fontScale));
+  check('1.05 → + → 1.10', up2.fontScale === 1.1, String(up2.fontScale));
+  check('1.10 → - → 1.05', down.fontScale === 1.05, String(down.fontScale));
+  check('박스가 같은 비율로 바뀐다', near(up1.bbox.width, 525) && near(up1.bbox.height, 84));
+  check('중심을 유지한다', near(up1.bbox.x + up1.bbox.width / 2, 290) && near(up1.bbox.y + up1.bbox.height / 2, 140));
+  check('입력 값을 바꾸지 않는다', start.fontScale === 1 && start.bbox.width === 500);
+
+  const nearEdge = { bbox: { x: 0, y: 0, width: 500, height: 80 }, fontScale: 1 };
+  const clamped = stepFontScale(nearEdge, 'increase', section);
+  check('섹션 밖으로 나가면 크기는 그대로 안쪽으로 민다', clamped.bbox.x === 0 && clamped.bbox.y === 0 && near(clamped.bbox.width, 525));
+
+  check('섹션보다 커지면 [+] 불가', stepFontScale({ bbox: { x: 0, y: 0, width: 990, height: 80 }, fontScale: 1 }, 'increase', section) === null);
+  check('섹션 크기와 같아지는 [+]는 허용', stepFontScale({ bbox: { x: 0, y: 0, width: 800, height: 80 }, fontScale: 1 }, 'increase', { width: 840, height: 400 }) !== null);
+  check('배율이 0이 되는 [-] 불가', stepFontScale({ bbox: start.bbox, fontScale: 0.05 }, 'decrease', section) === null);
+  check('배율 0.10 → - → 0.05 는 가능(제품 최소 없음)', stepFontScale({ bbox: start.bbox, fontScale: 0.1 }, 'decrease', section)?.fontScale === 0.05);
+}
+
+console.log('\n[글자 크기] local 초안 정리');
+{
+  const drafts = new Map([[1, 1.05], [2, 1.1]]);
+  check('블록이 그대로면 같은 Map', pruneBlockDrafts(drafts, new Set([1, 2, 3])) === drafts);
+  const pruned = pruneBlockDrafts(drafts, new Set([1]));
+  check('사라진 블록만 지운다', pruned.size === 1 && pruned.get(1) === 1.05 && drafts.size === 2);
 }
 
 console.log(`\n결과: PASS ${pass} / FAIL ${fail}\n`);

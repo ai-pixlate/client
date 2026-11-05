@@ -230,5 +230,51 @@ console.log('\n[8] 최대 단계(N5_HISTORY_LIMIT) — 최근 50단계만 유지
   check('clear → 비움', clearHistory(h100).entries.length === 0 && clearHistory(h100).pointer === 0);
 }
 
+console.log('\n[9] 여러 종류가 섞인 이력');
+{
+  const translation = cmd('translation', 1, 'A', 'B');
+  const move = cmd('box-move', 2, { x: 0 }, { x: 10 });
+  const exclude = cmd('section-exclude', 7, 'include', 'exclude', 'section');
+  const font = cmd('font-scale', 3, { bbox: { x: 0 }, fontScale: 1 }, { bbox: { x: -1 }, fontScale: 1.05 });
+  const resize = cmd('box-resize', 3, { width: 1 }, { width: 2 });
+  const all = [translation, move, exclude, font, resize];
+  let s = INITIAL_N5_EDIT_SESSION;
+  for (const command of all) s = reduceN5EditSession(s, { type: 'edit-succeeded', command });
+
+  const undone = [];
+  while (canUndo(s.history)) {
+    const command = peekUndo(s.history);
+    undone.push(command.kind);
+    s = reduceN5EditSession(s, { type: 'undo-succeeded', command });
+  }
+  check('역순으로 되돌아간다', undone.join() === 'box-resize,font-scale,section-exclude,box-move,translation', undone.join());
+  const redone = [];
+  while (canRedo(s.history)) {
+    const command = peekRedo(s.history);
+    redone.push(command.kind);
+    s = reduceN5EditSession(s, { type: 'redo-succeeded', command });
+  }
+  check('원래 순서로 다시 실행된다', redone.join() === 'translation,box-move,section-exclude,font-scale,box-resize', redone.join());
+  check('font-scale 값은 박스와 배율을 함께 담는다', font.before.fontScale === 1 && font.after.bbox.x === -1);
+
+  // 실패는 pointer 를 옮기지 않는다
+  const failed = reduceN5EditSession(reduceN5EditSession(s, { type: 'save-started', operation: 'undo' }), { type: 'undo-failed' });
+  check('서버 명령 실행 취소 실패 → pointer 불변 + 안내', failed.history.pointer === 5 && failed.notice === 'undo-failed' && failed.inFlight === null);
+  const inFlight = reduceN5EditSession(s, { type: 'save-started', operation: 'redo' });
+  check('진행 중에는 새 저장을 시작하지 않는다', !canStartSave(inFlight));
+
+  // 분기: A B C → Undo Undo → D 는 A D 가 된다
+  let branch = INITIAL_N5_EDIT_SESSION;
+  for (const command of [translation, move, exclude]) branch = reduceN5EditSession(branch, { type: 'edit-succeeded', command });
+  for (let i = 0; i < 2; i += 1) branch = reduceN5EditSession(branch, { type: 'undo-succeeded', command: peekUndo(branch.history) });
+  branch = reduceN5EditSession(branch, { type: 'edit-succeeded', command: font });
+  check('새 조작은 다시 실행 영역을 지운다', branch.history.entries.join() === [translation, font].join() && !canRedo(branch.history));
+
+  // 종류가 섞여도 51번째가 들어오면 가장 오래된 하나가 빠진다
+  let mixed = EMPTY_N5_HISTORY;
+  for (let i = 0; i < 51; i += 1) mixed = pushCommitted(mixed, { ...all[i % all.length], target: { ...all[i % all.length].target, id: i } });
+  check('섞인 51개 → 50개, 가장 오래된 것 제거', mixed.entries.length === 50 && mixed.entries[0].target.id === 1 && mixed.pointer === 50);
+}
+
 console.log(`\n결과: PASS ${pass} / FAIL ${fail}\n`);
 process.exit(fail === 0 ? 0 : 1);
