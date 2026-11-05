@@ -378,6 +378,11 @@ const HANDLE_POSITIONS: { key: ResizeHandle; x: number; y: number; cursor: strin
 /** 이만큼 움직여야 클릭이 아니라 끌기로 본다(화면 px) */
 const BLOCK_DRAG_START_DISTANCE_PX = 3;
 const FONT_HANDLE_CENTER_TOP_PX = 18;
+/**
+ * 이보다 낮은 block에서는 action handle이 오른쪽(e)·모서리(se) 손잡이를 덮어 폭을 넓힐 수 없다(누르는 영역 각 16). Auto Height로 박스가
+ * 한두 줄 높이가 되면 흔한 경우라 block 위쪽으로 같은 거리만큼 올린다. Figma에는 낮은 block 표본이 없어 보완한 값이다.
+ */
+const FONT_HANDLE_MIN_BLOCK_HEIGHT_PX = 68;
 const FONT_HANDLE_SIZE_PX = 12;
 const FONT_TOOLBAR_GAP_PX = 25;
 const FONT_TOOLBAR_TAIL_WIDTH_PX = 11;
@@ -401,6 +406,8 @@ function BlockSelectionChrome({
   onDragActiveChange,
   fontScale,
   onFontScaleChange,
+  fitAutoHeight,
+  autoHeightOverflow,
   rect,
   zoom,
   panX,
@@ -422,6 +429,13 @@ function BlockSelectionChrome({
   /** 현재 사용자 글자 배율 */
   fontScale: number;
   onFontScaleChange: (direction: 'increase' | 'decrease') => void;
+  /**
+   * Auto Height(Figma Text) — 조판이 요구하는 높이로 맞춘 박스. 이 값이 있으면 폭만 사용자가 정한다: 모서리의 세로 이동은
+   * 쓰지 않고, 세로 전용 n·s 손잡이는 끌리지 않는다. 잴 수 없는 block은 null이고 8방향 자유 조절을 그대로 쓴다.
+   */
+  fitAutoHeight: ((box: BoundingBox) => BoundingBox | null) | null;
+  /** 줄바꿈 결과가 section 아래를 넘어 박스에 다 들어가지 않는다(글자를 줄이거나 자르지 않는다) */
+  autoHeightOverflow: boolean;
   /** canvas 기준 block 위치 */
   rect: DisplayRect;
   zoom: number;
@@ -446,7 +460,7 @@ function BlockSelectionChrome({
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
-    if (isEditLocked) return;
+    if (isEditLocked || (fitAutoHeight && (handle === 'n' || handle === 's'))) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     onDragActiveChange(true);
     dragRef.current = {
@@ -469,10 +483,11 @@ function BlockSelectionChrome({
       drag.startZoom,
     );
     // null이면 폭·높이가 0 이하가 되는 위치다 — 직전 유효한 박스를 그대로 둔다
-    const next = resizeBoxWithinSection(drag.startBbox, drag.handle, delta, section);
+    const next = resizeBoxWithinSection(drag.startBbox, drag.handle, fitAutoHeight ? { x: delta.x, y: 0 } : delta, section);
     if (next) {
-      drag.lastBbox = next;
-      onResize(next);
+      const fitted = fitAutoHeight?.(next) ?? next;
+      drag.lastBbox = fitted;
+      onResize(fitted);
     }
   }
 
@@ -498,11 +513,11 @@ function BlockSelectionChrome({
     gap: FONT_TOOLBAR_GAP_PX,
     maxRight: usableWidth,
   });
-  // 낮은 block에서도 handle이 block 아래로 나가지 않게 하고, 툴바 꼬리는 handle 높이에 맞춘다
-  const handleCenterTop = Math.min(FONT_HANDLE_CENTER_TOP_PX, rect.height * zoom);
+  // 툴바 꼬리는 handle 높이에 맞춘다
+  const handleCenterTop = rect.height * zoom >= FONT_HANDLE_MIN_BLOCK_HEIGHT_PX ? FONT_HANDLE_CENTER_TOP_PX : -FONT_HANDLE_CENTER_TOP_PX;
   const stopPropagation = (e: React.SyntheticEvent) => e.stopPropagation();
   return (
-    <div data-testid="n5-block-selection" className="pointer-events-none absolute inset-0">
+    <div data-testid="n5-block-selection" data-auto-height={fitAutoHeight ? 'true' : 'false'} data-auto-height-overflow={autoHeightOverflow} className="pointer-events-none absolute inset-0">
       {/* 쌓는 순서: 핸들은 번호 배지(z-10) 아래, 툴바와 action handle은 그 위. 툴바가 밀려 겹쳐도 handle로 닫을 수 있다 */}
       {HANDLE_POSITIONS.map(({ key, x, y, cursor }) => (
         <span
@@ -515,7 +530,7 @@ function BlockSelectionChrome({
             left: rect.left + rect.width * x,
             top: rect.top + rect.height * y,
             transform: `translate(-50%, -50%) ${inverseScale}`,
-            cursor,
+            cursor: fitAutoHeight && (key === 'n' || key === 's') ? 'default' : cursor,
           }}
           onPointerDown={(e) => handleResizePointerDown(e, key)}
           onPointerMove={handleResizePointerMove}
@@ -1059,7 +1074,7 @@ export function N5Viewport({
 
   // 손잡이·본체 끌기로 바꾼 bbox(위치·크기 전부) — 세션 local 초안이다(use-n5-edit-session.ts). 저장 계약이 없어 서버로
   // 보내지 않고, 새로고침하면 사라진다. F-CFM-15 조정은 「번역 후」 화면의 것이라 「번역 전」에는 원본 bbox를 보인다.
-  const { bboxDrafts, setBboxDraft, commitBoxEdit, setLayoutDragging, isEditLocked } = editSession;
+  const { bboxDrafts, setBboxDraft, commitBoxEdit, setLayoutDragging, isEditLocked, fitAutoHeight } = editSession;
   const blocks = useMemo(
     () =>
       bboxDrafts.size === 0 || viewMode !== 'translated'
@@ -1478,6 +1493,9 @@ export function N5Viewport({
   });
   const [snapDebug, setSnapDebug] = useState<SnapDebugValues | null>(null);
   const selectedBlockForOverlap = blocks.find((b) => b.id === selectedBlockId);
+  // 선택 block의 Auto Height 가능 여부와 지금 박스의 넘침. 잴 수 없으면 null이고 자유 크기 조절을 쓴다
+  const selectedAutoFit =
+    viewMode === 'translated' && selectedBlockForOverlap?.bbox ? fitAutoHeight(selectedBlockForOverlap, selectedBlockForOverlap.bbox) : null;
   const overlapDiagnostic =
     isOverlapDebug && selectedBlockForOverlap?.bbox
       ? {
@@ -1736,6 +1754,12 @@ export function N5Viewport({
                 isEditLocked={isEditLocked}
                 onDragActiveChange={setLayoutDragging}
                 fontScale={editSession.fontScaleDrafts.get(selectedBlockId) ?? 1}
+                fitAutoHeight={
+                  selectedAutoFit && selectedBlockForOverlap
+                    ? (box) => fitAutoHeight(selectedBlockForOverlap, box)?.box ?? null
+                    : null
+                }
+                autoHeightOverflow={selectedAutoFit?.overflow ?? false}
                 onFontScaleChange={(direction) => {
                   const block = serverBlocks.find((candidate) => candidate.id === selectedBlockId);
                   if (block) editSession.changeFontScale(block, direction);

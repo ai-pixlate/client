@@ -28,7 +28,9 @@ import {
   type N5EditEvent,
   type N5EditSession,
 } from '@/lib/n5/history';
-import { isSameBox, pruneBlockDrafts, stepFontScale, type N5FontScaleValue } from '@/lib/n5/layout-edit';
+import { fitBoxToTextHeight, isSameBox, pruneBlockDrafts, stepFontScale, type N5FontScaleValue } from '@/lib/n5/layout-edit';
+import { openTypesetMeasurer, type TypesetMeasurer } from '@/lib/n5/typeset-measurement';
+import { isTypesetRole } from '@/lib/n5/typeset-rules';
 import type { N5SaveNotice } from '@/lib/n5/messages';
 import type { N5ViewMode } from '@/lib/n5/viewport';
 import { pixlateKeys, usePatchN5BlockMutation, useUpdateSectionBucketMutation } from '@/lib/queries/pixlate';
@@ -42,6 +44,9 @@ import { pixlateKeys, usePatchN5BlockMutation, useUpdateSectionBucketMutation } 
 // - 번역문·섹션 제외·되돌리기: 기존 PATCH. 성공한 뒤에만 이력·pointer 가 움직인다.
 // - 박스 위치·크기·글자 배율: 저장 계약이 없어 세션 local 초안에 곧바로 적용한다. 서버 요청이 없다.
 //
+// Auto Height — 폭·글자 배율·번역문이 바뀌면 조판 규칙대로 다시 줄바꿈한 높이로 박스를 맞춘다(Figma Text의 Auto height).
+// 잴 수 없는 블록(글이 비었거나 조판 역할이 아니거나 폰트가 준비되지 않음)은 기존 자유 크기 조절을 쓴다.
+//
 // 잠금
 // - 서버 실행 취소·다시 실행이 진행 중이면(session.inFlight) 새 편집·실행 취소·다시 실행을 시작하지 않는다.
 // - 일반 저장은 기존 정책대로 섹션·블록마다 따로 진행할 수 있어 개수(pendingEdits)로 센다. 하나라도 남아 있으면
@@ -51,6 +56,11 @@ import { pixlateKeys, usePatchN5BlockMutation, useUpdateSectionBucketMutation } 
 
 type SectionBucket = 'include' | 'exclude';
 type HistoryDirection = 'undo' | 'redo';
+/** 번역문 이력 값 — 글과 그때의 박스 초안(없으면 서버 박스). FE 내부 값이며 API DTO 가 아니다 */
+interface N5TranslationValue {
+  text: string;
+  bbox: BoundingBox | null;
+}
 
 export function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -70,6 +80,8 @@ export interface N5EditSessionApi {
   bboxDrafts: ReadonlyMap<number, BoundingBox>;
   setBboxDraft: (blockId: number, next: BoundingBox) => void;
   commitBoxEdit: (kind: 'box-move' | 'box-resize', blockId: number, before: BoundingBox, after: BoundingBox) => void;
+  /** 이 박스·배율에서 조판이 요구하는 높이로 맞춘 결과. 잴 수 없으면 null — 그 블록은 자유 크기 조절을 쓴다 */
+  fitAutoHeight: (block: BlockViewModel, box: BoundingBox) => { box: BoundingBox; overflow: boolean } | null;
   /** blockId → 사용자 글자 배율. 항목이 없으면 1.0 이다(서버에 사용자 배율 필드가 없다) */
   fontScaleDrafts: ReadonlyMap<number, number>;
   /** [+][-] 한 번 — 박스와 배율을 함께 바꾸고 이력 1단계를 남긴다 */
@@ -154,9 +166,58 @@ export function useN5EditSession({
     const prunedScales = pruneBlockDrafts(fontScaleDrafts, validBlockIds);
     if (prunedScales !== fontScaleDrafts) setFontScaleDrafts(prunedScales);
   }
+  const [translationDrafts, setTranslationDrafts] = useState<ReadonlyMap<number, TranslationDraft>>(() => new Map());
+  // 저장 응답을 기다린 뒤에도 최신 화면 값을 보도록 ref 로 읽는다
+  const latestRef = useRef({ blocks, sections, translationDrafts, bboxDrafts, fontScaleDrafts, onSelectBlock, onSelectSection });
+  useEffect(() => {
+    latestRef.current = { blocks, sections, translationDrafts, bboxDrafts, fontScaleDrafts, onSelectBlock, onSelectSection };
+  });
+
   const setBboxDraft = useCallback((blockId: number, next: BoundingBox) => {
     setBboxDrafts((drafts) => new Map(drafts).set(blockId, next));
   }, []);
+  // 측정기는 세션 동안 하나만 연다(폰트 확인·DOM 생성은 한 번). 폰트가 늦게 오면 로딩이 끝날 때 다시 시도한다
+  const [measurer, setMeasurer] = useState<TypesetMeasurer | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    let opened: TypesetMeasurer | null = null;
+    const tryOpen = async () => {
+      const result = await openTypesetMeasurer();
+      if (!result.ok) return;
+      if (cancelled || opened) {
+        if (result.measurer !== opened) result.measurer.dispose();
+        return;
+      }
+      opened = result.measurer;
+      setMeasurer(opened);
+      document.fonts.removeEventListener('loadingdone', tryOpen);
+    };
+    document.fonts.addEventListener('loadingdone', tryOpen);
+    void tryOpen();
+    return () => {
+      cancelled = true;
+      document.fonts.removeEventListener('loadingdone', tryOpen);
+      opened?.dispose();
+    };
+  }, []);
+
+  /** 주어진 글·박스·배율로 Auto Height 를 계산한다. 잴 수 없으면 null */
+  const fitForText = useCallback(
+    (block: BlockViewModel, text: string, box: BoundingBox, fontScale: number, section: PreviewSectionViewModel | undefined) => {
+      if (!measurer || !section || !isTypesetRole(block.role)) return null;
+      const needed = measurer.measureTextHeight({
+        text,
+        role: block.role,
+        sourceImageWidth: section.width,
+        userFontScale: fontScale,
+        bbox: box,
+        textAlign: block.textAlign,
+      });
+      return needed === null ? null : fitBoxToTextHeight(box, needed, section);
+    },
+    [measurer],
+  );
+
   const commitBoxEdit = useCallback(
     (kind: 'box-move' | 'box-resize', blockId: number, before: BoundingBox, after: BoundingBox) => {
       if (isSameBox(before, after)) return;
@@ -172,8 +233,12 @@ export function useN5EditSession({
       const bbox = bboxDrafts.get(block.id) ?? block.bbox;
       if (!section || !bbox) return;
       const before: N5FontScaleValue = { bbox, fontScale: fontScaleDrafts.get(block.id) ?? 1 };
-      const after = stepFontScale(before, direction, section, block.textAlign ?? 'left');
-      if (!after) return;
+      const stepped = stepFontScale(before, direction, section, block.textAlign ?? 'left');
+      if (!stepped) return;
+      // 폭·기준점은 배율 규칙을 따르고, 높이는 새 글자 크기로 다시 줄바꿈한 결과가 정본이다. 윗변은 그대로 둔다
+      const text = translationDrafts.get(block.id)?.draft ?? block.translatedText;
+      const fitted = fitForText(block, text, { ...stepped.bbox, y: bbox.y }, stepped.fontScale, section);
+      const after: N5FontScaleValue = fitted ? { bbox: fitted.box, fontScale: stepped.fontScale } : stepped;
       setBboxDraft(block.id, after.bbox);
       setFontScaleDrafts((drafts) => new Map(drafts).set(block.id, after.fontScale));
       dispatch({
@@ -181,11 +246,22 @@ export function useN5EditSession({
         command: { kind: 'font-scale', target: { type: 'block', id: block.id }, before, after },
       });
     },
-    [bboxDrafts, dispatch, fontScaleDrafts, sections, setBboxDraft],
+    [bboxDrafts, dispatch, fitForText, fontScaleDrafts, sections, setBboxDraft, translationDrafts],
+  );
+
+  const fitAutoHeight = useCallback(
+    (block: BlockViewModel, box: BoundingBox) =>
+      fitForText(
+        block,
+        translationDrafts.get(block.id)?.draft ?? block.translatedText,
+        box,
+        fontScaleDrafts.get(block.id) ?? 1,
+        sections.find((section) => section.id === block.sectionId),
+      ),
+    [fitForText, fontScaleDrafts, sections, translationDrafts],
   );
 
   // ── 번역문 ─ 초안·재렌더 task·충돌을 여기 두어 패널의 저장과 실행 취소가 같은 값을 본다
-  const [translationDrafts, setTranslationDrafts] = useState<ReadonlyMap<number, TranslationDraft>>(() => new Map());
   const updateTranslationDraft = useCallback(
     (blockId: number, update: (prev: TranslationDraft | undefined) => TranslationDraft | undefined) => {
       setTranslationDrafts((drafts) => updateTranslationDrafts(drafts, blockId, update));
@@ -206,14 +282,24 @@ export function useN5EditSession({
     });
   }, []);
   const commitTranslation = useCallback(
-    (blockId: number, before: string, after: string) => {
-      if (before === after) return;
-      dispatch({
-        type: 'edit-succeeded',
-        command: { kind: 'translation', target: { type: 'block', id: blockId }, before, after },
-      });
+    (blockId: number, beforeText: string, afterText: string) => {
+      if (beforeText === afterText) return;
+      // 저장한 글로 다시 줄바꿈해 박스 높이를 맞춘다. 서버에는 보내지 않고, 글과 박스를 한 단계로 되돌린다
+      const { blocks: latestBlocks, sections: latestSections, bboxDrafts: boxes, fontScaleDrafts: scales } = latestRef.current;
+      const block = latestBlocks.find((candidate) => candidate.id === blockId);
+      const beforeBox = boxes.get(blockId) ?? null;
+      const box = beforeBox ?? block?.bbox ?? null;
+      const fitted =
+        block && box
+          ? fitForText(block, afterText, box, scales.get(blockId) ?? 1, latestSections.find((s) => s.id === block.sectionId))
+          : null;
+      const afterBox = fitted && box && !isSameBox(fitted.box, box) ? fitted.box : beforeBox;
+      if (afterBox) setBboxDraft(blockId, afterBox);
+      const before: N5TranslationValue = { text: beforeText, bbox: beforeBox };
+      const after: N5TranslationValue = { text: afterText, bbox: afterBox };
+      dispatch({ type: 'edit-succeeded', command: { kind: 'translation', target: { type: 'block', id: blockId }, before, after } });
     },
-    [dispatch],
+    [dispatch, fitForText, setBboxDraft],
   );
 
   // ── 섹션 제외·되돌리기(SEC-03) ─ 저장이 끝난 뒤에 반영한다. 제외 여부의 정본은 프리뷰의 bucket/excludedStage 다
@@ -254,12 +340,7 @@ export function useN5EditSession({
     [beginServerEdit, dispatch, endServerEdit, onSectionExcluded, patchSectionBucket],
   );
 
-  // ── 실행 취소·다시 실행 ─ 저장 응답을 기다린 뒤에도 최신 화면 값을 보도록 ref 로 읽는다
-  const latestRef = useRef({ blocks, sections, translationDrafts, onSelectBlock, onSelectSection });
-  useEffect(() => {
-    latestRef.current = { blocks, sections, translationDrafts, onSelectBlock, onSelectSection };
-  });
-
+  // ── 실행 취소·다시 실행
   const revealBlock = useCallback((blockId: number) => {
     const { blocks: latestBlocks, onSelectBlock: select } = latestRef.current;
     const block = latestBlocks.find((candidate) => candidate.id === blockId);
@@ -275,7 +356,7 @@ export function useN5EditSession({
   );
 
   const runTranslationCommand = useCallback(
-    async (direction: HistoryDirection, command: N5EditCommand, text: string) => {
+    async (direction: HistoryDirection, command: N5EditCommand, value: N5TranslationValue) => {
       const blockId = command.target.id;
       revealBlock(blockId);
       // 저장하지 않은 초안이 있으면 서버값만 바뀌어 화면과 어긋난다 — 초안을 지키고 시도하지 않는다
@@ -292,8 +373,15 @@ export function useN5EditSession({
         return;
       }
       try {
-        const response = await patchBlock({ blockId, payload: { trans1: text, revision: latest.revision } });
+        const response = await patchBlock({ blockId, payload: { trans1: value.text, revision: latest.revision } });
         setRerenderTask(blockId, getRerenderTaskId(response));
+        // 저장에 성공한 뒤에만 그 글의 박스로 돌아간다. 초안이 없던 때로 돌아가면 서버 박스를 다시 쓴다
+        setBboxDrafts((drafts) => {
+          const next = new Map(drafts);
+          if (value.bbox) next.set(blockId, value.bbox);
+          else next.delete(blockId);
+          return next;
+        });
         settle(direction, command);
       } catch (err) {
         // 409 — 서버값으로 덮어쓰지 않고 기존 충돌 표시로 넘긴다. 사용자가 [최신 값 불러오기]를 고를 때만 바뀐다
@@ -343,7 +431,7 @@ export function useN5EditSession({
       const value = direction === 'undo' ? command.before : command.after;
       switch (command.kind) {
         case 'translation':
-          void runTranslationCommand(direction, command, value as string);
+          void runTranslationCommand(direction, command, value as N5TranslationValue);
           return;
         case 'section-exclude':
         case 'section-restore':
@@ -396,6 +484,7 @@ export function useN5EditSession({
     bboxDrafts,
     setBboxDraft,
     commitBoxEdit,
+    fitAutoHeight,
     fontScaleDrafts,
     changeFontScale,
     setLayoutDragging,

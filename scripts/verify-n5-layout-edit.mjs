@@ -15,6 +15,7 @@ import {
   canIncreaseScale,
   clampBoxToSection,
   effectiveFontSize,
+  fitBoxToTextHeight,
   moveBoxWithCenterSnap,
   moveBoxWithinSection,
   nextUserScale,
@@ -316,6 +317,22 @@ console.log('\n[글자 크기] local 초안 정리');
   check('블록이 그대로면 같은 Map', pruneBlockDrafts(drafts, new Set([1, 2, 3])) === drafts);
   const pruned = pruneBlockDrafts(drafts, new Set([1]));
   check('사라진 블록만 지운다', pruned.size === 1 && pruned.get(1) === 1.05 && drafts.size === 2);
+}
+
+console.log('\n[Auto Height] 줄바꿈 높이로 박스 맞추기');
+{
+  const section = { width: 1000, height: 400 };
+  const box = { x: 40, y: 100, width: 500, height: 200 };
+  const down = fitBoxToTextHeight(box, 120, section);
+  check('줄이 줄면 높이가 줄고 위치·폭은 그대로', sameBox(down.box, { x: 40, y: 100, width: 500, height: 120 }) && !down.overflow, show(down.box));
+  const up = fitBoxToTextHeight(box, 260, section);
+  check('줄이 늘면 높이가 는다', up.box.height === 260 && up.box.y === 100 && !up.overflow);
+  const same = fitBoxToTextHeight(box, 200.4, section);
+  check('미세한 차이는 같은 객체를 돌려준다(떨림 방지)', same.box === box);
+  const over = fitBoxToTextHeight(box, 500, section);
+  check('section 아래를 넘으면 윗변을 유지하고 경계까지만 늘리며 overflow 를 알린다', over.box.y === 100 && over.box.height === 300 && over.overflow);
+  const exact = fitBoxToTextHeight(box, 300, section);
+  check('경계와 정확히 같으면 overflow 가 아니다', exact.box.height === 300 && !exact.overflow);
 }
 
 console.log(`\n결과: PASS ${pass} / FAIL ${fail}\n`);

@@ -168,6 +168,11 @@ export async function checkTypesetFontReady(
 
 export interface TypesetMeasurer {
   measure(input: TypesetMeasureInput): TypesetMeasureResult;
+  /**
+   * 같은 조판 규칙으로 줄바꿈한 글 전체의 높이(원본 px, Auto Height 용). 글자 Range·Canvas 없이 레이아웃만 읽어
+   * pointermove 마다 불러도 된다. 글자 수로 추정하지 않는다. 잴 수 없거나 글이 비어 있으면 null.
+   */
+  measureTextHeight(input: TypesetMeasureInput): number | null;
   /** 마지막 measure() 로 그린 블록 요소(harness 촬영·비교용). 다음 measure() 에서 재사용된다 */
   readonly blockElement: HTMLElement;
   readonly hostElement: HTMLElement;
@@ -440,10 +445,22 @@ export async function openTypesetMeasurer(options: OpenTypesetMeasurerOptions = 
     };
   };
 
+  const measureTextHeight = (input: TypesetMeasureInput): number | null => {
+    if (disposed || !isTypesetRole(input.role) || !input.text.trim() || !(input.bbox.width > 0)) return null;
+    if (host.getBoundingClientRect().width !== HOST_PROBE_WIDTH) return null;
+    const blockStyle = typesetBlockStyle(input, family);
+    if (!blockStyle) return null;
+    block.style.cssText = '';
+    Object.assign(block.style, blockStyle, { height: 'auto' });
+    block.textContent = input.text;
+    return block.getBoundingClientRect().height;
+  };
+
   return {
     ok: true,
     measurer: {
       measure,
+      measureTextHeight,
       blockElement: block,
       hostElement: host,
       dispose() {

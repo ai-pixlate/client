@@ -304,6 +304,26 @@ export function pruneBlockDrafts<TValue>(
   return next;
 }
 
+/** 이 차이 이하의 높이 변화는 없는 것으로 본다 — 측정값의 미세한 떨림으로 박스가 흔들리지 않게 한다 */
+export const N5_AUTO_HEIGHT_EPSILON_PX = 0.5;
+
+/**
+ * Auto Height — 줄바꿈 결과가 요구하는 높이로 박스를 맞춘다. 윗변·좌우는 그대로다.
+ * 박스는 섹션을 넘지 않는다는 기존 규칙(F-CFM-15)을 유지해 아래 경계까지만 늘리고, 모자란 높이는 overflow 로 알린다.
+ * 글자를 줄이거나 자르지 않는다. 호출부는 needed 를 브라우저 측정값으로 넘긴다.
+ */
+export function fitBoxToTextHeight(
+  box: BoundingBox,
+  needed: number,
+  section: Size,
+): { box: BoundingBox; overflow: boolean } {
+  const available = section.height - box.y;
+  const height = Math.min(needed, available);
+  const overflow = needed > available + N5_AUTO_HEIGHT_EPSILON_PX;
+  if (Math.abs(height - box.height) <= N5_AUTO_HEIGHT_EPSILON_PX) return { box, overflow };
+  return { box: { ...box, height }, overflow };
+}
+
 /** 위치·크기가 같은 박스인지 — 값이 그대로면 실행 취소 단계를 만들지 않는다 */
 export function isSameBox(a: BoundingBox, b: BoundingBox): boolean {
   return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
