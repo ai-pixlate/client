@@ -1,6 +1,7 @@
 import { type Page, expect, test } from '@playwright/test';
 
 import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
+import { reachN5 } from './helpers/reach-n5';
 
 // ─────────────────────────────────────────────────────────────────
 // N5 Auto Height(Figma Text의 Auto height)와 Mock 조판 미리보기(?qaTypeset=1).
@@ -39,7 +40,8 @@ const textHeight = (page: Page, id = BLOCK) =>
 
 async function dragHandle(page: Page, key: string, dx: number, dy: number, hold?: () => Promise<void>) {
   const h = (await page.getByTestId(`n5-block-handle-${key}`).boundingBox())!;
-  const x = h.x + h.width / 2;
+  // 오른쪽 변 손잡이는 낮은 block에서 action handle과 겹친다 — 그 옆을 잡는다(누르는 영역 안)
+  const x = h.x + h.width / 2 + (key.includes('e') ? 6.5 : 0);
   const y = h.y + h.height / 2;
   await page.mouse.move(x, y);
   await page.mouse.down();
@@ -234,6 +236,130 @@ test.describe('Auto Height', () => {
     const start = await boxOf(page);
     await dragHandle(page, 's', 0, -20);
     expect((await boxOf(page)).height).toBeLessThan(start.height);
+  });
+});
+
+test.describe('낮은 block의 글자크기 손잡이', () => {
+  const center = async (page: Page, testId: string) => {
+    const b = (await page.getByTestId(testId).boundingBox())!;
+    return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+  };
+  const hitAt = (page: Page, x: number, y: number) =>
+    page.evaluate(([px, py]) => document.elementFromPoint(px, py)?.closest('[data-testid]')?.getAttribute('data-testid') ?? null, [x, y]);
+
+  test('어떤 높이에서도 Figma 위치(오른쪽 변, 위 +18)이고, 글자크기 손잡이와 오른쪽 손잡이를 각각 쓸 수 있다', async ({ page }) => {
+    await page.goto(QA_URL);
+    await expect(page.getByTestId('n5-qa-badge')).toBeVisible({ timeout: 20_000 });
+    // 글이 비면 세로 조절이 되어 원하는 높이를 만들 수 있다. 36은 두 손잡이 중심이 정확히 포개지는 높이다
+    await page.getByTestId(`n5-block-editor-${BLOCK}`).fill('');
+    for (const target of [60, 50, 36, 24, 14]) {
+      const before = (await page.getByTestId(`n5-block-overlay-${BLOCK}`).boundingBox())!;
+      await dragHandle(page, 's', 0, target - before.height);
+      const overlay = (await page.getByTestId(`n5-block-overlay-${BLOCK}`).boundingBox())!;
+      near(overlay.height, target, `height ${target}`, 1);
+      const right = overlay.x + overlay.width;
+
+      const font = await center(page, 'n5-font-scale-handle');
+      near(font.x, right, 'font x', 0.6);
+      near(font.y, overlay.y + 18, 'font y', 0.6);
+      const e = await center(page, 'n5-block-handle-e');
+      near(e.x, right, 'e x', 0.6);
+      near(e.y, overlay.y + overlay.height / 2, 'e y', 0.6);
+
+      // 글자크기 손잡이의 보이는 영역은 항상 글자크기다
+      expect(await hitAt(page, font.x, font.y), `font hit ${target}`).toBe('n5-font-scale-handle');
+      // 오른쪽 손잡이는 그 양옆에서 잡힌다
+      // (아주 낮으면 e·se 가 서로 겹쳐 둘 중 하나가 잡힌다. 둘 다 오른쪽 변을 움직인다)
+      for (const dx of [-9, 9]) expect(['n5-block-handle-e', 'n5-block-handle-se'], `e hit ${target} ${dx}`).toContain(await hitAt(page, e.x + dx, e.y));
+
+      // 실제 조작 — 넓혔다가 되돌리고, 글자크기 툴바를 여닫는다
+      const width = overlay.width;
+      await page.mouse.move(e.x + 9, e.y);
+      await page.mouse.down();
+      await page.mouse.move(e.x + 9 - 30, e.y, { steps: 3 });
+      await page.mouse.up();
+      near((await page.getByTestId(`n5-block-overlay-${BLOCK}`).boundingBox())!.width, width - 30, `drag ${target}`, 1);
+      await page.getByTestId('n5-undo').click();
+
+      await page.mouse.click(font.x, font.y);
+      await expect(page.getByTestId('n5-font-scale-toolbar')).toBeVisible();
+      await page.mouse.click(font.x, font.y);
+      await expect(page.getByTestId('n5-font-scale-toolbar')).toHaveCount(0);
+    }
+  });
+
+  test('높은 block은 누르는 영역을 바꾸지 않는다', async ({ page }) => {
+    await page.goto(QA_URL);
+    await expect(page.getByTestId('n5-qa-badge')).toBeVisible({ timeout: 20_000 });
+    await page.getByTestId(`n5-block-pin-${BLOCK}`).click(); // 표시 높이 80
+    const e = await center(page, 'n5-block-handle-e');
+    expect(await hitAt(page, e.x + 6.5, e.y)).toBe('n5-block-handle-e');
+    expect(await hitAt(page, e.x + 10, e.y)).not.toBe('n5-block-handle-e');
+  });
+});
+
+test.describe('일반 N5(렌더 이미지 화면)', () => {
+  test('Auto Height 가 QA와 같은 값으로 동작하고 렌더 이미지·이력이 그대로다', async ({ page, browser }) => {
+    await reachN5(page);
+    const writes = recordWrites(page);
+    await expect(page.getByTestId('n5-qa-badge')).toHaveCount(0);
+    await expect(page.locator('[data-typeset-render]')).toHaveCount(0);
+    await expect(page.getByTestId('n5-slice-translated-501')).not.toHaveCSS('background-image', 'none');
+    await page.getByTestId(`n5-block-pin-${BLOCK}`).click();
+    await expect(page.getByTestId('n5-block-selection')).toHaveAttribute('data-auto-height', 'true');
+    const start = await boxOf(page);
+    const undo = page.getByTestId('n5-undo');
+    const redo = page.getByTestId('n5-redo');
+
+    await dragHandle(page, 'e', -180, 0);
+    const narrow = await boxOf(page);
+    expect(narrow.width).toBeLessThan(start.width);
+    near(narrow.top, start.top);
+    await dragHandle(page, 'e', 120, 0);
+    const wider = await boxOf(page);
+    expect(wider.height).toBeLessThan(narrow.height);
+    await dragHandle(page, 'w', 40, 0);
+    const fromLeft = await boxOf(page);
+    expect(fromLeft.height).toBeGreaterThanOrEqual(wider.height);
+
+    // 같은 조작을 QA 화면에서 하면 값이 같다
+    const qa = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+    await openQa(qa);
+    await dragHandle(qa, 'e', -180, 0);
+    sameBox(await boxOf(qa), narrow);
+    await dragHandle(qa, 'e', 120, 0);
+    sameBox(await boxOf(qa), wider);
+    await dragHandle(qa, 'w', 40, 0);
+    sameBox(await boxOf(qa), fromLeft);
+    await qa.close();
+
+    // Undo·Redo 는 값을 그대로 되돌린다
+    await undo.click();
+    sameBox(await boxOf(page), wider);
+    await undo.click();
+    sameBox(await boxOf(page), narrow);
+    await undo.click();
+    sameBox(await boxOf(page), start);
+    await redo.click();
+    await redo.click();
+    await redo.click();
+    sameBox(await boxOf(page), fromLeft);
+
+    // 글자 크기 — 다시 재서 높이가 바뀌고 서버 요청이 없다
+    await page.getByTestId('n5-font-scale-handle').click();
+    await page.getByTestId('n5-font-scale-increase').click();
+    const scaled = await boxOf(page);
+    expect(scaled.height).toBeGreaterThan(fromLeft.height);
+    near(scaled.top, fromLeft.top);
+    expect(writes).toEqual([]);
+
+    // 번역 저장 — 다시 재서 높이가 바뀌고 서버에는 글만 간다
+    const editor = page.getByTestId(`n5-block-editor-${BLOCK}`);
+    await editor.fill(`${await editor.inputValue()} ${await editor.inputValue()}`);
+    await page.getByTestId(`n5-block-save-${BLOCK}`).click();
+    await expect.poll(async () => (await boxOf(page)).height).toBeGreaterThan(scaled.height);
+    expect(writes).toEqual([`PATCH /jobs/${MOCK_JOB_ID}/blocks/${BLOCK}`]);
+    await page.screenshot({ path: test.info().outputPath('normal-n5-auto-height.png') });
   });
 });
 
