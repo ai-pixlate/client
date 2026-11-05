@@ -22,6 +22,7 @@ import { BLOCK_ROLE_LABELS, SECTION_WARNING_LABELS, getSignalLabel } from '../ap
 import { VERDICT_BADGE_LABELS } from '../n3/verdict.ts';
 import type { ApiSection } from '../api/n3-schema';
 import type { BlockRole, BoundingBox } from '@/lib/api/types';
+import type { N5TextAlign } from './layout-edit';
 import type {
   ApiBbox,
   ApiBlockPatchResponse,
@@ -273,6 +274,11 @@ export interface BlockViewModel {
   roleLabel: string;
   sourceText: string;
   translatedText: string;
+  /**
+   * 글자 정렬([+][-] 기준점). 공개 API(TextBlock)에 블록 정렬 필드가 없어 지금은 채우지 않는다 — 없으면 left 로 본다.
+   * 계약이 생기면 toBlockViewModel 에서 채운다. text 내용이나 bbox 위치로 추측하지 않는다.
+   */
+  textAlign?: N5TextAlign;
   /** isExcluded(API 값, role=product_label 파생)로부터 editable = !isExcluded로 정리한다.
    *  role==='product_label' 여부를 FE에서 다시 계산하지 않는다 — isExcluded가 정본이다. */
   editable: boolean;

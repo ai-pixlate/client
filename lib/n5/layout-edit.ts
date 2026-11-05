@@ -21,7 +21,7 @@ import type { Point, Size } from './viewport';
 /**
  * [+][-] 한 번의 사용자 글자 배율 변화량 — PM 확정(10/29): 1.00 → 1.05 → 1.10 처럼 0.05 씩 더하고 뺀다.
  * API 계약 값이 아니라 FE 제품 동작 상수다. 박스는 같은 비율(nextScale / currentScale)로 바뀌고
- * 중심을 유지하며, 섹션을 넘으면 크기는 그대로 안쪽으로 민다(scaleBoxAndFont).
+ * 글자 정렬 기준점(N5TextAlign)을 유지하며, 섹션을 넘으면 크기는 그대로 안쪽으로 민다(scaleBoxAndFont).
  */
 export const N5_FONT_SCALE_STEP = 0.05;
 
@@ -97,8 +97,15 @@ export function nextUserScale(currentScale: number, step: number, direction: 'in
 }
 
 /**
+ * [+][-] 의 기준점이 되는 글자 정렬. 윗변은 항상 고정이고 높이는 아래로 변한다.
+ * left = 왼쪽 위, center = 위 가운데, right = 오른쪽 위. 손잡이 크기 조절(반대 변 고정)과 다른 규칙이다.
+ * anchor 공식은 저장 계약이 아니라 FE 구현 규칙이다.
+ */
+export type N5TextAlign = 'left' | 'center' | 'right';
+
+/**
  * [+][-] — 박스와 글자 배율을 같은 비율(nextScale / currentScale)로 바꾼다.
- * 현재 박스 중심을 유지하고, 섹션 경계를 넘으면 크기는 그대로 둔 채 안쪽으로 밀어 넣는다.
+ * 정렬 기준점을 유지하고, 섹션 경계를 넘으면 크기는 그대로 둔 채 가능한 만큼만 안쪽으로 밀어 넣는다.
  * 새 크기가 섹션보다 크거나(같으면 허용) 0 이하이면 null — 그 조작은 할 수 없다.
  */
 export function scaleBoxAndFont({
@@ -106,11 +113,13 @@ export function scaleBoxAndFont({
   currentScale,
   nextScale,
   section,
+  align,
 }: {
   box: BoundingBox;
   currentScale: number;
   nextScale: number;
   section: Size;
+  align: N5TextAlign;
 }): BoundingBox | null {
   if (!(currentScale > 0) || !(nextScale > 0)) return null;
   const ratio = nextScale / currentScale;
@@ -118,11 +127,10 @@ export function scaleBoxAndFont({
   const height = box.height * ratio;
   if (!(width > 0) || !(height > 0)) return null;
   if (width > section.width || height > section.height) return null;
-  const cx = box.x + box.width / 2;
-  const cy = box.y + box.height / 2;
+  const anchoredX = align === 'left' ? box.x : align === 'right' ? box.x + box.width - width : box.x + (box.width - width) / 2;
   return {
-    x: clamp(cx - width / 2, 0, section.width - width),
-    y: clamp(cy - height / 2, 0, section.height - height),
+    x: clamp(anchoredX, 0, section.width - width),
+    y: clamp(box.y, 0, section.height - height),
     width,
     height,
   };
@@ -142,9 +150,10 @@ export function stepFontScale(
   { bbox, fontScale }: N5FontScaleValue,
   direction: 'increase' | 'decrease',
   section: Size,
+  align: N5TextAlign,
 ): N5FontScaleValue | null {
   const nextScale = nextUserScale(fontScale, N5_FONT_SCALE_STEP, direction);
-  const nextBox = scaleBoxAndFont({ box: bbox, currentScale: fontScale, nextScale, section });
+  const nextBox = scaleBoxAndFont({ box: bbox, currentScale: fontScale, nextScale, section, align });
   return nextBox ? { bbox: nextBox, fontScale: nextScale } : null;
 }
 
@@ -158,13 +167,15 @@ interface ScaleStepInput {
 /** [+] 가능 여부 — 확대 후보가 섹션 폭·높이를 넘으면 false. 다른 블록과의 겹침은 보지 않는다. */
 export function canIncreaseScale({ box, currentScale, step, section }: ScaleStepInput): boolean {
   const nextScale = nextUserScale(currentScale, step, 'increase');
-  return scaleBoxAndFont({ box, currentScale, nextScale, section }) !== null;
+  // 가능 여부는 크기만 본다 — 위치는 기준점과 무관하게 항상 안쪽으로 맞출 수 있다
+  return scaleBoxAndFont({ box, currentScale, nextScale, section, align: 'left' }) !== null;
 }
 
 /** [-] 가능 여부 — 기술 조건(배율·폭·높이 > 0)만 본다. 제품 최소 크기는 없다. */
 export function canDecreaseScale({ box, currentScale, step, section }: ScaleStepInput): boolean {
   const nextScale = nextUserScale(currentScale, step, 'decrease');
-  return scaleBoxAndFont({ box, currentScale, nextScale, section }) !== null;
+  // 가능 여부는 크기만 본다 — 위치는 기준점과 무관하게 항상 안쪽으로 맞출 수 있다
+  return scaleBoxAndFont({ box, currentScale, nextScale, section, align: 'left' }) !== null;
 }
 
 /**

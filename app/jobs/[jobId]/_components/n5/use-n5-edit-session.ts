@@ -172,7 +172,7 @@ export function useN5EditSession({
       const bbox = bboxDrafts.get(block.id) ?? block.bbox;
       if (!section || !bbox) return;
       const before: N5FontScaleValue = { bbox, fontScale: fontScaleDrafts.get(block.id) ?? 1 };
-      const after = stepFontScale(before, direction, section);
+      const after = stepFontScale(before, direction, section, block.textAlign ?? 'left');
       if (!after) return;
       setBboxDraft(block.id, after.bbox);
       setFontScaleDrafts((drafts) => new Map(drafts).set(block.id, after.fontScale));
