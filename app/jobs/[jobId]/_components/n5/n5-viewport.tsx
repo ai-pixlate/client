@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, Fragment, useReducer } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, Fragment } from 'react';
 
 import { isApiMockingEnabled } from '@/lib/api/session';
 import { canRestoreSectionInN5, getSectionCanvasHeaderHeight } from '@/lib/n5/adapter';
@@ -8,10 +8,8 @@ import { computeBlockOverlaps, type BlockOverlap } from '@/lib/n5/overlap';
 import type { BlockViewModel, JobMetaViewModel, PreviewSectionViewModel, PreviewViewModel, SectionStatusViewModel } from '@/lib/n5/adapter';
 import type { BoundingBox } from '@/lib/api/types';
 import { N5_SAVE_NOTICE_MESSAGES } from '@/lib/n5/messages';
-import { useUpdateSectionBucketMutation } from '@/lib/queries/pixlate';
 import { getBlockDisplayRect, getBlockHitRect, getFontScaleToolbarLeft, screenDeltaToBboxDelta, type DisplayRect } from '@/lib/n5/coordinates';
 import {
-  isSameBox,
   moveBoxWithCenterSnap,
   N5_SNAP_ACQUIRE_SCREEN_PX,
   N5_SNAP_RELEASE_SCREEN_PX,
@@ -20,15 +18,6 @@ import {
   type CenterSnapLock,
   type ResizeHandle,
 } from '@/lib/n5/layout-edit';
-import {
-  canRedo,
-  canUndo,
-  INITIAL_N5_EDIT_SESSION,
-  peekRedo,
-  peekUndo,
-  reduceN5EditSession,
-  type N5EditCommand,
-} from '@/lib/n5/history';
 import { CanvasSectionStatus } from './n5-section-status';
 import {
   ZOOM_BUTTON_STEP,
@@ -51,6 +40,7 @@ import {
   FitControls,
   UndoRedoControls,
 } from './n5-toolbar';
+import { isTypingTarget, type N5EditSessionApi } from './use-n5-edit-session';
 
 // ─────────────────────────────────────────────────────────────────
 // N5 — 캔버스형 viewport (Figma 544:3168 "N5 검수" 기준)
@@ -399,6 +389,8 @@ function BlockSelectionChrome({
   scale,
   onResize,
   onResizeCommit,
+  isEditLocked,
+  onDragActiveChange,
   rect,
   zoom,
   panX,
@@ -413,6 +405,10 @@ function BlockSelectionChrome({
   onResize: (next: BoundingBox) => void;
   /** 손을 놓았을 때 한 번 — 실행 취소 한 단계 */
   onResizeCommit: (before: BoundingBox, after: BoundingBox) => void;
+  /** 서버 실행 취소·다시 실행 진행 중 — 새 조작을 시작하지 않는다 */
+  isEditLocked: boolean;
+  /** 끄는 동안 실행 취소·다시 실행이 끼어들지 않게 알린다 */
+  onDragActiveChange: (active: boolean) => void;
   /** canvas 기준 block 위치 */
   rect: DisplayRect;
   zoom: number;
@@ -430,12 +426,16 @@ function BlockSelectionChrome({
     startZoom: number;
     lastBbox: BoundingBox;
   } | null>(null);
+  // 끌기 중 선택 UI가 사라지면 pointerup을 받지 못한다 — 잠금이 남지 않게 함께 푼다
+  useEffect(() => () => onDragActiveChange(false), [onDragActiveChange]);
 
   function handleResizePointerDown(e: React.PointerEvent<HTMLSpanElement>, handle: ResizeHandle) {
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
+    if (isEditLocked) return;
     e.currentTarget.setPointerCapture(e.pointerId);
+    onDragActiveChange(true);
     dragRef.current = {
       pointerId: e.pointerId,
       handle,
@@ -468,6 +468,7 @@ function BlockSelectionChrome({
     if (!drag || drag.pointerId !== e.pointerId) return;
     e.stopPropagation();
     dragRef.current = null;
+    onDragActiveChange(false);
     if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
     // 시스템이 끌기를 취소하면 시작 전 상태로 돌리고 이력에 남기지 않는다
     if (e.type === 'pointercancel') onResize(drag.startBbox);
@@ -701,6 +702,7 @@ function ImageLayer({
   consumeDragClick,
   pendingSectionIds,
   failedSectionId,
+  isEditLocked,
   onExcludeSection,
   onRestoreSection,
   scale,
@@ -729,6 +731,8 @@ function ImageLayer({
   pendingSectionIds: ReadonlySet<number>;
   /** 마지막 SEC-03 저장이 실패한 sectionId — 그 섹션 위에 실패 안내를 띄운다. */
   failedSectionId: number | null;
+  /** 서버 실행 취소·다시 실행 진행 중 — 제외하기·되돌리기를 잠시 막는다 */
+  isEditLocked: boolean;
   onExcludeSection: (sectionId: number) => void;
   onRestoreSection: (sectionId: number) => void;
   scale: number;
@@ -849,7 +853,7 @@ function ImageLayer({
                   <button
                     type="button"
                     data-testid={`n5-section-restore-${slice.sectionId}`}
-                    disabled={isSaving}
+                    disabled={isSaving || isEditLocked}
                     aria-busy={isSaving}
                     onClick={(e) => {
                       e.stopPropagation();
@@ -866,7 +870,7 @@ function ImageLayer({
                 <button
                   type="button"
                   data-testid={`n5-section-exclude-${slice.sectionId}`}
-                  disabled={isSaving}
+                  disabled={isSaving || isEditLocked}
                   aria-busy={isSaving}
                   onClick={(e) => {
                     e.stopPropagation();
@@ -954,12 +958,6 @@ function JobMetaTags({ meta }: { meta: JobMetaViewModel }) {
   );
 }
 
-function isTypingTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  const tag = target.tagName;
-  return tag === 'INPUT' || tag === 'TEXTAREA' || target.isContentEditable;
-}
-
 function readPadding(el: HTMLElement) {
   const style = getComputedStyle(el);
   return {
@@ -978,7 +976,6 @@ interface Transform {
 const INITIAL_TRANSFORM: Transform = { zoom: 1, pan: { x: 0, y: 0 } };
 
 export function N5Viewport({
-  jobId,
   preview,
   blocks: serverBlocks,
   sectionStatusById,
@@ -989,9 +986,8 @@ export function N5Viewport({
   revealRequestSeq,
   onSelectBlock,
   onSelectSection,
-  onSectionExcluded,
+  editSession,
 }: {
-  jobId: string;
   preview: PreviewViewModel;
   blocks: BlockViewModel[];
   sectionStatusById: ReadonlyMap<number, SectionStatusViewModel>;
@@ -1010,65 +1006,14 @@ export function N5Viewport({
   revealRequestSeq: number;
   onSelectBlock: (block: BlockViewModel) => void;
   onSelectSection: (sectionId: number) => void;
-  /** 제외 저장 성공 — 상위가 그 섹션 안의 선택을 정리한다(제외된 섹션에 선택이 남지 않게). */
-  onSectionExcluded: (sectionId: number) => void;
+  /** N5 편집 세션(N5Loaded 소유) — 이력·박스 초안·섹션 저장의 정본이다 */
+  editSession: N5EditSessionApi;
 }) {
   const [transform, setTransform] = useState<Transform>(INITIAL_TRANSFORM);
   const [isSpaceHeld, setIsSpaceHeld] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
   // 스크롤 표시 막대와 글자크기 툴바 위치 전용(렌더 중 DOM을 읽지 않으려고 둔다). pan·zoom 계산은 그때그때 DOM을 측정한다
   const [usableSize, setUsableSize] = useState<Size>({ width: 0, height: 0 });
-
-  // F-CFM-14 — N5 섹션 제외·되돌리기는 SEC-03(PATCH /jobs/{jobId}/sections/{sectionId},
-  // N3·N5 공용)으로 저장한다. 제외 여부의 정본은 프리뷰 응답의 bucket/excludedStage
-  // (slice.isExcluded)뿐이고, 이 컴포넌트는 "저장 중"과 "마지막 실패"만 들고 있다.
-  //
-  // 저장이 끝난 뒤에 반영한다(낙관적 반영 안 함): 클릭 → 그 섹션 버튼만 잠금 → PATCH →
-  // 성공하면 응답 bucket 으로 프리뷰 캐시 갱신 + 프리뷰 재조회, 실패하면 화면은 손대지 않은
-  // 마지막 저장 상태 그대로 + 안내(재조회로 서버 정본과 다시 맞춘다).
-  //
-  // Undo/Redo 연결 지점(아직 연결하지 않음): 아래 saveSectionBucket 의 성공 분기에서
-  // pushCommitted({ kind: 'section-exclude' | 'section-restore', target: { type: 'section', id },
-  // before, after }) 를 부르면 된다 — 실패 분기는 이력에 넣지 않는다(lib/n5/history.ts).
-  const { mutateAsync: patchSectionBucket } = useUpdateSectionBucketMutation(jobId);
-  const [pendingSectionIds, setPendingSectionIds] = useState<ReadonlySet<number>>(() => new Set());
-  // 같은 tick 의 연속 클릭은 state 갱신 전에 들어오므로 ref 로 한 번 더 막는다
-  const pendingSectionIdsRef = useRef(new Set<number>());
-  const [failedSectionId, setFailedSectionId] = useState<number | null>(null);
-
-  const saveSectionBucket = useCallback(
-    async (sectionId: number, bucket: 'include' | 'exclude') => {
-      if (pendingSectionIdsRef.current.has(sectionId)) return;
-      pendingSectionIdsRef.current.add(sectionId);
-      setPendingSectionIds(new Set(pendingSectionIdsRef.current));
-      setFailedSectionId((prev) => (prev === sectionId ? null : prev));
-      try {
-        // mutateAsync — 섹션마다 따로 끝을 기다린다(mutate 의 호출별 콜백은 마지막 호출에만 불린다)
-        await patchSectionBucket({ sectionId, bucket });
-        if (bucket === 'exclude') onSectionExcluded(sectionId);
-      } catch {
-        setFailedSectionId(sectionId);
-      } finally {
-        pendingSectionIdsRef.current.delete(sectionId);
-        setPendingSectionIds(new Set(pendingSectionIdsRef.current));
-      }
-    },
-    [patchSectionBucket, onSectionExcluded],
-  );
-
-  const handleExcludeSection = useCallback(
-    (sectionId: number) => {
-      void saveSectionBucket(sectionId, 'exclude');
-    },
-    [saveSectionBucket],
-  );
-
-  const handleRestoreSection = useCallback(
-    (sectionId: number) => {
-      void saveSectionBucket(sectionId, 'include');
-    },
-    [saveSectionBucket],
-  );
 
   const viewportRef = useRef<HTMLDivElement>(null);
   const spaceHeldRef = useRef(false);
@@ -1090,10 +1035,9 @@ export function N5Viewport({
     [preview.sections, preview.scale],
   );
 
-  // 손잡이·본체 끌기로 바꾼 bbox(위치·크기 전부) — 이 세션의 local 초안이다. 저장 계약이 없어 서버로 보내지 않고,
-  // 새로고침하면 사라진다. 재조회·보기 전환으로 지워지지 않게 여기 둔다.
-  // F-CFM-15 조정은 「번역 후」 화면의 것이라 「번역 전」에는 원본 bbox를 보인다.
-  const [bboxDrafts, setBboxDrafts] = useState<ReadonlyMap<number, BoundingBox>>(() => new Map());
+  // 손잡이·본체 끌기로 바꾼 bbox(위치·크기 전부) — 세션 local 초안이다(use-n5-edit-session.ts). 저장 계약이 없어 서버로
+  // 보내지 않고, 새로고침하면 사라진다. F-CFM-15 조정은 「번역 후」 화면의 것이라 「번역 전」에는 원본 bbox를 보인다.
+  const { bboxDrafts, setBboxDraft, commitBoxEdit, setLayoutDragging, isEditLocked } = editSession;
   const blocks = useMemo(
     () =>
       bboxDrafts.size === 0 || viewMode !== 'translated'
@@ -1529,74 +1473,18 @@ export function N5Viewport({
     return pending;
   }, []);
 
-  function setBboxDraft(blockId: number, next: BoundingBox) {
-    setBboxDrafts((drafts) => new Map(drafts).set(blockId, next));
-  }
-
-  // ── 실행 취소·다시 실행(F-CFM-03, lib/n5/history.ts) — 박스 저장 계약이 없어 지금은 이 세션의 local 초안에 곧바로 적용하고
-  // 성공으로 기록한다. 저장 계약이 생기면 save-started → 저장 → 결과 이벤트 순서로 이 자리만 바꾸면 된다. 값은 커서가 아니라
-  // 실제 결과 bbox(snap·경계 반영)다. 끌기 한 번(손을 놓을 때까지)이 한 단계이고, 값이 그대로면 단계를 만들지 않는다.
-  const [editSession, dispatchEdit] = useReducer(reduceN5EditSession, INITIAL_N5_EDIT_SESSION);
-
-  function commitBoxEdit(kind: 'box-move' | 'box-resize', blockId: number, before: BoundingBox, after: BoundingBox) {
-    if (isSameBox(before, after)) return;
-    dispatchEdit({ type: 'edit-succeeded', command: { kind, target: { type: 'block', id: blockId }, before, after } });
-  }
-
-  // 「번역 전」에는 조정 UI가 없고 원본 bbox를 보이므로 되돌려도 보이지 않는다 — 「번역 후」에서만 동작한다
-  const isHistoryAvailable = viewMode === 'translated';
-
-  function applyHistoryCommand(command: N5EditCommand, value: unknown) {
-    const blockId = command.target.id;
-    setBboxDraft(blockId, value as BoundingBox);
-    if (blockId !== selectedBlockId) {
-      const block = serverBlocks.find((b) => b.id === blockId);
-      if (block) onSelectBlock(block); // 무엇이 되돌아갔는지 보이도록 그 block을 고른다
-    }
-  }
-
-  function handleUndo() {
-    const command = peekUndo(editSession.history);
-    if (!command || !isHistoryAvailable || blockDragRef.current) return;
-    applyHistoryCommand(command, command.before);
-    dispatchEdit({ type: 'undo-succeeded', command });
-  }
-
-  function handleRedo() {
-    const command = peekRedo(editSession.history);
-    if (!command || !isHistoryAvailable || blockDragRef.current) return;
-    applyHistoryCommand(command, command.after);
-    dispatchEdit({ type: 'redo-succeeded', command });
-  }
-
-  // 단축키 — 입력칸의 글자 실행 취소와 열린 확인창은 가로채지 않는다(F-CFM-03)
-  const historyShortcutRef = useRef({ undo: handleUndo, redo: handleRedo });
-  useEffect(() => {
-    historyShortcutRef.current = { undo: handleUndo, redo: handleRedo };
-  });
-  useEffect(() => {
-    function handleKeyDown(e: KeyboardEvent) {
-      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.key.toLowerCase() !== 'z') return;
-      if (isTypingTarget(e.target) || (e.target instanceof Element && e.target.closest('[role="dialog"]'))) return;
-      e.preventDefault();
-      if (e.shiftKey) historyShortcutRef.current.redo();
-      else historyShortcutRef.current.undo();
-    }
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
-
   const blockDrag: BlockBodyDragHandlers | null =
     viewMode !== 'translated'
       ? null
       : {
           onPointerDown(e, block) {
             dragClickPendingRef.current = false;
-            if (e.button !== 0 || spaceHeldRef.current || !block.bbox) return; // Space는 pan이 쓴다
+            if (e.button !== 0 || spaceHeldRef.current || !block.bbox || isEditLocked) return; // Space는 pan이 쓴다
             const section = preview.sections.find((s) => s.id === block.sectionId);
             if (!section) return;
             e.stopPropagation();
             e.currentTarget.setPointerCapture(e.pointerId);
+            setLayoutDragging(true);
             blockDragRef.current = {
               pointerId: e.pointerId,
               block,
@@ -1666,6 +1554,7 @@ export function N5Viewport({
             if (!drag || drag.pointerId !== e.pointerId) return;
             e.stopPropagation();
             blockDragRef.current = null;
+            setLayoutDragging(false);
             setSnapGuide(null);
             if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
             if (!drag.moved) return;
@@ -1756,11 +1645,21 @@ export function N5Viewport({
               padding과 같은 값), 화면 아래 31px. viewport 기준이라 우측 검수 패널 폭과 무관하다.
               viewport의 pointer·pan·zoom 처리에는 연결하지 않는다. */}
           <div data-testid="n5-undo-redo-wrap" className="absolute bottom-[31px] left-6 z-10">
+            {/* Figma에 실패 표현이 없어 섹션 저장 실패 안내와 같은 형식으로 버튼 위에 둔다 */}
+            {editSession.notice && (
+              <p
+                role="alert"
+                data-testid="n5-history-notice"
+                className="absolute bottom-[56px] left-0 w-[280px] rounded-[6px] border border-[#eaeaea] bg-white px-3 py-2 text-[11px] text-red-500"
+              >
+                {N5_SAVE_NOTICE_MESSAGES[editSession.notice]}
+              </p>
+            )}
             <UndoRedoControls
-              canUndo={isHistoryAvailable && canUndo(editSession.history)}
-              canRedo={isHistoryAvailable && canRedo(editSession.history)}
-              onUndo={handleUndo}
-              onRedo={handleRedo}
+              canUndo={editSession.canUndo}
+              canRedo={editSession.canRedo}
+              onUndo={editSession.undo}
+              onRedo={editSession.redo}
             />
           </div>
 
@@ -1790,10 +1689,11 @@ export function N5Viewport({
               mode={viewMode}
               blockDrag={blockDrag}
               consumeDragClick={consumeDragClick}
-              pendingSectionIds={pendingSectionIds}
-              failedSectionId={failedSectionId}
-              onExcludeSection={handleExcludeSection}
-              onRestoreSection={handleRestoreSection}
+              pendingSectionIds={editSession.pendingSectionIds}
+              failedSectionId={editSession.failedSectionId}
+              isEditLocked={isEditLocked}
+              onExcludeSection={(sectionId) => editSession.saveSectionBucket(sectionId, 'exclude')}
+              onRestoreSection={(sectionId) => editSession.saveSectionBucket(sectionId, 'include')}
               scale={preview.scale}
               zoom={transform.zoom}
               selectedBlockId={selectedBlockId}
@@ -1810,6 +1710,8 @@ export function N5Viewport({
                 scale={preview.scale}
                 onResize={(next) => setBboxDraft(selectedBlockId, next)}
                 onResizeCommit={(before, after) => commitBoxEdit('box-resize', selectedBlockId, before, after)}
+                isEditLocked={isEditLocked}
+                onDragActiveChange={setLayoutDragging}
                 rect={selectedBlockCanvasRect}
                 zoom={transform.zoom}
                 panX={transform.pan.x}

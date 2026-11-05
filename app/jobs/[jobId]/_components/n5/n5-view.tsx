@@ -17,6 +17,7 @@ import type { BlockTaskFailures, BlockViewModel, JobMetaViewModel, PreviewViewMo
 import type { N5ViewMode } from '@/lib/n5/viewport';
 import { N5Viewport } from './n5-viewport';
 import { N5Panel } from './n5-panel';
+import { useN5EditSession } from './use-n5-edit-session';
 
 // ─────────────────────────────────────────────────────────────────
 // N5 — 검수 shell (Figma node 544:3168, "N5 검수" 기준)
@@ -105,6 +106,17 @@ function N5Loaded({
     );
   }
 
+  // 실행 취소·다시 실행의 정본(F-CFM-03) — 캔버스와 패널의 모든 편집이 같은 이력을 쓴다
+  const editSession = useN5EditSession({
+    jobId,
+    blocks,
+    sections: preview.sections,
+    viewMode,
+    onSelectBlock: handleSelectBlock,
+    onSelectSection: handleSelectSection,
+    onSectionExcluded: handleSectionExcluded,
+  });
+
   return (
     <div className="flex h-full w-full bg-white">
       {/* 본문: 중앙 viewer + 우측 panel. 세로 padding을 주지 않는다 — Figma의
@@ -118,7 +130,6 @@ function N5Loaded({
           Figma 실측(52px, 1920 기준 2.708vw)을 상한으로 쓴다. */}
       <div className="flex h-full min-h-0 min-w-0 flex-1 gap-[clamp(20px,2.71vw,52px)] pr-[clamp(45px,3.125vw,60px)] pl-[clamp(0px,calc(6.25vw_-_80px),40px)]">
         <N5Viewport
-          jobId={jobId}
           preview={preview}
           blocks={blocks}
           sectionStatusById={sectionStatusById}
@@ -129,7 +140,7 @@ function N5Loaded({
           revealRequestSeq={revealRequestSeq}
           onSelectBlock={handleSelectBlock}
           onSelectSection={handleSelectSection}
-          onSectionExcluded={handleSectionExcluded}
+          editSession={editSession}
         />
         <N5Panel
           jobId={jobId}
@@ -144,6 +155,7 @@ function N5Loaded({
           selectedSectionId={selectedSectionId}
           onSelectBlock={handleSelectBlock}
           onSelectSection={handleSelectSection}
+          editSession={editSession}
         />
       </div>
     </div>

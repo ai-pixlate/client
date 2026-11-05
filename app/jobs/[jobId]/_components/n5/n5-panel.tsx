@@ -29,7 +29,6 @@ import {
   editTranslationDraft,
   resolveTranslationSaveFailed,
   resolveTranslationSaveSucceeded,
-  updateTranslationDrafts,
   type TranslationDraft,
 } from '@/lib/n5/failed-drafts';
 import { useModalDialog } from '@/app/_components/use-modal-dialog';
@@ -40,6 +39,7 @@ import {
   useConfirmN5Mutation,
 } from '@/lib/queries/pixlate';
 import { ViewModeToggle } from './n5-toolbar';
+import type { N5EditSessionApi } from './use-n5-edit-session';
 
 // ─────────────────────────────────────────────────────────────────
 // N5 — 우측 검수 panel (Figma node 544:3168 "N5 검수" 기준)
@@ -261,11 +261,13 @@ function TranslationEditor({
   draftEntry,
   onDraftUpdate,
   taskFailures,
+  editSession,
 }: {
   jobId: string;
   block: BlockViewModel;
   onSelect: () => void;
   taskFailures: BlockTaskFailures;
+  editSession: N5EditSessionApi;
   /** 이 칸의 미저장 초안(N5Panel 소유 — 이 편집기가 사라졌다 다시 생겨도 남는다). 없으면 서버값 그대로 */
   draftEntry: TranslationDraft | undefined;
   onDraftUpdate: (
@@ -280,8 +282,10 @@ function TranslationEditor({
   // 여기는 마지막으로 맞춘 서버값(syncedText/revision)과 409·오류 표시만 들고, 초안이 없으면 서버값을 보인다.
   const [syncedText, setSyncedText] = useState(block.translatedText);
   const [syncedRevision, setSyncedRevision] = useState(block.revision);
-  const [rerenderTaskId, setRerenderTaskId] = useState<number | null>(null);
-  const [conflictLatest, setConflictLatest] = useState<ApiTextBlock | null>(null);
+  // 재렌더 task 와 실행 취소 쪽 충돌은 편집 세션이 들고 있다 — 저장과 실행 취소가 같은 흐름으로 이어진다
+  const rerenderTaskId = editSession.rerenderTaskByBlock.get(block.id) ?? null;
+  const [saveConflict, setSaveConflict] = useState<ApiTextBlock | null>(null);
+  const conflictLatest = saveConflict ?? editSession.historyConflicts.get(block.id) ?? null;
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const draft = draftEntry?.draft ?? syncedText;
@@ -345,11 +349,13 @@ function TranslationEditor({
   const hasFailureMessage = translationFailure != null || taskFailures.verifyFailed || previewFailure != null || showOverflow;
 
   async function handleSave() {
-    if (patchMutation.isPending) return; // 저장 중 중복 PATCH 방지
+    if (patchMutation.isPending || !editSession.beginServerEdit()) return; // 저장 중 중복 PATCH 방지
     setSaveError(null);
-    setConflictLatest(null);
+    setSaveConflict(null);
+    editSession.clearHistoryConflict(block.id);
     handledTaskIdRef.current = null; // 새 저장 사이클이므로 이전 task 완료 처리 기록을 리셋
     const sentText = draft;
+    const textBeforeSave = block.translatedText;
     try {
       const response = await patchMutation.mutateAsync({
         blockId: block.id,
@@ -357,19 +363,22 @@ function TranslationEditor({
       });
       setSyncedText(sentText);
       setSyncedRevision(response.block?.revision ?? block.revision);
-      setRerenderTaskId(getRerenderTaskId(response));
+      editSession.setRerenderTask(block.id, getRerenderTaskId(response));
       onDraftUpdate(block.id, (prev) => resolveTranslationSaveSucceeded(prev, sentText));
+      editSession.commitTranslation(block.id, textBeforeSave, response.block?.trans1 ?? sentText);
     } catch (err) {
       // 초안은 그대로 두고 실패 표시만 켠다(PM: 번역문 저장 실패는 입력 유지) — 409 포함
       onDraftUpdate(block.id, resolveTranslationSaveFailed);
       if (err instanceof ApiRequestError && err.status === 409) {
         const parsed = parseApiError(err.body);
         if (parsed && isRevisionConflict(parsed)) {
-          setConflictLatest(getRevisionConflictLatestBlock(parsed));
+          setSaveConflict(getRevisionConflictLatestBlock(parsed));
           return;
         }
       }
       setSaveError(err instanceof Error ? err.message : '저장에 실패했습니다.');
+    } finally {
+      editSession.endServerEdit();
     }
   }
 
@@ -381,7 +390,8 @@ function TranslationEditor({
     );
     setSyncedText(latest.trans1 ?? '');
     setSyncedRevision(latest.revision ?? block.revision);
-    setConflictLatest(null);
+    setSaveConflict(null);
+    editSession.clearHistoryConflict(block.id);
     onDraftUpdate(block.id, () => undefined); // 사용자가 최신 값을 고른 경우에만 초안을 버린다
   }
 
@@ -434,7 +444,7 @@ function TranslationEditor({
               e.stopPropagation();
               handleSave();
             }}
-            disabled={!isDirty || patchMutation.isPending}
+            disabled={!isDirty || patchMutation.isPending || editSession.isEditLocked}
             className="flex h-6 items-center justify-center rounded-[4px] bg-white px-2.5 text-[12px] leading-[normal] tracking-[-0.02em] text-[#171717] disabled:cursor-not-allowed disabled:opacity-40"
           >
             {patchMutation.isPending ? '저장 중…' : '확인'}
@@ -510,10 +520,12 @@ function BlockRow({
   draftEntry,
   onDraftUpdate,
   taskFailures,
+  editSession,
 }: {
   jobId: string;
   block: BlockViewModel;
   taskFailures: BlockTaskFailures;
+  editSession: N5EditSessionApi;
   index: number;
   /** content slot(원문/번역문)이 이 값에 따라 통째로 바뀐다 — 동시에 쌓아 보여주지 않는다. */
   viewMode: N5ViewMode;
@@ -585,6 +597,7 @@ function BlockRow({
                 draftEntry={draftEntry}
                 onDraftUpdate={onDraftUpdate}
                 taskFailures={taskFailures}
+                editSession={editSession}
               />
             ) : (
               <ReadOnlyTranslation text={block.translatedText} />
@@ -639,6 +652,7 @@ export function N5Panel({
   selectedSectionId,
   onSelectBlock,
   onSelectSection,
+  editSession,
 }: {
   jobId: string;
   sections: PreviewSectionViewModel[];
@@ -653,6 +667,8 @@ export function N5Panel({
   selectedSectionId: number | null;
   onSelectBlock: (block: BlockViewModel) => void;
   onSelectSection: (sectionId: number) => void;
+  /** N5 편집 세션(N5Loaded 소유) — 이력·번역문 초안의 정본이다 */
+  editSession: N5EditSessionApi;
 }) {
   const groups = useMemo(() => groupBlocksBySection(sections, blocks, sectionStatusById), [sections, blocks, sectionStatusById]);
   const firstGroupHasStatus = groups.length > 0 && getSectionStatusRowCount(sectionStatusById.get(groups[0].sectionId)) > 0;
@@ -666,18 +682,12 @@ export function N5Panel({
   // 새 조건을 지어내는 게 아니다(lib/n5/adapter.ts의 areAllSectionsExcluded 참고).
   const allSectionsExcluded = areAllSectionsExcluded(sections);
 
-  // 번역문 미저장 초안 — blockId → { draft, lastSaveFailed }. 원문 보기 전환으로 편집기가 사라져도 초안이
-  // 남도록 여기(N5 화면 동안 살아 있는 패널)에 둔다. 서버·브라우저 저장소에는 두지 않는다.
+  // 번역문 미저장 초안 — blockId → { draft, lastSaveFailed }. 원문 보기 전환으로 편집기가 사라져도 초안이 남고 실행 취소도
+  // 같은 초안을 보도록 N5 편집 세션(use-n5-edit-session.ts)이 들고 있다. 서버·브라우저 저장소에는 두지 않는다.
   // 저장하지 못한 칸 수도 이 Map 에서 바로 센다(PM 확정 10/29: 그런 칸이 있어도 [저장하러 가기]를 막지 않고
-  // 확인창). 확정이 성공해 N5 를 떠날 때 이 컴포넌트와 함께 정리된다 — [계속]을 눌렀다고 지우지 않는다
+  // 확인창). 확정이 성공해 N5 를 떠날 때 세션과 함께 정리된다 — [계속]을 눌렀다고 지우지 않는다
   // (확정 요청이 실패하면 초안이 그대로 남아야 한다).
-  const [translationDrafts, setTranslationDrafts] = useState<ReadonlyMap<number, TranslationDraft>>(() => new Map());
-  const handleDraftUpdate = useCallback(
-    (blockId: number, update: (prev: TranslationDraft | undefined) => TranslationDraft | undefined) => {
-      setTranslationDrafts((drafts) => updateTranslationDrafts(drafts, blockId, update));
-    },
-    [],
-  );
+  const { translationDrafts, updateTranslationDraft: handleDraftUpdate } = editSession;
   // [저장하러 가기] 때 확인받을 항목(F-CFM-09). 항목이 없으면 확인창 없이 바로 확정한다. 항목은 열리는 순간의 값으로 고정한다.
   const [reviewIssues, setReviewIssues] = useState<N5ReviewIssue[] | null>(null);
   const confirmButtonRef = useRef<HTMLButtonElement>(null);
@@ -844,6 +854,7 @@ export function N5Panel({
                     draftEntry={translationDrafts.get(block.id)}
                     onDraftUpdate={handleDraftUpdate}
                     taskFailures={blockTaskFailuresById.get(block.id) ?? NO_TASK_FAILURES}
+                    editSession={editSession}
                   />
                 ))}
               </ul>

@@ -258,6 +258,21 @@ export function moveBoxWithCenterSnap(
   return { ...applyCenterSnapWithHysteresis(candidate, section, distance, effectiveLock), candidate, armedX, armedY };
 }
 
+/**
+ * block 별 local 초안에서 더 이상 없는 block 항목을 지운다. 지울 것이 없으면 같은 Map 을 돌려준다 —
+ * 재조회만으로는 초안을 지우지 않고, 서버에서 block·section 이 사라졌을 때만 정리한다.
+ */
+export function pruneBlockDrafts<TValue>(
+  drafts: ReadonlyMap<number, TValue>,
+  validBlockIds: ReadonlySet<number>,
+): ReadonlyMap<number, TValue> {
+  const stale = [...drafts.keys()].filter((blockId) => !validBlockIds.has(blockId));
+  if (stale.length === 0) return drafts;
+  const next = new Map(drafts);
+  for (const blockId of stale) next.delete(blockId);
+  return next;
+}
+
 /** 위치·크기가 같은 박스인지 — 값이 그대로면 실행 취소 단계를 만들지 않는다 */
 export function isSameBox(a: BoundingBox, b: BoundingBox): boolean {
   return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;

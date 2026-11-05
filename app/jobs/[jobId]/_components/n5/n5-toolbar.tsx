@@ -299,7 +299,7 @@ export function BlockFontScaleToolbar({ showTail }: { showTail: boolean }) {
 
 // ─────────────────────────────────────────────────────────────────
 // UndoRedoControls — 캔버스 좌하단 독립 그룹(Figma 544:3168 「After」 1512:23333).
-// 활성 여부와 동작은 N5Viewport의 이력(lib/n5/history.ts)이 정한다. 비활성 글자색은 Figma에 없어 다른 비활성과 같은 #999로 보완했다.
+// 활성 여부와 동작은 N5 편집 세션(use-n5-edit-session.ts)이 정한다. 비활성 글자색은 Figma에 없어 다른 비활성과 같은 #999로 보완했다.
 // ─────────────────────────────────────────────────────────────────
 
 /** Figma 53:1249 「Card/Action/Undo」 20px glyph — 원격 asset 좌표를 20×20 slot 위치 그대로 옮겼다 */
