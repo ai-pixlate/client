@@ -25,6 +25,9 @@ export const N5_PREVIEW_SCENARIOS = [
   'failed',
   'stale',
   'missing',
+  'missing-done',
+  'updating',
+  'update-failed',
   'ab-mismatch',
 ] as const;
 export type N5PreviewScenario = (typeof N5_PREVIEW_SCENARIOS)[number];
@@ -194,6 +197,15 @@ export function getMockPreviewScenarioState(
       return { preparing: false, inputError: null, render: { result: previous, attempt: { taskId: 81502, status: 'done', errorCode: null, retryable: false } } };
     case 'missing':
       return { preparing: false, inputError: null, render: { result: null, attempt: null } };
+    case 'missing-done':
+      // 결과 없음 + 끝난 시도 — 실패가 아니라 결과 없음이다
+      return { preparing: false, inputError: null, render: { result: null, attempt: { taskId: 81506, status: 'done', errorCode: null, retryable: false } } };
+    case 'updating':
+      // N5 수정 후 재렌더 진행 중 + 이전 성공 결과
+      return { preparing: false, inputError: null, render: { result: previous, attempt: { taskId: 81507, status: 'running', errorCode: null, retryable: false } } };
+    case 'update-failed':
+      // N5 수정 후 재렌더 실패 + 이전 성공 결과(F-CFM-02)
+      return { preparing: false, inputError: null, render: { result: previous, attempt: { taskId: 81508, status: 'failed', errorCode: 'PREVIEW_FAILED', retryable: true } } };
     case 'ab-mismatch':
       // /blocks 의 지문 A 가 계속 다르다 — 화면은 다시 불러온 뒤에도 표와 뷰어를 잇지 않아야 한다
       return { preparing: false, inputError: null, render: current, blockFingerprint: mockFingerprint('other read time') };
