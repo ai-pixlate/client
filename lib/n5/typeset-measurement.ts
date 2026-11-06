@@ -24,6 +24,8 @@ import {
   type InkBounds,
   type OverflowSides,
   type TypesetRole,
+  type TypesetServerStyle,
+  type TypesetTextAlign,
   NO_OVERFLOW_SIDES,
   TYPESET_COMMON,
   inkOverflowSides,
@@ -39,8 +41,10 @@ export interface TypesetMeasureInput {
   userFontScale?: number;
   /** 섹션 로컬 원본 px. 조정 박스/원본 선택은 호출자가 resolveActiveBBox 로 한다 */
   bbox: BoundingBox;
-  /** 정렬 기준 저장·전달은 미정 — 없으면 TYPESET_COMMON.textAlignFallback */
-  textAlign?: 'left' | 'center' | 'right';
+  /** 없으면 서버 style.align, 그것도 없으면 TYPESET_COMMON.textAlignFallback */
+  textAlign?: TypesetTextAlign;
+  /** 서버 renderInput style — 있으면 표시와 같은 8키로 잰다. 글꼴 준비 확인은 호출부가 먼저 한다 */
+  serverStyle?: TypesetServerStyle | null;
 }
 
 /** 섹션 로컬 원본 px 사각형 */
@@ -446,7 +450,7 @@ export async function openTypesetMeasurer(options: OpenTypesetMeasurerOptions = 
   };
 
   const measureTextHeight = (input: TypesetMeasureInput): number | null => {
-    if (disposed || !isTypesetRole(input.role) || !input.text.trim() || !(input.bbox.width > 0)) return null;
+    if (disposed || (!input.serverStyle && !isTypesetRole(input.role)) || !input.text.trim() || !(input.bbox.width > 0)) return null;
     if (host.getBoundingClientRect().width !== HOST_PROBE_WIDTH) return null;
     const blockStyle = typesetBlockStyle(input, family);
     if (!blockStyle) return null;

@@ -6,7 +6,10 @@ import { TypesetBlock } from '@/app/_components/typeset/typeset-block';
 import { isApiMockingEnabled } from '@/lib/api/session';
 import { isTypesetQaUrl, type TypesetRenderModel } from '@/lib/n5/typeset-render-model';
 import { isTypesetRole } from '@/lib/n5/typeset-rules';
-import { canRestoreSectionInN5, getSectionCanvasHeaderHeight } from '@/lib/n5/adapter';
+import { canRestoreSectionInN5, getBaseFontScale, getSectionCanvasHeaderHeight, getTranslatedBaseBox } from '@/lib/n5/adapter';
+import type { SectionInputSync } from '@/lib/n5/adapter';
+import { resolvePreviewSectionDisplay, type PreviewSectionDisplay } from '@/lib/n5/preview-state';
+import type { TypesetFontGate } from './use-typeset-font-gate';
 import { computeBlockOverlaps, type BlockOverlap } from '@/lib/n5/overlap';
 import type { BlockViewModel, JobMetaViewModel, PreviewSectionViewModel, PreviewViewModel, SectionStatusViewModel } from '@/lib/n5/adapter';
 import type { BoundingBox } from '@/lib/api/types';
@@ -138,6 +141,12 @@ interface CanvasSlice {
   width: number;
   originalUrl: string | null;
   render: PreviewSectionViewModel['render'];
+  /** 서버 결과 이미지(이전 결과 포함). 최신 여부는 display 로 본다 */
+  renderedUrl: string | null;
+  /** renderInput 배경(글자 없는 바탕) */
+  background: PreviewSectionViewModel['background'];
+  /** 「번역 후」 표시 방식(lib/n5/preview-state.ts resolvePreviewSectionDisplay) */
+  display: PreviewSectionDisplay;
   /** 서버 bucket/excludedStage 파생(render.status==='excluded') — 제외 여부의 정본 */
   isExcluded: boolean;
   /** N5 [되돌리기] 가능 여부. N3 에서 제외된 섹션은 false(canRestoreSectionInN5) */
@@ -150,7 +159,11 @@ interface CanvasSlice {
  * 남겨 같은 자리·같은 높이를 유지하고, 그 위에 회색 오버레이만 덮는다(구 구조와
  * 동일한 정책, 걸러내지 않는다).
  */
-function buildSectionSlices(sections: PreviewSectionViewModel[], scale: number): CanvasSlice[] {
+function buildSectionSlices(
+  sections: PreviewSectionViewModel[],
+  scale: number,
+  displayOf: (section: PreviewSectionViewModel) => PreviewSectionDisplay,
+): CanvasSlice[] {
   return sections.map((section) => ({
     sectionId: section.id,
     sectionOrder: section.sectionOrder,
@@ -158,6 +171,9 @@ function buildSectionSlices(sections: PreviewSectionViewModel[], scale: number):
     width: section.width * scale,
     originalUrl: section.originalUrl,
     render: section.render,
+    renderedUrl: section.renderedUrl,
+    background: section.background,
+    display: displayOf(section),
     isExcluded: section.render.status === 'excluded',
     canRestore: canRestoreSectionInN5(section),
   }));
@@ -778,8 +794,9 @@ function ImageLayer({
   pendingSectionIds,
   failedSectionId,
   isEditLocked,
-  fontScaleDrafts,
-  typesetQaModels,
+  baseFontScaleById,
+  typesetModelsBySection,
+  isTypesetQa: isTypesetQaMode,
   onExcludeSection,
   onRestoreSection,
   scale,
@@ -810,9 +827,14 @@ function ImageLayer({
   failedSectionId: number | null;
   /** 서버 실행 취소·다시 실행 진행 중 — 제외하기·되돌리기를 잠시 막는다 */
   isEditLocked: boolean;
-  fontScaleDrafts: ReadonlyMap<number, number>;
-  /** Mock 조판 미리보기(?qaTypeset=1). 켜져 있으면 렌더 이미지 대신 글자 없는 면 위에 실제 조판 블록을 그린다 */
-  typesetQaModels: ReadonlyMap<number, TypesetRenderModel[]> | null;
+  /** 초안이 있으면 초안, 없으면 저장 입력의 절대 글자 배율 */
+  baseFontScaleById: (blockId: number) => number;
+  /**
+   * HTML 조판 블록(섹션별). 일반 N5 는 renderInput 이 최신·일치인 섹션(display=typeset)만 있고, 그 섹션은 renderedUrl 대신
+   * background.url 위에 그린다. QA(?qaTypeset=1)는 그 밖의 포함 섹션도 역할 기본값으로 흰 면 위에 그린다(진단용).
+   */
+  typesetModelsBySection: ReadonlyMap<number, TypesetRenderModel[]>;
+  isTypesetQa: boolean;
   onExcludeSection: (sectionId: number) => void;
   onRestoreSection: (sectionId: number) => void;
   scale: number;
@@ -829,25 +851,38 @@ function ImageLayer({
         const headerHeight = sectionHeaderHeightById.get(slice.sectionId) ?? 0;
         const status = sectionStatusById.get(slice.sectionId);
         const renderFailed = status?.failedStages.includes('render') ?? false;
-        // 렌더링 실패 섹션은 원본 그대로 결과물에 들어간다(PRD N4 부분 실패) — 번역 후 화면도 원본을 보인다
-        const isTypesetQa = typesetQaModels !== null && mode === 'translated';
-        const url =
-          mode === 'original'
-            ? slice.originalUrl
-            : isTypesetQa
-              ? null
-              : slice.render.status === 'ready'
-              ? slice.render.url
-              : renderFailed
-                ? slice.originalUrl
-                : null;
         const isExcluded = slice.isExcluded;
+        const { display } = slice;
+        const typesetModels = mode === 'translated' && !isExcluded ? typesetModelsBySection.get(slice.sectionId) ?? null : null;
+        // QA 진단 — renderInput 조판이 아닌 섹션을 역할 기본값으로 흰 면 위에 그린다
+        const isQaFallback = isTypesetQaMode && typesetModels !== null && display.kind !== 'typeset';
+        // 「번역 후」 표시
+        // - typeset: renderInput 배경 + HTML 글자(글자가 구워진 renderedUrl 과 겹치지 않는다)
+        // - image: 서버 결과(이전 결과면 최신 아님 안내를 함께 낸다) / original: 결과 없음 → 원본 / pending: 결과 없이 진행 중
+        // - legacy: 이번 계약 키가 없는 응답 — 기존 renderedUrl 기준. 렌더링 실패 섹션은 원본 그대로 결과물에 들어간다(PRD N4 부분 실패)
+        const translatedUrl = isQaFallback
+          ? null
+          : display.kind === 'typeset'
+            ? (slice.background?.url ?? null)
+            : display.kind === 'image'
+              ? slice.renderedUrl
+              : display.kind === 'original'
+                ? slice.originalUrl
+                : display.kind === 'pending'
+                  ? null
+                  : slice.render.status === 'ready'
+                    ? slice.render.url
+                    : renderFailed
+                      ? slice.originalUrl
+                      : null;
+        const url = mode === 'original' ? slice.originalUrl : translatedUrl;
         const isSaving = pendingSectionIds.has(slice.sectionId);
-        // renderedUrl===null(렌더 전)이고 제외도 아닌데 「번역 후」를 보고 있는
-        // 경우 — 상위(N5View)가 이 상태면 번역 후 자체를 disabled 처리하므로
-        // 실제로는 거의 도달하지 않지만, 방어적으로 안내 문구를 보여준다(빈
-        // 배경으로 조용히 실패 처리하지 않는다).
-        const isPending = mode === 'translated' && !isTypesetQa && !isExcluded && slice.render.status === 'unresolved' && !renderFailed;
+        // 결과 없이 진행 중이면 빈 면에 진행 문구를 보인다(빈 배경으로 조용히 실패 처리하지 않는다)
+        const isPending =
+          mode === 'translated' &&
+          !isQaFallback &&
+          !isExcluded &&
+          (display.kind === 'pending' || (display.kind === 'legacy' && slice.render.status === 'unresolved' && !renderFailed));
         const blockRects = isExcluded
           ? []
           : buildBlockRects(blocksBySection.get(slice.sectionId) ?? [], scale, zoom, slice);
@@ -868,6 +903,9 @@ function ImageLayer({
           )}
           <div
             data-testid={`n5-slice-${mode}-${slice.sectionId}`}
+            data-preview-display={mode === 'translated' ? display.kind : undefined}
+            data-qa-typeset={isQaFallback ? 'role-default' : undefined}
+            data-background-source={mode === 'translated' && display.kind === 'typeset' ? slice.background?.source : undefined}
             role="button"
             tabIndex={0}
             // Figma(544:3168)는 section마다 테두리로 구획을 나눈다. border는 안쪽 원점을 1px 밀어 bbox·이미지·중앙선이
@@ -884,22 +922,22 @@ function ImageLayer({
             style={{
               height: slice.height,
               width: slice.width,
-              backgroundColor: isTypesetQa ? '#ffffff' : '#e5e5e5',
+              backgroundColor: isQaFallback ? '#ffffff' : '#e5e5e5',
               backgroundImage: url ? `url(${url})` : 'none',
               backgroundSize: '100% 100%',
               backgroundRepeat: 'no-repeat',
             }}
           >
-            {isTypesetQa && !isExcluded && (
+            {typesetModels && (
               // TypesetBlock 은 가장 가까운 positioned 조상을 section 원점으로 삼아 원본 px 로 그린다 — 이미지와 같은 배율 하나만 준다.
-              // z-[1]: section 아래로 넘친 글이 다음 section 면에 가리지 않게 한다(넘침을 눈으로 보는 도구다)
+              // z-[1]: section 아래로 넘친 글이 다음 section 면에 가리지 않게 한다. 넘침의 정본은 서버 결과이고 이 글은 편집 중 확인용이다
               <div
-                data-testid={`n5-qa-text-layer-${slice.sectionId}`}
+                data-testid={`n5-text-layer-${slice.sectionId}`}
                 aria-hidden="true"
                 className="pointer-events-none absolute top-0 left-0 z-[1]"
                 style={{ width: slice.width / scale, height: slice.height / scale, transform: `scale(${scale})`, transformOrigin: '0 0' }}
               >
-                {(typesetQaModels.get(slice.sectionId) ?? []).map((model) => (
+                {typesetModels.map((model) => (
                   <TypesetBlock key={model.blockId} model={model} />
                 ))}
               </div>
@@ -930,7 +968,7 @@ function ImageLayer({
                 visualRect={visualRect}
                 index={blockIndexById.get(block.id) ?? 0}
                 isSelected={block.id === selectedBlockId}
-                fontScale={fontScaleDrafts.get(block.id) ?? 1}
+                fontScale={baseFontScaleById(block.id)}
                 onSelect={selectHandlerOf(block)}
                 drag={blockDrag}
               />
@@ -1085,9 +1123,15 @@ export function N5Viewport({
   onSelectBlock,
   onSelectSection,
   editSession,
+  syncBySection,
+  isFontReady,
 }: {
   preview: PreviewViewModel;
   blocks: BlockViewModel[];
+  /** 섹션별 지문 A/B 일치(N5View) — 같은 저장 입력으로 연결된 섹션만 renderInput 조판을 쓴다 */
+  syncBySection: ReadonlyMap<number, SectionInputSync>;
+  /** 서버 style 글꼴 준비 여부 */
+  isFontReady: TypesetFontGate;
   sectionStatusById: ReadonlyMap<number, SectionStatusViewModel>;
   jobMeta: JobMetaViewModel;
   /** 11일차부터 이 컴포넌트가 소유하지 않는다 — 토글 UI가 N5Panel로 이동했다. */
@@ -1128,21 +1172,34 @@ export function N5Viewport({
   // F-CFM-14 — 제외·되돌리기 후 프리뷰가 다시 와도 slice 높이는 section.height × scale
   // 그대로다(bucket 과 무관). 서버 displayTop(include 만 누적)은 쓰지 않고 모든 섹션을
   // 순서대로 쌓으므로, 제외된 섹션도 같은 자리·같은 높이를 유지한다(스택 재배치 없음).
+  // 「번역 후」 표시 — 정상 입력 + 지문 A=B + 최신 결과 + 서버 style 정상·글꼴 준비일 때만 renderInput 조판을 쓴다
   const slices = useMemo(
-    () => buildSectionSlices(preview.sections, preview.scale),
-    [preview.sections, preview.scale],
+    () =>
+      buildSectionSlices(preview.sections, preview.scale, (section) =>
+        resolvePreviewSectionDisplay({
+          input: section.input,
+          render: section.renderState,
+          match: syncBySection.get(section.id)?.match ?? 'incomparable',
+          canTypeset:
+            syncBySection.get(section.id)?.bound === true &&
+            section.background != null &&
+            section.renderBlocks.every((block) => block.style != null && isFontReady(block.style)),
+        }),
+      ),
+    [preview.sections, preview.scale, syncBySection, isFontReady],
   );
 
   // 손잡이·본체 끌기로 바꾼 bbox(위치·크기 전부) — 세션 local 초안이다(use-n5-edit-session.ts). 저장 계약이 없어 서버로
   // 보내지 않고, 새로고침하면 사라진다. F-CFM-15 조정은 「번역 후」 화면의 것이라 「번역 전」에는 원본 bbox를 보인다.
   const { bboxDrafts, setBboxDraft, commitBoxEdit, setLayoutDragging, isEditLocked, fitAutoHeight } = editSession;
+  // 「번역 후」 박스 = 세션 초안 > 저장 입력(renderInput 적용 박스) > 원본 bbox
   const blocks = useMemo(
     () =>
-      bboxDrafts.size === 0 || viewMode !== 'translated'
+      viewMode !== 'translated'
         ? serverBlocks
         : serverBlocks.map((block) => {
-            const draft = bboxDrafts.get(block.id);
-            return draft ? { ...block, bbox: draft } : block;
+            const box = bboxDrafts.get(block.id) ?? getTranslatedBaseBox(block);
+            return box === block.bbox ? block : { ...block, bbox: box };
           }),
     [serverBlocks, bboxDrafts, viewMode],
   );
@@ -1553,31 +1610,76 @@ export function N5Viewport({
     return new URLSearchParams(window.location.search).get('debugSnap') === '1';
   });
   const [snapDebug, setSnapDebug] = useState<SnapDebugValues | null>(null);
-  // Mock 조판 미리보기 — Mock에서 ?qaTypeset=1일 때만 켠다. production 조판 연결이 아니라 사람이 줄바꿈을 눈으로 보는 도구다.
+  // 조판 진단 — Mock에서 ?qaTypeset=1일 때만 켠다. 진단 표시와, renderInput 조판이 아닌 섹션의 역할 기본값 조판을 더한다
   const [isTypesetQa] = useState(() => typeof window !== 'undefined' && isApiMockingEnabled() && isTypesetQaUrl(window.location.href));
-  const typesetQaModels = useMemo(() => {
-    if (!isTypesetQa) return null;
+  const { translationDrafts, fontScaleDrafts } = editSession;
+  const baseFontScaleById = useCallback(
+    (blockId: number) => {
+      const block = serverBlocks.find((candidate) => candidate.id === blockId);
+      return fontScaleDrafts.get(blockId) ?? (block ? getBaseFontScale(block) : 1);
+    },
+    [serverBlocks, fontScaleDrafts],
+  );
+  const typesetModelsBySection = useMemo(() => {
     const bySection = new Map<number, TypesetRenderModel[]>();
-    for (const block of serverBlocks) {
-      const section = preview.sections.find((s) => s.id === block.sectionId);
-      if (!section || !block.bbox || !isTypesetRole(block.role)) continue;
-      const model: TypesetRenderModel = {
-        blockId: block.id,
-        sectionId: block.sectionId,
-        revision: block.revision,
-        text: editSession.translationDrafts.get(block.id)?.draft ?? block.translatedText,
-        role: block.role,
-        originalBBox: block.bbox,
-        adjustedBBox: bboxDrafts.get(block.id) ?? null,
-        sourceImageWidth: section.width,
-        userFontScale: editSession.fontScaleDrafts.get(block.id) ?? 1,
-        textAlign: block.textAlign,
-        excluded: false,
-      };
-      bySection.set(block.sectionId, [...(bySection.get(block.sectionId) ?? []), model]);
+    const blockById = new Map(serverBlocks.map((block) => [block.id, block]));
+    for (const slice of slices) {
+      const section = preview.sections.find((s) => s.id === slice.sectionId);
+      if (!section || slice.isExcluded) continue;
+      if (slice.display.kind === 'typeset') {
+        // 저장 입력(renderInput) 위에 세션 local 편집값만 덮는다 — 글: 미저장 초안 > 저장 후 최신 block 글 > renderInput 글
+        bySection.set(
+          section.id,
+          section.renderBlocks.flatMap((renderBlock) => {
+            if (!renderBlock.style) return [];
+            const block = blockById.get(renderBlock.blockId);
+            return [
+              {
+                blockId: renderBlock.blockId,
+                sectionId: section.id,
+                revision: renderBlock.revision,
+                text: translationDrafts.get(renderBlock.blockId)?.draft ?? block?.translatedText ?? renderBlock.text,
+                // 서버 style 이 있으면 역할은 그리기에 쓰이지 않는다
+                role: block && isTypesetRole(block.role) ? block.role : 'body',
+                originalBBox: renderBlock.box,
+                adjustedBBox: bboxDrafts.get(renderBlock.blockId) ?? null,
+                sourceImageWidth: section.width,
+                userFontScale: fontScaleDrafts.get(renderBlock.blockId) ?? renderBlock.style.fontScale,
+                textAlign: renderBlock.style.align,
+                serverStyle: renderBlock.style,
+                excluded: false,
+              } satisfies TypesetRenderModel,
+            ];
+          }),
+        );
+        continue;
+      }
+      if (!isTypesetQa) continue;
+      bySection.set(
+        section.id,
+        serverBlocks.flatMap((block) =>
+          block.sectionId === section.id && block.bbox && isTypesetRole(block.role)
+            ? [
+                {
+                  blockId: block.id,
+                  sectionId: block.sectionId,
+                  revision: block.revision,
+                  text: translationDrafts.get(block.id)?.draft ?? block.translatedText,
+                  role: block.role,
+                  originalBBox: block.bbox,
+                  adjustedBBox: bboxDrafts.get(block.id) ?? null,
+                  sourceImageWidth: section.width,
+                  userFontScale: fontScaleDrafts.get(block.id) ?? 1,
+                  textAlign: block.textAlign,
+                  excluded: false,
+                } satisfies TypesetRenderModel,
+              ]
+            : [],
+        ),
+      );
     }
     return bySection;
-  }, [isTypesetQa, serverBlocks, preview.sections, bboxDrafts, editSession.translationDrafts, editSession.fontScaleDrafts]);
+  }, [slices, isTypesetQa, serverBlocks, preview.sections, bboxDrafts, translationDrafts, fontScaleDrafts]);
 
   const selectedBlockForOverlap = blocks.find((b) => b.id === selectedBlockId);
   // 선택 block의 Auto Height 가능 여부와 지금 박스의 넘침. 잴 수 없으면 null이고 자유 크기 조절을 쓴다
@@ -1726,8 +1828,10 @@ export function N5Viewport({
               data-testid="n5-qa-badge"
               className="pointer-events-none absolute top-[84px] left-8 z-10 flex flex-col gap-0.5 rounded-[6px] border border-[#eaeaea] bg-white px-3 py-2 text-[12px] leading-[normal] text-[#171717]"
             >
-              <p className="font-medium">Mock 조판 미리보기</p>
-              <p className="text-[#707070]">서버 렌더 결과가 아닙니다. 글자 없는 면 위에 조판 규칙으로 그립니다.</p>
+              <p className="font-medium">조판 진단(Mock)</p>
+              <p className="text-[#707070]">
+                최신 renderInput 섹션은 서버 배경과 style로, 그 밖의 섹션은 흰 면 위에 역할 기본값으로 그립니다.
+              </p>
               {selectedAutoFit?.overflow && (
                 <p data-testid="n5-qa-overflow" className="text-[#ff6a38]">
                   선택 block의 글이 section 아래로 넘칩니다.
@@ -1833,8 +1937,9 @@ export function N5Viewport({
               pendingSectionIds={editSession.pendingSectionIds}
               failedSectionId={editSession.failedSectionId}
               isEditLocked={isEditLocked}
-              fontScaleDrafts={editSession.fontScaleDrafts}
-              typesetQaModels={typesetQaModels}
+              baseFontScaleById={baseFontScaleById}
+              typesetModelsBySection={typesetModelsBySection}
+              isTypesetQa={isTypesetQa}
               onExcludeSection={(sectionId) => editSession.saveSectionBucket(sectionId, 'exclude')}
               onRestoreSection={(sectionId) => editSession.saveSectionBucket(sectionId, 'include')}
               scale={preview.scale}
@@ -1855,7 +1960,7 @@ export function N5Viewport({
                 onResizeCommit={(before, after) => commitBoxEdit('box-resize', selectedBlockId, before, after)}
                 isEditLocked={isEditLocked}
                 onDragActiveChange={setLayoutDragging}
-                fontScale={editSession.fontScaleDrafts.get(selectedBlockId) ?? 1}
+                fontScale={baseFontScaleById(selectedBlockId)}
                 fitAutoHeight={
                   selectedAutoFit && selectedBlockForOverlap
                     ? (box) => fitAutoHeight(selectedBlockForOverlap, box)?.box ?? null

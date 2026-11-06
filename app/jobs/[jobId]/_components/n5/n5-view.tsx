@@ -34,6 +34,7 @@ import { N5Viewport } from './n5-viewport';
 import { N5Panel } from './n5-panel';
 import { useN5EditSession } from './use-n5-edit-session';
 import { useN5PreviewSync } from './use-n5-preview-sync';
+import { useTypesetFontGate } from './use-typeset-font-gate';
 
 // ─────────────────────────────────────────────────────────────────
 // N5 — 검수 shell (Figma node 544:3168, "N5 검수" 기준)
@@ -88,6 +89,8 @@ function N5Loaded({
 }) {
   // 재조회 계기(진행 중인 시도 추적·d/e/g·A≠B)는 여기 한 곳에서 맡는다
   useN5PreviewSync(jobId, preview, syncBySection);
+  // 서버 style 글꼴 준비 확인 — 준비 전에는 HTML 조판·서버 style 측정을 하지 않는다
+  const isFontReady = useTypesetFontGate(blocks.flatMap((block) => (block.renderBinding ? [block.renderBinding.style] : [])));
 
   // N5는 번역 검수 화면이다 — 렌더 이미지가 없다는 이유로 원문 모드로
   // 강제 전환하지 않는다. 최초 진입은 항상 'translated'다(요청 3). 렌더가
@@ -134,6 +137,7 @@ function N5Loaded({
     blocks,
     sections: preview.sections,
     viewMode,
+    isFontReady,
     onSelectBlock: handleSelectBlock,
     onSelectSection: handleSelectSection,
     onSectionExcluded: handleSectionExcluded,
@@ -163,6 +167,8 @@ function N5Loaded({
           onSelectBlock={handleSelectBlock}
           onSelectSection={handleSelectSection}
           editSession={editSession}
+          syncBySection={syncBySection}
+          isFontReady={isFontReady}
         />
         <N5Panel
           jobId={jobId}

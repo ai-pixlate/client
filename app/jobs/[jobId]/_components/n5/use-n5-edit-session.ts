@@ -8,7 +8,9 @@ import type { ApiTextBlock } from '@/lib/api/n5-schema';
 import type { BoundingBox } from '@/lib/api/types';
 import {
   canRestoreSectionInN5,
+  getBaseFontScale,
   getRerenderTaskId,
+  getTranslatedBaseBox,
   getRevisionConflictLatestBlock,
   isRevisionConflict,
   parseApiError,
@@ -31,6 +33,7 @@ import {
 import { fitBoxToTextHeight, isSameBox, pruneBlockDrafts, stepFontScale, type N5FontScaleValue } from '@/lib/n5/layout-edit';
 import { openTypesetMeasurer, type TypesetMeasurer } from '@/lib/n5/typeset-measurement';
 import { isTypesetRole } from '@/lib/n5/typeset-rules';
+import type { TypesetFontGate } from './use-typeset-font-gate';
 import type { N5SaveNotice } from '@/lib/n5/messages';
 import type { N5ViewMode } from '@/lib/n5/viewport';
 import { pixlateKeys, usePatchN5BlockMutation, useUpdateSectionBucketMutation } from '@/lib/queries/pixlate';
@@ -43,8 +46,11 @@ import { pixlateKeys, usePatchN5BlockMutation, useUpdateSectionBucketMutation } 
 // 저장 위치
 // - 번역문·섹션 제외·되돌리기: 기존 PATCH. 성공한 뒤에만 이력·pointer 가 움직인다.
 // - 박스 위치·크기·글자 배율: 저장 계약이 없어 세션 local 초안에 곧바로 적용한다. 서버 요청이 없다.
+//   초안이 없으면 /preview renderInput 의 저장 입력(적용 박스·절대 fontScale)이 기준이다(getTranslatedBaseBox·getBaseFontScale).
 //
 // Auto Height — 폭·글자 배율·번역문이 바뀌면 조판 규칙대로 다시 줄바꿈한 높이로 박스를 맞춘다(Figma Text의 Auto height).
+// renderInput 이 연결된 블록은 표시와 같은 서버 style 8키로 잰다(역할 기본값으로 다시 재지 않는다). 그 글꼴이 준비되지 않았으면
+// 재지 않는다. 연결이 없는 블록(Mock·QA·이전 계약 응답)은 역할 기본값으로 잰다.
 // 잴 수 없는 블록(글이 비었거나 조판 역할이 아니거나 폰트가 준비되지 않음)은 기존 자유 크기 조절을 쓴다.
 //
 // 잠금
@@ -82,7 +88,7 @@ export interface N5EditSessionApi {
   commitBoxEdit: (kind: 'box-move' | 'box-resize', blockId: number, before: BoundingBox, after: BoundingBox) => void;
   /** 이 박스·배율에서 조판이 요구하는 높이로 맞춘 결과. 잴 수 없으면 null — 그 블록은 자유 크기 조절을 쓴다 */
   fitAutoHeight: (block: BlockViewModel, box: BoundingBox) => { box: BoundingBox; overflow: boolean } | null;
-  /** blockId → 사용자 글자 배율. 항목이 없으면 1.0 이다(서버에 사용자 배율 필드가 없다) */
+  /** blockId → 절대 글자 배율 초안. 항목이 없으면 저장 입력의 fontScale(getBaseFontScale) 이다 — 저장하지 않는다 */
   fontScaleDrafts: ReadonlyMap<number, number>;
   /** [+][-] 한 번 — 박스와 배율을 함께 바꾸고 이력 1단계를 남긴다 */
   changeFontScale: (block: BlockViewModel, direction: 'increase' | 'decrease') => void;
@@ -114,6 +120,7 @@ export function useN5EditSession({
   blocks,
   sections,
   viewMode,
+  isFontReady,
   onSelectBlock,
   onSelectSection,
   onSectionExcluded,
@@ -122,6 +129,8 @@ export function useN5EditSession({
   blocks: BlockViewModel[];
   sections: PreviewSectionViewModel[];
   viewMode: N5ViewMode;
+  /** 서버 style 글꼴 준비 여부 */
+  isFontReady: TypesetFontGate;
   onSelectBlock: (block: BlockViewModel) => void;
   onSelectSection: (sectionId: number) => void;
   onSectionExcluded: (sectionId: number) => void;
@@ -204,7 +213,9 @@ export function useN5EditSession({
   /** 주어진 글·박스·배율로 Auto Height 를 계산한다. 잴 수 없으면 null */
   const fitForText = useCallback(
     (block: BlockViewModel, text: string, box: BoundingBox, fontScale: number, section: PreviewSectionViewModel | undefined) => {
+      const serverStyle = block.renderBinding?.style ?? null;
       if (!measurer || !section || !isTypesetRole(block.role)) return null;
+      if (serverStyle && !isFontReady(serverStyle)) return null;
       const needed = measurer.measureTextHeight({
         text,
         role: block.role,
@@ -212,10 +223,11 @@ export function useN5EditSession({
         userFontScale: fontScale,
         bbox: box,
         textAlign: block.textAlign,
+        serverStyle,
       });
       return needed === null ? null : fitBoxToTextHeight(box, needed, section);
     },
-    [measurer],
+    [measurer, isFontReady],
   );
 
   const commitBoxEdit = useCallback(
@@ -230,9 +242,9 @@ export function useN5EditSession({
     (block: BlockViewModel, direction: 'increase' | 'decrease') => {
       if (!canStartSave(sessionRef.current)) return;
       const section = sections.find((candidate) => candidate.id === block.sectionId);
-      const bbox = bboxDrafts.get(block.id) ?? block.bbox;
+      const bbox = bboxDrafts.get(block.id) ?? getTranslatedBaseBox(block);
       if (!section || !bbox) return;
-      const before: N5FontScaleValue = { bbox, fontScale: fontScaleDrafts.get(block.id) ?? 1 };
+      const before: N5FontScaleValue = { bbox, fontScale: fontScaleDrafts.get(block.id) ?? getBaseFontScale(block) };
       const stepped = stepFontScale(before, direction, section, block.textAlign ?? 'left');
       if (!stepped) return;
       // 폭·기준점은 배율 규칙을 따르고, 높이는 새 글자 크기로 다시 줄바꿈한 결과가 정본이다. 윗변은 그대로 둔다
@@ -255,7 +267,7 @@ export function useN5EditSession({
         block,
         translationDrafts.get(block.id)?.draft ?? block.translatedText,
         box,
-        fontScaleDrafts.get(block.id) ?? 1,
+        fontScaleDrafts.get(block.id) ?? getBaseFontScale(block),
         sections.find((section) => section.id === block.sectionId),
       ),
     [fitForText, fontScaleDrafts, sections, translationDrafts],
@@ -288,10 +300,10 @@ export function useN5EditSession({
       const { blocks: latestBlocks, sections: latestSections, bboxDrafts: boxes, fontScaleDrafts: scales } = latestRef.current;
       const block = latestBlocks.find((candidate) => candidate.id === blockId);
       const beforeBox = boxes.get(blockId) ?? null;
-      const box = beforeBox ?? block?.bbox ?? null;
+      const box = beforeBox ?? (block ? getTranslatedBaseBox(block) : null);
       const fitted =
         block && box
-          ? fitForText(block, afterText, box, scales.get(blockId) ?? 1, latestSections.find((s) => s.id === block.sectionId))
+          ? fitForText(block, afterText, box, scales.get(blockId) ?? getBaseFontScale(block), latestSections.find((s) => s.id === block.sectionId))
           : null;
       const afterBox = fitted && box && !isSameBox(fitted.box, box) ? fitted.box : beforeBox;
       if (afterBox) setBboxDraft(blockId, afterBox);
