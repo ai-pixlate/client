@@ -20,6 +20,7 @@
     "generate:openapi-types": "openapi-typescript https://ai-pixlate.github.io/server/openapi.yaml -o lib/api/generated/openapi.d.ts",
     "verify:n5-adapter": "node --experimental-strip-types scripts/verify-n5-adapter.mjs",
     "verify:n5-preview-state": "node --experimental-strip-types scripts/verify-n5-preview-state.mjs",
+    "verify:n5-layout-adjust": "node --experimental-strip-types scripts/verify-n5-layout-adjust.mjs",
     "verify:n5-layout-edit": "node --experimental-strip-types scripts/verify-n5-layout-edit.mjs",
     "verify:n5-review-issues": "node --experimental-strip-types scripts/verify-n5-review-issues.mjs",
     "verify:n5-history": "node --experimental-strip-types scripts/verify-n5-history.mjs",

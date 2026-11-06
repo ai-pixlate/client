@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { ApiRequestError } from '@/lib/api/pixlate';
-import type { ApiTextBlock } from '@/lib/api/n5-schema';
+import type { ApiLayoutAdjustPatch, ApiTextBlock } from '@/lib/api/n5-schema';
 import type { BoundingBox } from '@/lib/api/types';
 import {
   canRestoreSectionInN5,
@@ -31,6 +31,14 @@ import {
   type N5EditSession,
 } from '@/lib/n5/history';
 import { fitBoxToTextHeight, isSameBox, pruneBlockDrafts, stepFontScale, type N5FontScaleValue } from '@/lib/n5/layout-edit';
+import {
+  appliedLayoutFromBlock,
+  buildLayoutAdjustPatch,
+  buildLayoutBlockPatch,
+  isLayoutRenderTarget,
+  type N5LayoutChange,
+} from '@/lib/n5/layout-adjust';
+import { isLayoutAdjustWriteEnabled } from '@/lib/n5/layout-adjust-capability';
 import { openTypesetMeasurer, type TypesetMeasurer } from '@/lib/n5/typeset-measurement';
 import { isTypesetRole } from '@/lib/n5/typeset-rules';
 import type { TypesetFontGate } from './use-typeset-font-gate';
@@ -45,8 +53,11 @@ import { pixlateKeys, usePatchN5BlockMutation, useUpdateSectionBucketMutation } 
 //
 // 저장 위치
 // - 번역문·섹션 제외·되돌리기: 기존 PATCH. 성공한 뒤에만 이력·pointer 가 움직인다.
-// - 박스 위치·크기·글자 배율: 저장 계약이 없어 세션 local 초안에 곧바로 적용한다. 서버 요청이 없다.
-//   초안이 없으면 /preview renderInput 의 저장 입력(적용 박스·절대 fontScale)이 기준이다(getTranslatedBaseBox·getBaseFontScale).
+// - 박스 위치·크기·글자 배율(F-CFM-15 layoutAdjust — 계약 확정·서버 구현 대기): 조작 중에는 세션 local 초안에 곧바로 적용하고,
+//   조작을 마쳤을 때(끌기·손잡이는 손을 놓을 때, [+][−] 는 한 번 누를 때) PATCH 1회로 저장한다. 성공한 뒤에만 이력에 넣고,
+//   실패하면 마지막 저장 값으로 되돌린다. 같은 블록의 저장은 순서대로 하나씩 보낸다(실행 시점 최신 revision).
+//   서버 쓰기는 Mock 에서만 켠다(lib/n5/layout-adjust-capability.ts) — 실서버에서는 지금처럼 세션 local 초안만 바꾼다.
+//   초안이 없으면 renderInput 적용값 > /blocks layoutAdjust > 원본 bbox 가 기준이다(getTranslatedBaseBox·getBaseFontScale).
 //
 // Auto Height — 폭·글자 배율·번역문이 바뀌면 조판 규칙대로 다시 줄바꿈한 높이로 박스를 맞춘다(Figma Text의 Auto height).
 // renderInput 이 연결된 블록은 표시와 같은 서버 style 8키로 잰다(역할 기본값으로 다시 재지 않는다). 그 글꼴이 준비되지 않았으면
@@ -230,37 +241,6 @@ export function useN5EditSession({
     [measurer, isFontReady],
   );
 
-  const commitBoxEdit = useCallback(
-    (kind: 'box-move' | 'box-resize', blockId: number, before: BoundingBox, after: BoundingBox) => {
-      if (isSameBox(before, after)) return;
-      dispatch({ type: 'edit-succeeded', command: { kind, target: { type: 'block', id: blockId }, before, after } });
-    },
-    [dispatch],
-  );
-
-  const changeFontScale = useCallback(
-    (block: BlockViewModel, direction: 'increase' | 'decrease') => {
-      if (!canStartSave(sessionRef.current)) return;
-      const section = sections.find((candidate) => candidate.id === block.sectionId);
-      const bbox = bboxDrafts.get(block.id) ?? getTranslatedBaseBox(block);
-      if (!section || !bbox) return;
-      const before: N5FontScaleValue = { bbox, fontScale: fontScaleDrafts.get(block.id) ?? getBaseFontScale(block) };
-      const stepped = stepFontScale(before, direction, section, block.textAlign ?? 'left');
-      if (!stepped) return;
-      // 폭·기준점은 배율 규칙을 따르고, 높이는 새 글자 크기로 다시 줄바꿈한 결과가 정본이다. 윗변은 그대로 둔다
-      const text = translationDrafts.get(block.id)?.draft ?? block.translatedText;
-      const fitted = fitForText(block, text, { ...stepped.bbox, y: bbox.y }, stepped.fontScale, section);
-      const after: N5FontScaleValue = fitted ? { bbox: fitted.box, fontScale: stepped.fontScale } : stepped;
-      setBboxDraft(block.id, after.bbox);
-      setFontScaleDrafts((drafts) => new Map(drafts).set(block.id, after.fontScale));
-      dispatch({
-        type: 'edit-succeeded',
-        command: { kind: 'font-scale', target: { type: 'block', id: block.id }, before, after },
-      });
-    },
-    [bboxDrafts, dispatch, fitForText, fontScaleDrafts, sections, setBboxDraft, translationDrafts],
-  );
-
   const fitAutoHeight = useCallback(
     (block: BlockViewModel, box: BoundingBox) =>
       fitForText(
@@ -293,6 +273,129 @@ export function useN5EditSession({
       return next;
     });
   }, []);
+  // ── 배치 저장(layoutAdjust) ─────────────────────────────────────
+  const layoutWriteEnabled = isLayoutAdjustWriteEnabled();
+  /** 블록마다 저장을 순서대로 — 앞 저장이 끝난 뒤 최신 revision 으로 보낸다 */
+  const layoutQueueRef = useRef(new Map<number, Promise<void>>());
+  /** 저장 실패로 화면을 되돌리면 올린다 — 그 뒤에 쌓인 조작은 보내지 않는다 */
+  const layoutGenerationRef = useRef(new Map<number, number>());
+
+  /** 서버에 배치를 저장할 블록인지 — 쓰기 허용(Mock) + 렌더 대상(라벨·로고·빈 원문·빈 번역문 아님) */
+  const canPersistLayout = useCallback(
+    (blockId: number) => {
+      if (!layoutWriteEnabled) return false;
+      const block = latestRef.current.blocks.find((candidate) => candidate.id === blockId);
+      return block != null && isLayoutRenderTarget(block);
+    },
+    [layoutWriteEnabled],
+  );
+
+  const applyLayoutDraft = useCallback(
+    (blockId: number, value: { bbox: BoundingBox; fontScale?: number }) => {
+      setBboxDraft(blockId, value.bbox);
+      const { fontScale } = value;
+      if (fontScale !== undefined) setFontScaleDrafts((drafts) => new Map(drafts).set(blockId, fontScale));
+    },
+    [setBboxDraft],
+  );
+
+  /**
+   * PATCH { trans1(서버 현재 값), revision(실행 시점 최신), layoutAdjust }. 응답 block(정규화된 저장값)을 정본으로 화면에 반영한다 —
+   * 요청값을 성공값으로 보지 않는다. applyResponse=false 면(같은 블록 저장이 뒤에 더 쌓임) 화면은 그대로 둔다.
+   * 409 REVISION_CONFLICT 는 기존 충돌 표시(historyConflicts)로 넘긴다.
+   */
+  const saveLayout = useCallback(
+    async (blockId: number, layoutAdjust: ApiLayoutAdjustPatch | null, applyResponse: () => boolean): Promise<{ ok: boolean; applied: boolean }> => {
+      const latest = queryClient.getQueryData<ApiTextBlock[]>(pixlateKeys.n5Blocks(jobId))?.find((b) => b.id === blockId);
+      if (latest?.revision == null) return { ok: false, applied: false };
+      try {
+        const response = await patchBlock({ blockId, payload: buildLayoutBlockPatch(latest, layoutAdjust) });
+        setRerenderTask(blockId, getRerenderTaskId(response));
+        const applied = response.block ? appliedLayoutFromBlock(response.block) : null;
+        if (applied && applyResponse()) applyLayoutDraft(blockId, applied);
+        return { ok: true, applied: applied != null };
+      } catch (err) {
+        if (err instanceof ApiRequestError && err.status === 409) {
+          const parsed = parseApiError(err.body);
+          const conflict = parsed && isRevisionConflict(parsed) ? getRevisionConflictLatestBlock(parsed) : null;
+          if (conflict) setHistoryConflicts((conflicts) => new Map(conflicts).set(blockId, conflict));
+        }
+        return { ok: false, applied: false };
+      }
+    },
+    [applyLayoutDraft, jobId, patchBlock, queryClient, setRerenderTask],
+  );
+
+  /** 새 배치 조작 저장 — 화면은 이미 after 다. 성공하면 이력 1단계, 실패하면 before 로 되돌리고 안내 */
+  const persistLayoutEdit = useCallback(
+    (command: N5EditCommand, change: N5LayoutChange, rollback: { bbox: BoundingBox; fontScale?: number }) => {
+      const blockId = command.target.id;
+      if (!beginServerEdit()) {
+        applyLayoutDraft(blockId, rollback);
+        return;
+      }
+      const generation = layoutGenerationRef.current.get(blockId) ?? 0;
+      const previous = layoutQueueRef.current.get(blockId) ?? Promise.resolve();
+      const run: Promise<void> = previous.then(async () => {
+        try {
+          if ((layoutGenerationRef.current.get(blockId) ?? 0) !== generation) return;
+          const result = await saveLayout(blockId, buildLayoutAdjustPatch(change), () => layoutQueueRef.current.get(blockId) === run);
+          if (result.ok) {
+            dispatch({ type: 'edit-succeeded', command });
+          } else {
+            layoutGenerationRef.current.set(blockId, generation + 1);
+            applyLayoutDraft(blockId, rollback);
+            dispatch({ type: 'edit-failed', kind: command.kind });
+          }
+        } finally {
+          if (layoutQueueRef.current.get(blockId) === run) layoutQueueRef.current.delete(blockId);
+          endServerEdit();
+        }
+      });
+      layoutQueueRef.current.set(blockId, run);
+    },
+    [applyLayoutDraft, beginServerEdit, dispatch, endServerEdit, saveLayout],
+  );
+
+  const commitBoxEdit = useCallback(
+    (kind: 'box-move' | 'box-resize', blockId: number, before: BoundingBox, after: BoundingBox) => {
+      if (isSameBox(before, after)) return;
+      const command: N5EditCommand = { kind, target: { type: 'block', id: blockId }, before, after };
+      if (!canPersistLayout(blockId)) {
+        dispatch({ type: 'edit-succeeded', command });
+        return;
+      }
+      // 끌기·손잡이 = box 만(배율은 그대로 — 안쪽 생략)
+      persistLayoutEdit(command, { kind: 'box', box: after }, { bbox: before });
+    },
+    [canPersistLayout, dispatch, persistLayoutEdit],
+  );
+
+  const changeFontScale = useCallback(
+    (block: BlockViewModel, direction: 'increase' | 'decrease') => {
+      if (!canStartSave(sessionRef.current)) return;
+      const section = sections.find((candidate) => candidate.id === block.sectionId);
+      const bbox = bboxDrafts.get(block.id) ?? getTranslatedBaseBox(block);
+      if (!section || !bbox) return;
+      const before: N5FontScaleValue = { bbox, fontScale: fontScaleDrafts.get(block.id) ?? getBaseFontScale(block) };
+      const stepped = stepFontScale(before, direction, section, block.textAlign ?? 'left');
+      if (!stepped) return;
+      // 폭·기준점은 배율 규칙을 따르고, 높이는 새 글자 크기로 다시 줄바꿈한 결과가 정본이다. 윗변은 그대로 둔다
+      const text = translationDrafts.get(block.id)?.draft ?? block.translatedText;
+      const fitted = fitForText(block, text, { ...stepped.bbox, y: bbox.y }, stepped.fontScale, section);
+      const after: N5FontScaleValue = fitted ? { bbox: fitted.box, fontScale: stepped.fontScale } : stepped;
+      applyLayoutDraft(block.id, after);
+      const command: N5EditCommand = { kind: 'font-scale', target: { type: 'block', id: block.id }, before, after };
+      if (!canPersistLayout(block.id)) {
+        dispatch({ type: 'edit-succeeded', command });
+        return;
+      }
+      // [+][−] 한 번 = 저장 1회 — 새 절대 배율과 그 박스를 한 요청으로
+      persistLayoutEdit(command, { kind: 'box-and-scale', box: after.bbox, fontScale: after.fontScale }, before);
+    },
+    [applyLayoutDraft, bboxDrafts, canPersistLayout, dispatch, fitForText, fontScaleDrafts, persistLayoutEdit, sections, translationDrafts],
+  );
+
   const commitTranslation = useCallback(
     (blockId: number, beforeText: string, afterText: string) => {
       if (beforeText === afterText) return;
@@ -430,6 +533,23 @@ export function useN5EditSession({
     [dispatch, patchSectionBucket, settle],
   );
 
+  /** 배치 실행 취소·다시 실행 — 과거 값을 현재 revision 으로 다시 저장한다(전용 API 없음). 성공한 뒤에만 pointer 를 옮긴다 */
+  const runLayoutCommand = useCallback(
+    async (direction: HistoryDirection, command: N5EditCommand, change: N5LayoutChange) => {
+      const blockId = command.target.id;
+      revealBlock(blockId);
+      dispatch({ type: 'save-started', operation: direction });
+      clearHistoryConflict(blockId);
+      const result = await saveLayout(blockId, buildLayoutAdjustPatch(change), () => true);
+      // 응답에 저장 조정 키가 없으면(서버 구현 전 모양) 보낸 값을 화면에 둔다
+      if (result.ok && !result.applied) {
+        applyLayoutDraft(blockId, change.kind === 'box' ? { bbox: change.box } : { bbox: change.box, fontScale: change.fontScale });
+      }
+      settle(direction, result.ok ? command : null);
+    },
+    [applyLayoutDraft, clearHistoryConflict, dispatch, revealBlock, saveLayout, settle],
+  );
+
   // 「번역 전」에는 조정 UI가 없고 원본 bbox를 보이므로 되돌려도 보이지 않는다 — 「번역 후」에서만 동작한다
   const isHistoryAvailable = viewMode === 'translated';
 
@@ -451,12 +571,20 @@ export function useN5EditSession({
           return;
         case 'box-move':
         case 'box-resize':
+          if (canPersistLayout(command.target.id)) {
+            void runLayoutCommand(direction, command, { kind: 'box', box: value as BoundingBox });
+            return;
+          }
           setBboxDraft(command.target.id, value as BoundingBox);
           revealBlock(command.target.id);
           settle(direction, command);
           return;
         case 'font-scale': {
           const { bbox, fontScale } = value as N5FontScaleValue;
+          if (canPersistLayout(command.target.id)) {
+            void runLayoutCommand(direction, command, { kind: 'box-and-scale', box: bbox, fontScale });
+            return;
+          }
           setBboxDraft(command.target.id, bbox);
           setFontScaleDrafts((drafts) => new Map(drafts).set(command.target.id, fontScale));
           revealBlock(command.target.id);
@@ -465,7 +593,7 @@ export function useN5EditSession({
         }
       }
     },
-    [isHistoryAvailable, revealBlock, runSectionCommand, runTranslationCommand, setBboxDraft, settle],
+    [canPersistLayout, isHistoryAvailable, revealBlock, runLayoutCommand, runSectionCommand, runTranslationCommand, setBboxDraft, settle],
   );
 
   const undo = useCallback(() => runHistory('undo'), [runHistory]);

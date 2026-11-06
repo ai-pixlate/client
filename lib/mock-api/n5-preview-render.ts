@@ -2,7 +2,7 @@
  * N5 /preview 렌더 입력·시도·결과 Mock(server PR #108 계약 모양). Mock 전용이며 실제 서버 값이 아니다.
  *
  * - 지문은 섹션의 저장 입력(블록 revision·번역문·박스·style·배경)을 이어 붙인 문자열의 64자리 16진수 해시다. 같은 입력이면 같은 값이다.
- * - renderInput.blocks 는 렌더 대상만 담는다(라벨·로고·빈 원문·빈 번역문 제외).
+ * - renderInput.blocks 는 렌더 대상만 담는다(라벨·로고·빈 원문·빈 번역문 제외). box·fontScale 은 적용값(셀러 조정 > 원본 bbox·1.0)이다.
  * - style 8키는 서버 값으로 내려준다. 값은 역할별 승인값을 섹션 원본 폭에 맞춘 "측정값"이다(FE 가 다시 계산하지 않는다).
  * - align 은 left·center·right 를 각 1개 이상 섞는다(9101 center · 9103 right · 나머지 left).
  *
@@ -63,16 +63,18 @@ function isRenderTarget(block: ApiTextBlock): boolean {
 
 function toRenderBlock(block: ApiTextBlock, sectionWidth: number): ApiPreviewRenderBlock {
   const role = ROLE_STYLE[block.role as string];
+  // 적용값 = 셀러 조정(layoutAdjust)이 있으면 그것, 없으면 원본 bbox · 배율 1.0
+  const box = block.layoutAdjust?.box ?? { x: block.bbox!.x ?? 0, y: block.bbox!.y ?? 0, w: block.bbox!.w ?? 0, h: block.bbox!.h ?? 0 };
   return {
     blockId: block.id as number,
     revision: block.revision as number,
     text: block.trans1 as string,
-    box: { x: block.bbox!.x ?? 0, y: block.bbox!.y ?? 0, w: block.bbox!.w ?? 0, h: block.bbox!.h ?? 0 },
+    box: { x: box.x, y: box.y, w: box.w, h: box.h },
     style: {
       fontFamily: 'Pretendard',
       fontWeight: role.fontWeight,
       fontSizePx: (role.fontSizePx * sectionWidth) / 375,
-      fontScale: 1,
+      fontScale: block.layoutAdjust?.fontScale ?? 1,
       fontColor: '#222222',
       align: ALIGN_BY_BLOCK[block.id as number] ?? 'left',
       letterSpacingEm: role.letterSpacingEm,

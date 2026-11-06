@@ -40,6 +40,7 @@ import {
   type PreviewSectionSemantic,
   type SectionFingerprintA,
 } from './preview-state.ts';
+import { readStoredLayout, storedLayoutBox, storedLayoutFontScale, type N5StoredLayout } from './layout-adjust.ts';
 import type {
   ApiBbox,
   ApiBlockPatchResponse,
@@ -344,7 +345,10 @@ export interface BlockViewModel {
    *  role==='product_label' 여부를 FE에서 다시 계산하지 않는다 — isExcluded가 정본이다. */
   editable: boolean;
   revision: number;
+  /** 원본 bbox — 셀러 조정으로 바뀌지 않는다 */
   bbox: BoundingBox | null;
+  /** /blocks layoutAdjust(저장된 셀러 조정). 키가 없는 응답(서버 구현 전)은 'missing' — null(조정 없음)과 섞지 않는다 */
+  storedLayout: N5StoredLayout;
   displayTop: number | null;
   badges: SignalBadge[];
   autoAdjust: AutoAdjustViewModel;
@@ -384,6 +388,7 @@ export function toBlockViewModel(dto: ApiTextBlock): BlockViewModel {
     editable: !isExcluded,
     revision: dto.revision,
     bbox: dto.bbox ? apiBboxToBoundingBox(dto.bbox) : null,
+    storedLayout: readStoredLayout(dto),
     displayTop: dto.displayTop ?? null,
     badges: toSignalBadges(dto.signals),
     autoAdjust: toAutoAdjustViewModel(dto.autoAdjust),
@@ -605,15 +610,16 @@ export function syncPreviewWithBlocks(
 }
 
 /**
- * 「번역 후」의 기준 박스 — 저장 입력(renderInput 적용 박스)이 있으면 그것, 없으면 원본 bbox. 세션 초안은 호출부가 위에 덮는다.
+ * 「번역 후」의 기준 박스 — 저장 입력(renderInput 적용 박스, 지문 A=B) > /blocks 저장 조정(layoutAdjust.box) > 원본 bbox.
+ * 세션 초안은 호출부가 위에 덮는다. 원본 bbox 자체는 덮어쓰지 않는다.
  */
-export function getTranslatedBaseBox(block: Pick<BlockViewModel, 'bbox' | 'renderBinding'>): BoundingBox | null {
-  return block.renderBinding?.box ?? block.bbox;
+export function getTranslatedBaseBox(block: Pick<BlockViewModel, 'bbox' | 'renderBinding'> & { storedLayout?: N5StoredLayout }): BoundingBox | null {
+  return block.renderBinding?.box ?? (block.storedLayout ? storedLayoutBox(block.storedLayout) : null) ?? block.bbox;
 }
 
-/** 세션 초안이 없을 때의 절대 글자 배율 — 저장 입력의 fontScale, 없으면 1 */
-export function getBaseFontScale(block: Pick<BlockViewModel, 'renderBinding'>): number {
-  return block.renderBinding?.style.fontScale ?? 1;
+/** 세션 초안이 없을 때의 절대 글자 배율 — 저장 입력의 fontScale > /blocks layoutAdjust.fontScale > 1(null = 적용 배율 1.0) */
+export function getBaseFontScale(block: Pick<BlockViewModel, 'renderBinding'> & { storedLayout?: N5StoredLayout }): number {
+  return block.renderBinding?.style.fontScale ?? (block.storedLayout ? storedLayoutFontScale(block.storedLayout) : null) ?? 1;
 }
 
 /**

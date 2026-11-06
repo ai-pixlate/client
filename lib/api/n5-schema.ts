@@ -38,6 +38,15 @@ export type ApiPreviewRenderResult = components['schemas']['PreviewRenderResult'
 export type ApiRenderStatus = components['schemas']['RenderStatus'];
 
 export type ApiBlockPatch = components['schemas']['BlockPatch'];
+
+/** BlockPatch.layoutAdjust — 셀러 배치 조정 요청(F-CFM-15). 계약 확정·서버 구현 대기. 안쪽 키 생략 = 유지, null = 그 값만 해제, 빈 객체 금지 */
+export type ApiLayoutAdjustPatch = components['schemas']['LayoutAdjustPatch'];
+
+/** TextBlock.layoutAdjust — 저장된 셀러 조정(정규화 후). 둘 다 없으면 이 객체 대신 null */
+export type ApiLayoutAdjust = components['schemas']['LayoutAdjust'];
+
+/** 섹션 로컬 원본 px 박스 {x,y,w,h} — 소수 그대로(반올림 없음) */
+export type ApiLayoutBox = components['schemas']['LayoutBox'];
 export type ApiBlockPatchResponse = components['schemas']['BlockPatchResponse'];
 
 export type ApiJobTaskStatus = components['schemas']['JobTaskStatus'];

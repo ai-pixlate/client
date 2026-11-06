@@ -1,6 +1,7 @@
 import { type Page, expect, test } from '@playwright/test';
 
 import { reachN5 } from './helpers/reach-n5';
+import { useLocalLayoutEditing } from './helpers/layout-write';
 
 // ─────────────────────────────────────────────────────────────────
 // F-CFM-15 배치 영역 조정(「번역 후」 화면) — 손잡이 8방향은 크기만, 본체 끌기는 위치만 바꾼다.
@@ -9,6 +10,11 @@ import { reachN5 } from './helpers/reach-n5';
 // ─────────────────────────────────────────────────────────────────
 
 test.use({ viewport: { width: 1920, height: 1080 } });
+
+// 박스·배율은 세션 local 편집만 본다 — Mock 에서도 layoutAdjust 쓰기를 끈다(실서버 쓰기 차단과 같은 동작). 저장 흐름은 n5-layout-adjust.spec.ts
+test.beforeEach(async ({ page }) => {
+  await useLocalLayoutEditing(page);
+});
 
 const BLOCK_ID = 9102;
 const BLOCK = `n5-block-overlay-${BLOCK_ID}`;

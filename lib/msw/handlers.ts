@@ -47,6 +47,7 @@ import {
 } from '@/lib/mock-api/n5-preview-render';
 import { mockLibraryCards } from '@/lib/mock-api/library-fixtures';
 import { mockMasterCountries, mockMasterLanguages } from '@/lib/mock-api/master-fixtures';
+import { applyMockLayoutPatch, isMockBoxInSection, isSameMockLayout, parseMockLayoutPatch } from '@/lib/mock-api/n5-layout-adjust';
 import { mockMasterCategories } from '@/lib/mock-api/category-fixtures';
 import type { ApiJob, ApiJobAsyncTaskItem, ApiTextBlock } from '@/lib/api/n5-schema';
 import type { ApiAcceptedTask, ApiAnalysisProgress, ApiJobPatch, ApiSourceImageUploadResult } from '@/lib/api/job-schema';
@@ -411,9 +412,30 @@ function buildMockN5PreviewWithRender(referrer: string) {
 /** /blocks 응답 블록 — 그 순간의 섹션 입력 지문(A)을 붙인다. 제외·입력 오류·준비 중 섹션은 null */
 function withSectionInputFingerprint(blocks: ApiTextBlock[], referrer: string): ApiTextBlock[] {
   const { blockFingerprintBySection } = buildMockN5PreviewWithRender(referrer);
-  return blocks.map((block) => ({ ...block, sectionInputFingerprint: blockFingerprintBySection.get(block.sectionId as number) ?? null }));
+  // layoutAdjust 키는 항상 낸다(Mock = 계약 구현 뒤 모양). 저장 조정이 없으면 null
+  return blocks.map((block) => ({
+    ...block,
+    layoutAdjust: block.layoutAdjust ?? null,
+    sectionInputFingerprint: blockFingerprintBySection.get(block.sectionId as number) ?? null,
+  }));
 }
 
+
+/** ?mockScenario=n5-layout-fail(배치 저장 500) · n5-layout-conflict(첫 배치 저장 409 REVISION_CONFLICT) */
+function getN5LayoutScenario(referrer: string): 'fail' | 'conflict' | null {
+  try {
+    const value = new URL(referrer).searchParams.get('mockScenario');
+    return value === 'n5-layout-fail' ? 'fail' : value === 'n5-layout-conflict' ? 'conflict' : null;
+  } catch {
+    return null;
+  }
+}
+let n5LayoutConflictFired = false;
+
+/** 공통 Error 계약 모양 — details 포함(400 fields · 409 reason) */
+function n5LayoutError(status: number, code: string, message: string, details: Record<string, unknown> | null) {
+  return HttpResponse.json({ error: { code, message, retryable: status >= 500, details, traceId: `mock-trace-${Date.now()}` } }, { status });
+}
 
 function n5RevisionConflictResponse(current: ApiTextBlock) {
   return HttpResponse.json(
@@ -1266,8 +1288,40 @@ export const handlers = [
       return badRequest('trans1(string)과 revision(number)이 필요합니다');
     }
 
+    // ── 블록 배치(layoutAdjust, 계약 확정·서버 구현 대기 — lib/mock-api/n5-layout-adjust.ts). 키가 있을 때만 다룬다
+    const hasLayout = 'layoutAdjust' in body;
+    const layoutScenario = getN5LayoutScenario(request.referrer);
+    const parsedLayout = hasLayout ? parseMockLayoutPatch(body.layoutAdjust) : null;
+    if (parsedLayout && !parsedLayout.ok) return n5LayoutError(422, 'VALIDATION_ERROR', parsedLayout.message, null);
+    // 다른 곳에서 먼저 저장한 상황(?mockScenario=n5-layout-conflict) — 첫 배치 저장 직전에 서버 revision 을 한 번 올린다
+    if (hasLayout && layoutScenario === 'conflict' && !n5LayoutConflictFired) {
+      n5LayoutConflictFired = true;
+      n5BlockState.set(blockId, { ...current, revision: (current.revision ?? 0) + 1 });
+      return n5RevisionConflictResponse(withSectionInputFingerprint([n5BlockState.get(blockId) as ApiTextBlock], request.referrer)[0]);
+    }
+
     if (body.revision !== current.revision) {
       return n5RevisionConflictResponse(current);
+    }
+
+    let nextLayout = current.layoutAdjust ?? null;
+    if (parsedLayout?.ok) {
+      if (layoutScenario === 'fail') return n5LayoutError(500, 'INTERNAL_ERROR', 'mock layout save failure', null);
+      // 렌더 대상만(라벨·로고·빈 원문·빈 번역문 제외 — 같은 요청의 trans1 이 번역문을 채우면 대상)
+      if (current.isExcluded === true || current.role === 'product_label' || !current.sourceKo || body.trans1.trim() === '') {
+        return n5LayoutError(409, 'INVALID_STATE', 'not a render target', { reason: 'not_render_target' });
+      }
+      const section = n5PreviewSectionState.find((candidate) => candidate.id === current.sectionId);
+      const box = parsedLayout.patch?.box;
+      if (box && section && !isMockBoxInSection(box, section)) {
+        return n5LayoutError(400, 'VALIDATION_ERROR', 'box is outside the section', { fields: [{ loc: ['body', 'layoutAdjust', 'box'], msg: 'outside section' }] });
+      }
+      nextLayout = applyMockLayoutPatch(current.layoutAdjust, parsedLayout.patch, current.bbox);
+      // 같은 값 저장 — 번역문과 정규화한 배치가 모두 지금과 같으면 변경 없음(revision 유지·rerenderTaskId null)
+      if (body.trans1 === current.trans1 && isSameMockLayout(current.layoutAdjust, nextLayout)) {
+        const [unchanged] = withSectionInputFingerprint([current], request.referrer);
+        return HttpResponse.json({ block: unchanged, rerenderTaskId: null });
+      }
     }
     // 처음 fixture 결과는 저장 직전 입력으로 고정한다 — 이후 입력이 바뀌면 최신이 아니다
     {
@@ -1286,6 +1340,7 @@ export const handlers = [
       trans1: body.trans1,
       charCount: body.trans1.length,
       revision: current.revision + 1,
+      layoutAdjust: nextLayout,
     };
     n5BlockState.set(blockId, updated);
 
