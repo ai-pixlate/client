@@ -14,6 +14,8 @@ import { N5_SAVE_NOTICE_MESSAGES } from '@/lib/n5/messages';
 import {
   FONT_HANDLE_CENTER_TOP_PX,
   getBlockDisplayRect,
+  getCompactRightResizeZone,
+  isCompactResizeHeight,
   getBlockHitRect,
   getFontScaleToolbarLeft,
   overlapsFontHandleHitArea,
@@ -449,6 +451,8 @@ function BlockSelectionChrome({
   usableWidth: number;
 }) {
   const [isToolbarOpen, setIsToolbarOpen] = useState(false);
+  // 끄는 동안의 조작 방식. 높이·zoom이 바뀌어 compact 경계를 넘어도 손을 놓을 때까지 시작한 방식(과 잡은 요소)을 유지한다
+  const [activeDragMode, setActiveDragMode] = useState<'normal' | 'compact' | null>(null);
   // 끌기 시작 시점의 값. pointer capture로 손잡이 밖에서도 이어지고, 해제되면 함께 지운다
   const dragRef = useRef<{
     pointerId: number;
@@ -468,6 +472,7 @@ function BlockSelectionChrome({
     if (isEditLocked || (fitAutoHeight && (handle === 'n' || handle === 's'))) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     onDragActiveChange(true);
+    setActiveDragMode(isCompact ? 'compact' : 'normal');
     dragRef.current = {
       pointerId: e.pointerId,
       handle,
@@ -502,6 +507,7 @@ function BlockSelectionChrome({
     e.stopPropagation();
     dragRef.current = null;
     onDragActiveChange(false);
+    setActiveDragMode(null);
     if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
     // 시스템이 끌기를 취소하면 시작 전 상태로 돌리고 이력에 남기지 않는다
     if (e.type === 'pointercancel') onResize(drag.startBbox);
@@ -520,11 +526,21 @@ function BlockSelectionChrome({
   });
   // 위치는 block 높이와 무관하다. 낮은 block에서 겹치는 오른쪽 손잡이는 위치가 아니라 누르는 영역으로 나눈다
   const blockScreenHeight = rect.height * zoom;
-  const overlapsHandle = (x: number, y: number) => x === 1 && overlapsFontHandleHitArea(blockScreenHeight * y);
-  const isFontHandleHitNarrowed = HANDLE_POSITIONS.some(({ x, y }) => overlapsHandle(x, y));
+  // compact — 낮게 보이는 Auto Height block은 오른쪽 손잡이(ne·e·se)를 따로 잡지 않고 오른쪽 변 전체가 가로 resize(e)를 받는다.
+  // 높이는 줄바꿈이 정하므로 세 손잡이의 차이는 폭뿐이다. 잴 수 없는 block은 모서리가 높이를 바꾸므로 기존 방식을 쓴다
+  const isCompact = activeDragMode ? activeDragMode === 'compact' : fitAutoHeight != null && isCompactResizeHeight(blockScreenHeight);
+  const compactZone = isCompact ? getCompactRightResizeZone(rect, zoom) : null;
+  const overlapsHandle = (x: number, y: number) => !isCompact && x === 1 && overlapsFontHandleHitArea(blockScreenHeight * y);
+  const isFontHandleHitNarrowed = isCompact || HANDLE_POSITIONS.some(({ x, y }) => overlapsHandle(x, y));
   const stopPropagation = (e: React.SyntheticEvent) => e.stopPropagation();
   return (
-    <div data-testid="n5-block-selection" data-auto-height={fitAutoHeight ? 'true' : 'false'} data-auto-height-overflow={autoHeightOverflow} className="pointer-events-none absolute inset-0">
+    <div
+      data-testid="n5-block-selection"
+      data-auto-height={fitAutoHeight ? 'true' : 'false'}
+      data-auto-height-overflow={autoHeightOverflow}
+      data-resize-mode={isCompact ? 'compact' : 'normal'}
+      className="pointer-events-none absolute inset-0"
+    >
       {/* 쌓는 순서: 핸들은 번호 배지(z-10) 아래, 툴바와 action handle은 그 위. 툴바가 밀려 겹쳐도 handle로 닫을 수 있다 */}
       {HANDLE_POSITIONS.map(({ key, x, y, cursor }) => (
         <span
@@ -532,7 +548,8 @@ function BlockSelectionChrome({
           aria-hidden="true"
           data-testid={`n5-block-handle-${key}`}
           // 8px는 잡기에 작아 before로 잡는 영역만 넓힌다. pointer만 쓰는 조작이라 aria-hidden을 유지한다
-          className={`pointer-events-auto absolute z-[5] box-border size-[7.667px] touch-none rounded-[1.355px] border border-[#ff6a38] bg-white before:absolute ${
+          // compact의 오른쪽 손잡이는 보이기만 하고, 누르는 것은 오른쪽 resize 영역이 받는다
+          className={`${isCompact && x === 1 ? 'pointer-events-none' : 'pointer-events-auto'} absolute z-[5] box-border size-[7.667px] touch-none rounded-[1.355px] border border-[#ff6a38] bg-white before:absolute ${
             overlapsHandle(x, y) ? 'before:-inset-x-[12px] before:-inset-y-[4px]' : 'before:-inset-[4px]'
           }`}
           style={{
@@ -548,12 +565,25 @@ function BlockSelectionChrome({
           onClick={stopPropagation}
         />
       ))}
+      {compactZone && (
+        <span
+          aria-hidden="true"
+          data-testid="n5-block-resize-zone-right"
+          className="pointer-events-auto absolute z-[5] cursor-ew-resize touch-none"
+          style={{ left: compactZone.left, top: compactZone.top, width: compactZone.width, height: compactZone.height }}
+          onPointerDown={(e) => handleResizePointerDown(e, 'e')}
+          onPointerMove={handleResizePointerMove}
+          onPointerUp={handleResizePointerEnd}
+          onPointerCancel={handleResizePointerEnd}
+          onClick={stopPropagation}
+        />
+      )}
       <button
         type="button"
         data-testid="n5-font-scale-handle"
         aria-label="글자크기 조절"
         aria-expanded={isToolbarOpen}
-        // 12px는 누르기에 작아 before로 누르는 영역을 16px로 넓힌다. 오른쪽 손잡이와 겹치는 낮은 block에서는 보이는 12px만 받는다
+        // 12px는 누르기에 작아 before로 누르는 영역을 16px로 넓힌다. 오른쪽 손잡이와 겹치는 낮은 block·compact에서는 보이는 12px만 받는다
         className={`pointer-events-auto absolute z-[21] cursor-pointer rounded-[2.6px] bg-[#ff6a38] before:absolute ${
           isFontHandleHitNarrowed ? 'before:inset-0' : 'before:-inset-0.5'
         } focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ff6a38]`}
