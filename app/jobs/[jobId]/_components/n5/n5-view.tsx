@@ -1,15 +1,40 @@
 'use client';
 
 import { useState } from 'react';
-import Link from 'next/link';
 
-import { useJobQuery, useN5BlocksQuery, useN5PreviewQuery } from '@/lib/queries/pixlate';
-import { toBlockViewModel, toPreviewViewModel } from '@/lib/n5/adapter';
-import type { BlockViewModel, PreviewViewModel } from '@/lib/n5/adapter';
+import { REGULATORY_CLASS_LABELS } from '@/lib/job/regulatory-class-labels';
+import {
+  useJobQuery,
+  useMasterCategoriesQuery,
+  useMasterCountriesQuery,
+  useN5BlocksQuery,
+  useN5ReviewTasksQuery,
+  useN5SectionStatusQuery,
+  useN5PreviewQuery,
+} from '@/lib/queries/pixlate';
+import {
+  buildSectionStatus,
+  getBlockTaskFailures,
+  syncPreviewWithBlocks,
+  toBlockViewModel,
+  toJobMetaViewModel,
+  toPreviewStatusInput,
+  toPreviewViewModel,
+} from '@/lib/n5/adapter';
+import type {
+  BlockTaskFailures,
+  BlockViewModel,
+  JobMetaViewModel,
+  PreviewViewModel,
+  SectionInputSync,
+  SectionStatusViewModel,
+} from '@/lib/n5/adapter';
 import type { N5ViewMode } from '@/lib/n5/viewport';
-import { StepNav } from '../step-nav';
 import { N5Viewport } from './n5-viewport';
 import { N5Panel } from './n5-panel';
+import { useN5EditSession } from './use-n5-edit-session';
+import { useN5PreviewSync } from './use-n5-preview-sync';
+import { useTypesetFontGate } from './use-typeset-font-gate';
 
 // ─────────────────────────────────────────────────────────────────
 // N5 — 검수 shell (Figma node 544:3168, "N5 검수" 기준)
@@ -48,11 +73,25 @@ function N5Loaded({
   jobId,
   preview,
   blocks,
+  jobMeta,
+  sectionStatusById,
+  blockTaskFailuresById,
+  syncBySection,
 }: {
   jobId: string;
   preview: PreviewViewModel;
   blocks: BlockViewModel[];
+  jobMeta: JobMetaViewModel;
+  sectionStatusById: ReadonlyMap<number, SectionStatusViewModel>;
+  blockTaskFailuresById: ReadonlyMap<number, BlockTaskFailures>;
+  /** 섹션별 지문 A/B 일치 — 같은 저장 입력으로 연결된 섹션만 renderInput 조판을 쓴다 */
+  syncBySection: ReadonlyMap<number, SectionInputSync>;
 }) {
+  // 재조회 계기(진행 중인 시도 추적·d/e/g·A≠B)는 여기 한 곳에서 맡는다
+  useN5PreviewSync(jobId, preview, syncBySection);
+  // 서버 style 글꼴 준비 확인 — 준비 전에는 HTML 조판·서버 style 측정을 하지 않는다
+  const isFontReady = useTypesetFontGate(blocks.flatMap((block) => (block.renderBinding ? [block.renderBinding.style] : [])));
+
   // N5는 번역 검수 화면이다 — 렌더 이미지가 없다는 이유로 원문 모드로
   // 강제 전환하지 않는다. 최초 진입은 항상 'translated'다(요청 3). 렌더가
   // 안 된 section은 캔버스 쪽에서 개별 section 단위로 "렌더 대기 중"을
@@ -81,42 +120,31 @@ function N5Loaded({
     setRevealRequestSeq((seq) => seq + 1);
   }
 
+  // 섹션 제외 저장 성공 — 그 섹션 안에 선택(섹션 또는 블록)이 있으면 비운다. 제외된 섹션은
+  // 캔버스에 블록 표시·선택 태그를 그리지 않으므로, 선택만 남으면 보이지 않는 선택이 된다.
+  // 저장 응답을 기다린 뒤 불리므로 그 사이 바뀐 선택을 보도록 함수형 갱신을 쓴다.
+  // 우측 패널의 블록 목록 자체는 바꾸지 않는다(제외 섹션 블록 표시 정책은 이번 범위 밖).
+  function handleSectionExcluded(sectionId: number) {
+    setSelectedSectionId((current) => (current === sectionId ? null : current));
+    setSelectedBlockId((current) =>
+      current != null && blocks.find((block) => block.id === current)?.sectionId === sectionId ? null : current,
+    );
+  }
+
+  // 실행 취소·다시 실행의 정본(F-CFM-03) — 캔버스와 패널의 모든 편집이 같은 이력을 쓴다
+  const editSession = useN5EditSession({
+    jobId,
+    blocks,
+    sections: preview.sections,
+    viewMode,
+    isFontReady,
+    onSelectBlock: handleSelectBlock,
+    onSelectSection: handleSelectSection,
+    onSectionExcluded: handleSectionExcluded,
+  });
+
   return (
     <div className="flex h-full w-full bg-white">
-      {/* 좌측 rail — 나가기 버튼 + StepNav. Figma(544:3168) 실측: 나가기
-          버튼(849:7253)은 x=40,y=40,w=40,h=40로 StepNav와 별개의 떠 있는
-          요소이고, StepNav(585:3283)는 세로 중앙(top:calc(50%+40px))에
-          온다 — N1/N2/N4(processing-stage-layout.tsx)가 이미 쓰는 같은
-          rail 패턴을 그대로 재사용한다(새 레이아웃을 만들지 않는다). 이전
-          구조는 나가기 버튼을 본문 위 헤더 줄로 올려서, 그 아래 gray
-          workspace가 Figma처럼 세로 꽉 채움(top:0, height:1080)이 아니라
-          헤더 높이만큼 아래로 밀려 있었다. */}
-      <div className="relative ml-9 h-full w-[44px] shrink-0">
-        <Link
-          href="/"
-          aria-label="보관함으로 나가기"
-          className="absolute top-10 left-1/2 z-20 flex size-10 -translate-x-1/2 shrink-0 items-center justify-center rounded-md border border-[#eaeaea] bg-white text-[#171717] transition-colors hover:bg-gray-50"
-        >
-          {/* N5 3차 디테일 정렬 — Figma(849:7253 "Card/Navigation/Close", 16px
-              glyph) 실제 asset을 내려받아 좌표를 확인했다: X선은 16px 박스
-              전체가 아니라 가운데 8×8 영역(4~12, inset 25%)에만 있고,
-              stroke-width는 1.25다. 기존엔 2~14(12×12, inset 12.5%) +
-              strokeWidth 1.5라 Figma보다 크고 굵었다. */}
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path
-              d="M4 4L12 12M12 4L4 12"
-              stroke="currentColor"
-              strokeWidth="1.25"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </Link>
-        <div className="absolute inset-0 pt-[100px] pb-6">
-          <StepNav currentStep="N5" />
-        </div>
-      </div>
-
       {/* 본문: 중앙 viewer + 우측 panel. 세로 padding을 주지 않는다 — Figma의
           gray workspace(602:4953)가 top:0, height:1080(뷰포트 전체)이라,
           이 행 자체가 위아래 여백 없이 h-full을 그대로 채워야 workspace도
@@ -126,27 +154,36 @@ function N5Loaded({
           panel→프레임 오른쪽 끝 간격(pr, 같은 화면들의 clamp(45px,3.125vw,
           60px)과 동일)을 그대로 재사용한다. workspace와 panel 사이 gap은
           Figma 실측(52px, 1920 기준 2.708vw)을 상한으로 쓴다. */}
-      <div className="flex h-full min-h-0 min-w-0 flex-1 gap-[clamp(20px,2.708vw,52px)] pr-[clamp(45px,3.125vw,60px)] pl-[clamp(0px,calc(6.25vw_-_80px),40px)]">
+      <div className="flex h-full min-h-0 min-w-0 flex-1 gap-[clamp(20px,2.71vw,52px)] pr-[clamp(45px,3.125vw,60px)] pl-[clamp(0px,calc(6.25vw_-_80px),40px)]">
         <N5Viewport
           preview={preview}
           blocks={blocks}
+          sectionStatusById={sectionStatusById}
+          jobMeta={jobMeta}
           viewMode={viewMode}
           selectedBlockId={selectedBlockId}
           selectedSectionId={selectedSectionId}
           revealRequestSeq={revealRequestSeq}
           onSelectBlock={handleSelectBlock}
           onSelectSection={handleSelectSection}
+          editSession={editSession}
+          syncBySection={syncBySection}
+          isFontReady={isFontReady}
         />
         <N5Panel
           jobId={jobId}
           sections={preview.sections}
           blocks={blocks}
+          sectionStatusById={sectionStatusById}
+          blockTaskFailuresById={blockTaskFailuresById}
+          revealRequestSeq={revealRequestSeq}
           viewMode={viewMode}
           onViewModeChange={setViewMode}
           selectedBlockId={selectedBlockId}
           selectedSectionId={selectedSectionId}
           onSelectBlock={handleSelectBlock}
           onSelectSection={handleSelectSection}
+          editSession={editSession}
         />
       </div>
     </div>
@@ -157,14 +194,22 @@ export function N5View({ jobId }: { jobId: string }) {
   const jobQuery = useJobQuery(jobId);
   const blocksQuery = useN5BlocksQuery(jobId);
   const previewQuery = useN5PreviewQuery(jobId);
+  // 상단 정보의 표시 이름용. 받지 못해도 검수는 막지 않고 그 항목만 비워 둔다
+  const countriesQuery = useMasterCountriesQuery();
+  const categoriesQuery = useMasterCategoriesQuery();
+  // 실패 상태 표시용. 받지 못해도 검수는 막지 않고 그 표시만 비워 둔다
+  const reviewTasksQuery = useN5ReviewTasksQuery(jobId);
+  const sectionDtoById = useN5SectionStatusQuery(jobId);
 
   const isLoading = jobQuery.isLoading || blocksQuery.isLoading || previewQuery.isLoading;
   const isError = jobQuery.isError || blocksQuery.isError || previewQuery.isError;
 
   if (isLoading) {
     return (
-      <div className="flex flex-1 items-center justify-center bg-white">
-        <span className="text-sm text-gray-400">검수 데이터를 불러오는 중...</span>
+      <div className="flex h-full w-full bg-white">
+        <div className="flex min-w-0 flex-1 items-center justify-center">
+          <span className="text-sm text-gray-400">검수 데이터를 불러오는 중...</span>
+        </div>
       </div>
     );
   }
@@ -172,18 +217,50 @@ export function N5View({ jobId }: { jobId: string }) {
   if (isError) {
     const err = jobQuery.error ?? blocksQuery.error ?? previewQuery.error;
     return (
-      <div className="flex flex-1 items-center justify-center bg-white">
-        <p className="text-sm text-red-500">
-          {err instanceof Error ? err.message : '오류가 발생했습니다.'}
-        </p>
+      <div className="flex h-full w-full bg-white">
+        <div className="flex min-w-0 flex-1 items-center justify-center">
+          <p className="text-sm text-red-500">
+            {err instanceof Error ? err.message : '오류가 발생했습니다.'}
+          </p>
+        </div>
       </div>
     );
   }
 
   if (!jobQuery.data || !blocksQuery.data || !previewQuery.data) return null;
 
-  const blocks = blocksQuery.data.map(toBlockViewModel);
   const preview = toPreviewViewModel(previewQuery.data);
+  // 지문 A(/blocks) = B(/preview) 인 섹션만 renderInput(정렬·서버 style·적용 박스)을 블록에 잇는다
+  const { blocks, syncBySection } = syncPreviewWithBlocks(blocksQuery.data.map(toBlockViewModel), preview);
 
-  return <N5Loaded jobId={jobId} preview={preview} blocks={blocks} />;
+  const jobMeta = toJobMetaViewModel(jobQuery.data, countriesQuery.data ?? [], categoriesQuery.data ?? [], REGULATORY_CLASS_LABELS);
+
+  const taskItems = reviewTasksQuery.data?.items ?? [];
+  const sectionStatusById = new Map(
+    preview.sections.map((section) => [
+      section.id,
+      buildSectionStatus(
+        section.id,
+        section.badges,
+        taskItems,
+        sectionDtoById.get(section.id),
+        section.render.status,
+        // 이번 계약 키가 없거나 조합이 계약 밖이면 기존 renderedUrl 기준 표시로 둔다
+        toPreviewStatusInput(section, syncBySection.get(section.id)?.match ?? 'incomparable'),
+      ),
+    ]),
+  );
+  const blockTaskFailuresById = new Map(blocks.map((block) => [block.id, getBlockTaskFailures(taskItems, block.id)]));
+
+  return (
+    <N5Loaded
+      jobId={jobId}
+      preview={preview}
+      blocks={blocks}
+      jobMeta={jobMeta}
+      sectionStatusById={sectionStatusById}
+      blockTaskFailuresById={blockTaskFailuresById}
+      syncBySection={syncBySection}
+    />
+  );
 }

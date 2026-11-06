@@ -138,7 +138,18 @@ export const mockSectionsResponse: SectionsResponse = {
       // N3에서 자동 제외된 섹션. N5 화면에 표시되지 않음.
       excludedStage: 'N3',
       bbox: { x: 0, y: 1100, width: 1000, height: 200 },
-      verdicts: [],
+      // 자동 제외(auto_local)는 근거 판정이 있어야 한다. 판정이 없으면 포함이고, 판정을 못 한 것은 auto_local_failed다(F-SEC-02).
+      verdicts: [
+        {
+          verdictId: 'ver_03_01',
+          verdictStatus: 'irrelevant',
+          verdictType: 'local_irrelevant',
+          problemText: '카카오톡 상담 안내',
+          alternativeExpression: null,
+          evidenceUrl: null,
+          basis: '미국(도착 시장)에서 쓰지 않는 채널 안내입니다.',
+        },
+      ],
       warningBadge: null,
       originalVerdict: null,
     },
@@ -178,6 +189,17 @@ export const mockSectionsResponse: SectionsResponse = {
           verdictStatus: 'regulated',
           problemText: '민감성 피부에 적합',
           basis: '미국 시장에서 "sensitive" 표기 시 피부과 테스트 결과 근거 권장',
+          alternativeExpression: null,
+          evidenceUrl: null,
+        },
+        // 12월 판정(channel_policy)이 서버에서 섞여 와도 9월 N3 화면에는 보이지 않아야 한다 —
+        // e2e/n3-real-data-defense.spec.ts의 비노출 검증용. 계약 enum 값(VerdictType·VerdictStatus) 그대로다.
+        {
+          verdictId: 'vrd_05_channel',
+          verdictType: 'channel_policy',
+          verdictStatus: 'policy',
+          problemText: '구매 후기 캡처',
+          basis: '선택한 채널에서 제한될 수 있는 유형입니다.',
           alternativeExpression: null,
           evidenceUrl: null,
         },

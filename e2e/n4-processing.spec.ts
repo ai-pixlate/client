@@ -12,6 +12,7 @@ import {
   recordProcessing,
   type DomSnap,
 } from './helpers/processing-recorder';
+import { pickRegulatoryClass } from './helpers/n1-regulatory-class';
 
 // ─────────────────────────────────────────────────────────────────
 // N4 — "번역 중" 5단계 표시 회귀 검증 (Figma 660:4221).
@@ -45,8 +46,11 @@ async function reachN4(page: Page): Promise<void> {
   await selectFirstValidOption(page, 0);
   await selectFirstValidOption(page, 1);
   await page.getByRole('button', { name: '선택하기' }).click();
-  await page.getByRole('dialog', { name: '카테고리 선택' }).getByRole('button', { name: '바디/헤어' }).click();
-  await selectFirstValidOption(page, 2);
+  await page.getByRole('dialog', { name: '카테고리 선택' }).getByRole('button', { name: '선케어' }).click();
+  await page.getByRole('dialog', { name: '카테고리 선택' }).getByRole('button', { name: '선크림' }).click();
+  await page.getByRole('dialog', { name: '카테고리 선택' }).getByRole('button', { name: '확인' }).click(); // PRD F-SRC-04 — [확인]으로 확정
+  await page.getByRole('checkbox', { name: /외부 AI 서비스로 전송됨을 확인했습니다/ }).check(); // F-ACC-04 책임 동의
+  await pickRegulatoryClass(page, '화장품'); // 규제 분류 — 드롭다운(native select 아님)
   await page.getByLabel('파일 선택').setInputFiles({
     name: 'n4-processing.png',
     mimeType: 'image/png',
@@ -55,8 +59,8 @@ async function reachN4(page: Page): Promise<void> {
   await page.getByRole('button', { name: '다음' }).click();
   await page.waitForURL(new RegExp(`/jobs/${MOCK_JOB_ID}$`));
   // 기본 mock N2 는 analyze → finalize → judge 를 poll 마다 보여 준 뒤 N3 로 간다(약 11초)
-  await page.getByRole('button', { name: '번역 시작' }).waitFor({ state: 'visible', timeout: 30_000 });
-  await page.getByRole('button', { name: '번역 시작' }).click();
+  await page.getByRole('button', { name: '이대로 진행' }).waitFor({ state: 'visible', timeout: 30_000 });
+  await page.getByRole('button', { name: '이대로 진행' }).click();
 }
 
 async function readProgress(page: Page): Promise<number> {
@@ -243,7 +247,7 @@ test('N4 C — 첫 render 관측이 progress=0.9 여도 04·05 를 함께 render
   expect(log.every((e) => JSON.stringify(e.rows) === JSON.stringify(rowsOf(D, D, D, A, A))), JSON.stringify(log)).toBe(true);
 });
 
-test('N4 D — jobStatus=failed·render=done·progress=1 이어도 완료가 아니고 N4 실패 안내에 머문다', async ({ page }) => {
+test('N4 D — jobStatus=failed·render=done·progress=1 이어도 완료가 아니고 N4 오류 화면에 머문다', async ({ page }) => {
   test.setTimeout(60_000);
   await page.clock.install();
   await setN4Script(page, [
@@ -268,11 +272,11 @@ test('N4 D — jobStatus=failed·render=done·progress=1 이어도 완료가 아
       fail: true,
     },
   ]);
-  await recordN4Snapshots(page);
   await reachN4(page);
   await expect(page.getByRole('heading', { name: '번역 중' })).toBeVisible({ timeout: 5_000 });
 
-  await expect(page.getByText('일부 항목을 처리하지 못했습니다')).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByTestId('processing-error')).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText('번역을 완료하지 못했습니다')).toBeVisible();
   const atFailure = await readProgress(page);
   expect(atFailure).toBeLessThan(100);
 
@@ -281,7 +285,6 @@ test('N4 D — jobStatus=failed·render=done·progress=1 이어도 완료가 아
   expect(await readProgress(page)).toBe(atFailure);
   await expect(page.getByRole('heading', { name: '번역 중' })).toBeVisible();
   await expect(page.locator('[data-testid="n5-panel"]')).toHaveCount(0);
-  expectN4Invariants(await n4Log(page));
 });
 
 // ── 로딩 표현 안정화: 서버 관측 단계 · 표시 % · 실제 완료(N5) 를 분리 ──

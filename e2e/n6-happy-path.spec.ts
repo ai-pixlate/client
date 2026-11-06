@@ -49,7 +49,7 @@ test('render → deliverables → validation → export → download → save �
 
   // ── StepNav + 헤더가 Figma대로 붙어 있다 ─────────────────────────
   await expect(page.getByRole('heading', { name: '저장 및 내보내기' })).toBeVisible();
-  await expect(page.getByRole('link', { name: '보관함으로 나가기' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '작업 취소' })).toBeVisible();
   await expect(page.getByRole('navigation', { name: '작업 진행 단계' })).toBeVisible();
 
   // ── deliverables / validation ────────────────────────────────
