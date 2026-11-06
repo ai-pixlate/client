@@ -1,7 +1,7 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ArrowLeftGlyph16 } from '@/app/_components/library/library-controls';
 import {
@@ -10,15 +10,18 @@ import {
   getM2Status,
   isM2LogoFileAllowed,
   listM2Changes,
-  normalizeM2Form,
   type M2BrandFormValue,
   type M2Mode,
 } from '@/lib/brand/m2-form';
-import { M2_BRAND_MOCK } from '@/lib/mock-api/m2-brand-fixtures';
+import type { ApiBrand, ApiBrandLogo } from '@/lib/api/brand-schema';
+import { ApiRequestError } from '@/lib/api/pixlate';
+import { resolveM2BrandTarget, toM2BrandFormValue } from '@/lib/brand/m2-adapter';
+import { useBrandLogosQuery, useBrandQuery, useBrandsQuery } from '@/lib/queries/pixlate';
 
 import { M2Button } from './m2-button';
 import { M2LogoPanel } from './m2-logo-panel';
 import { M2UnsavedDialog } from './m2-unsaved-dialog';
+import { useM2BrandSave, type M2SaveState } from './use-m2-brand-save';
 import { useUnsavedNavigationGuard, type BlockedNavigation } from './use-unsaved-navigation-guard';
 
 // ─────────────────────────────────────────────────────────────────
@@ -33,8 +36,10 @@ import { useUnsavedNavigationGuard, type BlockedNavigation } from './use-unsaved
 //   하단(753:6362)     w688, 오른쪽 끝 1799(Divider와 같은 선), 아래 끝 1027
 //   Figma CSS의 right·bottom은 프레임 테두리 1px 안쪽 기준이라, 화면 기준으로는 각각 2px씩 더 안쪽이다.
 //
-// ★ M2 API를 아직 연결하지 않았다. 저장은 화면 안의 baseline을 바꾸는 local mock persistence뿐이고
-//   서버 저장은 없다 — 새로고침하거나 화면을 나가면 fixture 값으로 돌아간다. 저장 성공 toast를 두지 않는다.
+// ★ Brand API 연결: GET /brands/{brandId} + GET /brands/{brandId}/logos 가 화면 정본(baseline)이다.
+//   [변경사항 저장]은 PATCH(바뀐 항목만) → 로고 DELETE·POST → 로고 목록 다시 받기(use-m2-brand-save.ts). 서버 응답으로만
+//   baseline 을 바꾸고, 실패하면 draft 를 그대로 둔다. Mock(MSW)도 같은 API·Adapter 를 탄다. 저장 성공 toast를 두지 않는다.
+//   brandId: ?brandId= 가 있으면 그것, 없으면 GET /brands 가 하나일 때만 그 브랜드(m2-adapter resolveM2BrandTarget).
 //
 // Figma에 있지만 넣지 않은 것: 부가 정보(F-BRD-08, PRD v3.5.10 이후 범위), 로고 카드 체크박스(의미 미확정).
 // [새 브랜드 추가]·[브랜드 삭제]·[로고 변경]은 후속 범위라 Figma 모습만 보여 주고 "3차 구현 예정" 툴팁을 단다.
@@ -50,12 +55,70 @@ function borderClass(editable: boolean, hasError: boolean) {
   return editable ? 'border-[#eaeaea] focus:border-[#ff6a38]' : 'border-[#eaeaea]';
 }
 
+/** 조회 단계 — 어느 브랜드인지 정하고 브랜드·로고를 받은 뒤에만 편집 화면을 그린다 */
 export default function M2BrandView() {
+  const queryBrandId = useSearchParams().get('brandId');
+  const brandsQuery = useBrandsQuery(queryBrandId == null || queryBrandId === '');
+  const target = resolveM2BrandTarget(queryBrandId, brandsQuery.data ?? null);
+  const brandId = target?.kind === 'id' ? target.brandId : null;
+  const brandQuery = useBrandQuery(brandId);
+  const logosQuery = useBrandLogosQuery(brandId);
+
+  const isNotFound = (error: unknown) => error instanceof ApiRequestError && error.status === 404;
+  let message: { state: string; text: string } | null = null;
+  if (brandsQuery.isError) message = { state: 'error', text: '브랜드 정보를 불러오지 못했습니다.' };
+  else if (target?.kind === 'none') message = { state: 'none', text: '등록된 브랜드가 없습니다.' };
+  else if (target?.kind === 'ambiguous') message = { state: 'ambiguous', text: '표시할 브랜드를 하나로 정할 수 없습니다.' };
+  else if (target?.kind === 'invalid-query' || isNotFound(brandQuery.error) || isNotFound(logosQuery.error))
+    message = { state: 'not-found', text: '브랜드를 찾을 수 없습니다.' };
+  else if (brandQuery.isError || logosQuery.isError) message = { state: 'error', text: '브랜드 정보를 불러오지 못했습니다.' };
+
+  if (message || brandId == null || !brandQuery.data || !logosQuery.data) {
+    return <M2LoadState state={message?.state ?? 'loading'} text={message?.text ?? '브랜드 정보를 불러오는 중입니다.'} />;
+  }
+  return <M2BrandEditor brandId={brandId} brand={brandQuery.data} logos={logosQuery.data} />;
+}
+
+/** 조회 중·실패 — Figma 표본이 없어 헤더 자리에 안내 한 줄만 둔다(새 레이아웃을 만들지 않는다) */
+function M2LoadState({ state, text }: { state: string; text: string }) {
+  const router = useRouter();
+  return (
+    <main data-testid="m2-brand" data-m2-load={state} className="relative flex h-screen min-h-[640px] flex-col bg-white">
+      <button
+        type="button"
+        onClick={() => router.push('/')}
+        aria-label="뒤로 가기"
+        data-testid="m2-back"
+        className="absolute top-[39px] left-[39px] flex size-10 items-center justify-center rounded-[6px] border border-[#eaeaea] bg-white hover:bg-[#f5f5f5]"
+      >
+        <ArrowLeftGlyph16 />
+      </button>
+      <div className="ml-[119px] flex flex-col gap-3 pt-[79px]">
+        <h1 className="text-[32px] leading-[38px] font-bold tracking-[-0.64px] text-[#171717]">브랜드 정보</h1>
+        <p role={state === 'loading' ? 'status' : 'alert'} data-testid="m2-load-message" className="text-[14px] leading-[17px] tracking-[-0.14px] text-[#707070]">
+          {text}
+        </p>
+      </div>
+    </main>
+  );
+}
+
+/** 저장 실패 안내 — 입력은 그대로 남아 있다는 것을 함께 알린다 */
+function saveErrorText(state: M2SaveState): string | null {
+  if (state.kind !== 'error') return null;
+  if (state.brandFailed) return '브랜드 정보를 저장하지 못했습니다. 입력한 내용은 그대로 있으니 다시 저장해주세요.';
+  return '일부 로고를 저장하지 못했습니다. 남은 변경을 확인하고 다시 저장해주세요.';
+}
+
+function M2BrandEditor({ brandId, brand, logos }: { brandId: number; brand: ApiBrand; logos: ApiBrandLogo[] }) {
   const router = useRouter();
 
   const [mode, setMode] = useState<M2Mode>('view');
-  const [baseline, setBaseline] = useState<M2BrandFormValue>(M2_BRAND_MOCK);
-  const [draft, setDraft] = useState<M2BrandFormValue>(M2_BRAND_MOCK);
+  // 화면 정본 = 서버 응답(브랜드 + 로고 목록). 저장도 이 값을 바꾸지 않고 query cache 를 서버 응답으로 바꾼다
+  const baseline = useMemo(() => toM2BrandFormValue(brand, logos), [brand, logos]);
+  const [draft, setDraft] = useState<M2BrandFormValue>(baseline);
+  const saver = useM2BrandSave(brandId, brand);
+  const isSaving = saver.state.kind === 'saving';
   const [invalidFiles, setInvalidFiles] = useState(false);
   const [pendingNavigation, setPendingNavigation] = useState<BlockedNavigation | null>(null);
 
@@ -113,7 +176,7 @@ export default function M2BrandView() {
       const src = URL.createObjectURL(file);
       blobUrls.current.add(src);
       nextLogoId.current += 1;
-      return { id: `local-logo-${nextLogoId.current}`, name: file.name, src };
+      return { id: `local-logo-${nextLogoId.current}`, name: file.name, src, serverId: null, file };
     });
     setDraft((current) => ({ ...current, logos: [...current.logos, ...added] }));
   };
@@ -122,19 +185,28 @@ export default function M2BrandView() {
     setDraft((current) => ({ ...current, logos: current.logos.filter((logo) => logo.id !== logoId) }));
   };
 
+  const startEdit = () => {
+    // 수정 초기값 = 지금의 서버 값
+    setDraft(baseline);
+    saver.reset();
+    setMode('edit');
+  };
+
   const resetToBaseline = () => {
     setDraft(baseline);
     setInvalidFiles(false);
+    saver.reset();
     setMode('view');
   };
 
-  /** local mock persistence — 서버 요청 없이 draft를 화면의 baseline으로 올린다. */
-  const saveLocally = () => {
-    const saved = normalizeM2Form(draft);
-    setBaseline(saved);
-    setDraft(saved);
-    setInvalidFiles(false);
-    setMode('view');
+  const handleSave = async () => {
+    const outcome = await saver.save(baseline, draft);
+    if (!outcome) return; // 이미 저장 중
+    setDraft(outcome.draft);
+    if (outcome.complete) {
+      setInvalidFiles(false);
+      setMode('view');
+    }
   };
 
   const handleBack = () => {
@@ -163,7 +235,8 @@ export default function M2BrandView() {
     <main
       data-testid="m2-brand"
       data-m2-status={getM2Status(mode, dirty)}
-      data-persistence="local-mock"
+      data-persistence="api"
+      data-save-state={saver.state.kind}
       className="relative flex h-screen min-h-[640px] flex-col bg-white"
     >
       <button
@@ -194,7 +267,7 @@ export default function M2BrandView() {
               label="정보수정"
               testId="m2-edit"
               buttonRef={editButtonRef}
-              onClick={() => setMode('edit')}
+              onClick={startEdit}
               className={editable ? 'invisible' : ''}
             />
           </div>
@@ -279,23 +352,32 @@ export default function M2BrandView() {
         data-testid="m2-footer"
         className={`mt-6 mr-[121px] mb-[53px] ml-auto flex h-[37px] max-w-[calc(100%-240px)] shrink-0 items-center gap-4 ${editable ? 'w-[688px] justify-between' : 'justify-end'}`}
       >
-        <p data-testid="m2-apply-notice" className="min-w-0 text-right text-[12px] leading-[normal] font-light tracking-[-0.48px] whitespace-nowrap text-[#ff6a38]">
-          변경한 브랜드 정보는 새로 시작하는 작업부터 적용되며, 이미 완료된 작업에는 자동 반영되지 않습니다.
-        </p>
+        {/* 저장 실패 안내는 Figma 표본이 없어 같은 안내 자리에 오류 색으로 바꿔 보인다(새 배치·toast 없음) */}
+        {saveErrorText(saver.state) ? (
+          <p role="alert" data-testid="m2-save-error" className="min-w-0 text-right text-[12px] leading-[normal] tracking-[-0.12px] whitespace-nowrap text-[#e5484d]">
+            {saveErrorText(saver.state)}
+          </p>
+        ) : (
+          <p data-testid="m2-apply-notice" className="min-w-0 text-right text-[12px] leading-[normal] font-light tracking-[-0.48px] whitespace-nowrap text-[#ff6a38]">
+            변경한 브랜드 정보는 새로 시작하는 작업부터 적용되며, 이미 완료된 작업에는 자동 반영되지 않습니다.
+          </p>
+        )}
         {editable && (
           <div className="flex shrink-0 items-center gap-2">
             <button
               type="button"
               onClick={resetToBaseline}
+              disabled={isSaving}
               data-testid="m2-cancel"
-              className="flex h-[37px] items-center justify-center rounded-[6px] border border-[#eaeaea] bg-white px-7 text-[14px] leading-[17px] font-medium tracking-[-0.42px] whitespace-nowrap text-[#171717] hover:bg-[#f5f5f5]"
+              className="flex h-[37px] items-center justify-center rounded-[6px] border border-[#eaeaea] bg-white px-7 text-[14px] leading-[17px] font-medium tracking-[-0.42px] whitespace-nowrap text-[#171717] hover:bg-[#f5f5f5] disabled:cursor-not-allowed disabled:opacity-40"
             >
               취소
             </button>
             <button
               type="button"
-              onClick={saveLocally}
-              disabled={!canSaveM2(baseline, draft)}
+              onClick={() => void handleSave()}
+              disabled={isSaving || !canSaveM2(baseline, draft)}
+              aria-busy={isSaving || undefined}
               data-testid="m2-save"
               className="flex h-[37px] items-center justify-center rounded-[6px] bg-[#171717] px-7 text-[14px] leading-[17px] font-medium tracking-[-0.42px] whitespace-nowrap text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
             >

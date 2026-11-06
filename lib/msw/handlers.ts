@@ -49,6 +49,7 @@ import { mockLibraryCards } from '@/lib/mock-api/library-fixtures';
 import { mockMasterCountries, mockMasterLanguages } from '@/lib/mock-api/master-fixtures';
 import { applyMockLayoutPatch, isMockBoxInSection, isSameMockLayout, parseMockLayoutPatch } from '@/lib/mock-api/n5-layout-adjust';
 import { mockMasterCategories } from '@/lib/mock-api/category-fixtures';
+import { m2BrandHandlers } from './m2-brand-handlers';
 import type { ApiJob, ApiJobAsyncTaskItem, ApiTextBlock } from '@/lib/api/n5-schema';
 import type { ApiAcceptedTask, ApiAnalysisProgress, ApiJobPatch, ApiSourceImageUploadResult } from '@/lib/api/job-schema';
 import type {
@@ -1772,6 +1773,9 @@ export const handlers = [
   http.get('/master/languages', () => HttpResponse.json(mockMasterLanguages)),
   // N1 카테고리 트리 (API-MST-04) — 실서버와 같은 Category 평면 배열
   http.get('/master/categories', () => HttpResponse.json(mockMasterCategories)),
+
+  // M2 — 브랜드 정보·로고 (lib/msw/m2-brand-handlers.ts)
+  ...m2BrandHandlers,
 
   // ──────────────────────────────────────────
   // presigned 다운로드 URL(mock) — 실제로는 S3 객체다. 위 download 응답의 url 이 이 경로를
