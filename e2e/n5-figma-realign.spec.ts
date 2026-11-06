@@ -1,6 +1,7 @@
 import { type Page, expect, test } from '@playwright/test';
 
 import { reachN5 } from './helpers/reach-n5';
+import { useLocalLayoutEditing } from './helpers/layout-write';
 
 // ─────────────────────────────────────────────────────────────────
 // N5 Figma 재정합(544:3168) — shell·canvas·패널 geometry, 선택 block UI(1512:23496),
@@ -8,6 +9,11 @@ import { reachN5 } from './helpers/reach-n5';
 // ─────────────────────────────────────────────────────────────────
 
 test.use({ viewport: { width: 1920, height: 1080 } });
+
+// 박스·배율은 세션 local 편집만 본다 — Mock 에서도 layoutAdjust 쓰기를 끈다(실서버 쓰기 차단과 같은 동작). 저장 흐름은 n5-layout-adjust.spec.ts
+test.beforeEach(async ({ page }) => {
+  await useLocalLayoutEditing(page);
+});
 
 const box = async (page: Page, testId: string) => (await page.getByTestId(testId).boundingBox())!;
 const near = (actual: number, expected: number, tolerance = 2) => expect(Math.abs(actual - expected), `${actual} ≈ ${expected}`).toBeLessThanOrEqual(tolerance);

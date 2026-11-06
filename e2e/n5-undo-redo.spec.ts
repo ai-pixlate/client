@@ -1,6 +1,7 @@
 import { type Page, test, expect } from '@playwright/test';
 
 import { reachN5 } from './helpers/reach-n5';
+import { useLocalLayoutEditing } from './helpers/layout-write';
 
 // ─────────────────────────────────────────────────────────────────
 // N5 실행 취소·다시 실행(F-CFM-03) — 박스 이동·크기 조절의 local 초안(서버 저장 없음). 혼합 이력은 n5-edit-history.spec.ts.
@@ -8,6 +9,11 @@ import { reachN5 } from './helpers/reach-n5';
 // ─────────────────────────────────────────────────────────────────
 
 test.use({ viewport: { width: 1920, height: 1080 } });
+
+// 박스·배율은 세션 local 편집만 본다 — Mock 에서도 layoutAdjust 쓰기를 끈다(실서버 쓰기 차단과 같은 동작). 저장 흐름은 n5-layout-adjust.spec.ts
+test.beforeEach(async ({ page }) => {
+  await useLocalLayoutEditing(page);
+});
 
 test('Undo/Redo가 캔버스 좌하단에 있고, 이력이 없으면 비활성이다', async ({ page }) => {
   await reachN5(page);

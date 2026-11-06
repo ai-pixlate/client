@@ -1,6 +1,7 @@
 import { type Page, expect, test } from '@playwright/test';
 
 import { reachN5 } from './helpers/reach-n5';
+import { useLocalLayoutEditing } from './helpers/layout-write';
 
 // ─────────────────────────────────────────────────────────────────
 // 일반 /jobs/1 경로(기본 fixture)에서 사용자가 잡는 block 본체 중앙을 실제 mouse로 끈다.
@@ -8,6 +9,11 @@ import { reachN5 } from './helpers/reach-n5';
 // ─────────────────────────────────────────────────────────────────
 
 test.use({ viewport: { width: 1920, height: 1080 } });
+
+// 박스·배율은 세션 local 편집만 본다 — Mock 에서도 layoutAdjust 쓰기를 끈다(실서버 쓰기 차단과 같은 동작). 저장 흐름은 n5-layout-adjust.spec.ts
+test.beforeEach(async ({ page }) => {
+  await useLocalLayoutEditing(page);
+});
 
 const box = async (page: Page, id: string) => (await page.getByTestId(id).boundingBox())!;
 const centerOf = (b: { x: number; y: number; width: number; height: number }) => ({ x: b.x + b.width / 2, y: b.y + b.height / 2 });

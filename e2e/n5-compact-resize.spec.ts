@@ -1,6 +1,7 @@
 import { type Page, expect, test } from '@playwright/test';
 
 import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
+import { useLocalLayoutEditing } from './helpers/layout-write';
 
 // ─────────────────────────────────────────────────────────────────
 // N5 낮은 Auto Height block의 compact resize.
@@ -11,6 +12,11 @@ import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 
 test.skip(({ browserName }) => browserName !== 'chromium', '조판 검증은 Chromium 기준이다');
 test.use({ viewport: { width: 1920, height: 1080 } });
+
+// 박스·배율은 세션 local 편집만 본다 — Mock 에서도 layoutAdjust 쓰기를 끈다(실서버 쓰기 차단과 같은 동작). 저장 흐름은 n5-layout-adjust.spec.ts
+test.beforeEach(async ({ page }) => {
+  await useLocalLayoutEditing(page);
+});
 
 const BLOCK = 9103; // 502 가격 한 줄 — Auto Height로 한 줄 높이가 된다
 const BODY = 9102; // 501 본문 여러 줄 — 좁히면 줄이 늘어 높아진다

@@ -2,6 +2,7 @@ import { type Page, test, expect } from '@playwright/test';
 
 import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 import { reachN5 } from './helpers/reach-n5';
+import { useLocalLayoutEditing } from './helpers/layout-write';
 
 // ─────────────────────────────────────────────────────────────────
 // N5 통합 편집 이력(F-CFM-03) + 글자 크기 [+][-](F-CFM-15 2차).
@@ -13,6 +14,11 @@ import { reachN5 } from './helpers/reach-n5';
 // ─────────────────────────────────────────────────────────────────
 
 test.use({ viewport: { width: 1920, height: 1080 } });
+
+// 박스·배율은 세션 local 편집만 본다 — Mock 에서도 layoutAdjust 쓰기를 끈다(실서버 쓰기 차단과 같은 동작). 저장 흐름은 n5-layout-adjust.spec.ts
+test.beforeEach(async ({ page }) => {
+  await useLocalLayoutEditing(page);
+});
 
 const NOTICE = {
   undo: '실행 취소를 하지 못했습니다. 현재 상태를 유지합니다.',

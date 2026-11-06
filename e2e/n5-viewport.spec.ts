@@ -2,6 +2,13 @@ import { test, expect, type Page } from '@playwright/test';
 
 import { reachN5 } from './helpers/reach-n5';
 import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
+import { useLocalLayoutEditing } from './helpers/layout-write';
+
+// 박스·배율은 세션 local 편집만 본다 — Mock 에서도 layoutAdjust 쓰기를 끈다(실서버 쓰기 차단과 같은 동작). 저장 흐름은 n5-layout-adjust.spec.ts
+test.beforeEach(async ({ page }) => {
+  await useLocalLayoutEditing(page);
+});
+
 
 // ─────────────────────────────────────────────────────────────────
 // N5 — v3.4.2 실제 계약(GET /jobs/{jobId}/blocks·preview, PATCH
