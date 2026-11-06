@@ -585,7 +585,7 @@ export function useUpdateSectionBucketMutation(jobId: string) {
           ? {
               ...prev,
               sections: prev.sections.map((s) =>
-                s.id === saved.id ? { ...s, bucket: saved.bucket, excludedStage: saved.excludedStage ?? null } : s,
+                s.id === saved.id ? { ...s, bucket: saved.bucket ?? s.bucket, excludedStage: saved.excludedStage ?? null } : s,
               ),
             }
           : prev,
