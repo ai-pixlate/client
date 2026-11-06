@@ -352,7 +352,7 @@ export interface paths {
          * 작업 생성 = N1 완료 🟢9월
          * @description **2차 상태**(PRD v3.5.10 기준)
          *     - 계약 확정·서버 구현 대기: category leaf만 허용(`categoryId`) · 브랜드 생성 시점 스냅샷
-         *     - 현행: 호출 시점·책임 동의(`consentId` 미사용 — 동의 체크는 화면)
+         *     - 현행: 호출 시점·책임 동의(`consentId` 미사용 — 동의 체크는 화면) · 500·503 오류 응답
          *
          *     draft 생성 (A3 draft-first). brandId만으로 빈 draft를 만들고 jobId 반환. 흐름: POST /jobs(draft) → SRC-02(원본 업로드) → PATCH /jobs/{jobId}(N1 값) → analyze. N1 필수값 검증은 analyze(ANL-01) 게이트. Idempotency-Key 헤더 권장. 🟢9월.
          *     **[PRD v3.5.10 · 계약 확정 · 서버 현행 · 동의 체크 = 화면] 호출 시점과 책임 동의(F-ACC-04)** — 화면은 책임 동의 체크 뒤 N1 [다음]에서 이 API를 호출하고 이어서 위 순서(업로드 → PATCH → analyze)를 실행한다. 동의는 따로 저장하지 않는다. `createdAt`은 지금은 작업 생성 시각이며, 동의 체크를 [다음]의 필수 조건으로 적용한 뒤부터는 동의 시각으로도 쓴다(PM 정책).
@@ -1534,6 +1534,13 @@ export interface components {
             w?: number;
             h?: number;
         };
+        /** @description 블록 원본 박스 {x,y,w,h} — 섹션 로컬 원본 px(섹션 왼쪽 위 = 0,0). 저장값을 자르거나 반올림하지 않고 그대로 주므로 소수일 수 있다(현행). 섹션 `bbox`(`Bbox`)는 정수다. 적용 박스는 /preview `renderInput.blocks[].box`에서 읽는다. */
+        BlockBbox: {
+            x?: number;
+            y?: number;
+            w?: number;
+            h?: number;
+        };
         LoginRequest: {
             /** Format: email */
             email: string;
@@ -1943,7 +1950,7 @@ export interface components {
             residualRatio?: number | null;
             warningBadge?: components["schemas"]["WarningBadge"] | null;
         };
-        /** @description ERD text_block. isExcluded는 파생(role=product_label). 번역 실패는 signals[].code=translation_failed. */
+        /** @description ERD text_block. isExcluded는 라벨·로고 판정의 파생값(아래 필드 설명). 번역 실패는 signals[].code=translation_failed. */
         TextBlock: {
             /** Format: int64 */
             id?: number;
@@ -1953,15 +1960,15 @@ export interface components {
             displayTop?: number | null;
             blockOrder?: number;
             role?: components["schemas"]["BlockRole"];
-            /** @description 파생 (role=product_label) */
-            isExcluded?: boolean;
+            /** @description 라벨·로고 판정의 파생값 — DB가 `is_product_label OR is_brand_logo`의 3값 논리로 계산한다(마이그레이션 0007 · 현행). `true` = 제품 라벨 또는 브랜드 로고로 판정돼 번역 대상이 아니다. `false` = 라벨도 로고도 아니라고 판정돼 번역 대상이다. `null` = 아직 판정 전이라 제외 여부를 모른다(N4 라벨·로고 판정 전 등). `false`로 취급하지 않는다. */
+            isExcluded?: boolean | null;
             sourceKo?: string | null;
             trans1?: string | null;
             /** @description 9월 null */
             trans2?: string | null;
             /** @description 「사용자수정」 표시(F-CFM-02a). `edited`는 번역문이 바뀐 저장에서만 된다. [PRD v3.5.10 · 합의(PM) · 계약 확정·서버 구현 대기] 배치(박스·글자 배율)만 바꾼 저장은 이 값을 바꾸지 않는다(blockPatch 「블록 배치」). */
             blockStatus?: components["schemas"]["BlockStatus"];
-            bbox?: components["schemas"]["Bbox"] | null;
+            bbox?: components["schemas"]["BlockBbox"] | null;
             charCount?: number | null;
             /** @description 항상 필드 포함, 상한 없으면 null */
             charLimit?: number | null;
@@ -2263,8 +2270,11 @@ export interface components {
                 /** @description 1.0.0 은 html·psd 를 만들지 않으므로 false */
                 isActive?: boolean;
                 failedCount?: number;
-                /** @enum {string|null} */
-                retryAction?: "render" | "export" | "null" | null;
+                /**
+                 * @description 재시도 동작. null = 지정된 재시도 동작 없음. 현행 서버는 항상 null을 준다.
+                 * @enum {string|null}
+                 */
+                retryAction?: "render" | "export" | null;
             }[];
         };
         /** @description 규격 검증 항목별 (deliverable.validation_result). 9월 포맷·색공간만, 용량 passed=null. */
@@ -2921,6 +2931,24 @@ export interface operations {
                 };
             };
             409: components["responses"]["Conflict"];
+            /** @description `INTERNAL_ERROR`(현행). `retryable`은 서버 기본값 `true`, `details`는 null이다. 커밋 중 오류면 작업이 만들어졌는지 응답만으로는 모른다. 다시 보낼 때는 **같은 `Idempotency-Key`** 를 쓴다 — 저장됐으면 최초 201을 재전송하고, 커밋 전 실패로 키가 지워졌으면 새로 만들며(201), 미확정이면 409 DUPLICATE다. 새 키나 키 없는 요청으로 자동 재시도하지 않는다(중복 위험). 카테고리 매핑 충돌은 데이터·설정 오류라 `retryable`이 `true`여도 고칠 때까지 같은 500이다. 이때 작업은 만들어지지 않는다. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description `SERVICE_UNAVAILABLE`(현행). `retryable: true`, `details: null`. `Idempotency-Key`를 받은 요청에서 멱등 저장소(Redis)를 쓸 수 없을 때만 나며, 작업을 만들지 않는다. 저장소가 회복된 뒤 같은 키로 다시 보낸다. 키 없는 요청은 저장소를 쓰지 않으므로 이 응답이 나지 않는다. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
         };
     };
     jobGet: {
