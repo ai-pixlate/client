@@ -1,10 +1,10 @@
 import { test, expect, type Page } from '@playwright/test';
 
 // ─────────────────────────────────────────────────────────────────
-// M2 브랜드 정보 (Figma 743:6039) — API 없이 Mock + local state로만 동작한다.
+// M2 브랜드 정보 (Figma 743:6039) — Brand API(GET·PATCH /brands/{brandId}, 로고 GET·POST·DELETE)를 MSW Mock 으로 탄다.
 //
-// ★ "저장"은 local mock persistence다. 서버 저장을 검증하지 않고, 어떤 흐름에서도 브랜드·로고 API 요청이
-//   나가지 않는지만 확인한다. 실제 API 연동 검증이 아니다.
+// ★ Mock 은 실제 계약 모양으로 응답하지만 실서버 검증이 아니다. 저장하지 않는 흐름에서는 쓰기 요청(PATCH·POST·DELETE)이
+//   나가지 않아야 한다(allowWrites 를 켠 테스트만 쓴다). API 연결 동작 자체는 e2e/m2-brand-api.spec.ts 가 본다.
 // ─────────────────────────────────────────────────────────────────
 
 test.use({ viewport: { width: 1920, height: 1080 } });
@@ -24,25 +24,29 @@ async function enterEdit(page: Page) {
   await expect(status(page)).toHaveAttribute('data-m2-status', 'edit-clean');
 }
 
+/** 브랜드·로고 쓰기 요청(PATCH·POST·DELETE). 조회(GET)는 화면 정본이라 늘 나간다 */
 let brandApiRequests: string[];
+let allowWrites: boolean;
 
 test.beforeEach(async ({ page }) => {
   brandApiRequests = [];
+  allowWrites = false;
   page.on('request', (request) => {
     const { pathname } = new URL(request.url());
-    if (/^\/(v1\/)?brands(\/|$)/.test(pathname) || pathname.includes('/logos')) brandApiRequests.push(pathname);
+    if (request.method() !== 'GET' && /^\/(v1\/)?brands(\/|$)/.test(pathname)) brandApiRequests.push(`${request.method()} ${pathname}`);
   });
   await page.goto('/brand');
   await expect(page.getByRole('heading', { name: '브랜드 정보' })).toBeVisible();
+  await expect(status(page)).toHaveAttribute('data-m2-status', 'view');
 });
 
 test.afterEach(() => {
-  expect(brandApiRequests).toEqual([]);
+  if (!allowWrites) expect(brandApiRequests).toEqual([]);
 });
 
 test('기본 화면은 저장된 Mock을 읽기 전용으로 보여 준다', async ({ page }) => {
   await expect(status(page)).toHaveAttribute('data-m2-status', 'view');
-  await expect(status(page)).toHaveAttribute('data-persistence', 'local-mock');
+  await expect(status(page)).toHaveAttribute('data-persistence', 'api');
   await expect(page.getByTestId('m2-name-ko')).toHaveValue('픽슬레이트');
   await expect(page.getByTestId('m2-name-en')).toHaveValue('Pixlate');
   await expect(page.getByTestId('m2-overview')).toHaveValue(/자연 유래 성분/);
@@ -76,7 +80,7 @@ test('정보수정을 누르면 입력과 로고 조작이 열리고 저장은 �
   }
   await expect(page.getByTestId('m2-name-ko')).toBeFocused();
   await expect(page.getByTestId('m2-logo-uploader')).toBeVisible();
-  await expect(page.getByRole('button', { name: '워드마크 로고 삭제' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '브랜드 로고 1 삭제' })).toBeVisible();
   await expect(page.getByTestId('m2-edit')).toBeHidden();
   await expect(page.getByTestId('m2-save')).toBeDisabled();
 });
@@ -100,7 +104,8 @@ test('취소하면 baseline으로 돌아간다', async ({ page }) => {
   await expect(page.getByTestId('m2-edit')).toBeFocused();
 });
 
-test('저장은 화면의 baseline만 바꾸고, 새로고침하면 fixture로 돌아간다', async ({ page }) => {
+test('저장은 서버 응답을 새 baseline으로 쓰고, 새로고침하면 Mock 서버 상태가 fixture로 돌아간다', async ({ page }) => {
+  allowWrites = true;
   await enterEdit(page);
   await page.getByTestId('m2-name-en').fill('  Pixlate Labs ');
   await page.getByTestId('m2-save').click();
@@ -114,7 +119,7 @@ test('저장은 화면의 baseline만 바꾸고, 새로고침하면 fixture로 �
   await page.getByTestId('m2-cancel').click();
   await expect(page.getByTestId('m2-name-en')).toHaveValue('Pixlate Labs');
 
-  // 서버 저장이 없으므로 새로고침하면 사라진다
+  // Mock 서버 상태는 페이지 메모리에만 있어 새로고침하면 fixture 로 돌아간다(실서버라면 남는다)
   await page.reload();
   await expect(page.getByTestId('m2-name-en')).toHaveValue('Pixlate');
 });
@@ -139,6 +144,7 @@ for (const [testId, errorText] of [
 
 for (const testId of ['m2-overview', 'm2-target-customer']) {
   test(`${testId}는 비어도 저장할 수 있다`, async ({ page }) => {
+    allowWrites = true;
     await enterEdit(page);
     await page.getByTestId(testId).fill('');
     await expect(page.getByTestId('m2-save')).toBeEnabled();
@@ -150,6 +156,7 @@ for (const testId of ['m2-overview', 'm2-target-customer']) {
 }
 
 test('로고를 추가하면 draft에만 들어가고, 저장해야 확정된다', async ({ page }) => {
+  allowWrites = true;
   await enterEdit(page);
   await page.getByTestId('m2-logo-input').setInputFiles([pngFile('a.png'), pngFile('b.png')]);
   await expect(logoCards(page)).toHaveCount(4);
@@ -158,18 +165,23 @@ test('로고를 추가하면 draft에만 들어가고, 저장해야 확정된다
   await expect(added).toHaveAttribute('src', /^blob:/);
   await expect.poll(() => added.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
 
+  expect(brandApiRequests).toEqual([]);
+
   await page.getByTestId('m2-save').click();
   await expect(status(page)).toHaveAttribute('data-m2-status', 'view');
   await expect(logoCards(page)).toHaveCount(4);
-  // 저장 뒤에도 blob URL이 해제되지 않아 계속 보인다
-  await expect.poll(() => page.getByRole('img', { name: 'b.png' }).evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
+  // 저장 뒤에는 서버 로고(Mock 은 data: URL)로 바뀌고 서버 순서 번호로 부른다
+  const saved = page.getByRole('img', { name: '브랜드 로고 4' });
+  await expect(saved).not.toHaveAttribute('src', /^blob:/);
+  await expect.poll(() => saved.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
+  expect(brandApiRequests.filter((r) => r.startsWith('POST'))).toHaveLength(2);
 });
 
 test('로고를 삭제하면 draft에서 빠지고 포커스가 파일 선택으로 옮겨 간다', async ({ page }) => {
   await enterEdit(page);
-  await page.getByRole('button', { name: '심볼 로고 삭제' }).click();
+  await page.getByRole('button', { name: '브랜드 로고 2 삭제' }).click();
   await expect(logoCards(page)).toHaveCount(1);
-  await expect(page.getByRole('img', { name: '심볼 로고' })).toHaveCount(0);
+  await expect(page.getByRole('img', { name: '브랜드 로고 2' })).toHaveCount(0);
   await expect(status(page)).toHaveAttribute('data-m2-status', 'edit-dirty');
   await expect(page.getByRole('button', { name: '파일 선택' })).toBeFocused();
 });
@@ -177,13 +189,13 @@ test('로고를 삭제하면 draft에서 빠지고 포커스가 파일 선택으
 test('취소하면 추가·삭제한 로고가 원래대로 돌아온다', async ({ page }) => {
   await enterEdit(page);
   await page.getByTestId('m2-logo-input').setInputFiles(pngFile());
-  await page.getByRole('button', { name: '워드마크 로고 삭제' }).click();
-  await page.getByRole('button', { name: '심볼 로고 삭제' }).click();
+  await page.getByRole('button', { name: '브랜드 로고 1 삭제' }).click();
+  await page.getByRole('button', { name: '브랜드 로고 2 삭제' }).click();
   await expect(logoCards(page)).toHaveCount(1);
   await page.getByTestId('m2-cancel').click();
   await expect(logoCards(page)).toHaveCount(2);
-  await expect(page.getByRole('img', { name: '워드마크 로고' })).toBeVisible();
-  await expect(page.getByRole('img', { name: '심볼 로고' })).toBeVisible();
+  await expect(page.getByRole('img', { name: '브랜드 로고 1' })).toBeVisible();
+  await expect(page.getByRole('img', { name: '브랜드 로고 2' })).toBeVisible();
   await expect(page.getByRole('img', { name: 'new-logo.png' })).toHaveCount(0);
 });
 
@@ -279,6 +291,7 @@ test('변경이 있을 때 내부 링크 이동도 막고, 버리면 그 링크�
 });
 
 test('변경이 있을 때 브라우저 뒤로가기도 막고, 저장 뒤에는 한 번에 돌아간다', async ({ page }) => {
+  allowWrites = true;
   await page.goto('/');
   await page.goto('/brand');
   await enterEdit(page);
@@ -670,7 +683,7 @@ test('현재 범위 버튼에는 3차 구현 예정이 없다', async ({ page })
   for (const locator of [
     page.getByTestId('m2-cancel'),
     page.getByTestId('m2-save'),
-    page.getByRole('button', { name: '심볼 로고 삭제' }),
+    page.getByRole('button', { name: '브랜드 로고 2 삭제' }),
     page.getByRole('button', { name: '파일 선택' }),
     page.getByTestId('m2-logo-delete-action'),
   ]) {
@@ -684,7 +697,7 @@ test('현재 범위 버튼에는 3차 구현 예정이 없다', async ({ page })
 
 test('로고 삭제는 수정 모드에서 계속 동작하고 후속 버튼과 구분된다', async ({ page }) => {
   await enterEdit(page);
-  await page.getByRole('button', { name: '심볼 로고 삭제' }).click();
+  await page.getByRole('button', { name: '브랜드 로고 2 삭제' }).click();
   await expect(logoCards(page)).toHaveCount(1);
   await expect(page.getByTestId('m2-logo-delete-action')).not.toHaveAttribute('aria-describedby', /.+/);
   await expect(page.getByTestId('m2-delete-brand')).toHaveAttribute('aria-describedby', /.+/);

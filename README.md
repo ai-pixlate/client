@@ -62,8 +62,9 @@ Secret(JWT, access token, password 등)은 절대 Git에 커밋하지 않습니�
 | `npm run verify:n5-adapter` | N5 Adapter(OpenAPI DTO → ViewModel) 자동 검증 (브라우저 불필요) |
 | `npm run verify:library-adapter` | M1 보관함 Adapter(LibraryCard → 카드 ViewModel) 자동 검증 (브라우저 불필요) |
 | `npm run verify:library-view` | M1 보관함 화면 로직(검색·국가 필터·최신순·선택·날짜 포맷) 자동 검증 (브라우저 불필요) |
-| `npm run verify:m2-form` | M2 브랜드 정보 화면 로직(dirty 판정·필수값·변경 항목 열거·로고 파일 형식) 자동 검증 (브라우저 불필요) |
-| `npx playwright test e2e/m2-brand.spec.ts --project=chromium` | M2 브랜드 정보 화면(`/brand`) 검증 — API 없이 Mock + local state로만 동작하며 서버 저장은 없다 (Chromium, dev 서버 필요) |
+| `npm run verify:m2-form` | M2 브랜드 정보 화면 로직(dirty 판정·필수값·변경 항목 열거·로고 파일 형식)과 Brand API Adapter(DTO→ViewModel·바뀐 항목만 PATCH·로고 추가/삭제 계획·저장 뒤 정합·brandId 결정) 자동 검증 (브라우저 불필요) |
+| `npx playwright test e2e/m2-brand.spec.ts --project=chromium` | M2 브랜드 정보 화면(`/brand`) 화면·view/edit·dirty·이탈 확인 검증 (MSW Mock, Chromium, dev 서버 필요) |
+| `npx playwright test e2e/m2-brand-api.spec.ts --project=chromium` | M2 Brand API 연결(조회·바뀐 항목만 PATCH·로고 POST/DELETE·저장 실패 시 입력 유지·중복 저장 방지·404/없음/여러 브랜드) 검증 — MSW Mock이 실제 계약 모양으로 응답하며 실서버 검증이 아니다 (Chromium, dev 서버 필요) |
 | `npm run verify:msw-flag` | `isApiMockingEnabled()`(MSW on/off SSOT)가 `NEXT_PUBLIC_API_MOCKING` 값 조합에서 `NODE_ENV`와 무관하게 정확히 동작하는지 자동 검증 (브라우저 불필요) |
 | `npm run verify:displayed-progress` | N2·N4 처리 화면 표시 %(관측 단계는 상한만 염·점프·감소 없음·처리 중 100 없음·실패 시 멈춤·완료 응답 뒤 100 표시) 순수 계산 자동 검증 (브라우저 불필요) |
 | `npm run generate:openapi-types` | 최신 OpenAPI 계약(`ai-pixlate.github.io/server/openapi.yaml`)에서 타입 재생성 → `lib/api/generated/openapi.d.ts` (직접 수정 금지, 재실행으로만 갱신) |
