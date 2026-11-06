@@ -12,7 +12,7 @@ import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 test.skip(({ browserName }) => browserName !== 'chromium', '조판 검증은 Chromium 기준이다');
 test.use({ viewport: { width: 1920, height: 1080 } });
 
-const BLOCK = 9103; // 501 가격 한 줄 — Auto Height로 한 줄 높이가 된다
+const BLOCK = 9103; // 502 가격 한 줄 — Auto Height로 한 줄 높이가 된다
 const BODY = 9102; // 501 본문 여러 줄 — 좁히면 줄이 늘어 높아진다
 const overlayId = (id: number) => `n5-block-overlay-${id}`;
 const OVERLAY = overlayId(BLOCK);
@@ -195,7 +195,7 @@ test.describe('compact resize', () => {
     await openQa(page);
     const overlay = await showAtHeight(page, 30);
     await drag(page, { x: overlay.x + overlay.width, y: overlay.y + 2 }, 3000, 0);
-    const slice = await box(page, 'n5-slice-translated-501');
+    const slice = await box(page, 'n5-slice-translated-502');
     const now = await box(page, OVERLAY);
     near(now.x + now.width, slice.x + slice.width, 'right', 1.5);
     near(now.x, overlay.x, 'left', 1);

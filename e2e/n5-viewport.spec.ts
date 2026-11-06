@@ -100,7 +100,11 @@ test.describe('N5 진입 — section별 preview 렌더', () => {
     await expect(page.getByTestId('n5-view-mode-translated')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByTestId('n5-view-mode-translated')).toBeEnabled();
     await expect(page.getByTestId('n5-view-mode-original')).toBeEnabled();
-    await expect(page.getByTestId('n5-slice-translated-504').getByText('렌더 대기 중')).toBeVisible();
+    // /preview 계약(PR #108) — 504 는 입력 준비 중이고 결과가 없다 → 원본 + 렌더 대기 중(섹션 상태 태그).
+    // 결과 없이 시도가 진행 중일 때만 빈 면 위 진행 문구다(e2e/n5-preview-render-input.spec.ts 「상태 pending」)
+    await expect(page.getByTestId('n5-slice-translated-504')).toHaveAttribute('data-preview-display', 'original');
+    await expect(page.getByTestId('n5-slice-translated-504')).toHaveCSS('background-image', /504-original/);
+    await expect(page.getByTestId('n5-section-status-4-progress')).toHaveText('렌더 대기 중');
   });
 
   test('isExcluded 블록(9105, product_label)은 편집 input 자체를 렌더하지 않는다', async ({ page }) => {

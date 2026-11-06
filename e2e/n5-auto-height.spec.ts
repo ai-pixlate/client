@@ -222,7 +222,7 @@ test.describe('Auto Height', () => {
     near(now.top + now.height, sectionHeight, 'bottom', 1);
     expect(await textHeight(page)).toBeGreaterThan(now.height);
     // 넘친 글이 다음 section 면에 가리지 않는다
-    await expect(page.getByTestId('n5-qa-text-layer-501')).toHaveCSS('z-index', '1');
+    await expect(page.getByTestId('n5-text-layer-501')).toHaveCSS('z-index', '1');
     await page.screenshot({ path: test.info().outputPath('auto-height-overflow.png') });
   });
 
@@ -298,13 +298,16 @@ test.describe('낮은 block의 글자크기 손잡이', () => {
   });
 });
 
-test.describe('일반 N5(렌더 이미지 화면)', () => {
-  test('Auto Height 가 QA와 같은 값으로 동작하고 렌더 이미지·이력이 그대로다', async ({ page, browser }) => {
+test.describe('일반 N5(renderInput 조판 화면)', () => {
+  test('최신 renderInput 섹션은 배경 위 HTML 조판이고, Auto Height 가 QA와 같은 값으로 동작하며 이력이 그대로다', async ({ page, browser }) => {
     await reachN5(page);
     const writes = recordWrites(page);
     await expect(page.getByTestId('n5-qa-badge')).toHaveCount(0);
-    await expect(page.locator('[data-typeset-render]')).toHaveCount(0);
-    await expect(page.getByTestId('n5-slice-translated-501')).not.toHaveCSS('background-image', 'none');
+    // QA 주소가 아니어도 서버 renderInput 으로 그린다 — 글자가 구워진 renderedUrl 이 아니라 글자 없는 배경 위다
+    const slice = page.getByTestId('n5-slice-translated-501');
+    await expect(slice).toHaveAttribute('data-preview-display', 'typeset');
+    await expect(slice).toHaveCSS('background-image', /501-background/);
+    await expect(page.locator(`[data-typeset-render="${BLOCK}"]`)).toContainText('high-concentration');
     await page.getByTestId(`n5-block-pin-${BLOCK}`).click();
     await expect(page.getByTestId('n5-block-selection')).toHaveAttribute('data-auto-height', 'true');
     const start = await boxOf(page);
@@ -359,17 +362,20 @@ test.describe('일반 N5(렌더 이미지 화면)', () => {
     await page.getByTestId(`n5-block-save-${BLOCK}`).click();
     await expect.poll(async () => (await boxOf(page)).height).toBeGreaterThan(scaled.height);
     expect(writes).toEqual([`PATCH /jobs/${MOCK_JOB_ID}/blocks/${BLOCK}`]);
+    // 저장한 글로 서버 미리보기가 다시 만들어지면 다시 조판 화면이 된다(그동안은 이전 결과·최신 아님)
+    await expect(slice).toHaveAttribute('data-preview-display', 'typeset', { timeout: 15_000 });
     await page.screenshot({ path: test.info().outputPath('normal-n5-auto-height.png') });
   });
 });
 
-test.describe('Mock 조판 미리보기', () => {
+test.describe('조판 진단(QA)', () => {
   test('글자 없는 면 위에 실제 조판 블록을 그리고 조작을 막지 않으며, 작성 중 초안을 보여 준다', async ({ page }) => {
     await page.goto(QA_URL);
-    await expect(page.getByTestId('n5-qa-badge')).toContainText('Mock 조판 미리보기');
-    // 렌더 이미지를 쓰지 않는다(이중 글자 방지)
+    await expect(page.getByTestId('n5-qa-badge')).toContainText('조판 진단(Mock)');
+    // 렌더 이미지(글자가 구워진 renderedUrl)를 쓰지 않는다 — renderInput 배경 위에 그린다(이중 글자 방지)
     const slice = page.getByTestId('n5-slice-translated-501');
-    await expect(slice).toHaveCSS('background-image', 'none');
+    await expect(slice).toHaveCSS('background-image', /501-background/);
+    await expect(slice).not.toHaveCSS('background-image', /501-translated/);
     const block = page.locator(`[data-typeset-render="${BLOCK}"]`);
     await expect(block).toContainText('high-concentration');
     const font = await block.evaluate((el) => ({ family: getComputedStyle(el).fontFamily, lineHeight: (el as HTMLElement).style.lineHeight, whiteSpace: getComputedStyle(el).whiteSpace }));
@@ -377,7 +383,7 @@ test.describe('Mock 조판 미리보기', () => {
     expect(font.lineHeight).toBe('1.2');
     expect(font.whiteSpace).toBe('pre-line');
     // 글자는 이벤트를 받지 않는다
-    await expect(page.getByTestId('n5-qa-text-layer-501')).toHaveCSS('pointer-events', 'none');
+    await expect(page.getByTestId('n5-text-layer-501')).toHaveCSS('pointer-events', 'none');
     await page.getByTestId(`n5-block-pin-${BLOCK}`).click();
     await expect(page.getByTestId(`n5-block-row-${BLOCK}`)).toHaveAttribute('aria-pressed', 'true');
 
@@ -394,7 +400,7 @@ test.describe('Mock 조판 미리보기', () => {
     await expect(page.locator('[data-typeset-render]')).toHaveCount(0);
   });
 
-  test('주소에 값이 없으면 기존 N5 그대로이고 조판 글자가 없다', async ({ page }) => {
+  test('주소에 값이 없으면 진단 표시가 없다', async ({ page }) => {
     await page.goto(`/jobs/${MOCK_JOB_ID}?qaTypeset=1`);
     await expect(page.getByTestId('n5-qa-badge')).toBeVisible({ timeout: 20_000 });
     await page.evaluate(() => history.replaceState(history.state, '', location.pathname));

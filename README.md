@@ -67,6 +67,7 @@ Secret(JWT, access token, password 등)은 절대 Git에 커밋하지 않습니�
 | `npm run typecheck` | 타입 검사 (`tsc --noEmit`) |
 | `npm run verify:coords` | **좌표 변환 자동 검증** (브라우저 불필요) |
 | `npm run verify:n5-adapter` | N5 Adapter(OpenAPI DTO → ViewModel) 자동 검증 (브라우저 불필요) |
+| `npm run verify:n5-preview-state` | N5 `/preview` 입력 상태·렌더 상태(시도·결과·최신)·지문 A/B·표시 규칙·서버 style 8키 변환 자동 검증 (브라우저 불필요) |
 | `npm run verify:n5-layout-edit` | N5 배치 영역 편집 순수 계산(이동·크기 조절·[+][-]·가운데선 snap, 섹션 경계) 자동 검증 (브라우저 불필요) |
 | `npm run verify:n5-history` | N5 실행 취소·다시 실행 이력 엔진(저장 성공 뒤 commit, 실패 시 불변) 자동 검증 (브라우저 불필요) |
 | `npm run verify:n5-failed-drafts` | N5 번역문 미저장 초안(편집·저장 성공/실패 전이, 실패 칸 집계) 자동 검증 (브라우저 불필요) |
