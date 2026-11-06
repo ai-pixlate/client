@@ -1,16 +1,20 @@
 /**
  * M2 브랜드 정보 화면 로직 — 저장 전 변경 판정(F-BRD-07)과 입력 검증(F-BRD-01).
  *
- * M2 API를 아직 연결하지 않아 화면이 쓰는 값만 ViewModel로 둔다. API 응답 타입을 추측하지 않는다.
+ * 화면이 쓰는 값만 ViewModel로 둔다. API DTO ↔ ViewModel 변환은 lib/brand/m2-adapter.ts 가 맡는다.
  * React 없이 Node에서 검증할 수 있는 순수 함수만 둔다(scripts/verify-m2-form.mjs).
  */
 
 export type M2BrandLogo = {
-  /** 목록·삭제의 식별자. 파일 이름이나 배열 위치를 쓰지 않는다. */
+  /** 목록·삭제의 식별자. 파일 이름이나 배열 위치를 쓰지 않는다(서버 로고 `logo-{id}` · 저장 전 로고 `local-logo-{n}`). */
   id: string;
   name: string;
-  /** Mock 정적 경로 또는 사용자가 고른 파일의 blob: URL */
+  /** 서버 logoUrl(presigned) 또는 사용자가 고른 파일의 blob: URL */
   src: string;
+  /** 서버 BrandLogo.id — 저장 전(추가 대기) 로고는 null */
+  serverId: number | null;
+  /** 저장 전 로고의 원본 파일 — 저장 때 POST /brands/{brandId}/logos 로 보낸다 */
+  file?: File;
 };
 
 export type M2BrandFormValue = {
