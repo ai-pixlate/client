@@ -345,7 +345,9 @@ function TranslationEditor({
       ? null
       : taskFailures.previewFailure;
   // 고치는 중이거나 재렌더 전이면 이전 넘침 판정을 새 결과처럼 보이지 않는다
-  const showOverflow = hasWidthOverflowSignal(block.badges) && !isDirty && !isRerendering;
+  // 넘침 정본은 최신 서버 결과(isCurrent=true)의 overflow 다. 최신이 아니면 내지 않는다. 이번 계약 키가 없는 응답만 기존 signal 을 쓴다
+  const serverOverflow = block.serverOverflow === 'legacy' ? hasWidthOverflowSignal(block.badges) : block.serverOverflow === true;
+  const showOverflow = serverOverflow && !isDirty && !isRerendering;
   const hasFailureMessage = translationFailure != null || taskFailures.verifyFailed || previewFailure != null || showOverflow;
 
   async function handleSave() {

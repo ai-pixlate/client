@@ -12,12 +12,28 @@ import {
   useN5SectionStatusQuery,
   useN5PreviewQuery,
 } from '@/lib/queries/pixlate';
-import { buildSectionStatus, getBlockTaskFailures, toBlockViewModel, toJobMetaViewModel, toPreviewViewModel } from '@/lib/n5/adapter';
-import type { BlockTaskFailures, BlockViewModel, JobMetaViewModel, PreviewViewModel, SectionStatusViewModel } from '@/lib/n5/adapter';
+import {
+  buildSectionStatus,
+  getBlockTaskFailures,
+  syncPreviewWithBlocks,
+  toBlockViewModel,
+  toJobMetaViewModel,
+  toPreviewViewModel,
+} from '@/lib/n5/adapter';
+import type {
+  BlockTaskFailures,
+  BlockViewModel,
+  JobMetaViewModel,
+  PreviewViewModel,
+  SectionInputSync,
+  SectionStatusViewModel,
+} from '@/lib/n5/adapter';
+import { resolvePreviewSectionLabels } from '@/lib/n5/preview-state';
 import type { N5ViewMode } from '@/lib/n5/viewport';
 import { N5Viewport } from './n5-viewport';
 import { N5Panel } from './n5-panel';
 import { useN5EditSession } from './use-n5-edit-session';
+import { useN5PreviewSync } from './use-n5-preview-sync';
 
 // ─────────────────────────────────────────────────────────────────
 // N5 — 검수 shell (Figma node 544:3168, "N5 검수" 기준)
@@ -59,6 +75,7 @@ function N5Loaded({
   jobMeta,
   sectionStatusById,
   blockTaskFailuresById,
+  syncBySection,
 }: {
   jobId: string;
   preview: PreviewViewModel;
@@ -66,7 +83,12 @@ function N5Loaded({
   jobMeta: JobMetaViewModel;
   sectionStatusById: ReadonlyMap<number, SectionStatusViewModel>;
   blockTaskFailuresById: ReadonlyMap<number, BlockTaskFailures>;
+  /** 섹션별 지문 A/B 일치 — 같은 저장 입력으로 연결된 섹션만 renderInput 조판을 쓴다 */
+  syncBySection: ReadonlyMap<number, SectionInputSync>;
 }) {
+  // 재조회 계기(진행 중인 시도 추적·d/e/g·A≠B)는 여기 한 곳에서 맡는다
+  useN5PreviewSync(jobId, preview, syncBySection);
+
   // N5는 번역 검수 화면이다 — 렌더 이미지가 없다는 이유로 원문 모드로
   // 강제 전환하지 않는다. 최초 진입은 항상 'translated'다(요청 3). 렌더가
   // 안 된 section은 캔버스 쪽에서 개별 section 단위로 "렌더 대기 중"을
@@ -201,8 +223,9 @@ export function N5View({ jobId }: { jobId: string }) {
 
   if (!jobQuery.data || !blocksQuery.data || !previewQuery.data) return null;
 
-  const blocks = blocksQuery.data.map(toBlockViewModel);
   const preview = toPreviewViewModel(previewQuery.data);
+  // 지문 A(/blocks) = B(/preview) 인 섹션만 renderInput(정렬·서버 style·적용 박스)을 블록에 잇는다
+  const { blocks, syncBySection } = syncPreviewWithBlocks(blocksQuery.data.map(toBlockViewModel), preview);
 
   const jobMeta = toJobMetaViewModel(jobQuery.data, countriesQuery.data ?? [], categoriesQuery.data ?? [], REGULATORY_CLASS_LABELS);
 
@@ -210,7 +233,21 @@ export function N5View({ jobId }: { jobId: string }) {
   const sectionStatusById = new Map(
     preview.sections.map((section) => [
       section.id,
-      buildSectionStatus(section.id, section.badges, taskItems, sectionDtoById.get(section.id), section.render.status),
+      buildSectionStatus(
+        section.id,
+        section.badges,
+        taskItems,
+        sectionDtoById.get(section.id),
+        section.render.status,
+        // 이번 계약 키가 없거나 조합이 계약 밖이면 기존 renderedUrl 기준 표시로 둔다
+        section.input.kind === 'invalid-contract' || section.renderState.kind === 'invalid-contract'
+          ? undefined
+          : {
+              input: section.input,
+              render: section.renderState,
+              labels: resolvePreviewSectionLabels(section.input, section.renderState, syncBySection.get(section.id)?.match ?? 'incomparable'),
+            },
+      ),
     ]),
   );
   const blockTaskFailuresById = new Map(blocks.map((block) => [block.id, getBlockTaskFailures(taskItems, block.id)]));
@@ -223,6 +260,7 @@ export function N5View({ jobId }: { jobId: string }) {
       jobMeta={jobMeta}
       sectionStatusById={sectionStatusById}
       blockTaskFailuresById={blockTaskFailuresById}
+      syncBySection={syncBySection}
     />
   );
 }

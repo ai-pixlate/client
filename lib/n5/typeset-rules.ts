@@ -185,15 +185,42 @@ export function typesetTextStyle(
   };
 }
 
+export type TypesetTextAlign = 'left' | 'center' | 'right';
+
+/**
+ * 서버 /preview renderInput.blocks[].style 8키 — FE 내부 모델(값은 그대로 옮긴다, lib/n5/preview-state.ts toTypesetServerStyle).
+ * 이 값이 있으면 역할 기본값(ROLE_STYLE_DEFAULTS)으로 다시 계산하지 않는다. fontSizePx 는 배율 적용 전 섹션 원본 px 다.
+ */
+export interface TypesetServerStyle {
+  fontFamily: string;
+  fontWeight: number;
+  fontSizePx: number;
+  /** 서버에 저장된 적용 배율(절대값) */
+  fontScale: number;
+  /** '#RRGGBB' 그대로 */
+  fontColor: string;
+  align: TypesetTextAlign;
+  letterSpacingEm: number;
+  lineHeightRatio: number;
+}
+
+/** 서버 style 의 최종 글자 크기 = fontSizePx × 절대 배율, 한 번만 곱한다. 배율은 세션 초안이 있으면 그것, 없으면 서버 fontScale */
+export function resolveServerFontPx(style: TypesetServerStyle, userFontScale?: number): number {
+  return effectiveFontSize(style.fontSizePx, userFontScale ?? style.fontScale);
+}
+
 /** 조판 블록 한 개를 그리는 데 필요한 입력 — API DTO 가 아니다 */
 export interface TypesetBlockStyleInput {
   role: TypesetRole;
   sourceImageWidth: number;
+  /** 절대 배율. 없으면 서버 style 의 fontScale, 그것도 없으면 1 */
   userFontScale?: number;
   /** 섹션 로컬 원본 px. 조정 박스/원본 선택은 호출자가 resolveActiveBBox 로 한다 */
   bbox: BoundingBox;
-  /** 없으면 TYPESET_COMMON.textAlignFallback */
-  textAlign?: 'left' | 'center' | 'right';
+  /** 없으면 서버 style.align, 그것도 없으면 TYPESET_COMMON.textAlignFallback */
+  textAlign?: TypesetTextAlign;
+  /** 서버 renderInput style. 있으면 역할 기본값 대신 이 값만 쓴다(표시·측정 공통) */
+  serverStyle?: TypesetServerStyle | null;
 }
 
 /**
@@ -205,8 +232,23 @@ export function typesetBlockStyle(
   input: TypesetBlockStyleInput,
   fontFamily: string = TYPESET_COMMON.fontFamily,
 ): Record<string, string> | null {
-  const style = typesetTextStyle(input.role, input.sourceImageWidth, input.userFontScale);
+  const server = input.serverStyle;
+  const style: TypesetTextStyle | null = server
+    ? {
+        fontFamily: server.fontFamily,
+        fontSize: `${resolveServerFontPx(server, input.userFontScale)}px`,
+        fontWeight: server.fontWeight,
+        letterSpacing: `${server.letterSpacingEm}em`,
+        lineHeight: server.lineHeightRatio,
+        color: server.fontColor,
+        textAlign: server.align,
+        whiteSpace: TYPESET_COMMON.whiteSpace,
+        fontKerning: TYPESET_COMMON.fontKerning,
+      }
+    : typesetTextStyle(input.role, input.sourceImageWidth, input.userFontScale);
   if (!style) return null;
+  // 서버 style 이 있으면 글꼴도 그 값이다(측정기 기본 글꼴로 바꾸지 않는다)
+  const family = server ? server.fontFamily : fontFamily;
   const { bbox } = input;
   return {
     position: 'absolute',
@@ -219,7 +261,7 @@ export function typesetBlockStyle(
     padding: '0px',
     border: '0px',
     overflow: 'visible',
-    fontFamily: `"${fontFamily}"`,
+    fontFamily: `"${family}"`,
     fontSize: style.fontSize,
     fontWeight: String(style.fontWeight),
     fontStyle: 'normal',

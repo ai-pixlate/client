@@ -10,7 +10,8 @@
  * 1단계 조사에서 Adapter로 격리하기로 한 4개 항목을 여기서 흡수한다:
  *   - previewWidth      → getPreviewContainerWidth()
  *   - autoAdjust        → toAutoAdjustViewModel() (snake_case를 여기서만 다룬다)
- *   - renderedUrl===null → resolveSectionRenderState() (실패 단정 금지)
+ *   - renderedUrl===null → resolveSectionRenderState() (실패 단정 금지 — 이번 계약 키가 없는 응답의 기존 표시용)
+ *   - renderInput·render → lib/n5/preview-state.ts (입력 상태·렌더 상태를 따로 판정) + syncPreviewWithBlocks() (지문 A/B)
  *   - error.code        → parseApiError()/isRevisionConflict() (열린 string 유지)
  */
 
@@ -23,6 +24,19 @@ import { VERDICT_BADGE_LABELS } from '../n3/verdict.ts';
 import type { ApiSection } from '../api/n3-schema';
 import type { BlockRole, BoundingBox } from '@/lib/api/types';
 import type { N5TextAlign } from './layout-edit';
+import type { TypesetServerStyle } from './typeset-rules';
+import {
+  compareFingerprintsAB,
+  deriveSectionFingerprintA,
+  resolvePreviewInputState,
+  resolvePreviewRenderState,
+  toTypesetServerStyle,
+  type FingerprintMatch,
+  type PreviewInputState,
+  type PreviewRenderState,
+  type PreviewSectionLabels,
+  type SectionFingerprintA,
+} from './preview-state.ts';
 import type {
   ApiBbox,
   ApiBlockPatchResponse,
@@ -153,6 +167,10 @@ export interface SectionStatusViewModel {
   signals: SignalBadge[];
   /** 실패가 아닌 진행·제외 상태 문구(렌더 대기 중 · 렌더링 중 · 제외된 섹션). renderedUrl=null만으로 실패로 보지 않는다 */
   progressLabel: string | null;
+  /** 미리보기 안내(최신 미리보기 아님 · 미리보기 없음 · 미리보기 입력 오류 · 최신 내용을 불러오는 중). 이번 계약 키가 없으면 null */
+  previewNotice: string | null;
+  /** 입력 오류 원래 코드 — 화면 문구에는 쓰지 않고 개발·테스트 확인용 data 속성에만 둔다 */
+  previewInputErrorCode: string | null;
 }
 
 function getSectionProgressLabel(
@@ -169,24 +187,39 @@ function getSectionProgressLabel(
   return isRunning ? '렌더링 중' : '렌더 대기 중';
 }
 
+/** /preview 렌더 상태에서 온 섹션 상태 입력. 이번 계약 키가 없는(legacy) 섹션이면 넘기지 않는다 */
+export interface PreviewSectionStatusInput {
+  labels: PreviewSectionLabels;
+  render: PreviewRenderState;
+  input: PreviewInputState;
+}
+
 export function buildSectionStatus(
   sectionId: number,
   signals: SignalBadge[],
   items: readonly ApiJobAsyncTaskItem[],
   section: Pick<ApiSection, 'exclusionReason' | 'verdicts' | 'warningBadge'> | undefined,
   renderStatus?: SectionRenderState['status'],
+  preview?: PreviewSectionStatusInput,
 ): SectionStatusViewModel {
   const render = findFailedItem(items, 'render', 'section', sectionId);
   const inpaint = findFailedItem(items, 'inpaint', 'section', sectionId);
   const labels = (section?.verdicts ?? []).flatMap((verdict) => (verdict.verdictType ? [VERDICT_BADGE_LABELS[verdict.verdictType]] : []));
+  // /tasks 실패와 /preview 시도 실패는 같은 「실행 실패 · 렌더링」 행 하나로 보인다(경고를 두 번 내지 않는다)
+  const attempt = preview?.render.attempt;
+  const attemptFailed = preview?.labels.renderFailed === true && attempt != null;
+  const renderRetry = render ? toRetryTarget(render) : attemptFailed ? { taskId: attempt.taskId, retryable: attempt.retryable } : null;
+  const isLegacy = preview == null || renderStatus === 'excluded';
   return {
-    failedStages: [...(render ? (['render'] as const) : []), ...(inpaint ? (['inpaint'] as const) : [])],
-    renderRetry: render ? toRetryTarget(render) : null,
+    failedStages: [...(render || attemptFailed ? (['render'] as const) : []), ...(inpaint ? (['inpaint'] as const) : [])],
+    renderRetry,
     restoredInN3: section?.exclusionReason === 'restored_by_user',
     verdictLabels: [...new Set(labels)],
     warningLabel: section?.warningBadge ? SECTION_WARNING_LABELS[section.warningBadge] : null,
     signals,
-    progressLabel: getSectionProgressLabel(sectionId, items, renderStatus, render != null),
+    progressLabel: isLegacy ? getSectionProgressLabel(sectionId, items, renderStatus, render != null) : preview.labels.progressLabel,
+    previewNotice: isLegacy ? null : preview.labels.notice,
+    previewInputErrorCode: isLegacy ? null : preview.input.errorCode,
   };
 }
 
@@ -196,7 +229,8 @@ export function getSectionStatusRowCount(status: SectionStatusViewModel | undefi
   return (
     (status.failedStages.length > 0 ? 1 : 0) +
     (status.restoredInN3 || status.verdictLabels.length > 0 ? 1 : 0) +
-    (status.warningLabel != null ? 1 : 0)
+    (status.warningLabel != null ? 1 : 0) +
+    (status.previewNotice != null ? 1 : 0)
   );
 }
 
@@ -217,7 +251,8 @@ export function hasSectionStatus(status: SectionStatusViewModel | undefined): bo
     status.verdictLabels.length > 0 ||
     status.warningLabel != null ||
     status.signals.length > 0 ||
-    status.progressLabel != null
+    status.progressLabel != null ||
+    status.previewNotice != null
   );
 }
 
@@ -275,10 +310,19 @@ export interface BlockViewModel {
   sourceText: string;
   translatedText: string;
   /**
-   * 글자 정렬([+][-] 기준점). 공개 API(TextBlock)에 블록 정렬 필드가 없어 지금은 채우지 않는다 — 없으면 left 로 본다.
-   * 계약이 생기면 toBlockViewModel 에서 채운다. text 내용이나 bbox 위치로 추측하지 않는다.
+   * 글자 정렬([+][-] 기준점·조판). /preview renderInput style.align 에서 온다(syncPreviewWithBlocks, 지문 A=B 일 때만).
+   * 없으면 left 로 본다. text 내용이나 bbox 위치로 추측하지 않는다.
    */
   textAlign?: N5TextAlign;
+  /** 지문 A(/blocks sectionInputFingerprint). 키가 없거나 null 이면 null — 비교하지 않는다 */
+  sectionInputFingerprint: string | null;
+  /** 같은 저장 입력(A=B)으로 확인된 /preview renderInput 블록. 없으면 null — 서버 style 을 쓰지 않는다 */
+  renderBinding: N5RenderBinding | null;
+  /**
+   * 서버 넘침(getServerOverflow) — 소속 섹션의 최신 결과(isCurrent=true) overflow 만 값이다. 최신이 아니면 null(표시하지 않는다).
+   * 'legacy' = 이번 계약 키가 없는 응답 — 기존 signals(width_overflow) 표시를 쓴다. FE DOM 측정값은 여기 들어오지 않는다.
+   */
+  serverOverflow: boolean | null | 'legacy';
   /** isExcluded(API 값, role=product_label 파생)로부터 editable = !isExcluded로 정리한다.
    *  role==='product_label' 여부를 FE에서 다시 계산하지 않는다 — isExcluded가 정본이다. */
   editable: boolean;
@@ -326,6 +370,9 @@ export function toBlockViewModel(dto: ApiTextBlock): BlockViewModel {
     displayTop: dto.displayTop ?? null,
     badges: toSignalBadges(dto.signals),
     autoAdjust: toAutoAdjustViewModel(dto.autoAdjust),
+    sectionInputFingerprint: dto.sectionInputFingerprint ?? null,
+    renderBinding: null,
+    serverOverflow: 'legacy',
   };
 }
 
@@ -396,15 +443,42 @@ export interface PreviewSectionViewModel {
   /** 번역 전(원문) 이미지. renderedUrl과 달리 "null=제외/렌더전" 같은 별도 의미가
    *  스펙에 명시돼 있지 않아 render 상태 판단에는 쓰지 않는다 — 있는 그대로 전달한다. */
   originalUrl: string | null;
+  /** 서버 결과 이미지(이전 결과 포함). 최신인지는 renderState.kind 로 본다 */
+  renderedUrl: string | null;
+  /** renderedUrl 기준 기존 판정 — 제외 판정과 이번 계약 키가 없는(legacy) 응답의 표시에만 쓴다 */
   render: SectionRenderState;
   badges: SignalBadge[];
+  /** 섹션 revision(Section.revision과 같음) — SEC-03 섹션 제외·복원 요청용. 키가 없으면 null */
+  revision: number | null;
+  /** 입력 상태(renderInput·inputFingerprint·inputError) */
+  input: PreviewInputState;
+  /** 렌더 상태(render.attempt·result·isCurrent) — 입력 상태와 따로 판정한다 */
+  renderState: PreviewRenderState;
+  /** renderInput.section.background — 글자 없는 바탕. source(inpaint/original)는 그대로 둔다 */
+  background: { url: string; source: 'inpaint' | 'original'; sha256: string | null } | null;
+  /** renderInput.blocks(렌더 대상만). style 형식이 계약 밖이면 그 블록 style 은 null */
+  renderBlocks: N5RenderInputBlock[];
 }
+
+/** /preview renderInput 블록 하나 — FE 내부 모델. box 는 섹션 로컬 원본 px 그대로 */
+export interface N5RenderInputBlock {
+  blockId: number;
+  revision: number;
+  text: string;
+  box: BoundingBox;
+  style: TypesetServerStyle | null;
+}
+
+/** BlockViewModel 에 붙는 저장 입력(renderInput). 세션 local 편집값은 여기 두지 않고 위에 덮는다 */
+export type N5RenderBinding = Omit<N5RenderInputBlock, 'style' | 'blockId'> & { style: TypesetServerStyle };
 
 export interface PreviewViewModel {
   /** getPreviewContainerWidth()를 거친 값 — previewWidth 원본 필드를 컴포넌트에 노출하지 않는다 */
   containerWidth: number;
   scale: number;
   sections: PreviewSectionViewModel[];
+  /** 서버 렌더러(opaque — 파싱하지 않고 같은지만 본다). 키가 없으면 null */
+  renderer: { rendererId: string; bundleId: string | null } | null;
 }
 
 /**
@@ -412,10 +486,12 @@ export interface PreviewViewModel {
  * toBlockViewModel과 같은 이유로 조용히 기본값을 채우지 않고 던진다 — bucket을
  * 'include'로 잘못 기본값 처리하면 제외된 섹션이 일반 섹션처럼 보일 수 있다.
  */
-function toPreviewSectionViewModel(section: ApiPreviewSection): PreviewSectionViewModel {
+function toPreviewSectionViewModel(section: ApiPreviewSection, renderer: ApiReviewPreview['renderer'] | undefined): PreviewSectionViewModel {
   if (section.id == null) throw new Error('N5 Adapter: PreviewSection.id가 없습니다');
   if (section.sourceImageId == null) throw new Error('N5 Adapter: PreviewSection.sourceImageId가 없습니다');
   if (section.bucket == null) throw new Error('N5 Adapter: PreviewSection.bucket이 없습니다');
+  const input = resolvePreviewInputState(section);
+  const renderInput = input.kind === 'ready' ? section.renderInput : null;
 
   return {
     id: section.id,
@@ -427,20 +503,110 @@ function toPreviewSectionViewModel(section: ApiPreviewSection): PreviewSectionVi
     height: section.height ?? 0,
     displayTop: section.displayTop ?? 0,
     originalUrl: section.originalUrl ?? null,
+    renderedUrl: section.renderedUrl ?? null,
     render: resolveSectionRenderState(section),
     badges: toSignalBadges(section.signals),
+    revision: typeof section.revision === 'number' ? section.revision : null,
+    input,
+    renderState: resolvePreviewRenderState(section, renderer, input.kind),
+    background: renderInput
+      ? {
+          url: renderInput.section.background.url,
+          source: renderInput.section.background.source,
+          sha256: renderInput.section.background.sha256 ?? null,
+        }
+      : null,
+    renderBlocks: (renderInput?.blocks ?? []).map((block) => ({
+      blockId: block.blockId,
+      revision: block.revision,
+      text: block.text,
+      box: apiBboxToBoundingBox(block.box),
+      style: toTypesetServerStyle(block.style),
+    })),
   };
 }
 
 export function toPreviewViewModel(preview: ApiReviewPreview): PreviewViewModel {
+  const renderer = 'renderer' in preview && preview.renderer ? preview.renderer : undefined;
   return {
     containerWidth: getPreviewContainerWidth(preview),
     scale: preview.scale ?? 1,
+    renderer: renderer ? { rendererId: renderer.rendererId, bundleId: renderer.bundleId ?? null } : null,
     sections: (preview.sections ?? [])
-      .map(toPreviewSectionViewModel)
+      .map((section) => toPreviewSectionViewModel(section, renderer))
       // job 전체 표시 순서 = sectionOrder 오름차순 (buildSectionSlices의 기존 규칙과 동일)
       .sort((a, b) => a.sectionOrder - b.sectionOrder),
   };
+}
+
+/** 섹션별 표(/blocks)·뷰어(/preview) 입력 일치 */
+export interface SectionInputSync {
+  a: SectionFingerprintA;
+  match: FingerprintMatch;
+  /** renderInput 블록 style 이 모두 계약 형식인지. 아니면 그 섹션은 HTML 조판을 만들지 않는다 */
+  stylesValid: boolean;
+  /** 같은 저장 입력으로 연결했는지(정상 입력 + A=B + style 정상) */
+  bound: boolean;
+}
+
+/**
+ * 지문 A(/blocks)와 B(/preview)가 같은 섹션만 renderInput 을 블록에 연결한다(textAlign·서버 style·적용 박스).
+ * 같은 섹션의 A 가 서로 다르면 inconsistent, null 은 비교하지 않는다 — 어느 쪽도 하나를 골라 억지로 잇지 않는다.
+ */
+export function syncPreviewWithBlocks(
+  blocks: BlockViewModel[],
+  preview: PreviewViewModel,
+): { blocks: BlockViewModel[]; syncBySection: Map<number, SectionInputSync> } {
+  const fingerprintsBySection = new Map<number, (string | null)[]>();
+  for (const block of blocks) {
+    const list = fingerprintsBySection.get(block.sectionId);
+    if (list) list.push(block.sectionInputFingerprint);
+    else fingerprintsBySection.set(block.sectionId, [block.sectionInputFingerprint]);
+  }
+  const syncBySection = new Map<number, SectionInputSync>();
+  const bindings = new Map<number, N5RenderBinding>();
+  for (const section of preview.sections) {
+    const a = deriveSectionFingerprintA(fingerprintsBySection.get(section.id) ?? []);
+    const match = compareFingerprintsAB(a, section.input.fingerprint);
+    const stylesValid = section.renderBlocks.every((block) => block.style !== null);
+    const bound = section.input.kind === 'ready' && match === 'match' && stylesValid;
+    syncBySection.set(section.id, { a, match, stylesValid, bound });
+    if (!bound) continue;
+    for (const { blockId, revision, text, box, style } of section.renderBlocks) {
+      if (style) bindings.set(blockId, { revision, text, box, style });
+    }
+  }
+  const sectionById = new Map(preview.sections.map((section) => [section.id, section]));
+  return {
+    blocks: blocks.map((block) => {
+      const binding = bindings.get(block.id);
+      const serverOverflow = getServerOverflow(sectionById.get(block.sectionId), block.id);
+      return binding ? { ...block, renderBinding: binding, textAlign: binding.style.align, serverOverflow } : { ...block, serverOverflow };
+    }),
+    syncBySection,
+  };
+}
+
+/**
+ * 「번역 후」의 기준 박스 — 저장 입력(renderInput 적용 박스)이 있으면 그것, 없으면 원본 bbox. 세션 초안은 호출부가 위에 덮는다.
+ */
+export function getTranslatedBaseBox(block: Pick<BlockViewModel, 'bbox' | 'renderBinding'>): BoundingBox | null {
+  return block.renderBinding?.box ?? block.bbox;
+}
+
+/** 세션 초안이 없을 때의 절대 글자 배율 — 저장 입력의 fontScale, 없으면 1 */
+export function getBaseFontScale(block: Pick<BlockViewModel, 'renderBinding'>): number {
+  return block.renderBinding?.style.fontScale ?? 1;
+}
+
+/**
+ * 서버 넘침 — 최신 결과(isCurrent=true)의 overflow 만 정본이다. 최신이 아니면 null(쓰지 않는다).
+ * 이번 계약 키가 없는(legacy) 섹션이면 'legacy' — 호출부가 기존 signal 기준 표시를 쓴다.
+ */
+export function getServerOverflow(section: Pick<PreviewSectionViewModel, 'renderState'> | undefined, blockId: number): boolean | null | 'legacy' {
+  if (!section || section.renderState.kind === 'invalid-contract') return 'legacy';
+  const map = section.renderState.overflowByBlockId;
+  return map ? map.get(blockId) === true : null;
 }
 
 /**
@@ -572,7 +738,10 @@ export function getRevisionConflictLatestBlock(error: ApiErrorInfo): ApiTextBloc
   return current as ApiTextBlock;
 }
 
-/** BlockPatchResponse에서 rerenderTaskId를 꺼낸다. 없으면 null(스펙상 optional). */
+/**
+ * BlockPatchResponse에서 rerenderTaskId를 꺼낸다(required · number|null). null 은 "이 요청이 새 task 를 만들지 않음"만 뜻한다 —
+ * 렌더 완료·no-op·실패를 뜻하지 않으며, 진행 중인 시도는 /preview render.attempt 로 따로 추적한다.
+ */
 export function getRerenderTaskId(response: ApiBlockPatchResponse): number | null {
   return response.rerenderTaskId ?? null;
 }

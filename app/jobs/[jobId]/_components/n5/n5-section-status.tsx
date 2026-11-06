@@ -130,6 +130,13 @@ function SectionStatusRows({
           <StatusTag tone="neutral">{status.warningLabel}</StatusTag>
         </div>
       )}
+      {/* 미리보기 안내(최신 아님·없음·입력 오류·다시 불러오는 중) — 기존 중립 태그 행을 그대로 쓴다(Figma 에 이 문구 표본은 없다).
+          입력 오류 원래 코드는 화면 문구가 아니라 data 속성으로만 남긴다 */}
+      {status.previewNotice && (
+        <div data-testid={`${testIdPrefix}-notice`} data-input-error-code={status.previewInputErrorCode ?? undefined} className="flex">
+          <StatusTag tone="neutral">{status.previewNotice}</StatusTag>
+        </div>
+      )}
     </>
   );
 }

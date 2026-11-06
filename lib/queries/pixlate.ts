@@ -296,12 +296,12 @@ export function usePatchN5BlockMutation(jobId: string) {
  * (요청 접수 전이거나 이미 종료됨). done/failed/cancelled에 도달하면 polling을
  * 멈춘다 — 호출부가 그 상태를 보고 blocks/preview invalidate 여부를 판단한다.
  */
-export function useN5TaskStatusQuery(jobId: string, taskId: number | null) {
-  return useQuery({
+export function n5TaskStatusQueryOptions(jobId: string, taskId: number | null) {
+  return {
     queryKey: pixlateKeys.n5Task(jobId, taskId),
     queryFn: () => getJobTasks(jobId),
     enabled: taskId != null,
-    refetchInterval: (query) => {
+    refetchInterval: (query: { state: { data?: Awaited<ReturnType<typeof getJobTasks>> } }) => {
       if (taskId == null) return false;
       const item = query.state.data?.items?.find((i) => i.taskId === taskId);
       if (!item) return 2000; // 아직 목록에 반영 전 — 계속 polling
@@ -309,7 +309,15 @@ export function useN5TaskStatusQuery(jobId: string, taskId: number | null) {
         ? false
         : 2000;
     },
-  });
+  } as const;
+}
+
+/**
+ * 같은 task 는 같은 query key 를 쓴다 — 저장 응답의 rerenderTaskId 와 /preview render.attempt.taskId 가 같은 번호면 polling 이
+ * 하나로 합쳐진다(use-n5-preview-sync.ts 도 이 옵션을 쓴다).
+ */
+export function useN5TaskStatusQuery(jobId: string, taskId: number | null) {
+  return useQuery(n5TaskStatusQueryOptions(jobId, taskId));
 }
 
 // ─────────────────────────────────────────────

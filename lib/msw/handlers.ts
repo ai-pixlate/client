@@ -34,6 +34,17 @@ import {
   n5ErrorRestoredSectionListItem,
 } from '@/lib/mock-api/n5-error-fixtures';
 import { isTypesetQaUrl } from '@/lib/n5/typeset-render-model';
+import {
+  MOCK_N5_PREPARING_SECTION_IDS,
+  MOCK_N5_RENDERER,
+  N5_PREVIEW_SCENARIO_SECTION_ID,
+  buildMockPreviewRenderFields,
+  buildMockRenderInput,
+  getMockPreviewScenarioState,
+  getN5PreviewScenario,
+  mockInputFingerprint,
+  type MockN5SectionRender,
+} from '@/lib/mock-api/n5-preview-render';
 import { mockLibraryCards } from '@/lib/mock-api/library-fixtures';
 import { mockMasterCountries, mockMasterLanguages } from '@/lib/mock-api/master-fixtures';
 import { mockMasterCategories } from '@/lib/mock-api/category-fixtures';
@@ -317,6 +328,91 @@ function getN5BlocksFromState(sectionId?: number, referrer = ''): ApiTextBlock[]
  */
 let n5TaskIdCounter = 90000;
 const n5TaskState = new Map<number, { blockId: number; pollCount: number }>();
+
+// ─────────────────────────────────────────────
+// N5 /preview 렌더 입력·시도·결과(server PR #108 계약 모양, lib/mock-api/n5-preview-render.ts)
+// 섹션마다 현재 시도(attempt)와 채택 결과(result)를 둔다. 블록 저장이 시도를 만들고, /tasks 의 그 task 가 끝나면 결과로 채택한다.
+// ─────────────────────────────────────────────
+
+/** 입력 준비 중 — 504 는 번역이 빈 블록(번역 재시도 대기)이 남아 있는 동안 준비 중이다 */
+function isMockSectionPreparing(sectionId: number): boolean {
+  if (!MOCK_N5_PREPARING_SECTION_IDS.has(sectionId)) return false;
+  return [...n5BlockState.values()].some((b) => b.sectionId === sectionId && b.sourceKo && !b.trans1);
+}
+
+function mockSectionFingerprint(section: { id: number; width: number; height: number }, referrer = ''): string {
+  return mockInputFingerprint(buildMockRenderInput(section, getN5BlocksFromState(undefined, referrer)));
+}
+
+const n5SectionRenderState = new Map<number, MockN5SectionRender>(
+  mockN5PreviewSections.map((section) => {
+    if (section.bucket === 'exclude' || isMockSectionPreparing(section.id) || section.renderedUrl == null) {
+      return [section.id, { result: null, attempt: null }];
+    }
+    const taskId = 81000 + section.id;
+    return [
+      section.id,
+      {
+        result: { taskId, inputFingerprint: '', rendererId: MOCK_N5_RENDERER.rendererId },
+        attempt: { taskId, status: 'done', errorCode: null, retryable: false },
+      },
+    ];
+  }),
+);
+
+/** 시도의 task 상태를 반영하고, 끝났으면 그때의 입력으로 결과를 채택한다 */
+function settleMockSectionRender(sectionId: number, referrer: string): MockN5SectionRender {
+  const render = n5SectionRenderState.get(sectionId) ?? { result: null, attempt: null };
+  const task = render.attempt ? n5TaskState.get(render.attempt.taskId) : undefined;
+  if (!render.attempt || !task || render.attempt.status === 'done' || render.attempt.status === 'failed') return render;
+  const block = n5BlockState.get(task.blockId);
+  const section = n5PreviewSectionState.find((s) => s.id === sectionId);
+  let next: MockN5SectionRender = render;
+  if (task.pollCount === 0) next = { ...render, attempt: { ...render.attempt, status: 'pending' } };
+  else if (task.pollCount < 2) next = { ...render, attempt: { ...render.attempt, status: 'running' } };
+  else if (block?.trans1?.includes('실패유도')) next = { ...render, attempt: { ...render.attempt, status: 'failed', errorCode: 'PREVIEW_FAILED', retryable: true } };
+  else if (section) {
+    next = {
+      attempt: { ...render.attempt, status: 'done' },
+      result: { taskId: render.attempt.taskId, inputFingerprint: mockSectionFingerprint(section, referrer), rendererId: MOCK_N5_RENDERER.rendererId },
+    };
+  }
+  n5SectionRenderState.set(sectionId, next);
+  return next;
+}
+
+/** /preview sections 와 같은 시점의 지문 — /blocks 의 sectionInputFingerprint(A)도 이 값을 쓴다 */
+function buildMockN5PreviewWithRender(referrer: string) {
+  const preview = buildMockN5Preview(n5PreviewSectionState);
+  const scenario = getN5PreviewScenario(referrer);
+  // 시나리오가 덮은 블록(겹침·signal 등)도 그 응답의 저장 입력으로 본다
+  const blocks = getN5BlocksFromState(undefined, referrer);
+  const errorScenario = isN5ErrorScenario(referrer);
+  const blockFingerprintBySection = new Map<number, string | null>();
+  const sections = preview.sections.map((section) => {
+    let render = settleMockSectionRender(section.id, referrer);
+    let preparing = isMockSectionPreparing(section.id);
+    let inputError: { code: string; blockIds: number[] } | null = null;
+    let blockFingerprint: string | undefined;
+    if (scenario && section.id === N5_PREVIEW_SCENARIO_SECTION_ID) {
+      ({ render, preparing, inputError, blockFingerprint } = { ...getMockPreviewScenarioState(scenario, render) });
+    }
+    // n5-errors — JOB-05 실패 item 과 같은 시도(501 실패·이전 결과 있음 / 504 진행 중 / 505 실패·결과 없음)
+    if (errorScenario && section.id === 501) render = { ...render, attempt: { taskId: 80001, status: 'failed', errorCode: 'MOCK_FAILED', retryable: true } };
+    if (errorScenario && section.id === 504) render = { ...render, attempt: { taskId: 80006, status: 'running', errorCode: null, retryable: false } };
+    if (errorScenario && section.id === 505) render = { result: null, attempt: { taskId: 80007, status: 'failed', errorCode: 'MOCK_FAILED', retryable: true } };
+    const fields = buildMockPreviewRenderFields(section, blocks, render, { preparing, inputError });
+    blockFingerprintBySection.set(section.id, blockFingerprint ?? fields.inputFingerprint);
+    return { ...section, ...fields, revision: 1 };
+  });
+  return { preview: { ...preview, renderer: MOCK_N5_RENDERER, sections }, blockFingerprintBySection };
+}
+
+/** /blocks 응답 블록 — 그 순간의 섹션 입력 지문(A)을 붙인다. 제외·입력 오류·준비 중 섹션은 null */
+function withSectionInputFingerprint(blocks: ApiTextBlock[], referrer: string): ApiTextBlock[] {
+  const { blockFingerprintBySection } = buildMockN5PreviewWithRender(referrer);
+  return blocks.map((block) => ({ ...block, sectionInputFingerprint: blockFingerprintBySection.get(block.sectionId as number) ?? null }));
+}
 
 
 function n5RevisionConflictResponse(current: ApiTextBlock) {
@@ -1132,23 +1228,18 @@ export const handlers = [
 
     const sectionIdParam = new URL(request.url).searchParams.get('sectionId');
     const sectionId = sectionIdParam != null ? Number(sectionIdParam) : undefined;
-    return HttpResponse.json(getN5BlocksFromState(sectionId, request.referrer));
+    return HttpResponse.json(withSectionInputFingerprint(getN5BlocksFromState(sectionId, request.referrer), request.referrer));
   }),
 
   http.get('/jobs/:jobId/preview', ({ params, request }) => {
     const jobId = params.jobId as string;
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
-    const preview = buildMockN5Preview(n5PreviewSectionState);
+    const { preview } = buildMockN5PreviewWithRender(request.referrer);
     if (isN5ErrorScenario(request.referrer)) {
       return HttpResponse.json({
         ...preview,
-        sections: preview.sections.map((s) =>
-          s.id === 502
-            ? { ...s, signals: [{ code: 'logo_match_failed', reason: '정품 로고 매칭에 실패했습니다' }] }
-            : s.id === 505
-              ? { ...s, renderedUrl: null } // 렌더링 실패 — JOB-05 item과 함께 본다
-              : s,
-        ),
+        // 505 렌더링 실패는 render.attempt(failed)·result=null 로 이미 덮었다 — JOB-05 item과 함께 본다
+        sections: preview.sections.map((s) => (s.id === 502 ? { ...s, signals: [{ code: 'logo_match_failed', reason: '정품 로고 매칭에 실패했습니다' }] } : s)),
       });
     }
     return HttpResponse.json(preview);
@@ -1178,6 +1269,17 @@ export const handlers = [
     if (body.revision !== current.revision) {
       return n5RevisionConflictResponse(current);
     }
+    // 처음 fixture 결과는 저장 직전 입력으로 고정한다 — 이후 입력이 바뀌면 최신이 아니다
+    {
+      const sectionBase = n5PreviewSectionState.find((s) => s.id === current.sectionId);
+      const before = n5SectionRenderState.get(current.sectionId as number);
+      if (sectionBase && before?.result?.inputFingerprint === '') {
+        n5SectionRenderState.set(current.sectionId as number, {
+          ...before,
+          result: { ...before.result, inputFingerprint: mockSectionFingerprint(sectionBase, request.referrer) },
+        });
+      }
+    }
 
     const updated: ApiTextBlock = {
       ...current,
@@ -1189,8 +1291,13 @@ export const handlers = [
 
     const rerenderTaskId = n5TaskIdCounter++;
     n5TaskState.set(rerenderTaskId, { blockId, pollCount: 0 });
+    // 저장이 섹션 미리보기 시도를 새로 만든다. 이전 성공 결과는 새 결과가 채택될 때까지 남는다
+    const sectionId = updated.sectionId as number;
+    const render = n5SectionRenderState.get(sectionId) ?? { result: null, attempt: null };
+    n5SectionRenderState.set(sectionId, { ...render, attempt: { taskId: rerenderTaskId, status: 'pending', errorCode: null, retryable: false } });
 
-    return HttpResponse.json({ block: updated, rerenderTaskId });
+    const [withFingerprint] = withSectionInputFingerprint([updated], request.referrer);
+    return HttpResponse.json({ block: withFingerprint, rerenderTaskId });
   }),
 
   // ──────────────────────────────────────────
