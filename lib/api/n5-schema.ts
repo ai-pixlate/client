@@ -26,6 +26,17 @@ export type ApiReviewPreview = components['schemas']['ReviewPreview'];
 /** ReviewPreview.sections는 스펙에서 별도 이름 없는 inline object라 인덱스 접근으로 뽑아낸다 */
 export type ApiPreviewSection = NonNullable<ApiReviewPreview['sections']>[number];
 
+/** /preview 렌더 입력·시도·결과(PR #108) — 입력 상태와 렌더 상태는 따로 판단한다(lib/n5/preview-state.ts) */
+export type ApiPreviewRenderer = components['schemas']['PreviewRenderer'];
+export type ApiPreviewRenderInput = components['schemas']['PreviewRenderInput'];
+export type ApiPreviewRenderBlock = components['schemas']['PreviewRenderBlock'];
+export type ApiPreviewRenderStyle = ApiPreviewRenderBlock['style'];
+export type ApiPreviewInputError = components['schemas']['PreviewInputError'];
+export type ApiPreviewRender = components['schemas']['PreviewRender'];
+export type ApiPreviewRenderAttempt = components['schemas']['PreviewRenderAttempt'];
+export type ApiPreviewRenderResult = components['schemas']['PreviewRenderResult'];
+export type ApiRenderStatus = components['schemas']['RenderStatus'];
+
 export type ApiBlockPatch = components['schemas']['BlockPatch'];
 export type ApiBlockPatchResponse = components['schemas']['BlockPatchResponse'];
 

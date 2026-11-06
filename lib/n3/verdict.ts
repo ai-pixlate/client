@@ -89,10 +89,33 @@ export const VERDICT_BADGE_LABELS: Record<VerdictType, string> = {
   regulatory: '규제 위반',
   regulatory_replaceable: '규제 표현',
   regulatory_conditional: '조건부 규제',
-  local_irrelevant: '현지 무의미',
-  needs_fix: '현지 기준 수정 필요',
+  // 표시 문구만 PRD v3.5 이름(must_fix「현지 수정 필수」· needs_check「현지 확인 필요」)을 따른다.
+  // 코드값(local_irrelevant · needs_fix)은 DB·계약 이름 그대로 둔다(값 이관은 서버 스키마 배치 몫).
+  local_irrelevant: '현지 수정 필수',
+  needs_fix: '현지 확인 필요',
   channel_policy: '채널 정책',
 };
+
+/**
+ * N3 현재(9월) 화면에 보이는 판정 5종. channel_policy(채널 정책)는 12월 기능이라 뺀다.
+ * VerdictType·라벨 map에서는 지우지 않는다 — N3 화면 표시에서만 거른다(N5·12월 화면 영향 없음).
+ */
+export const N3_VISIBLE_VERDICT_TYPES = [
+  'regulatory',
+  'regulatory_replaceable',
+  'regulatory_conditional',
+  'local_irrelevant',
+  'needs_fix',
+] as const satisfies readonly VerdictType[];
+
+const N3_VISIBLE_VERDICT_TYPE_SET: ReadonlySet<string> = new Set(N3_VISIBLE_VERDICT_TYPES);
+
+/** 서버 verdicts 중 N3 현재 화면에 그릴 것만 고른다(순서 유지). verdictType 없는 행도 뺀다. */
+export function filterN3VisibleVerdicts<T extends { verdictType?: VerdictType | null }>(
+  verdicts: readonly T[] | null | undefined,
+): T[] {
+  return (verdicts ?? []).filter((v) => v.verdictType != null && N3_VISIBLE_VERDICT_TYPE_SET.has(v.verdictType));
+}
 
 /** verdictType -> N3 배지 문구 */
 export function getN3VerdictBadgeLabel(type: VerdictType): string {

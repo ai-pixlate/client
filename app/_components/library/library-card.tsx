@@ -129,8 +129,8 @@ export function LibraryCard({
  *   내부 세로 gap 20: Icon Button Circle 40(Plus 16) / 제목(16 Medium, -0.48)·보조(12 Regular, -0.12) gap 8 /
  *   Button Primary MD 107×37(px 20, label px 8, 14 Medium, -0.42)
  *
- * N1(/jobs/new)은 brandId 쿼리가 있어야 제출할 수 있는데, M1에서 넘길 brandId 계약이 없어
- * 쿼리 없이 연결한다(임의 brandId를 만들지 않는다).
+ * M1에서 넘길 brandId 계약이 없어 쿼리 없이 연결한다(임의 brandId를 만들지 않는다).
+ * Mock 환경은 N1이 기존 fixture로 보완하고, 실서버에서는 N1이 브랜드 정보 없음을 안내한다.
  */
 export function LibraryAddCard() {
   return (
