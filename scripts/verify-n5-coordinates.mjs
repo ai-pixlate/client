@@ -11,6 +11,10 @@ import {
   getFontScaleToolbarLeft,
   FONT_HANDLE_CENTER_TOP_PX,
   overlapsFontHandleHitArea,
+  COMPACT_RESIZE_HEIGHT_PX,
+  COMPACT_RIGHT_RESIZE_HALF_PX,
+  isCompactResizeHeight,
+  getCompactRightResizeZone,
   screenDeltaToBboxDelta,
   computeSectionDisplayTops,
   getBlockDisplayRect,
@@ -323,6 +327,29 @@ console.log('\n[글자크기 손잡이] 위치는 고정, 누르는 영역만 �
   check('높이 66의 e(33)는 경계라 겹치지 않는다', !overlapsFontHandleHitArea(33));
   check('위 모서리 ne(0)는 겹치지 않는다', !overlapsFontHandleHitArea(0));
   check('높이 20의 se(20)는 겹친다', overlapsFontHandleHitArea(20));
+}
+
+console.log('\n[compact resize] 보이는 높이 48 미만은 오른쪽 변 전체가 가로 resize');
+{
+  check('경계값은 48', COMPACT_RESIZE_HEIGHT_PX === 48);
+  for (const h of [60, 50, 48]) check(`보이는 높이 ${h}은 기존 방식`, !isCompactResizeHeight(h));
+  for (const h of [47.99, 47.5, 47, 36, 24, 14]) check(`보이는 높이 ${h}은 compact`, isCompactResizeHeight(h));
+  // 같은 48이 계산 경로에 따라 47.99999…가 되어도 흔들리지 않는다
+  check('부동소수 오차로 47.999999999가 된 48은 기존 방식', !isCompactResizeHeight(48 - 1e-9));
+  check('bbox 높이 100 × scale 0.5 × zoom 0.8 = 40은 compact', isCompactResizeHeight(100 * 0.5 * 0.8));
+  check('같은 block을 zoom 1.2로 보면(60) 기존 방식', !isCompactResizeHeight(100 * 0.5 * 1.2));
+
+  const rect = { left: 100, top: 50, width: 200, height: 14 };
+  const z1 = getCompactRightResizeZone(rect, 1);
+  const half = COMPACT_RIGHT_RESIZE_HALF_PX;
+  check('zoom 1 — 오른쪽 변 중심 ±8', z1.left === 300 - half && z1.width === half * 2, JSON.stringify(z1));
+  check('zoom 1 — 위·아래로 8씩 넓혀 ne·se 자리를 덮는다', z1.top === 50 - half && z1.height === 14 + half * 2, JSON.stringify(z1));
+  const z2 = getCompactRightResizeZone(rect, 2);
+  check('zoom 2 — 화면 폭은 그대로(canvas 폭은 절반)', z2.width * 2 === half * 2 && z2.left === 300 - half / 2, JSON.stringify(z2));
+  check('zoom 2 — 세로는 block 높이 + 화면 8씩', z2.top === 50 - half / 2 && z2.height === 14 + half, JSON.stringify(z2));
+  // 36 높이 — font(18)와 e(18) 중심이 같아도 font는 보이는 12만 받으므로, 영역 안 font 바깥(18±6 밖)이 남는다
+  const z36 = getCompactRightResizeZone({ left: 0, top: 0, width: 100, height: 36 }, 1);
+  check('36 — font 위쪽(0~12)과 아래쪽(24~36)이 resize 영역 안', z36.top <= 0 && z36.top + z36.height >= 36);
 }
 
 console.log(`\n결과: PASS ${pass} / FAIL ${fail}\n`);
