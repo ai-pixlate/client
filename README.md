@@ -80,6 +80,8 @@ Secret(JWT, access token, password 등)은 절대 Git에 커밋하지 않습니�
 | `npx playwright test e2e/processing-error.spec.ts --project=chromium` | N2·N4 전체 실패 화면 검증 — 표시 조건, 부분 실패 구분, 진행률 정지, 미연결 [다시 시도]·[중단], S0 취소 (Chromium, dev 서버 필요) |
 | `npm run verify:library-adapter` | M1 보관함 Adapter(LibraryCard → 카드 ViewModel) 자동 검증 (브라우저 불필요) |
 | `npm run verify:library-view` | M1 보관함 화면 로직(검색·국가 필터·최신순·선택·날짜 포맷) 자동 검증 (브라우저 불필요) |
+| `npm run verify:m2-form` | M2 브랜드 정보 화면 로직(dirty 판정·필수값·변경 항목 열거·로고 파일 형식) 자동 검증 (브라우저 불필요) |
+| `npx playwright test e2e/m2-brand.spec.ts --project=chromium` | M2 브랜드 정보 화면(`/brand`) 검증 — API 없이 Mock + local state로만 동작하며 서버 저장은 없다 (Chromium, dev 서버 필요) |
 | `npm run verify:msw-flag` | `isApiMockingEnabled()`(MSW on/off SSOT)가 `NEXT_PUBLIC_API_MOCKING` 값 조합에서 `NODE_ENV`와 무관하게 정확히 동작하는지 자동 검증 (브라우저 불필요) |
 | `npm run verify:displayed-progress` | N2·N4 처리 화면 표시 %(관측 단계는 상한만 염·점프·감소 없음·처리 중 100 없음·실패 시 멈춤·완료 응답 뒤 100 표시) 순수 계산 자동 검증 (브라우저 불필요) |
 | `npm run verify:n1-category` | N1 카테고리 트리(GET /master/categories → 트리, 하위 없는 항목만 leaf)와 [다음] 진행 조건 순수 함수 자동 검증 (브라우저 불필요) |
