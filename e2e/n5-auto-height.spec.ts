@@ -305,7 +305,7 @@ test.describe('일반 N5(renderInput 조판 화면)', () => {
     await expect(page.getByTestId('n5-qa-badge')).toHaveCount(0);
     // QA 주소가 아니어도 서버 renderInput 으로 그린다 — 글자가 구워진 renderedUrl 이 아니라 글자 없는 배경 위다
     const slice = page.getByTestId('n5-slice-translated-501');
-    await expect(slice).toHaveAttribute('data-preview-display', 'typeset');
+    await expect(slice).toHaveAttribute('data-preview-display', 'local-typeset');
     await expect(slice).toHaveCSS('background-image', /501-background/);
     await expect(page.locator(`[data-typeset-render="${BLOCK}"]`)).toContainText('high-concentration');
     await page.getByTestId(`n5-block-pin-${BLOCK}`).click();
@@ -363,7 +363,7 @@ test.describe('일반 N5(renderInput 조판 화면)', () => {
     await expect.poll(async () => (await boxOf(page)).height).toBeGreaterThan(scaled.height);
     expect(writes).toEqual([`PATCH /jobs/${MOCK_JOB_ID}/blocks/${BLOCK}`]);
     // 저장한 글로 서버 미리보기가 다시 만들어지면 다시 조판 화면이 된다(그동안은 이전 결과·최신 아님)
-    await expect(slice).toHaveAttribute('data-preview-display', 'typeset', { timeout: 15_000 });
+    await expect(slice).toHaveAttribute('data-preview-display', 'local-typeset', { timeout: 15_000 });
     await page.screenshot({ path: test.info().outputPath('normal-n5-auto-height.png') });
   });
 });

@@ -9,9 +9,18 @@ import {
   resolvePreviewRenderState,
   resolvePreviewSectionDisplay,
   resolvePreviewSectionLabels,
+  resolvePreviewSectionSemantic,
   toTypesetServerStyle,
 } from '../lib/n5/preview-state.ts';
-import { getServerOverflow, syncPreviewWithBlocks, toBlockViewModel, toPreviewViewModel } from '../lib/n5/adapter.ts';
+import { N5_PREVIEW_NOTICE_COPY, N5_PREVIEW_PROGRESS_COPY } from '../lib/n5/preview-copy.ts';
+import {
+  buildSectionStatus,
+  getServerOverflow,
+  syncPreviewWithBlocks,
+  toBlockViewModel,
+  toPreviewStatusInput,
+  toPreviewViewModel,
+} from '../lib/n5/adapter.ts';
 import { resolveServerFontPx, typesetBlockStyle } from '../lib/n5/typeset-rules.ts';
 
 let pass = 0;
@@ -113,65 +122,133 @@ console.log('\n[렌더 상태] attempt · result · isCurrent');
   check('rendererId 는 파싱하지 않는다 — 같은 문자열이면 같은 렌더러', renderOf(section({ render: { attempt: null, result: result(FP_OLD, null), isCurrent: false } })).staleReason === 'input-changed');
 }
 
-console.log('\n[입력 준비 중 ≠ 렌더 실패] 두 사실을 함께 가진다');
-{
-  const s = section({ renderInput: null, inputFingerprint: null, render: { attempt: attempt('failed', 9, true), result: null, isCurrent: false } });
-  const input = resolvePreviewInputState(s);
-  const render = renderOf(s);
-  check('입력 = preparing', input.kind === 'preparing');
-  check('렌더 = failed', render.kind === 'failed');
-  const labels = resolvePreviewSectionLabels(input, render, 'incomparable');
-  check('「렌더 대기 중」으로 뭉개지 않고 실패로 표시', labels.renderFailed === true && labels.progressLabel === null);
-  check('입력 오류 문구는 내지 않는다', labels.notice === null);
-  check('화면 = 원본(결과 없음)', resolvePreviewSectionDisplay({ input, render, match: 'incomparable', canTypeset: true }).kind === 'original');
-}
+const semOf = (s, match = 'match') => resolvePreviewSectionSemantic(resolvePreviewInputState(s), renderOf(s), match);
+const labelsOf = (s, match = 'match') => resolvePreviewSectionLabels(semOf(s, match));
+const disp = (s, match = 'match', canTypeset = true) =>
+  resolvePreviewSectionDisplay({ input: resolvePreviewInputState(s), render: renderOf(s), match, canTypeset });
+const PREP = { renderInput: null, inputFingerprint: null };
+const ERR = { renderInput: null, inputFingerprint: null, inputError: { code: 'STYLE_RESULT_INVALID', blockIds: [11] } };
+const prev = () => result(FP_OLD, null);
 
-console.log('\n[입력 오류] 렌더 실패와 다른 상태 · 다시 시도 대상 아님');
+console.log('\n[표시 소스 · 의미 상태] 시나리오 A–J (N5 「번역 후」 뷰어 — N6 최종 렌더와 무관)');
 {
-  const s = section({ renderInput: null, inputFingerprint: null, inputError: { code: 'RENDER_INPUT_INVALID', blockIds: [] }, render: { attempt: null, result: null, isCurrent: false } });
-  const input = resolvePreviewInputState(s);
-  const render = renderOf(s);
-  const labels = resolvePreviewSectionLabels(input, render, 'incomparable');
-  check('입력 오류 안내', labels.notice === '미리보기 입력 오류');
-  check('렌더 실패가 아니다(다시 시도 행 없음)', labels.renderFailed === false);
-  const withPrevious = section({ renderInput: null, inputFingerprint: null, inputError: { code: 'X', blockIds: [] }, render: { attempt: null, result: result(FP_OLD, null), isCurrent: false } });
-  const d = resolvePreviewSectionDisplay({ input: resolvePreviewInputState(withPrevious), render: renderOf(withPrevious), match: 'incomparable', canTypeset: true });
-  check('이전 결과가 있으면 이미지를 보이되 최신이 아니다', d.kind === 'image' && d.isLatest === false);
-}
+  // A 최신
+  const a = section();
+  check('A current → local-typeset(배경 + HTML)', disp(a) === 'local-typeset');
+  check('A 의미 상태 current · 문구 없음', semOf(a).render === 'current' && labelsOf(a).progressLabel === null && labelsOf(a).notice === null);
 
-console.log('\n[표시 규칙] 결과가 없을 때 · 이전 결과 · 최신 결과');
-{
-  const disp = (s, match = 'match', canTypeset = true) =>
-    resolvePreviewSectionDisplay({ input: resolvePreviewInputState(s), render: renderOf(s), match, canTypeset });
-  check('정상·A=B·최신·그릴 수 있음 → HTML 조판', disp(section()).kind === 'typeset');
-  check('A≠B 면 조판하지 않고 최신 결과 이미지', disp(section(), 'mismatch').kind === 'image' && disp(section(), 'mismatch').isLatest === true);
-  check('A·B 비교 불가(null)도 조판하지 않는다', disp(section(), 'incomparable').kind === 'image');
-  check('글꼴 미준비 등으로 그릴 수 없으면 서버 이미지', disp(section(), 'match', false).kind === 'image');
-  check('pending·결과 없음 → 빈 면 + 대기 문구', disp(section({ render: { attempt: attempt('pending'), result: null, isCurrent: false } })).kind === 'pending');
-  check('failed·결과 없음 → 원본', disp(section({ render: { attempt: attempt('failed'), result: null, isCurrent: false } })).kind === 'original');
-  check('시도 없음·결과 없음 → 원본', disp(section({ render: { attempt: null, result: null, isCurrent: false } })).kind === 'original');
-  const stale = disp(section({ render: { attempt: attempt('running', 8), result: result(FP_OLD, null), isCurrent: false } }));
-  check('진행 중 + 이전 결과 → 이전 이미지(최신 아님)', stale.kind === 'image' && stale.isLatest === false);
-  check('입력 준비 중 + 이전 결과 → 이전 이미지', disp(section({ renderInput: null, inputFingerprint: null, render: { attempt: null, result: result(FP_OLD, null), isCurrent: false } })).kind === 'image');
-  const prep = section({ renderInput: null, inputFingerprint: null, render: { attempt: null, result: null, isCurrent: false } });
-  check('입력 준비 중 + 결과 없음 → 원본', disp(prep).kind === 'original');
-  check('… 문구는 렌더 대기 중', resolvePreviewSectionLabels(resolvePreviewInputState(prep), renderOf(prep), 'incomparable').progressLabel === '렌더 대기 중');
+  // B N4 최초 생성 실패 — 이전 결과 없음 + 실패
+  const b = section({ renderedUrl: null, render: { attempt: attempt('failed', 8, true), result: null, isCurrent: false } });
+  check('B 최초 실패 → original-image(HTML 없음)', disp(b) === 'original-image');
+  check('B 의미 상태 failed(update-failed 아님)', semOf(b).render === 'failed');
+  check('B 기존 「실행 실패」 행 하나 · 진행 문구 없음', labelsOf(b).renderFailed === true && labelsOf(b).progressLabel === null);
+  check('B 다시 시도 대상 = attempt.taskId·retryable', semOf(b).retry?.taskId === 8 && semOf(b).retry?.retryable === true);
+
+  // C N5 수정 후 재렌더 진행 + 이전 결과
+  for (const status of ['pending', 'running']) {
+    const c = section({ render: { attempt: attempt(status, 8), result: prev(), isCurrent: false } });
+    check(`C 재렌더 ${status} + 이전 결과 → previous-rendered-image`, disp(c) === 'previous-rendered-image');
+    check(`C 의미 상태 updating(${status})`, semOf(c).render === 'updating' && semOf(c).attemptStatus === status && semOf(c).retry === null);
+  }
+  check('C A=B·그릴 수 있어도 새 번역문 HTML 을 얹지 않는다', disp(section({ render: { attempt: attempt('running', 8), result: prev(), isCurrent: false } }), 'match', true) !== 'local-typeset');
+
+  // D N5 수정 후 재렌더 실패 + 이전 결과
+  const d = section({ render: { attempt: attempt('failed', 8, true), result: prev(), isCurrent: false } });
+  check('D 재렌더 실패 + 이전 결과 → previous-rendered-image', disp(d) === 'previous-rendered-image');
+  check('D 의미 상태 update-failed(failed 와 구분)', semOf(d).render === 'update-failed');
+  check('D retry 의미 = taskId·retryable', semOf(d).retry?.taskId === 8 && semOf(d).retry?.retryable === true);
+  check('D 실패 행 유지', labelsOf(d).renderFailed === true);
+  check('D retryable=false 도 그대로 전달(버튼 활성 여부는 서버 값)', semOf(section({ render: { attempt: attempt('failed', 8, false), result: prev(), isCurrent: false } })).retry?.retryable === false);
+
+  // E 이전 결과 없는 pending/running
+  for (const status of ['pending', 'running']) {
+    const e = section({ renderedUrl: null, render: { attempt: attempt(status, 8), result: null, isCurrent: false } });
+    check(`E ${status} · 이전 결과 없음 → original-image`, disp(e) === 'original-image');
+    check(`E 의미 상태 ${status === 'pending' ? 'waiting' : 'running'}`, semOf(e).render === (status === 'pending' ? 'waiting' : 'running'));
+  }
+
+  // F 입력 오류 — 렌더 실패와 별개
+  const f = section({ ...ERR, render: { attempt: null, result: null, isCurrent: false } });
+  check('F 입력 오류 → input-error · render missing(실패 아님)', semOf(f, 'incomparable').input === 'input-error' && semOf(f, 'incomparable').render === 'missing');
+  check('F 실패 행·다시 시도 없음', labelsOf(f, 'incomparable').renderFailed === false && semOf(f, 'incomparable').retry === null);
+  check('F 결과 없으면 original-image', disp(f, 'incomparable') === 'original-image');
+  check('F 이전 결과가 있으면 그대로(HTML 로 숨기지 않는다)', disp(section({ ...ERR, render: { attempt: null, result: prev(), isCurrent: false } }), 'incomparable') === 'previous-rendered-image');
+  const fFailed = section({ ...ERR, render: { attempt: attempt('failed', 8, true), result: null, isCurrent: false } });
+  check('F 입력 오류 + 시도 실패 — 두 사실을 함께 가진다', semOf(fFailed, 'incomparable').input === 'input-error' && semOf(fFailed, 'incomparable').render === 'failed');
+
+  // G 결과 없음 + 시도 null/done
+  for (const att of [null, attempt('done', 8)]) {
+    const g = section({ renderedUrl: null, render: { attempt: att, result: null, isCurrent: false } });
+    const label = att ? 'done' : 'null';
+    check(`G attempt ${label} · 결과 없음 → missing(failed 아님)`, semOf(g).render === 'missing' && labelsOf(g).renderFailed === false);
+    check(`G attempt ${label} → original-image · 미리보기 없음`, disp(g) === 'original-image' && labelsOf(g).notice === '미리보기 없음');
+  }
+
+  // H 입력 준비 중 + 시도 실패
+  const h = section({ ...PREP, render: { attempt: attempt('failed', 9, true), result: null, isCurrent: false } });
+  check('H preparing + failed — 두 상태를 함께', semOf(h, 'incomparable').input === 'preparing' && semOf(h, 'incomparable').render === 'failed');
+  check('H 「렌더 대기 중」으로 뭉개지 않는다', labelsOf(h, 'incomparable').progressLabel === null && labelsOf(h, 'incomparable').renderFailed === true);
+  check('H 화면 original-image', disp(h, 'incomparable') === 'original-image');
+  const hPrev = section({ ...PREP, render: { attempt: attempt('failed', 9, true), result: prev(), isCurrent: false } });
+  check('H preparing + 재렌더 실패 + 이전 결과 → update-failed · 이전 이미지', semOf(hPrev, 'incomparable').render === 'update-failed' && disp(hPrev, 'incomparable') === 'previous-rendered-image');
+  const hOnly = section({ ...PREP, render: { attempt: null, result: null, isCurrent: false } });
+  check('renderInput null 만으로 waiting 이 아니다 — render 는 missing, input 이 preparing', semOf(hOnly, 'incomparable').render === 'missing' && semOf(hOnly, 'incomparable').input === 'preparing');
+  check('… 임시 진행 문구는 입력 준비(preparing) 키', labelsOf(hOnly, 'incomparable').progressLabel === '렌더 대기 중');
+
+  // I 이전 결과(stale) — 넘침 없음
+  const i = section({ render: { attempt: null, result: result(FP_OLD, { 11: true }), isCurrent: false } });
+  check('I stale → previous-rendered-image · overflow 없음', disp(i) === 'previous-rendered-image' && renderOf(i).overflowByBlockId === null);
+  check('I 의미 상태 stale · 최신 미리보기 아님', semOf(i).render === 'stale' && labelsOf(i).notice === '최신 미리보기 아님');
+  check('I 진행 중 이전 결과도 overflow 없음', renderOf(section({ render: { attempt: attempt('running', 8), result: result(FP_OLD, { 11: true }), isCurrent: false } })).overflowByBlockId === null);
+
+  // J 최신 — 서버 넘침
+  check('J current → result.overflow 를 넘침 정본으로', renderOf(section()).overflowByBlockId?.get(11) === true);
+
+  // 지문 A≠B
+  const syncing = semOf(section(), 'mismatch');
+  check('A≠B → syncing · 최신 이미지(조판 안 함)', syncing.syncing === true && disp(section(), 'mismatch') === 'current-rendered-image');
+  check('A≠B 임시 문구', labelsOf(section(), 'mismatch').notice === '최신 내용을 불러오는 중');
+  check('inconsistent 도 syncing', semOf(section(), 'inconsistent').syncing === true);
+  check('null 비교 불가는 syncing 아님(조판도 안 함)', semOf(section(), 'incomparable').syncing === false && disp(section(), 'incomparable') === 'current-rendered-image');
+  check('글꼴 미준비 → current-rendered-image', disp(section(), 'match', false) === 'current-rendered-image');
+
+  // renderedUrl=null 만으로 실패가 아니다
+  check('renderedUrl=null · 결과·시도 없음 → failed 가 아니다', semOf(section({ renderedUrl: null, render: { attempt: null, result: null, isCurrent: false } })).render !== 'failed');
+
+  // 제외·계약 밖
   const legacy = section();
   delete legacy.render;
-  check('키가 빠진 응답은 기존 표시(legacy)', disp(legacy).kind === 'legacy');
+  check('키가 빠진 응답은 legacy · 의미 상태 null', disp(legacy) === 'legacy' && semOf(legacy) === null && labelsOf(legacy).notice === null);
+  const excluded = section({ bucket: 'exclude', excludedStage: 'N5', render: null, renderInput: null, inputFingerprint: null });
+  check('제외 섹션 → excluded · 의미 상태 null', disp(excluded) === 'excluded' && semOf(excluded) === null);
 }
 
-console.log('\n[문구] 진행 · 안내');
+console.log('\n[문구 분리] 판정과 화면 문구가 1:1 로 묶이지 않는다');
 {
-  const labels = (s, match = 'match') => resolvePreviewSectionLabels(resolvePreviewInputState(s), renderOf(s), match);
-  check('최신 → 문구 없음', labels(section()).progressLabel === null && labels(section()).notice === null);
-  check('running + 이전 결과 → 렌더링 중 · 최신 미리보기 아님', (() => {
-    const l = labels(section({ render: { attempt: attempt('running', 8), result: result(FP_OLD, null), isCurrent: false } }));
-    return l.progressLabel === '렌더링 중' && l.notice === '최신 미리보기 아님';
-  })());
-  check('pending → 렌더 대기 중', labels(section({ render: { attempt: attempt('pending'), result: null, isCurrent: false } })).progressLabel === '렌더 대기 중');
-  check('missing → 미리보기 없음', labels(section({ render: { attempt: null, result: null, isCurrent: false } })).notice === '미리보기 없음');
-  check('A≠B → 최신 내용을 불러오는 중', labels(section(), 'mismatch').notice === '최신 내용을 불러오는 중');
+  const keys = new Set(Object.keys(N5_PREVIEW_NOTICE_COPY).concat(Object.keys(N5_PREVIEW_PROGRESS_COPY)));
+  check('문구 표는 preview-copy.ts 한 곳', ['input-error', 'syncing', 'previous-result', 'missing', 'waiting', 'running', 'preparing'].every((k) => keys.has(k)));
+  check('stale·updating·update-failed 가 같은 임시 안내를 공유(의미 상태는 다르다)', [
+    section({ render: { attempt: null, result: prev(), isCurrent: false } }),
+    section({ render: { attempt: attempt('running', 8), result: prev(), isCurrent: false } }),
+    section({ render: { attempt: attempt('failed', 8), result: prev(), isCurrent: false } }),
+  ].every((x) => labelsOf(x).notice === N5_PREVIEW_NOTICE_COPY['previous-result']));
+  check('running + 이전 결과 → 렌더링 중', labelsOf(section({ render: { attempt: attempt('running', 8), result: prev(), isCurrent: false } })).progressLabel === '렌더링 중');
+  check('pending + 이전 결과 → 렌더 대기 중', labelsOf(section({ render: { attempt: attempt('pending', 8), result: prev(), isCurrent: false } })).progressLabel === '렌더 대기 중');
+}
+
+console.log('\n[ViewModel] buildSectionStatus 에 의미 상태·다시 시도 대상');
+{
+  const vmOf = (s, match = 'match') => {
+    const pv = toPreviewViewModel({ maxOriginalWidth: 1000, renderer: RENDERER, sections: [s] }).sections[0];
+    return buildSectionStatus(1, [], [], undefined, pv.render.status, toPreviewStatusInput(pv, match));
+  };
+  const d = vmOf(section({ render: { attempt: attempt('failed', 8, true), result: prev(), isCurrent: false } }));
+  check('update-failed → previewState · renderRetry(taskId 8)', d.previewState?.render === 'update-failed' && d.renderRetry?.taskId === 8 && d.failedStages.includes('render'));
+  const f = vmOf(section({ ...ERR, render: { attempt: null, result: null, isCurrent: false } }), 'incomparable');
+  check('input-error → 실패 행·retry 없음', f.previewState?.input === 'input-error' && f.renderRetry === null && f.failedStages.length === 0);
+  const legacy = section();
+  delete legacy.render;
+  check('legacy → previewState null', vmOf(legacy).previewState === null);
 }
 
 console.log('\n[지문 A/B] null 은 비교하지 않는다');

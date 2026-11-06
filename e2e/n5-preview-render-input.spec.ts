@@ -43,7 +43,7 @@ const near = (a: number, b: number, label = '', tolerance = 0.6) => expect(Math.
 test('최신 renderInput — 배경 위 HTML 조판, 서버 style 8키·정렬 그대로, 이중 렌더 없음', async ({ page }) => {
   await open(page);
   for (const id of [501, 502, 505]) {
-    await expect(slice(page, id)).toHaveAttribute('data-preview-display', 'typeset');
+    await expect(slice(page, id)).toHaveAttribute('data-preview-display', 'local-typeset');
     await expect(slice(page, id)).toHaveCSS('background-image', new RegExp(`${id}-background`));
     await expect(slice(page, id)).not.toHaveCSS('background-image', /translated/);
   }
@@ -72,7 +72,7 @@ test('최신 renderInput — 배경 위 HTML 조판, 서버 style 8키·정렬 �
   await page.screenshot({ path: test.info().outputPath('render-input-current.png') });
 
   // 입력 준비 중(504) — 결과 없음 → 원본 + 렌더 대기 중
-  await expect(slice(page, 504)).toHaveAttribute('data-preview-display', 'original');
+  await expect(slice(page, 504)).toHaveAttribute('data-preview-display', 'original-image');
   await expect(page.getByTestId('n5-section-status-4-progress')).toHaveText('렌더 대기 중');
   // 제외(503)
   await expect(slice(page, 503)).toHaveAttribute('data-preview-display', 'excluded');
@@ -126,12 +126,12 @@ test('번역 저장 — 글만 PATCH 하고, 재렌더 동안은 이전 결과(�
   // 저장 전 초안이 바로 조판에 보인다
   await expect(render(page, 9112)).toHaveText('Visible effect');
   await page.getByTestId('n5-block-save-9112').click();
-  await expect(slice(page, 502)).toHaveAttribute('data-preview-display', 'image');
+  await expect(slice(page, 502)).toHaveAttribute('data-preview-display', 'previous-rendered-image');
   await expect(page.getByTestId(`${status2}-notice`)).toHaveText('최신 미리보기 아님');
   // 최신이 아닌 동안 넘침을 내지 않는다
   await expect(page.getByTestId('n5-block-row-9104').getByTestId('n5-cell-failure-overflow')).toHaveCount(0);
   await page.screenshot({ path: test.info().outputPath('save-rerendering.png') });
-  await expect(slice(page, 502)).toHaveAttribute('data-preview-display', 'typeset', { timeout: 15_000 });
+  await expect(slice(page, 502)).toHaveAttribute('data-preview-display', 'local-typeset', { timeout: 15_000 });
   await expect(page.getByTestId(`${status2}-notice`)).toHaveCount(0);
   await expect(render(page, 9112)).toHaveText('Visible effect');
   await expect(page.getByTestId('n5-block-row-9104').getByTestId('n5-cell-failure-overflow')).toBeVisible();
@@ -146,13 +146,13 @@ const SCENARIOS: {
   notice: string | null;
   failed: boolean;
 }[] = [
-  { name: 'preparing-previous', display: 'image', progress: null, notice: '최신 미리보기 아님', failed: false },
-  { name: 'preparing-failed', display: 'original', progress: null, notice: null, failed: true },
-  { name: 'input-error', display: 'original', progress: null, notice: '미리보기 입력 오류', failed: false },
-  { name: 'pending', display: 'pending', progress: '렌더 대기 중', notice: null, failed: false },
-  { name: 'failed', display: 'original', progress: null, notice: null, failed: true },
-  { name: 'stale', display: 'image', progress: null, notice: '최신 미리보기 아님', failed: false },
-  { name: 'missing', display: 'original', progress: null, notice: '미리보기 없음', failed: false },
+  { name: 'preparing-previous', display: 'previous-rendered-image', progress: null, notice: '최신 미리보기 아님', failed: false },
+  { name: 'preparing-failed', display: 'original-image', progress: null, notice: null, failed: true },
+  { name: 'input-error', display: 'original-image', progress: null, notice: '미리보기 입력 오류', failed: false },
+  { name: 'pending', display: 'original-image', progress: '렌더 대기 중', notice: null, failed: false },
+  { name: 'failed', display: 'original-image', progress: null, notice: null, failed: true },
+  { name: 'stale', display: 'previous-rendered-image', progress: null, notice: '최신 미리보기 아님', failed: false },
+  { name: 'missing', display: 'original-image', progress: null, notice: '미리보기 없음', failed: false },
 ];
 
 for (const s of SCENARIOS) {
@@ -172,7 +172,7 @@ for (const s of SCENARIOS) {
     // 최신이 아니면 넘침을 내지 않는다
     await expect(page.getByTestId('n5-block-row-9104').getByTestId('n5-cell-failure-overflow')).toHaveCount(0);
     // 다른 섹션은 그대로 최신
-    await expect(slice(page, 501)).toHaveAttribute('data-preview-display', 'typeset');
+    await expect(slice(page, 501)).toHaveAttribute('data-preview-display', 'local-typeset');
     await page.screenshot({ path: test.info().outputPath(`scenario-${s.name}.png`) });
   });
 }
@@ -192,7 +192,8 @@ test('지문 A≠B — 한 번만 다시 불러오고, 계속 다르면 표와 �
   await open(page, 'ab-mismatch');
   await expect(page.getByTestId(`${status2}-notice`)).toHaveText('최신 내용을 불러오는 중');
   // 조판하지 않고 최신 서버 이미지로 둔다
-  await expect(slice(page, 502)).toHaveAttribute('data-preview-display', 'image');
+  await expect(slice(page, 502)).toHaveAttribute('data-preview-display', 'current-rendered-image');
+  await expect(slice(page, 502)).toHaveAttribute('data-preview-syncing', 'true');
   await page.waitForTimeout(6_000);
   const previewReads = reads.filter((p) => p.endsWith('/preview')).length;
   const blockReads = reads.filter((p) => p.endsWith('/blocks')).length;
@@ -207,11 +208,11 @@ test('지문 A≠B — 한 번만 다시 불러오고, 계속 다르면 표와 �
 test('일반 N5 — 이전 결과 섹션은 renderedUrl, 최신 섹션은 배경 위 HTML 이다', async ({ page }) => {
   await reachN5(page, { mockScenario: 'n5-preview-stale' });
   await expect(page.getByTestId('n5-qa-badge')).toHaveCount(0);
-  await expect(slice(page, 502)).toHaveAttribute('data-preview-display', 'image');
+  await expect(slice(page, 502)).toHaveAttribute('data-preview-display', 'previous-rendered-image');
   await expect(slice(page, 502)).toHaveCSS('background-image', /502-translated/);
   await expect(page.getByTestId('n5-text-layer-502')).toHaveCount(0);
   await expect(page.getByTestId(`${status2}-notice`)).toHaveText('최신 미리보기 아님');
-  await expect(slice(page, 501)).toHaveAttribute('data-preview-display', 'typeset');
+  await expect(slice(page, 501)).toHaveAttribute('data-preview-display', 'local-typeset');
   await expect(slice(page, 501)).toHaveCSS('background-image', /501-background/);
   await expect(render(page, 9102)).toContainText('high-concentration');
   // 결과 없는 입력 준비 중 섹션은 원본

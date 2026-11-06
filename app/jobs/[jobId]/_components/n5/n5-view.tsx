@@ -18,6 +18,7 @@ import {
   syncPreviewWithBlocks,
   toBlockViewModel,
   toJobMetaViewModel,
+  toPreviewStatusInput,
   toPreviewViewModel,
 } from '@/lib/n5/adapter';
 import type {
@@ -28,7 +29,6 @@ import type {
   SectionInputSync,
   SectionStatusViewModel,
 } from '@/lib/n5/adapter';
-import { resolvePreviewSectionLabels } from '@/lib/n5/preview-state';
 import type { N5ViewMode } from '@/lib/n5/viewport';
 import { N5Viewport } from './n5-viewport';
 import { N5Panel } from './n5-panel';
@@ -246,13 +246,7 @@ export function N5View({ jobId }: { jobId: string }) {
         sectionDtoById.get(section.id),
         section.render.status,
         // 이번 계약 키가 없거나 조합이 계약 밖이면 기존 renderedUrl 기준 표시로 둔다
-        section.input.kind === 'invalid-contract' || section.renderState.kind === 'invalid-contract'
-          ? undefined
-          : {
-              input: section.input,
-              render: section.renderState,
-              labels: resolvePreviewSectionLabels(section.input, section.renderState, syncBySection.get(section.id)?.match ?? 'incomparable'),
-            },
+        toPreviewStatusInput(section, syncBySection.get(section.id)?.match ?? 'incomparable'),
       ),
     ]),
   );

@@ -8,7 +8,7 @@ import { isTypesetQaUrl, type TypesetRenderModel } from '@/lib/n5/typeset-render
 import { isTypesetRole } from '@/lib/n5/typeset-rules';
 import { canRestoreSectionInN5, getBaseFontScale, getSectionCanvasHeaderHeight, getTranslatedBaseBox } from '@/lib/n5/adapter';
 import type { SectionInputSync } from '@/lib/n5/adapter';
-import { resolvePreviewSectionDisplay, type PreviewSectionDisplay } from '@/lib/n5/preview-state';
+import { resolvePreviewSectionDisplay, type PreviewSectionDisplaySource } from '@/lib/n5/preview-state';
 import type { TypesetFontGate } from './use-typeset-font-gate';
 import { computeBlockOverlaps, type BlockOverlap } from '@/lib/n5/overlap';
 import type { BlockViewModel, JobMetaViewModel, PreviewSectionViewModel, PreviewViewModel, SectionStatusViewModel } from '@/lib/n5/adapter';
@@ -145,8 +145,8 @@ interface CanvasSlice {
   renderedUrl: string | null;
   /** renderInput 배경(글자 없는 바탕) */
   background: PreviewSectionViewModel['background'];
-  /** 「번역 후」 표시 방식(lib/n5/preview-state.ts resolvePreviewSectionDisplay) */
-  display: PreviewSectionDisplay;
+  /** 「번역 후」 표시 소스(lib/n5/preview-state.ts resolvePreviewSectionDisplay) — renderedUrl·renderInput·isCurrent 를 여기서 다시 판단하지 않는다 */
+  display: PreviewSectionDisplaySource;
   /** 서버 bucket/excludedStage 파생(render.status==='excluded') — 제외 여부의 정본 */
   isExcluded: boolean;
   /** N5 [되돌리기] 가능 여부. N3 에서 제외된 섹션은 false(canRestoreSectionInN5) */
@@ -162,7 +162,7 @@ interface CanvasSlice {
 function buildSectionSlices(
   sections: PreviewSectionViewModel[],
   scale: number,
-  displayOf: (section: PreviewSectionViewModel) => PreviewSectionDisplay,
+  displayOf: (section: PreviewSectionViewModel) => PreviewSectionDisplaySource,
 ): CanvasSlice[] {
   return sections.map((section) => ({
     sectionId: section.id,
@@ -855,34 +855,29 @@ function ImageLayer({
         const { display } = slice;
         const typesetModels = mode === 'translated' && !isExcluded ? typesetModelsBySection.get(slice.sectionId) ?? null : null;
         // QA 진단 — renderInput 조판이 아닌 섹션을 역할 기본값으로 흰 면 위에 그린다
-        const isQaFallback = isTypesetQaMode && typesetModels !== null && display.kind !== 'typeset';
-        // 「번역 후」 표시
-        // - typeset: renderInput 배경 + HTML 글자(글자가 구워진 renderedUrl 과 겹치지 않는다)
-        // - image: 서버 결과(이전 결과면 최신 아님 안내를 함께 낸다) / original: 결과 없음 → 원본 / pending: 결과 없이 진행 중
+        const isQaFallback = isTypesetQaMode && typesetModels !== null && display !== 'local-typeset';
+        // 「번역 후」 표시 — 소스는 resolvePreviewSectionDisplay 한 곳에서 정한다
+        // - local-typeset: renderInput 배경 + HTML 글자(글자가 구워진 renderedUrl 과 겹치지 않는다)
+        // - current/previous-rendered-image: 서버 결과 이미지(새 번역문 HTML 을 얹지 않는다) / original-image: 결과 없음 → 원본
         // - legacy: 이번 계약 키가 없는 응답 — 기존 renderedUrl 기준. 렌더링 실패 섹션은 원본 그대로 결과물에 들어간다(PRD N4 부분 실패)
         const translatedUrl = isQaFallback
           ? null
-          : display.kind === 'typeset'
+          : display === 'local-typeset'
             ? (slice.background?.url ?? null)
-            : display.kind === 'image'
+            : display === 'current-rendered-image' || display === 'previous-rendered-image'
               ? slice.renderedUrl
-              : display.kind === 'original'
+              : display === 'original-image'
                 ? slice.originalUrl
-                : display.kind === 'pending'
-                  ? null
-                  : slice.render.status === 'ready'
-                    ? slice.render.url
-                    : renderFailed
-                      ? slice.originalUrl
-                      : null;
+                : slice.render.status === 'ready'
+                  ? slice.render.url
+                  : renderFailed
+                    ? slice.originalUrl
+                    : null;
         const url = mode === 'original' ? slice.originalUrl : translatedUrl;
         const isSaving = pendingSectionIds.has(slice.sectionId);
-        // 결과 없이 진행 중이면 빈 면에 진행 문구를 보인다(빈 배경으로 조용히 실패 처리하지 않는다)
-        const isPending =
-          mode === 'translated' &&
-          !isQaFallback &&
-          !isExcluded &&
-          (display.kind === 'pending' || (display.kind === 'legacy' && slice.render.status === 'unresolved' && !renderFailed));
+        // 이번 계약 키가 없는(legacy) 응답만 — 결과 없이 진행 중이면 빈 면에 진행 문구를 보인다(기존 표시)
+        const isPending = mode === 'translated' && !isQaFallback && !isExcluded && display === 'legacy' && slice.render.status === 'unresolved' && !renderFailed;
+        const previewState = mode === 'translated' ? status?.previewState ?? null : null;
         const blockRects = isExcluded
           ? []
           : buildBlockRects(blocksBySection.get(slice.sectionId) ?? [], scale, zoom, slice);
@@ -903,9 +898,12 @@ function ImageLayer({
           )}
           <div
             data-testid={`n5-slice-${mode}-${slice.sectionId}`}
-            data-preview-display={mode === 'translated' ? display.kind : undefined}
+            data-preview-display={mode === 'translated' ? display : undefined}
+            data-preview-input-state={previewState?.input}
+            data-preview-render-state={previewState?.render}
+            data-preview-syncing={previewState?.syncing ? 'true' : undefined}
             data-qa-typeset={isQaFallback ? 'role-default' : undefined}
-            data-background-source={mode === 'translated' && display.kind === 'typeset' ? slice.background?.source : undefined}
+            data-background-source={mode === 'translated' && display === 'local-typeset' ? slice.background?.source : undefined}
             role="button"
             tabIndex={0}
             // Figma(544:3168)는 section마다 테두리로 구획을 나눈다. border는 안쪽 원점을 1px 밀어 bbox·이미지·중앙선이
@@ -1626,7 +1624,7 @@ export function N5Viewport({
     for (const slice of slices) {
       const section = preview.sections.find((s) => s.id === slice.sectionId);
       if (!section || slice.isExcluded) continue;
-      if (slice.display.kind === 'typeset') {
+      if (slice.display === 'local-typeset') {
         // 저장 입력(renderInput) 위에 세션 local 편집값만 덮는다 — 글: 미저장 초안 > 저장 후 최신 block 글 > renderInput 글
         bySection.set(
           section.id,

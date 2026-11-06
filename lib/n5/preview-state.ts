@@ -15,6 +15,7 @@
 
 import type { ApiPreviewRenderer, ApiPreviewRenderStyle, ApiPreviewSection, ApiRenderStatus } from '../api/n5-schema';
 import type { TypesetServerStyle, TypesetTextAlign } from './typeset-rules';
+import { N5_PREVIEW_NOTICE_COPY, N5_PREVIEW_PROGRESS_COPY } from './preview-copy.ts';
 
 /* ------------------------------------------------------------------ *
  * 입력 상태
@@ -259,21 +260,19 @@ export function toTypesetServerStyle(style: ApiPreviewRenderStyle): TypesetServe
 }
 
 /* ------------------------------------------------------------------ *
- * 화면 표시
+ * 화면 표시 — N5 「번역 후」 뷰어(검수용 preview). N6 최종 렌더(/render) 진행 상태와 섞지 않는다
  * ------------------------------------------------------------------ */
 
-export type PreviewSectionDisplay =
-  /** 서버 renderInput 배경 + HTML 조판. 글자가 구워진 renderedUrl 은 쓰지 않는다 */
-  | { kind: 'typeset' }
-  /** 서버 결과 이미지 — isLatest=false 면 이전 결과(최신 아님) */
-  | { kind: 'image'; isLatest: boolean }
-  /** 결과 없음 — 원본을 보인다 */
-  | { kind: 'original' }
-  /** 결과 없이 시도가 진행 중 — 빈 면 + 진행 문구 */
-  | { kind: 'pending' }
-  | { kind: 'excluded' }
-  /** 이번 계약 키가 없거나 조합이 계약 밖 — 기존(renderedUrl 기준) 표시로 둔다 */
-  | { kind: 'legacy' };
+/**
+ * N5 「번역 후」 섹션 면에 무엇을 그리는지 — 컴포넌트는 renderedUrl·renderInput·isCurrent 를 따로 보지 않고 이 값만 본다.
+ * - local-typeset: renderInput 배경 + FE HTML 번역문(글자가 구워진 renderedUrl 위에 겹치지 않는다)
+ * - current-rendered-image: 최신 서버 결과지만 HTML 로 그릴 수 없음(지문 A≠B·글꼴 미준비·style 계약 밖)
+ * - previous-rendered-image: 최신이 아닌 이전 서버 결과. 새 번역문을 HTML 로 얹지 않는다
+ * - original-image: 서버 결과 없음 → 원본. 번역문 HTML 을 얹지 않는다
+ * - excluded: 제외 섹션 / legacy: 이번 계약 키가 없거나 조합이 계약 밖 — 기존 renderedUrl 기준 표시
+ */
+export type N5PreviewDisplaySource = 'local-typeset' | 'current-rendered-image' | 'previous-rendered-image' | 'original-image';
+export type PreviewSectionDisplaySource = N5PreviewDisplaySource | 'excluded' | 'legacy';
 
 export function resolvePreviewSectionDisplay(options: {
   input: PreviewInputState;
@@ -281,14 +280,64 @@ export function resolvePreviewSectionDisplay(options: {
   match: FingerprintMatch;
   /** 서버 style 로 그릴 수 있음(모든 블록 style 형식 정상 + 폰트 준비) */
   canTypeset: boolean;
-}): PreviewSectionDisplay {
+}): PreviewSectionDisplaySource {
   const { input, render, match, canTypeset } = options;
-  if (input.kind === 'excluded' || render.kind === 'excluded') return { kind: 'excluded' };
-  if (input.kind === 'invalid-contract' || render.kind === 'invalid-contract') return { kind: 'legacy' };
-  if (input.kind === 'ready' && match === 'match' && render.kind === 'current' && canTypeset) return { kind: 'typeset' };
-  if (render.result) return { kind: 'image', isLatest: render.kind === 'current' };
-  if ((render.kind === 'waiting' || render.kind === 'running') && input.kind === 'ready') return { kind: 'pending' };
-  return { kind: 'original' };
+  if (input.kind === 'excluded' || render.kind === 'excluded') return 'excluded';
+  if (input.kind === 'invalid-contract' || render.kind === 'invalid-contract') return 'legacy';
+  if (render.kind === 'current') {
+    return input.kind === 'ready' && match === 'match' && canTypeset ? 'local-typeset' : 'current-rendered-image';
+  }
+  // 최신이 아니다 — 이전 결과가 있으면 그대로(진행 중·실패·입력 오류·준비 중이어도), 없으면 원본
+  return render.result ? 'previous-rendered-image' : 'original-image';
+}
+
+/**
+ * 디자인 연결용 의미 상태 — 문구·아이콘·위치와 1:1 로 묶지 않는다(문구는 preview-copy.ts).
+ * render:
+ * - current · stale(이전 결과, 진행 중 시도 없음)
+ * - updating(이전 결과 + 새 시도 pending/running) · update-failed(이전 결과 + 새 시도 실패 — N5 수정 후 재렌더 실패, F-CFM-02)
+ * - waiting · running(이전 결과 없이 시도 진행) · failed(이전 결과 없이 실패 — N4 최초 생성 실패와 같은 표시)
+ * - missing(결과 없음 + 시도 없음·done) — renderedUrl=null 만으로 실패로 보지 않는다
+ * input 은 render 와 따로 둔다(preparing + failed 를 함께 가진다).
+ */
+export type PreviewRenderSemantic = 'current' | 'stale' | 'updating' | 'update-failed' | 'waiting' | 'running' | 'failed' | 'missing';
+export type PreviewInputSemantic = 'ready' | 'preparing' | 'input-error';
+
+export interface PreviewSectionSemantic {
+  input: PreviewInputSemantic;
+  render: PreviewRenderSemantic;
+  /** 진행 중 시도의 단계(updating·waiting·running 에서 pending/running 구분) */
+  attemptStatus: ApiRenderStatus | null;
+  /** 지문 A≠B(또는 A 불일치) — 다시 불러온 뒤에도 표와 뷰어를 잇지 않은 상태 */
+  syncing: boolean;
+  /** 재렌더 다시 시도 대상 — failed·update-failed 일 때만. 기존 task retry 계약(attempt.taskId·retryable)을 쓴다 */
+  retry: { taskId: number; retryable: boolean } | null;
+}
+
+/** 제외·계약 밖 섹션은 null(기존 표시 규칙을 따른다) */
+export function resolvePreviewSectionSemantic(input: PreviewInputState, render: PreviewRenderState, match: FingerprintMatch): PreviewSectionSemantic | null {
+  if (input.kind === 'excluded' || input.kind === 'invalid-contract' || render.kind === 'excluded' || render.kind === 'invalid-contract') return null;
+  const hasPrevious = render.result != null;
+  const renderSemantic: PreviewRenderSemantic =
+    render.kind === 'current'
+      ? 'current'
+      : render.kind === 'waiting' || render.kind === 'running'
+        ? hasPrevious
+          ? 'updating'
+          : render.kind
+        : render.kind === 'failed'
+          ? hasPrevious
+            ? 'update-failed'
+            : 'failed'
+          : render.kind;
+  const failed = renderSemantic === 'failed' || renderSemantic === 'update-failed';
+  return {
+    input: input.kind === 'error' ? 'input-error' : input.kind,
+    render: renderSemantic,
+    attemptStatus: render.attempt?.status ?? null,
+    syncing: input.kind === 'ready' && (match === 'mismatch' || match === 'inconsistent'),
+    retry: failed && render.attempt ? { taskId: render.attempt.taskId, retryable: render.attempt.retryable } : null,
+  };
 }
 
 /** 섹션 상태 문구 — 진행(progress)·안내(notice)·실패를 따로 둔다. 실패는 기존 「실행 실패」 행 하나로만 보인다 */
@@ -298,28 +347,37 @@ export interface PreviewSectionLabels {
   renderFailed: boolean;
 }
 
-export function resolvePreviewSectionLabels(input: PreviewInputState, render: PreviewRenderState, match: FingerprintMatch): PreviewSectionLabels {
-  if (input.kind === 'excluded' || input.kind === 'invalid-contract' || render.kind === 'invalid-contract') {
-    return { progressLabel: null, notice: null, renderFailed: false };
-  }
-  const renderFailed = render.kind === 'failed';
-  const progressLabel =
-    render.kind === 'waiting'
-      ? '렌더 대기 중'
-      : render.kind === 'running'
-        ? '렌더링 중'
-        : input.kind === 'preparing' && !renderFailed && !render.result
-          ? '렌더 대기 중'
+const NO_LABELS: PreviewSectionLabels = { progressLabel: null, notice: null, renderFailed: false };
+
+/** 의미 상태 → 임시 문구(preview-copy.ts). 디자인이 오면 문구 표만 바꾼다 */
+export function resolvePreviewSectionLabels(semantic: PreviewSectionSemantic | null): PreviewSectionLabels {
+  if (!semantic) return NO_LABELS;
+  const { input, render, attemptStatus, syncing } = semantic;
+  const hasPrevious = render === 'current' || render === 'stale' || render === 'updating' || render === 'update-failed';
+  const renderFailed = render === 'failed' || render === 'update-failed';
+  const progressKey =
+    render === 'waiting' || render === 'running'
+      ? render
+      : render === 'updating'
+        ? attemptStatus === 'running'
+          ? 'running'
+          : 'waiting'
+        : input === 'preparing' && !renderFailed && !hasPrevious
+          ? 'preparing'
           : null;
-  const notice =
-    input.kind === 'error'
-      ? '미리보기 입력 오류'
-      : input.kind === 'ready' && (match === 'mismatch' || match === 'inconsistent')
-        ? '최신 내용을 불러오는 중'
-        : render.result && render.kind !== 'current'
-          ? '최신 미리보기 아님'
-          : render.kind === 'missing' && input.kind === 'ready'
-            ? '미리보기 없음'
+  const noticeKey =
+    input === 'input-error'
+      ? 'input-error'
+      : syncing
+        ? 'syncing'
+        : hasPrevious && render !== 'current'
+          ? 'previous-result'
+          : render === 'missing' && input === 'ready'
+            ? 'missing'
             : null;
-  return { progressLabel, notice, renderFailed };
+  return {
+    progressLabel: progressKey ? N5_PREVIEW_PROGRESS_COPY[progressKey] : null,
+    notice: noticeKey ? N5_PREVIEW_NOTICE_COPY[noticeKey] : null,
+    renderFailed,
+  };
 }

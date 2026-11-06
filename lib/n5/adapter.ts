@@ -30,11 +30,14 @@ import {
   deriveSectionFingerprintA,
   resolvePreviewInputState,
   resolvePreviewRenderState,
+  resolvePreviewSectionLabels,
+  resolvePreviewSectionSemantic,
   toTypesetServerStyle,
   type FingerprintMatch,
   type PreviewInputState,
   type PreviewRenderState,
   type PreviewSectionLabels,
+  type PreviewSectionSemantic,
   type SectionFingerprintA,
 } from './preview-state.ts';
 import type {
@@ -171,6 +174,8 @@ export interface SectionStatusViewModel {
   previewNotice: string | null;
   /** 입력 오류 원래 코드 — 화면 문구에는 쓰지 않고 개발·테스트 확인용 data 속성에만 둔다 */
   previewInputErrorCode: string | null;
+  /** N5 미리보기 의미 상태(preview-state.ts resolvePreviewSectionSemantic) — 디자인 연결용. 이번 계약 키가 없으면 null */
+  previewState: PreviewSectionSemantic | null;
 }
 
 function getSectionProgressLabel(
@@ -189,9 +194,19 @@ function getSectionProgressLabel(
 
 /** /preview 렌더 상태에서 온 섹션 상태 입력. 이번 계약 키가 없는(legacy) 섹션이면 넘기지 않는다 */
 export interface PreviewSectionStatusInput {
+  semantic: PreviewSectionSemantic;
   labels: PreviewSectionLabels;
-  render: PreviewRenderState;
   input: PreviewInputState;
+}
+
+/** 섹션의 입력·렌더 상태 → 의미 상태·임시 문구. 이번 계약 키가 없거나 조합이 계약 밖이면 undefined(기존 renderedUrl 기준 표시) */
+export function toPreviewStatusInput(
+  section: Pick<PreviewSectionViewModel, 'input' | 'renderState'>,
+  match: FingerprintMatch,
+): PreviewSectionStatusInput | undefined {
+  const semantic = resolvePreviewSectionSemantic(section.input, section.renderState, match);
+  if (!semantic) return undefined;
+  return { semantic, labels: resolvePreviewSectionLabels(semantic), input: section.input };
 }
 
 export function buildSectionStatus(
@@ -206,9 +221,10 @@ export function buildSectionStatus(
   const inpaint = findFailedItem(items, 'inpaint', 'section', sectionId);
   const labels = (section?.verdicts ?? []).flatMap((verdict) => (verdict.verdictType ? [VERDICT_BADGE_LABELS[verdict.verdictType]] : []));
   // /tasks 실패와 /preview 시도 실패는 같은 「실행 실패 · 렌더링」 행 하나로 보인다(경고를 두 번 내지 않는다)
-  const attempt = preview?.render.attempt;
-  const attemptFailed = preview?.labels.renderFailed === true && attempt != null;
-  const renderRetry = render ? toRetryTarget(render) : attemptFailed ? { taskId: attempt.taskId, retryable: attempt.retryable } : null;
+  // 재렌더 실패(failed·update-failed)의 다시 시도 대상은 기존 task retry 계약(attempt.taskId·retryable)이다
+  const attemptRetry = preview?.labels.renderFailed === true ? preview.semantic.retry : null;
+  const attemptFailed = attemptRetry != null;
+  const renderRetry = render ? toRetryTarget(render) : attemptRetry;
   const isLegacy = preview == null || renderStatus === 'excluded';
   return {
     failedStages: [...(render || attemptFailed ? (['render'] as const) : []), ...(inpaint ? (['inpaint'] as const) : [])],
@@ -220,6 +236,7 @@ export function buildSectionStatus(
     progressLabel: isLegacy ? getSectionProgressLabel(sectionId, items, renderStatus, render != null) : preview.labels.progressLabel,
     previewNotice: isLegacy ? null : preview.labels.notice,
     previewInputErrorCode: isLegacy ? null : preview.input.errorCode,
+    previewState: isLegacy ? null : preview.semantic,
   };
 }
 
