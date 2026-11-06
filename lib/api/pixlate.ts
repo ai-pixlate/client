@@ -13,7 +13,8 @@ import type {
   ApiLibraryCard,
   ApiExportArtifactType,
 } from '@/lib/api/n6-schema';
-import type { ApiCountry, ApiLanguage } from '@/lib/api/master-schema';
+import type { ApiCategory, ApiCountry, ApiLanguage } from '@/lib/api/master-schema';
+import type { ApiBrand, ApiBrandLogo, ApiBrandUpdate } from '@/lib/api/brand-schema';
 
 // ─────────────────────────────────────────────
 // 공통 fetch 헬퍼
@@ -153,6 +154,15 @@ export async function deleteSourceImage(jobId: string, sourceImageId: number): P
   if (!res.ok) throw new ApiRequestError(res.status, await res.json().catch(() => null));
 }
 
+/**
+ * 작업 취소 (API-JOB-04, DELETE /jobs/{jobId} · 204 본문 없음). 서버가 status=archived로 바꾸고 종속 리소스를
+ * 정리한다. 진입점은 S0 ✕(F-JOB-07)이며 N1 draft · N2~N6 에서 같은 흐름으로 쓴다.
+ */
+export async function cancelJob(jobId: string): Promise<void> {
+  const res = await authorizedFetch(`/jobs/${jobId}`, { method: 'DELETE' });
+  if (!res.ok) throw new ApiRequestError(res.status, await res.json().catch(() => null));
+}
+
 /** 원본 순서 재정렬 (API-SRC-03). order는 sourceImageId 배열이다. */
 export function reorderSourceImages(jobId: string, order: number[]): Promise<ApiSourceImage[]> {
   return apiFetch<ApiSourceImage[]>(`/jobs/${jobId}/source-images/reorder`, {
@@ -189,8 +199,13 @@ export function getSections(jobId: string): Promise<ApiSectionList> {
   return apiFetch<ApiSectionList>(`/jobs/${jobId}/sections`);
 }
 
+/** 섹션 상세(판정 근거 전체, API-SEC-02). 목록은 포함 섹션의 verdicts를 빈 배열로 준다. */
+export function getSectionDetail(jobId: string, sectionId: number): Promise<ApiSection> {
+  return apiFetch<ApiSection>(`/jobs/${jobId}/sections/${sectionId}`);
+}
+
 /**
- * N3(드래그)·N5(휴지통) 공용 PATCH. body는 실제 계약대로 { action }이다 —
+ * N3(버튼)·N5(휴지통) 공용 PATCH. body는 실제 계약대로 { action }이다 —
  * bucket 값을 그대로 보내지 않는다. exclude→include 이동은 action='restore',
  * include→exclude 이동은 action='exclude'. excludedStage는 서버가 현재
  * currentStep 기준으로 기록하므로 FE가 보내지 않는다. 응답은 갱신된 전체
@@ -208,9 +223,15 @@ export function updateSectionBucket(
   });
 }
 
-/** 이대로 진행 = N3 → N4 (API-SEC-04). 전 섹션 제외면 409 ALL_SECTIONS_EXCLUDED. */
-export function proceedSections(jobId: string): Promise<ApiAcceptedTask> {
-  return apiFetch<ApiAcceptedTask>(`/jobs/${jobId}/sections/proceed`, { method: 'POST' });
+/**
+ * 이대로 진행 = N3 → N4 (API-SEC-04). 전 섹션 제외면 409 ALL_SECTIONS_EXCLUDED —
+ * N3가 error.code로 분기하도록 confirmN5와 같이 raw body를 보존하는 ApiRequestError를 던진다.
+ */
+export async function proceedSections(jobId: string): Promise<ApiAcceptedTask> {
+  const res = await authorizedFetch(`/jobs/${jobId}/sections/proceed`, { method: 'POST' });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) throw new ApiRequestError(res.status, body);
+  return body as ApiAcceptedTask;
 }
 
 /**
@@ -380,4 +401,54 @@ export function getMasterCountries(): Promise<ApiCountry[]> {
 
 export function getMasterLanguages(): Promise<ApiLanguage[]> {
   return apiFetch<ApiLanguage[]>('/master/languages');
+}
+
+/** N1 카테고리 트리 (API-MST-04). 평면 노드 배열 — 트리 구성은 app/jobs/new/_lib/category-tree.ts */
+export function getMasterCategories(): Promise<ApiCategory[]> {
+  return apiFetch<ApiCategory[]>('/master/categories');
+}
+
+// ─────────────────────────────────────────────
+// M2 — 브랜드 정보·로고 (brandList/brandGet/brandUpdate/brandLogoList/brandLogoCreate/brandLogoDelete).
+// 404(미소유 포함)를 화면에서 구분해야 해서 실패 시 status·body 를 보존하는 ApiRequestError 를 던진다.
+// ─────────────────────────────────────────────
+
+async function brandFetch<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await authorizedFetch(url, init);
+  if (!res.ok) throw new ApiRequestError(res.status, await res.json().catch(() => null));
+  return res.json() as Promise<T>;
+}
+
+export function getBrands(): Promise<ApiBrand[]> {
+  return brandFetch<ApiBrand[]>('/brands');
+}
+
+export function getBrand(brandId: number): Promise<ApiBrand> {
+  return brandFetch<ApiBrand>(`/brands/${brandId}`);
+}
+
+/** 부분 수정 — 바뀐 항목만 보낸다. 응답 Brand 가 화면 정본이다 */
+export function updateBrand(brandId: number, payload: ApiBrandUpdate): Promise<ApiBrand> {
+  return brandFetch<ApiBrand>(`/brands/${brandId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+/** order_no ASC 그대로 온다 */
+export function getBrandLogos(brandId: number): Promise<ApiBrandLogo[]> {
+  return brandFetch<ApiBrandLogo[]>(`/brands/${brandId}/logos`);
+}
+
+/** 로고 1개 multipart(field `file`). 포맷 검증·SVG sanitize 는 서버 책임(415) — Content-Type 은 브라우저가 boundary 와 함께 정한다 */
+export function uploadBrandLogo(brandId: number, file: File): Promise<ApiBrandLogo> {
+  const formData = new FormData();
+  formData.append('file', file);
+  return brandFetch<ApiBrandLogo>(`/brands/${brandId}/logos`, { method: 'POST', body: formData });
+}
+
+export async function deleteBrandLogo(brandId: number, logoId: number): Promise<void> {
+  const res = await authorizedFetch(`/brands/${brandId}/logos/${logoId}`, { method: 'DELETE' });
+  if (!res.ok) throw new ApiRequestError(res.status, await res.json().catch(() => null));
 }

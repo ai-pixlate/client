@@ -70,7 +70,7 @@ test('N2 마지막 stage 가 끝나자마자 currentStep=N3 가 와도 04·05 �
   await expect(page.getByRole('heading', { name: '이미지 분석' })).toBeVisible({ timeout: 15_000 });
 
   // 최종적으로는 서버 정본(currentStep=N3)대로 N3 에 들어간다
-  await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 25_000 });
+  await expect(page.getByRole('button', { name: '이대로 진행' })).toBeVisible({ timeout: 25_000 });
   expect(steps.at(-1)).toBe('N3');
   expect(steps.filter((s) => s === 'N2').length).toBeGreaterThanOrEqual(5);
 

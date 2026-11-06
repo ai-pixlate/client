@@ -17,6 +17,7 @@ import {
   SECTION_VERDICT_STATUSES,
   VERDICT_TYPES,
   getN3VerdictBadgeLabel,
+  filterN3VisibleVerdicts,
 } from '../lib/n3/verdict.ts';
 import { BLOCK_ROLES } from '../lib/api/types.ts';
 import * as verdictModule from '../lib/n3/verdict.ts';
@@ -96,14 +97,28 @@ console.log('\n[4] verdictType -> N3 배지 라벨 (9월 표시 5종 + 12월 cha
     regulatory: '규제 위반',
     regulatory_replaceable: '규제 표현',
     regulatory_conditional: '조건부 규제',
-    local_irrelevant: '현지 무의미',
-    needs_fix: '현지 기준 수정 필요',
+    local_irrelevant: '현지 수정 필수',
+    needs_fix: '현지 확인 필요',
     channel_policy: '채널 정책',
   };
   for (const type of VERDICT_TYPES) {
     const got = getN3VerdictBadgeLabel(type);
     check(`${type} -> "${expected[type]}"`, got === expected[type], `got "${got}"`);
   }
+}
+
+console.log('\n[4-1] N3 현재 화면 표시 필터 — channel_policy(12월)는 N3 화면에서만 거른다');
+{
+  const fixture = [
+    { id: 1, verdictType: 'regulatory' },
+    { id: 2, verdictType: 'channel_policy' },
+    { id: 3, verdictType: 'local_irrelevant' },
+    { id: 4, verdictType: null },
+  ];
+  const visible = filterN3VisibleVerdicts(fixture);
+  check('channel_policy·verdictType 없음은 빠지고 순서는 유지', visible.map((v) => v.id).join(',') === '1,3', visible.map((v) => v.id).join(','));
+  check('라벨 map에는 channel_policy가 그대로 남는다(N5·12월 화면용)', getN3VerdictBadgeLabel('channel_policy') === '채널 정책');
+  check('null/undefined 입력은 빈 배열', filterN3VisibleVerdicts(undefined).length === 0 && filterN3VisibleVerdicts(null).length === 0);
 }
 
 console.log('\n[5] Mock 계약 케이스 (9월 5종) — section.bucket이 UI 정본, verdictType으로 재계산하지 않는다');

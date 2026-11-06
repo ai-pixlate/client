@@ -10,10 +10,20 @@
 import {
   areAllSectionsExcluded,
   buildAcknowledgedWarnings,
+  buildSectionStatus,
+  canRestoreSectionInN5,
+  getBlockTaskFailures,
   getInvalidStateWarnings,
   getPreviewContainerWidth,
   getRerenderTaskId,
+  getSectionCanvasHeaderHeight,
+  getSectionStatusRowCount,
   getRevisionConflictLatestBlock,
+  getSignalRows,
+  getSignalTone,
+  getTranslationFailure,
+  hasSectionStatus,
+  hasWidthOverflowSignal,
   isAllSectionsExcludedError,
   isInvalidStateError,
   isRevisionConflict,
@@ -23,6 +33,7 @@ import {
   toBlockViewModel,
   toPreviewViewModel,
   toSignalBadges,
+  toJobMetaViewModel,
 } from '../lib/n5/adapter.ts';
 
 let pass = 0;
@@ -299,6 +310,17 @@ console.log('\n[12] areAllSectionsExcluded — 서버가 검사하는 것과 같
   check('전부 exclude면 true', areAllSectionsExcluded([{ bucket: 'exclude' }, { bucket: 'exclude' }]) === true);
 }
 
+console.log('\n[12-1] canRestoreSectionInN5 — SEC-03: N5 에서 excludedStage=N3 조작은 409');
+{
+  const excluded = { status: 'excluded' };
+  check('N5 에서 제외한 섹션은 되돌릴 수 있다', canRestoreSectionInN5({ render: excluded, excludedStage: 'N5' }) === true);
+  check('N3 에서 제외된 섹션은 N5 에서 되돌릴 수 없다', canRestoreSectionInN5({ render: excluded, excludedStage: 'N3' }) === false);
+  check(
+    '포함 상태 섹션은 되돌리기 대상이 아니다',
+    canRestoreSectionInN5({ render: { status: 'ready', url: 'u' }, excludedStage: null }) === false,
+  );
+}
+
 console.log('\n[13] confirm 에러 판별 — isAllSectionsExcludedError / isInvalidStateError / getInvalidStateWarnings');
 {
   const allExcludedErr = parseApiError({
@@ -332,6 +354,70 @@ console.log('\n[13] confirm 에러 판별 — isAllSectionsExcludedError / isInv
       parseApiError({ error: { code: 'INVALID_STATE', message: 'm', retryable: true, traceId: 't3' } }),
     ) === null,
   );
+}
+
+console.log('\ntoJobMetaViewModel');
+{
+  const labels = { cosmetic: '화장품' };
+  const countries = [{ code: 'US', name: '미국' }];
+  const categories = [{ id: 7, name: '선크림' }];
+  const full = toJobMetaViewModel({ targetCountry: 'US', regulatoryClass: 'cosmetic', categoryId: 7 }, countries, categories, labels);
+  check('실제 값을 표시 이름으로 바꾼다', full.countryLabel === '미국' && full.regulatoryClassLabel === '화장품' && full.categoryLabel === '선크림');
+  const empty = toJobMetaViewModel({ targetCountry: 'JP', regulatoryClass: null, categoryId: null }, countries, categories, labels);
+  check('없는 값은 지어내지 않는다', empty.countryLabel === null && empty.regulatoryClassLabel === null && empty.categoryLabel === null);
+  const loading = toJobMetaViewModel({ targetCountry: 'US', regulatoryClass: 'cosmetic', categoryId: 7 }, [], [], labels);
+  check('목록을 받기 전에는 해당 이름만 비운다', loading.countryLabel === null && loading.categoryLabel === null && loading.regulatoryClassLabel === '화장품');
+}
+
+console.log('\nN5 오류 상태');
+{
+  const badges = toSignalBadges([
+    { code: 'prohibited_expression', reason: 'a' },
+    { code: 'translation_failed', reason: 'b', taskId: 7, retryable: true },
+    { code: 'width_overflow', reason: 'c' },
+    { code: 'empty_block', reason: 'd' },
+  ]);
+  check('칸 실패 signal은 행에서 빠진다', getSignalRows(badges).map((b) => b.code).join() === 'prohibited_expression,empty_block');
+  check('톤은 시각 매핑이다', getSignalTone('prohibited_expression') === 'warning' && getSignalTone('empty_block') === 'neutral');
+  const t = getTranslationFailure(badges);
+  check('번역 실패의 정본은 signal이고 task를 동봉한다', t?.retry?.taskId === 7 && t?.retry?.retryable === true);
+  check('번역 실패 signal이 없으면 null', getTranslationFailure([]) === null);
+  check('retryable 값이 없으면 재시도 불가로 본다', getTranslationFailure(toSignalBadges([{ code: 'translation_failed', taskId: 7 }]))?.retry?.retryable === false);
+  check('넘침은 signal 기준', hasWidthOverflowSignal(badges) && !hasWidthOverflowSignal([]));
+
+  const items = [
+    { taskId: 1, taskType: 'render', unitType: 'section', unitId: 10, status: 'failed', retryable: true },
+    { taskId: 2, taskType: 'inpaint', unitType: 'section', unitId: 10, status: 'failed', retryable: false },
+    { taskId: 3, taskType: 'render', unitType: 'section', unitId: 20, status: 'running' },
+    { taskId: 4, taskType: 'verify', unitType: 'text_block', unitId: 100, status: 'failed' },
+    { taskId: 5, taskType: 'render', unitType: 'text_block', unitId: 100, status: 'failed', retryable: true },
+    { taskId: 6, taskType: 'verify', unitType: 'job', unitId: 100, status: 'failed' },
+  ];
+  const blockFail = getBlockTaskFailures(items, 100);
+  check('block 실패는 text_block 단위만 본다', blockFail.verifyFailed && blockFail.previewFailure?.taskId === 5);
+  const other = getBlockTaskFailures(items, 200);
+  check('다른 block은 실패가 없다', !other.verifyFailed && other.previewFailure === null);
+
+  const status = buildSectionStatus(10, [], items, {
+    exclusionReason: 'restored_by_user',
+    warningBadge: 'quality_warning',
+    verdicts: [{ verdictType: 'regulatory' }, { verdictType: 'regulatory' }, { verdictType: 'needs_fix' }],
+  });
+  check('실행 실패 단계', status.failedStages.join() === 'render,inpaint' && status.renderRetry?.taskId === 1);
+  check('되살림·품질·판정 배지(중복 제거)', status.restoredInN3 && status.warningLabel === '품질 주의' && status.verdictLabels.join() === '규제 위반,현지 확인 필요');
+  const running = buildSectionStatus(20, [], items, undefined);
+  check('진행 중은 실패가 아니고, Section을 못 받아도 상태 없음이다', running.failedStages.length === 0 && !hasSectionStatus(running));
+  check('행 3개면 이미지까지 134(Figma 1244:8444)', getSectionStatusRowCount(status) === 3 && getSectionCanvasHeaderHeight(status) === 134);
+  check('상태가 없으면 공간도 없다', getSectionCanvasHeaderHeight(running) === 0 && getSectionCanvasHeaderHeight(undefined) === 0);
+  check('signal만 있으면 canvas 공간을 쓰지 않는다', getSectionCanvasHeaderHeight(buildSectionStatus(40, toSignalBadges([{ code: 'empty_block' }]), [], undefined)) === 0);
+  const label = (id, render, list = items) => buildSectionStatus(id, [], list, undefined, render).progressLabel;
+  check('renderedUrl=null · task 없음 → 렌더 대기 중', label(50, 'unresolved') === '렌더 대기 중');
+  check('renderedUrl=null · running → 렌더링 중', label(20, 'unresolved') === '렌더링 중');
+  check('renderedUrl=null · failed → 진행 문구 없음(실패로 표시)', label(10, 'unresolved') === null && buildSectionStatus(10, [], items, undefined, 'unresolved').failedStages.includes('render'));
+  check('제외 → 제외된 섹션', label(50, 'excluded') === '제외된 섹션');
+  check('렌더 완료 → 없음', label(50, 'ready') === null);
+  check('진행 문구는 canvas 공간을 쓰지 않는다', getSectionCanvasHeaderHeight(buildSectionStatus(50, [], [], undefined, 'unresolved')) === 0);
+  check('warningBadge로 렌더 실패를 판별하지 않는다', buildSectionStatus(30, [], [], { warningBadge: 'processing_failed' }).failedStages.length === 0);
 }
 
 console.log(`\n총 ${pass + fail}건 — PASS ${pass} / FAIL ${fail}`);

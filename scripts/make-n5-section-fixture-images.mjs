@@ -14,7 +14,8 @@
  * lib/mock-api/n5-fixtures.ts의 섹션 목록과 반드시 맞춰야 한다 (id/width/height/scale).
  *
  * 실행:  node scripts/make-n5-section-fixture-images.mjs (npm run make:n5-section-fixtures)
- * 출력:  public/mock/n5/sections/{id}-{original,translated}.png
+ * 출력:  public/mock/n5/sections/{id}-{original,translated,background}.png
+ *   background = /preview renderInput.section.background(글자 없는 바탕). 라벨은 block 영역을 피해 아래쪽에만 둔다.
  */
 
 import { deflateSync } from 'node:zlib';
@@ -144,6 +145,7 @@ function encodePng(c) {
 
 const ORIGINAL_BG = [0xdc, 0xe6, 0xf5]; // 옅은 블루그레이
 const TRANSLATED_BG = [0xe0, 0xf5, 0xe4]; // 옅은 그린
+const BACKGROUND_BG = [0xf7, 0xf1, 0xe6]; // 옅은 베이지 — 글자 없는 바탕
 const BORDER = [0xea, 0xea, 0xea];
 const LABEL_COLOR = [0x17, 0x17, 0x17];
 const WATERMARK_COLOR = [0x88, 0x88, 0x88];
@@ -160,12 +162,23 @@ function makeSectionImage(width, height, idLabel, layerLabel, background) {
   return c;
 }
 
+function makeBackgroundImage(width, height, idLabel) {
+  const c = createCanvas(width, height, BACKGROUND_BG);
+  fillRect(c, 0, 0, width, 1, BORDER);
+  fillRect(c, 0, height - 1, width, 1, BORDER);
+  fillRect(c, 0, 0, 1, height, BORDER);
+  fillRect(c, width - 1, 0, 1, height, BORDER);
+  drawText(c, `SEC ${idLabel}`, 10, height - 20, WATERMARK_COLOR, 1);
+  return c;
+}
+
 // scale=0.4 — lib/mock-api/n5-fixtures.ts와 반드시 일치.
 const targets = [
   { id: 501, width: 400, height: 360, layers: ['original', 'translated'] },
   { id: 502, width: 400, height: 280, layers: ['original', 'translated'] },
   { id: 503, width: 400, height: 200, layers: ['original', 'translated'] }, // N5 제외 섹션 — 오버레이로 가려짐
-  { id: 504, width: 400, height: 240, layers: ['original'] }, // renderedUrl null(렌더 전) 시나리오 — translated 파일 없음
+  // 처음에는 입력 준비 중(결과 없음). 번역을 저장하면 결과가 채택되므로 translated 도 둔다
+  { id: 504, width: 400, height: 240, layers: ['original', 'translated'] },
   { id: 505, width: 360, height: 320, layers: ['original', 'translated'] }, // 다른 원본 폭 — align=left 검증
 ];
 
@@ -180,4 +193,7 @@ for (const t of targets) {
     writeFileSync(join(OUT_DIR, file), png);
     console.log(`${file}  ${t.width}x${t.height}  ${(png.length / 1024).toFixed(1)}KB`);
   }
+  const background = encodePng(makeBackgroundImage(t.width, t.height, t.id));
+  writeFileSync(join(OUT_DIR, `${t.id}-background.png`), background);
+  console.log(`${t.id}-background.png  ${t.width}x${t.height}  ${(background.length / 1024).toFixed(1)}KB`);
 }

@@ -19,6 +19,7 @@ import {
   computeCenteredPan,
   clampPan,
   parseZoomPercentInput,
+  computeScrollThumb,
 } from '../lib/n5/viewport.ts';
 
 let pass = 0;
@@ -226,6 +227,16 @@ console.log('\n[9] parseZoomPercentInput — 배율 직접 입력 파싱/보정'
   check('"0.5"(0.5%, 양수지만 최소 미만) -> MIN_ZOOM으로 clamp', parseZoomPercentInput('0.5') === MIN_ZOOM);
 
   check('최대값 초과 "10000" -> MAX_ZOOM으로 clamp', parseZoomPercentInput('10000') === MAX_ZOOM);
+}
+
+console.log('\ncomputeScrollThumb');
+check('화면 안에 다 들어오면 표시하지 않는다', computeScrollThumb(0, 500, 900) === null);
+{
+  const top = computeScrollThumb(450, 1800, 900);
+  const bottom = computeScrollThumb(450 - 1800, 1800, 900);
+  check('pan 최대면 시작 위치', top.start === 0 && top.size === 0.5);
+  check('pan 최소면 끝 위치', Math.abs(bottom.start + bottom.size - 1) < 1e-9);
+  check('아주 긴 캔버스도 막대가 보인다', computeScrollThumb(0, 1e6, 900).size === 0.05);
 }
 
 console.log(`\n결과: PASS ${pass} / FAIL ${fail}\n`);
