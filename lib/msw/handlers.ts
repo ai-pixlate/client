@@ -47,7 +47,14 @@ import {
 } from '@/lib/mock-api/n5-preview-render';
 import { mockLibraryCards } from '@/lib/mock-api/library-fixtures';
 import { mockMasterCountries, mockMasterLanguages } from '@/lib/mock-api/master-fixtures';
-import { applyMockLayoutPatch, isMockBoxInSection, isSameMockLayout, parseMockLayoutPatch } from '@/lib/mock-api/n5-layout-adjust';
+import {
+  applyMockLayoutPatch,
+  clearsMockLegacyBox,
+  isMockBoxInSection,
+  isSameMockLayout,
+  parseMockLayoutPatch,
+  withMockLegacyBox,
+} from '@/lib/mock-api/n5-layout-adjust';
 import { mockMasterCategories } from '@/lib/mock-api/category-fixtures';
 import { m2BrandHandlers } from './m2-brand-handlers';
 import type { ApiJob, ApiJobAsyncTaskItem, ApiTextBlock } from '@/lib/api/n5-schema';
@@ -309,7 +316,31 @@ function n5WarningSetsMatch(
   return true;
 }
 
+/**
+ * ?mockScenario=n5-layout-legacy — 9112 는 layoutAdjust null 이지만 렌더 입력에 legacy 박스가 적용된 상태로 시작한다(server PR #116 대비).
+ * legacy 박스는 Mock 내부 상태다. /blocks 에는 싣지 않고 /preview renderInput·지문 계산에만 쓴다(lib/mock-api/n5-layout-adjust.ts).
+ */
+const N5_LEGACY_LAYOUT_SEED: ReadonlyMap<number, { x: number; y: number; w: number; h: number }> = new Map([[9112, { x: 120, y: 340, w: 420, h: 80 }]]);
+const n5LegacyLayoutBox = new Map<number, { x: number; y: number; w: number; h: number }>();
+let n5LegacyLayoutSeeded = false;
+function seedN5LegacyLayout(referrer: string) {
+  if (n5LegacyLayoutSeeded) return;
+  try {
+    if (new URL(referrer).searchParams.get('mockScenario') !== 'n5-layout-legacy') return;
+  } catch {
+    return;
+  }
+  n5LegacyLayoutSeeded = true;
+  for (const [blockId, box] of N5_LEGACY_LAYOUT_SEED) n5LegacyLayoutBox.set(blockId, box);
+}
+
+/** 렌더 입력 계산용 블록 — legacy 박스가 남아 있으면 적용값으로 얹는다 */
+function getN5RenderBlocksFromState(referrer = ''): ApiTextBlock[] {
+  return getN5BlocksFromState(undefined, referrer).map((block) => withMockLegacyBox(block, n5LegacyLayoutBox.get(block.id as number)));
+}
+
 function getN5BlocksFromState(sectionId?: number, referrer = ''): ApiTextBlock[] {
+  seedN5LegacyLayout(referrer);
   const overlay = isN5ErrorScenario(referrer)
     ? applyN5ErrorBlocks
     : isN5OverlapScenario(referrer)
@@ -343,7 +374,7 @@ function isMockSectionPreparing(sectionId: number): boolean {
 }
 
 function mockSectionFingerprint(section: { id: number; width: number; height: number }, referrer = ''): string {
-  return mockInputFingerprint(buildMockRenderInput(section, getN5BlocksFromState(undefined, referrer)));
+  return mockInputFingerprint(buildMockRenderInput(section, getN5RenderBlocksFromState(referrer)));
 }
 
 const n5SectionRenderState = new Map<number, MockN5SectionRender>(
@@ -387,8 +418,8 @@ function settleMockSectionRender(sectionId: number, referrer: string): MockN5Sec
 function buildMockN5PreviewWithRender(referrer: string) {
   const preview = buildMockN5Preview(n5PreviewSectionState);
   const scenario = getN5PreviewScenario(referrer);
-  // 시나리오가 덮은 블록(겹침·signal 등)도 그 응답의 저장 입력으로 본다
-  const blocks = getN5BlocksFromState(undefined, referrer);
+  // 시나리오가 덮은 블록(겹침·signal 등)도 그 응답의 저장 입력으로 본다. legacy 적용 박스도 여기서만 얹는다
+  const blocks = getN5RenderBlocksFromState(referrer);
   const errorScenario = isN5ErrorScenario(referrer);
   const blockFingerprintBySection = new Map<number, string | null>();
   const sections = preview.sections.map((section) => {
@@ -1281,6 +1312,7 @@ export const handlers = [
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
 
     const blockId = Number(params.blockId);
+    seedN5LegacyLayout(request.referrer);
     const current = n5BlockState.get(blockId);
     if (!current) return notFound(`Block '${blockId}' not found`);
 
@@ -1306,6 +1338,8 @@ export const handlers = [
     }
 
     let nextLayout = current.layoutAdjust ?? null;
+    // legacy 적용 박스를 지우는 저장(box 지정·전부 해제)은 layoutAdjust 가 null → null 이어도 적용 박스가 바뀐다
+    const clearsLegacy = parsedLayout?.ok === true && n5LegacyLayoutBox.has(blockId) && clearsMockLegacyBox(parsedLayout.patch);
     if (parsedLayout?.ok) {
       if (layoutScenario === 'fail') return n5LayoutError(500, 'INTERNAL_ERROR', 'mock layout save failure', null);
       // 렌더 대상만(라벨·로고·빈 원문·빈 번역문 제외 — 같은 요청의 trans1 이 번역문을 채우면 대상)
@@ -1318,8 +1352,8 @@ export const handlers = [
         return n5LayoutError(400, 'VALIDATION_ERROR', 'box is outside the section', { fields: [{ loc: ['body', 'layoutAdjust', 'box'], msg: 'outside section' }] });
       }
       nextLayout = applyMockLayoutPatch(current.layoutAdjust, parsedLayout.patch, current.bbox);
-      // 같은 값 저장 — 번역문과 정규화한 배치가 모두 지금과 같으면 변경 없음(revision 유지·rerenderTaskId null)
-      if (body.trans1 === current.trans1 && isSameMockLayout(current.layoutAdjust, nextLayout)) {
+      // 같은 값 저장 — 번역문·정규화한 배치·적용 박스(legacy)가 모두 지금과 같으면 변경 없음(revision 유지·rerenderTaskId null)
+      if (body.trans1 === current.trans1 && isSameMockLayout(current.layoutAdjust, nextLayout) && !clearsLegacy) {
         const [unchanged] = withSectionInputFingerprint([current], request.referrer);
         return HttpResponse.json({ block: unchanged, rerenderTaskId: null });
       }
@@ -1344,6 +1378,7 @@ export const handlers = [
       layoutAdjust: nextLayout,
     };
     n5BlockState.set(blockId, updated);
+    if (clearsLegacy) n5LegacyLayoutBox.delete(blockId);
 
     const rerenderTaskId = n5TaskIdCounter++;
     n5TaskState.set(rerenderTaskId, { blockId, pollCount: 0 });

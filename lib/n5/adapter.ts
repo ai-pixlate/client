@@ -255,9 +255,11 @@ export function getSectionStatusRowCount(status: SectionStatusViewModel | undefi
 /**
  * 좌측 canvas에서 section 이미지 위에 차지하는 높이(Figma 1244:8444 Frame 259). 태그 28 + 간격 16 + 행(26, 간격 4) +
  * 이미지까지 4 — 세 행이면 134다. 상태가 없으면 0(정상 화면과 같다).
+ * 미리보기 안내(previewNotice)는 저장할 때마다 생겼다 사라져 viewer 를 밀어내므로 이 공간에 넣지 않는다 — canvas 에서는
+ * section 위 absolute 자리(N5PreviewStatusSlot)에 보인다. 우측 패널의 행 수(getSectionStatusRowCount)는 그대로다.
  */
 export function getSectionCanvasHeaderHeight(status: SectionStatusViewModel | undefined): number {
-  const rows = getSectionStatusRowCount(status);
+  const rows = getSectionStatusRowCount(status) - (status?.previewNotice != null ? 1 : 0);
   return rows === 0 ? 0 : 28 + 16 + rows * 26 + (rows - 1) * 4 + 4;
 }
 

@@ -135,6 +135,44 @@ test.describe('F-CFM-13 — 좌우 selection 연동 + 자동 스크롤', () => {
     expect(await readTransform(page)).toEqual(before);
   });
 
+  test('텍스트 block 선택으로 section 태그·액션이 보여도 작업 화면 배치가 움직이지 않는다(layout shift 0)', async ({ page }) => {
+    // 캔버스 안에서 직접 선택한다 — 우측 목록에서 고르는 경우는 선택 block 으로 옮겨 가는 것이 정상 동작(F-CFM-13)이다
+    const geometry = () =>
+      page.evaluate(() => {
+        const rect = (testId: string) => {
+          const el = document.querySelector(`[data-testid="${testId}"]`);
+          if (!el) return null;
+          const { left, top, width, height } = el.getBoundingClientRect();
+          return { left, top, width, height };
+        };
+        return {
+          viewport: rect('n5-viewport'),
+          canvas: rect('n5-canvas'),
+          slices: [501, 502, 503, 504, 505].map((id) => rect(`n5-slice-translated-${id}`)),
+          headers: [1, 2, 3, 4, 5].map((order) => rect(`n5-section-header-${order}`)),
+          blocks: [9101, 9103].map((id) => rect(`n5-block-overlay-${id}`)),
+        };
+      });
+
+    const initial = await readTransform(page);
+    const before = await geometry();
+    expect(before.slices.every(Boolean)).toBe(true);
+
+    // 선택 없음 → section 502 의 block, 이어서 다른 section(501)의 block
+    for (const [blockId, sectionId] of [
+      [9103, 502],
+      [9101, 501],
+    ] as const) {
+      await page.getByTestId(`n5-block-overlay-${blockId}`).click({ force: true });
+      await expect(page.getByTestId(`n5-block-overlay-${blockId}`)).toHaveAttribute('aria-pressed', 'true');
+      await expect(page.getByTestId('n5-section-selected-tag')).toBeVisible();
+      await expect(page.getByTestId(`n5-section-exclude-${sectionId}`)).toBeVisible();
+      // 같은 frame 의 같은 값 — 허용 오차를 두지 않는다
+      expect(await geometry()).toEqual(before);
+      expect(await readTransform(page)).toEqual(initial);
+    }
+  });
+
   test('우측 row 클릭 → 좌측 block overlay에 선택 테두리 표시, 이전 선택은 해제', async ({ page }) => {
     await page.getByTestId('n5-fit-height').click();
 

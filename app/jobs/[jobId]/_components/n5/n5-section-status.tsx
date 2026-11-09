@@ -86,6 +86,15 @@ export function SignalRows({ badges, testIdPrefix }: { badges: SignalBadge[]; te
 
 const STAGE_LABELS = { render: '렌더링', inpaint: '인페인팅' } as const;
 
+function PreviewNotice({ status, testIdPrefix }: { status: SectionStatusViewModel; testIdPrefix: string }) {
+  if (!status.previewNotice) return null;
+  return (
+    <div data-testid={`${testIdPrefix}-notice`} data-input-error-code={status.previewInputErrorCode ?? undefined} className="flex">
+      <StatusTag tone="neutral">{status.previewNotice}</StatusTag>
+    </div>
+  );
+}
+
 /**
  * Section 상태 행(Figma 1244:8444 Frame 626·627) — 실패 / 되살림·판정 배지 / 품질. 좌측 canvas(650)와 우측 패널(433)이 같이
  * 쓴다. 좌측은 gap 8에 한 줄(이미지 위 공간이 행 수로 정해진다)이고 태그가 내용 폭이다. 우측은 gap 4로 줄을 바꾸고 실패 태그가
@@ -131,12 +140,8 @@ function SectionStatusRows({
         </div>
       )}
       {/* 미리보기 안내(최신 아님·없음·입력 오류·다시 불러오는 중) — 기존 중립 태그 행을 그대로 쓴다(Figma 에 이 문구 표본은 없다).
-          입력 오류 원래 코드는 화면 문구가 아니라 data 속성으로만 남긴다 */}
-      {status.previewNotice && (
-        <div data-testid={`${testIdPrefix}-notice`} data-input-error-code={status.previewInputErrorCode ?? undefined} className="flex">
-          <StatusTag tone="neutral">{status.previewNotice}</StatusTag>
-        </div>
-      )}
+          입력 오류 원래 코드는 화면 문구가 아니라 data 속성으로만 남긴다. canvas 는 이 행 대신 N5PreviewStatusSlot 에 보인다 */}
+      {variant === 'panel' && <PreviewNotice status={status} testIdPrefix={testIdPrefix} />}
     </>
   );
 }
@@ -162,6 +167,23 @@ export function CanvasSectionStatus({ status }: { status: SectionStatusViewModel
   return (
     <div data-testid="n5-canvas-section-status" className="flex w-[650px] flex-col gap-1">
       <SectionStatusRows status={status} variant="canvas" testIdPrefix="n5-canvas-section-status" />
+    </div>
+  );
+}
+
+/**
+ * 좌측 canvas section 의 미리보기 상태 자리 — section 위에 absolute 로 얹어 문서 흐름 높이를 바꾸지 않는다.
+ * 상태가 생기고 사라져도 viewer·section·block 위치가 그대로다. 비어 있어도 항상 둔다(자리 고정).
+ * 지금은 기존 임시 안내(previewNotice)를 기존 중립 태그로 보인다 — 자리 맞춤·넘침 판정 상태 디자인이 오면 이 안쪽만 바꾼다.
+ * 클릭은 아래 block·section 으로 그대로 넘긴다. block 번호 핀(block 왼쪽 위)·제외하기(오른쪽 위)를 가리지 않게 왼쪽 아래에 둔다(임시 위치).
+ */
+export function N5PreviewStatusSlot({ sectionId, status }: { sectionId: number; status: SectionStatusViewModel | undefined }) {
+  return (
+    <div
+      data-testid={`n5-preview-status-slot-${sectionId}`}
+      className="pointer-events-none absolute bottom-2 left-2 z-10 flex max-w-[calc(100%-16px)] flex-col items-start gap-1"
+    >
+      {status && <PreviewNotice status={status} testIdPrefix="n5-canvas-section-status" />}
     </div>
   );
 }

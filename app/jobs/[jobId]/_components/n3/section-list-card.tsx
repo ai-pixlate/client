@@ -82,7 +82,7 @@ export function SectionListCard({
       }}
       className={`flex shrink-0 cursor-pointer gap-5 rounded-[8px] border text-left transition-colors ${
         isCompact ? 'h-40 w-full py-[13px] pr-4 pl-[15px]' : 'min-h-[161px] w-[calc(100%+2px)] -mx-px p-5'
-      } ${isWhite ? 'bg-white' : 'bg-[#f5f5f5]'} ${isSelected ? 'border-[#ff6a38]' : 'border-[#eaeaea]'} ${
+      } ${isWhite ? 'bg-white' : 'bg-[#f5f5f5]'} ${isSelected ? 'border-[#707070]' : 'border-[#eaeaea]'} ${
         isJudgementFailed ? 'opacity-50' : ''
       }`}
     >

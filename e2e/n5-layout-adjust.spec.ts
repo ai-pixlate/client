@@ -116,6 +116,28 @@ test('move — 손을 놓을 때 1회, box 만 · 서버 trans1 · 최신 revisi
   for (const key of ['left', 'top', 'width', 'height'] as const) expect(Math.abs(synced[key] - after[key])).toBeLessThan(0.01);
 });
 
+test('저장 뒤 미리보기 안내는 section 위 상태 자리에 보이고, viewer·section 위치는 움직이지 않는다', async ({ page }) => {
+  await open(page);
+  const tops = () =>
+    page.evaluate(() => [501, 502, 503, 504, 505].map((id) => document.querySelector(`[data-testid="n5-slice-translated-${id}"]`)!.getBoundingClientRect().top));
+  const before = await tops();
+  const slot = page.getByTestId('n5-preview-status-slot-502');
+  await expect(slot).toBeAttached();
+  await expect(slot).toBeEmpty();
+
+  await page.getByTestId('n5-block-editor-9112').fill('Visible effect');
+  await page.getByTestId('n5-block-save-9112').click();
+  // 재렌더 동안 — 안내가 상태 자리에 보이고, 이미지 위 공간(헤더)은 생기지 않는다
+  await expect(slot.getByTestId('n5-canvas-section-status-notice')).toBeVisible();
+  await expect(page.getByTestId('n5-section-header-2')).toHaveCount(0);
+  expect(await tops()).toEqual(before);
+  // 우측 패널에는 같은 안내가 그대로 있다
+  await expect(page.getByTestId('n5-section-status-2-notice')).toBeVisible();
+  // 재렌더가 끝나면 안내가 사라지고 위치는 여전히 같다
+  await expect(slot).toBeEmpty({ timeout: 20_000 });
+  expect(await tops()).toEqual(before);
+});
+
 test('resize(Auto Height) — 손을 놓을 때 1회, box 만 · 높이는 줄바꿈 결과 그대로', async ({ page }) => {
   const patches = trackPatches(page);
   await open(page);
@@ -179,6 +201,34 @@ test('Undo/Redo — 이전 box·이후 box 를 현재 revision 으로 다시 저
   const redo = layoutPatches(patches)[2];
   expect(redo.body.layoutAdjust).toEqual({ box: moved });
   expect((await responseOf(redo)).block.layoutAdjust).toEqual({ box: moved, fontScale: null });
+});
+
+test('Idempotency-Key — 배치 저장은 조작마다 새 UUID v4(끌기·[+]·Undo·Redo 각각), 번역문 저장은 키를 싣지 않는다', async ({ page }) => {
+  const patches = trackPatches(page);
+  await open(page);
+  await page.getByTestId('n5-block-editor-9112').fill('Visible effect');
+  await page.getByTestId('n5-block-save-9112').click();
+  await expect(page.getByTestId('n5-block-save-9112')).toHaveText('확인');
+  await settled(page);
+  await dragBody(page, 9112, 30, 20);
+  await settled(page);
+  await openFontToolbar(page);
+  await page.getByTestId('n5-font-scale-increase').click();
+  await settled(page);
+  await page.getByTestId('n5-undo').click();
+  await expect(page.getByTestId('n5-redo')).toBeEnabled();
+  await page.getByTestId('n5-redo').click();
+  await settled(page);
+
+  const keyOf = (p: Patch) => p.request.headers()['idempotency-key'];
+  const layout = layoutPatches(patches);
+  expect(layout).toHaveLength(4); // 끌기 · [+] · Undo · Redo
+  const keys = layout.map(keyOf);
+  for (const key of keys) expect(key).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  expect(new Set(keys).size).toBe(keys.length); // 다른 조작에 같은 키를 쓰지 않는다
+  const text = patches.filter((p) => !('layoutAdjust' in p.body));
+  expect(text.length).toBeGreaterThan(0);
+  for (const p of text) expect(keyOf(p)).toBeUndefined();
 });
 
 test('혼합 이력 — 번역문 저장 뒤 옮기기, Undo 두 번은 box → 번역문 순서로 저장한다', async ({ page }) => {
@@ -332,5 +382,147 @@ test.describe('Mock 서버 계약 — 해제·정규화·범위·형식·렌더 
     const res = await patch(page, 9105, { trans1: label.trans1 ?? '', revision: label.revision, layoutAdjust: { fontScale: 1.1 } });
     expect(res.status).toBe(409);
     expect(res.json.error.details.reason).toBe('not_render_target');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────
+// server PR #116 대비 — legacy 적용 box(?mockScenario=n5-layout-legacy)
+// 9112 는 /blocks layoutAdjust=null 이지만 /preview renderInput.box 에 legacy box 가 적용된 상태로 시작한다.
+// FE 에는 아직 reset(layoutAdjust null) UI 가 없다 — reset 요청·반복 reset 은 Mock 서버 계약으로 확인하고,
+// 편집 시작값과 Undo 는 실제 화면 조작으로 확인한다.
+// ─────────────────────────────────────────────────────────────────
+test.describe('PR #116 대비 — legacy 적용 box', () => {
+  const LEGACY_9112 = { x: 120, y: 340, w: 420, h: 80 };
+  type Box = { x: number; y: number; w: number; h: number };
+
+  const readBlock = (page: Page, blockId: number) =>
+    page.evaluate(
+      async ({ blockId, jobId }) => {
+        const blocks = (await (await fetch(`/jobs/${jobId}/blocks`)).json()) as { id: number; revision: number; trans1: string; layoutAdjust: unknown }[];
+        return blocks.find((b) => b.id === blockId)!;
+      },
+      { blockId, jobId: MOCK_JOB_ID },
+    );
+  const renderBox = (page: Page, blockId: number) =>
+    page.evaluate(
+      async ({ blockId, jobId }) => {
+        const preview = (await (await fetch(`/jobs/${jobId}/preview`)).json()) as {
+          sections: { renderInput?: { blocks: { blockId: number; box: { x: number; y: number; w: number; h: number } }[] } | null }[];
+        };
+        for (const section of preview.sections) {
+          const hit = section.renderInput?.blocks.find((b) => b.blockId === blockId);
+          if (hit) return hit.box;
+        }
+        return null;
+      },
+      { blockId, jobId: MOCK_JOB_ID },
+    );
+  const send = (page: Page, blockId: number, body: unknown) =>
+    page.evaluate(
+      async ({ blockId, body, jobId }) => {
+        const res = await fetch(`/jobs/${jobId}/blocks/${blockId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        return { status: res.status, json: await res.json() };
+      },
+      { blockId, body, jobId: MOCK_JOB_ID },
+    );
+  const taskStatus = (page: Page, taskId: number) =>
+    page.evaluate(
+      async ({ taskId, jobId }) => {
+        const tasks = (await (await fetch(`/jobs/${jobId}/tasks`)).json()) as { items?: { taskId: number; status: string }[] };
+        return tasks.items?.find((item) => item.taskId === taskId)?.status ?? null;
+      },
+      { taskId, jobId: MOCK_JOB_ID },
+    );
+  /** 화면 박스 비율이 그 원본 px box 와 같은지(표시 배율과 무관하게) */
+  async function expectScreenBox(page: Page, box: Box) {
+    await expect
+      .poll(async () => {
+        const shown = await localBox(page, 9112);
+        return Math.abs(shown.left / shown.width - box.x / box.w) < 0.001 && Math.abs(shown.height / shown.width - box.h / box.w) < 0.001;
+      })
+      .toBe(true);
+  }
+
+  test('legacy 적용 box를 편집 시작값으로 쓰고, 옮긴 뒤 Undo하면 화면의 이전 box를 다시 저장한다', async ({ page }) => {
+    const patches = trackPatches(page);
+    const previewReads: number[] = [];
+    page.on('request', (r) => {
+      if (r.method() === 'GET' && new URL(r.url()).pathname.endsWith('/preview')) previewReads.push(Date.now());
+    });
+    await open(page, 'n5-layout-legacy');
+    const initial = await readBlock(page, 9112);
+    expect(initial.layoutAdjust).toBeNull();
+    expect(await renderBox(page, 9112)).toEqual(LEGACY_9112);
+    // 편집 시작값 = renderInput legacy box(원본 bbox 아님)
+    await expectScreenBox(page, LEGACY_9112);
+
+    await select(page, 9112);
+    await dragBody(page, 9112, 30, 20);
+    await settled(page);
+    const [move] = layoutPatches(patches);
+    const moved = move.body.layoutAdjust!.box!;
+    // 옮기기는 legacy box 크기 그대로 — 시작값이 원본 bbox 였다면 w=500 이 나간다
+    expect([moved.w, moved.h]).toEqual([LEGACY_9112.w, LEGACY_9112.h]);
+    expect(moved.x).toBeGreaterThan(LEGACY_9112.x);
+    expect(move.body.revision).toBe(initial.revision);
+    const moveRes = await responseOf(move);
+    expect(moveRes.block.revision).toBe(initial.revision + 1);
+
+    await page.getByTestId('n5-undo').click();
+    await expect(page.getByTestId('n5-redo')).toBeEnabled();
+    await expect(page.getByTestId('n5-undo')).toBeDisabled();
+    const undo = layoutPatches(patches)[1];
+    // Undo = 이전 적용 box 를 명시적으로 다시 저장(legacy 출처·null 복원을 기대하지 않는다)
+    expect(undo.body).toEqual({ trans1: initial.trans1, revision: initial.revision + 1, layoutAdjust: { box: LEGACY_9112 } });
+    const undoRes = await responseOf(undo);
+    expect(undoRes.block.revision).toBe(initial.revision + 2);
+    expect(undoRes.block.layoutAdjust).toEqual({ box: LEGACY_9112, fontScale: null }); // 저장 출처는 seller layoutAdjust
+    expect(typeof undoRes.rerenderTaskId).toBe('number');
+    await expectScreenBox(page, LEGACY_9112);
+
+    // 재렌더 완료 → /blocks·/preview 재조회 뒤에도 같은 box · 이후 revision 정본 = Undo 응답 값
+    const readsBefore = previewReads.length;
+    await expect.poll(() => taskStatus(page, undoRes.rerenderTaskId!), { timeout: 20_000 }).toBe('done');
+    await expect.poll(() => previewReads.length, { timeout: 20_000 }).toBeGreaterThan(readsBefore);
+    await expect(slice(page, 502)).toHaveAttribute('data-preview-display', 'local-typeset', { timeout: 20_000 });
+    expect(await renderBox(page, 9112)).toEqual(LEGACY_9112);
+    expect((await readBlock(page, 9112)).revision).toBe(undoRes.block.revision);
+    await expectScreenBox(page, LEGACY_9112);
+  });
+
+  test('layoutAdjust가 null로 유지돼도 revision과 rerenderTaskId가 바뀌면 변경으로 처리한다(Mock 서버 계약)', async ({ page }) => {
+    await open(page, 'n5-layout-legacy');
+    const before = await readBlock(page, 9112);
+    expect(before.layoutAdjust).toBeNull();
+    expect(await renderBox(page, 9112)).toEqual(LEGACY_9112);
+
+    const reset = await send(page, 9112, { trans1: before.trans1, revision: before.revision, layoutAdjust: null });
+    expect(reset.status).toBe(200);
+    expect(reset.json.block.layoutAdjust).toBeNull(); // null → null
+    expect(reset.json.block.revision).toBe(before.revision + 1);
+    expect(typeof reset.json.rerenderTaskId).toBe('number');
+    await expect.poll(() => taskStatus(page, reset.json.rerenderTaskId), { timeout: 20_000 }).toBe('done');
+    // 적용 box 가 원본 bbox 로 바뀐다
+    expect(await renderBox(page, 9112)).toEqual(ORIGINAL_9112);
+    expect((await readBlock(page, 9112)).revision).toBe(before.revision + 1);
+
+    // Undo 와 같은 요청 — 이전 적용 box 를 명시적으로 저장하면 seller layoutAdjust 가 된다
+    const undo = await send(page, 9112, { trans1: before.trans1, revision: before.revision + 1, layoutAdjust: { box: LEGACY_9112 } });
+    expect(undo.json.block.layoutAdjust).toEqual({ box: LEGACY_9112, fontScale: null });
+    expect(undo.json.block.revision).toBe(before.revision + 2);
+    expect(await renderBox(page, 9112)).toEqual(LEGACY_9112);
+  });
+
+  test('적용 box가 이미 원본이면 같은 reset 요청은 no-op으로 처리한다(Mock 서버 계약)', async ({ page }) => {
+    await open(page, 'n5-layout-legacy');
+    const before = await readBlock(page, 9112);
+    const first = await send(page, 9112, { trans1: before.trans1, revision: before.revision, layoutAdjust: null });
+    expect(first.json.rerenderTaskId).not.toBeNull();
+    const again = await send(page, 9112, { trans1: before.trans1, revision: first.json.block.revision, layoutAdjust: null });
+    expect(again.status).toBe(200);
+    expect(again.json.block.revision).toBe(first.json.block.revision);
+    expect(again.json.block.layoutAdjust).toBeNull();
+    expect(again.json.rerenderTaskId).toBeNull();
+    expect(await renderBox(page, 9112)).toEqual(ORIGINAL_9112);
   });
 });

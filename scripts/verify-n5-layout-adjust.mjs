@@ -14,8 +14,15 @@ import {
   toLayoutBox,
 } from '../lib/n5/layout-adjust.ts';
 import { isLayoutAdjustWriteEnabled } from '../lib/n5/layout-adjust-capability.ts';
+import { createIdempotencyKey } from '../lib/api/idempotency.ts';
 import { getBaseFontScale, getTranslatedBaseBox, toBlockViewModel } from '../lib/n5/adapter.ts';
-import { applyMockLayoutPatch, isSameMockLayout, parseMockLayoutPatch } from '../lib/mock-api/n5-layout-adjust.ts';
+import {
+  applyMockLayoutPatch,
+  clearsMockLegacyBox,
+  isSameMockLayout,
+  parseMockLayoutPatch,
+  withMockLegacyBox,
+} from '../lib/mock-api/n5-layout-adjust.ts';
 
 let pass = 0;
 let fail = 0;
@@ -120,6 +127,39 @@ console.log('\n[Mock 서버] 형식 · 병합 · 정규화');
   check('fontScale 1.0 → null', eq(applyMockLayoutPatch(null, { box: moved, fontScale: 1 }, ORIGINAL), { box: moved, fontScale: null }));
   check('둘 다 기본값 → layoutAdjust null', applyMockLayoutPatch({ box: moved, fontScale: 1.1 }, { box: ORIGINAL, fontScale: 1 }, ORIGINAL) === null);
   check('같은 배치 판정(null 끼리)', isSameMockLayout(null, undefined) && !isSameMockLayout(null, { box: null, fontScale: 1.1 }));
+}
+
+console.log('\n[legacy 적용 박스] server PR #116 대비 — layoutAdjust null 이어도 적용 박스는 renderInput 이 정본');
+{
+  const LEGACY = { x: 120, y: 340, w: 420, h: 80 };
+  const legacyVm = { ...toBlockViewModel(dto({ layoutAdjust: null })), renderBinding: { box: { x: 120, y: 340, width: 420, height: 80 }, style: { fontScale: 1 } } };
+  check('편집 시작값 = renderInput legacy box(원본 bbox 아님)', eq(getTranslatedBaseBox(legacyVm), { x: 120, y: 340, width: 420, height: 80 }));
+  // reset 응답 null 은 이전 값과 비교하지 않고 원본 bbox 로 해석한다(null → null 이라도 no-op 으로 보지 않는다)
+  check('reset 응답(layoutAdjust null) → 원본 bbox · 1.0', eq(appliedLayoutFromBlock(dto({ layoutAdjust: null, revision: 8 })), { bbox: { x: 40, y: 300, width: 500, height: 80 }, fontScale: 1 }));
+  check('Undo 응답(seller box = 이전 legacy box) → 그 box', eq(appliedLayoutFromBlock(dto({ layoutAdjust: { box: LEGACY, fontScale: null } })).bbox, { x: 120, y: 340, width: 420, height: 80 }));
+  check('Mock: 전부 해제는 legacy 를 지운다', clearsMockLegacyBox(null));
+  check('Mock: box 지정은 legacy 를 지운다', clearsMockLegacyBox({ box: LEGACY }) && clearsMockLegacyBox({ box: null }));
+  check('Mock: fontScale 만은 legacy 를 남긴다', !clearsMockLegacyBox({ fontScale: 1.1 }));
+  check('Mock: 셀러 박스가 없으면 legacy 를 적용값으로', eq(withMockLegacyBox({ layoutAdjust: null }, LEGACY).layoutAdjust, { box: LEGACY, fontScale: null }));
+  check('Mock: 셀러 박스가 있으면 그대로', eq(withMockLegacyBox({ layoutAdjust: { box: ORIGINAL, fontScale: 1.1 } }, LEGACY).layoutAdjust, { box: ORIGINAL, fontScale: 1.1 }));
+  check('Mock: legacy 없으면 그대로', withMockLegacyBox({ layoutAdjust: null }, undefined).layoutAdjust === null);
+}
+
+console.log('\n[Idempotency-Key] 조작마다 새 UUID v4 · 만들 수 없으면 키 없이');
+{
+  const a = createIdempotencyKey();
+  const b = createIdempotencyKey();
+  const v4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  check('UUID v4 형식', v4.test(a ?? ''));
+  check('계약 형식(공백 없는 ASCII 1~128자)', /^[!-~]{1,128}$/.test(a ?? ''));
+  check('부를 때마다 다른 키', a !== b);
+  const original = globalThis.crypto.randomUUID;
+  try {
+    globalThis.crypto.randomUUID = undefined;
+    check('randomUUID 없음(secure context 아님) → null', createIdempotencyKey() === null);
+  } finally {
+    globalThis.crypto.randomUUID = original;
+  }
 }
 
 console.log(`\n결과: PASS ${pass} / FAIL ${fail}`);

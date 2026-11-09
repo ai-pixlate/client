@@ -37,7 +37,7 @@ import {
   type CenterSnapLock,
   type ResizeHandle,
 } from '@/lib/n5/layout-edit';
-import { CanvasSectionStatus } from './n5-section-status';
+import { CanvasSectionStatus, N5PreviewStatusSlot } from './n5-section-status';
 import {
   ZOOM_BUTTON_STEP,
   computeWheelZoomFactor,
@@ -971,6 +971,7 @@ function ImageLayer({
                 drag={blockDrag}
               />
             ))}
+            <N5PreviewStatusSlot sectionId={slice.sectionId} status={status} />
             {!isExcluded && headerHeight === 0 && slice.sectionId === selectedSectionId && (
               <SectionSelectedTag sectionOrder={slice.sectionOrder} />
             )}
