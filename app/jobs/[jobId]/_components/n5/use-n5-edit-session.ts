@@ -39,6 +39,7 @@ import {
   type N5LayoutChange,
 } from '@/lib/n5/layout-adjust';
 import { isLayoutAdjustWriteEnabled } from '@/lib/n5/layout-adjust-capability';
+import { createIdempotencyKey } from '@/lib/api/idempotency';
 import { openTypesetMeasurer, type TypesetMeasurer } from '@/lib/n5/typeset-measurement';
 import { isTypesetRole } from '@/lib/n5/typeset-rules';
 import type { TypesetFontGate } from './use-typeset-font-gate';
@@ -309,7 +310,8 @@ export function useN5EditSession({
       const latest = queryClient.getQueryData<ApiTextBlock[]>(pixlateKeys.n5Blocks(jobId))?.find((b) => b.id === blockId);
       if (latest?.revision == null) return { ok: false, applied: false };
       try {
-        const response = await patchBlock({ blockId, payload: buildLayoutBlockPatch(latest, layoutAdjust) });
+        // 이 호출 = 사용자 조작 1회(끌기·손잡이 1회 · [+][−] 1회 · 실행 취소·다시 실행 1회) — 조작마다 새 멱등 키
+        const response = await patchBlock({ blockId, payload: buildLayoutBlockPatch(latest, layoutAdjust), idempotencyKey: createIdempotencyKey() });
         setRerenderTask(blockId, getRerenderTaskId(response));
         const applied = response.block ? appliedLayoutFromBlock(response.block) : null;
         if (applied && applyResponse()) applyLayoutDraft(blockId, applied);

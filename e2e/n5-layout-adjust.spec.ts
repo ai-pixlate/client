@@ -181,6 +181,34 @@ test('Undo/Redo — 이전 box·이후 box 를 현재 revision 으로 다시 저
   expect((await responseOf(redo)).block.layoutAdjust).toEqual({ box: moved, fontScale: null });
 });
 
+test('Idempotency-Key — 배치 저장은 조작마다 새 UUID v4(끌기·[+]·Undo·Redo 각각), 번역문 저장은 키를 싣지 않는다', async ({ page }) => {
+  const patches = trackPatches(page);
+  await open(page);
+  await page.getByTestId('n5-block-editor-9112').fill('Visible effect');
+  await page.getByTestId('n5-block-save-9112').click();
+  await expect(page.getByTestId('n5-block-save-9112')).toHaveText('확인');
+  await settled(page);
+  await dragBody(page, 9112, 30, 20);
+  await settled(page);
+  await openFontToolbar(page);
+  await page.getByTestId('n5-font-scale-increase').click();
+  await settled(page);
+  await page.getByTestId('n5-undo').click();
+  await expect(page.getByTestId('n5-redo')).toBeEnabled();
+  await page.getByTestId('n5-redo').click();
+  await settled(page);
+
+  const keyOf = (p: Patch) => p.request.headers()['idempotency-key'];
+  const layout = layoutPatches(patches);
+  expect(layout).toHaveLength(4); // 끌기 · [+] · Undo · Redo
+  const keys = layout.map(keyOf);
+  for (const key of keys) expect(key).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  expect(new Set(keys).size).toBe(keys.length); // 다른 조작에 같은 키를 쓰지 않는다
+  const text = patches.filter((p) => !('layoutAdjust' in p.body));
+  expect(text.length).toBeGreaterThan(0);
+  for (const p of text) expect(keyOf(p)).toBeUndefined();
+});
+
 test('혼합 이력 — 번역문 저장 뒤 옮기기, Undo 두 번은 box → 번역문 순서로 저장한다', async ({ page }) => {
   const patches = trackPatches(page);
   await open(page);

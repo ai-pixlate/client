@@ -14,6 +14,7 @@ import {
   toLayoutBox,
 } from '../lib/n5/layout-adjust.ts';
 import { isLayoutAdjustWriteEnabled } from '../lib/n5/layout-adjust-capability.ts';
+import { createIdempotencyKey } from '../lib/api/idempotency.ts';
 import { getBaseFontScale, getTranslatedBaseBox, toBlockViewModel } from '../lib/n5/adapter.ts';
 import {
   applyMockLayoutPatch,
@@ -142,6 +143,23 @@ console.log('\n[legacy 적용 박스] server PR #116 대비 — layoutAdjust nul
   check('Mock: 셀러 박스가 없으면 legacy 를 적용값으로', eq(withMockLegacyBox({ layoutAdjust: null }, LEGACY).layoutAdjust, { box: LEGACY, fontScale: null }));
   check('Mock: 셀러 박스가 있으면 그대로', eq(withMockLegacyBox({ layoutAdjust: { box: ORIGINAL, fontScale: 1.1 } }, LEGACY).layoutAdjust, { box: ORIGINAL, fontScale: 1.1 }));
   check('Mock: legacy 없으면 그대로', withMockLegacyBox({ layoutAdjust: null }, undefined).layoutAdjust === null);
+}
+
+console.log('\n[Idempotency-Key] 조작마다 새 UUID v4 · 만들 수 없으면 키 없이');
+{
+  const a = createIdempotencyKey();
+  const b = createIdempotencyKey();
+  const v4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  check('UUID v4 형식', v4.test(a ?? ''));
+  check('계약 형식(공백 없는 ASCII 1~128자)', /^[!-~]{1,128}$/.test(a ?? ''));
+  check('부를 때마다 다른 키', a !== b);
+  const original = globalThis.crypto.randomUUID;
+  try {
+    globalThis.crypto.randomUUID = undefined;
+    check('randomUUID 없음(secure context 아님) → null', createIdempotencyKey() === null);
+  } finally {
+    globalThis.crypto.randomUUID = original;
+  }
 }
 
 console.log(`\n결과: PASS ${pass} / FAIL ${fail}`);

@@ -275,15 +275,20 @@ export function getN5Preview(jobId: string): Promise<ApiReviewPreview> {
 /**
  * 번역문 수정 (API-CFM-02, v3.4.2). revision 낙관적 잠금 — 불일치 시 409
  * REVISION_CONFLICT(ApiRequestError로 던짐, body에 원본 Error 응답 보존).
+ * idempotencyKey(선택) — blockPatch 「저장 공통」의 Idempotency-Key. 사용자 조작마다 새 키이고,
+ * 같은 키는 같은 조작의 같은 본문 재전송에만 쓴다(lib/api/idempotency.ts). 없으면 헤더를 싣지 않는다.
  */
 export async function patchN5Block(
   jobId: string,
   blockId: number,
   payload: ApiBlockPatch,
+  options: { idempotencyKey?: string | null } = {},
 ): Promise<ApiBlockPatchResponse> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (options.idempotencyKey) headers['Idempotency-Key'] = options.idempotencyKey;
   const res = await authorizedFetch(`/jobs/${jobId}/blocks/${blockId}`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify(payload),
   });
   const body = await res.json().catch(() => null);

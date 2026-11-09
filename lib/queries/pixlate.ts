@@ -279,8 +279,8 @@ export function usePatchN5BlockMutation(jobId: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ blockId, payload }: { blockId: number; payload: ApiBlockPatch }) =>
-      patchN5Block(jobId, blockId, payload),
+    mutationFn: ({ blockId, payload, idempotencyKey }: { blockId: number; payload: ApiBlockPatch; idempotencyKey?: string | null }) =>
+      patchN5Block(jobId, blockId, payload, { idempotencyKey }),
     onSuccess: (response) => {
       const updated = response.block;
       if (!updated) return;
