@@ -166,7 +166,7 @@ test.describe('N3 — 선택', () => {
     await expect(page.getByTestId('n3-section-image')).toHaveAttribute('data-section-id', String(id));
   });
 
-  test('모든 카드를 클릭으로 선택할 수 있고, 선택 카드에만 orange 테두리가 붙는다', async ({ page }) => {
+  test('모든 카드를 클릭으로 선택할 수 있고, 선택 카드에만 선택 테두리(#707070)가 붙는다', async ({ page }) => {
     const pageErrors: Error[] = [];
     page.on('pageerror', (err) => pageErrors.push(err));
     await reachN3(page);
@@ -175,8 +175,8 @@ test.describe('N3 — 선택', () => {
       const id = toNumericId(s.sectionId);
       await card(page, id).click({ position: { x: 150, y: 20 } });
       await expect(card(page, id)).toHaveAttribute('aria-pressed', 'true');
-      await expect(card(page, id)).toHaveClass(/border-\[#ff6a38\]/);
-      await expect(page.locator('[data-testid^="n3-section-card-"][class*="border-[#ff6a38]"]')).toHaveCount(1);
+      await expect(card(page, id)).toHaveClass(/border-\[#707070\]/);
+      await expect(page.locator('[data-testid^="n3-section-card-"][class*="border-[#707070]"]')).toHaveCount(1);
       await expect(page.getByTestId('n3-detail-title')).toHaveText(`SECTION ${String(s.sectionOrder).padStart(2, '0')}`);
       await expect(page.getByTestId('n3-section-image')).toHaveAttribute('data-section-id', String(id));
     }

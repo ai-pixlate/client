@@ -12,7 +12,8 @@ test.use({ viewport: { width: 1920, height: 1080 } });
 const WHITE = 'rgb(255, 255, 255)';
 const GRAY = 'rgb(245, 245, 245)';
 const NEUTRAL = 'rgb(234, 234, 234)';
-const ORANGE = 'rgb(255, 106, 56)';
+// 선택 테두리 — 판정 배지·CTA보다 위계가 높아지지 않게 회색(#707070). 주황은 CTA·의미 상태에만 남긴다
+const SELECTED = 'rgb(112, 112, 112)';
 
 async function expectCard(
   card: Locator,
@@ -38,7 +39,7 @@ test('카드 7종이 서버 상태와 선택에 따라 나오고, 상세에도 �
   const status = page.getByTestId('n3-detail-status');
 
   // 첫 제외 섹션(2)이 기본 선택이다 — 제외 선택
-  await expectCard(card(2), { variant: 'exclusion-selected', bg: GRAY, border: ORANGE, opacity: '1', action: '그래도 번역하기', badges: true });
+  await expectCard(card(2), { variant: 'exclusion-selected', bg: GRAY, border: SELECTED, opacity: '1', action: '그래도 번역하기', badges: true });
   expect(Math.round((await card(2).boundingBox())!.height)).toBeGreaterThanOrEqual(161);
   await expect(status).toHaveCount(0); // 자동 제외는 칩이 없다
 
@@ -57,7 +58,7 @@ test('카드 7종이 서버 상태와 선택에 따라 나오고, 상세에도 �
 
   // 번역 선택 + 상세 상태
   await card(1).click({ position: { x: 300, y: 20 } });
-  await expectCard(card(1), { variant: 'translation-selected', bg: WHITE, border: ORANGE, opacity: '1', height: 160, chip: '번역 예정', action: '제외하기', badges: false });
+  await expectCard(card(1), { variant: 'translation-selected', bg: WHITE, border: SELECTED, opacity: '1', height: 160, chip: '번역 예정', action: '제외하기', badges: false });
   await expect(status).toHaveText('번역 예정');
   await expect(page.getByTestId('n3-detail-title')).toHaveText('SECTION 01');
   await expect(page.getByTestId('n3-verdict-empty')).toHaveText('걸린 판정이 없어요');
@@ -76,12 +77,44 @@ test('카드 7종이 서버 상태와 선택에 따라 나오고, 상세에도 �
 
   // 판정실패 선택 — 테두리만 바뀐다
   await card(4).click({ position: { x: 300, y: 20 } });
-  await expect(card(4)).toHaveCSS('border-top-color', ORANGE);
+  await expect(card(4)).toHaveCSS('border-top-color', SELECTED);
   await expect(card(4)).toHaveAttribute('data-variant', 'judgement-failed');
   await expect(page.getByTestId('n3-verdict-judge-failed')).toHaveText('판정 실패');
   await expect(page.getByTestId('n3-verdict-empty')).toHaveCount(0);
   await expect(page.getByTestId('n3-detail-action')).toHaveText('그래도 번역하기');
   await expect(card(4)).toHaveAttribute('data-bucket', 'exclude');
+});
+
+test('선택 테두리는 #707070 — 판정 배지·CTA 색은 선택과 무관하고, 키보드 focus 표시는 남는다', async ({ page }) => {
+  await reachN3(page, { mockScenario: 'n3-card-variants' });
+  const card = (id: number) => page.getByTestId(`n3-section-card-${id}`);
+  const dotColors = (id: number) => card(id).locator('span.size-\\[6px\\]').evaluateAll((els) => els.map((el) => getComputedStyle(el).backgroundColor));
+  const ctaBg = () => page.getByTestId('n3-proceed').evaluate((el) => getComputedStyle(el).backgroundColor);
+
+  // 2 = 기본 선택(제외 선택) · 5 = 되살림(배지 있음, 선택 안 됨)
+  await expect(card(2)).toHaveCSS('border-top-color', SELECTED);
+  const badgeWhenSelected = await dotColors(2);
+  const badgeOther = await dotColors(5);
+  const ctaBefore = await ctaBg();
+  expect(badgeWhenSelected.length).toBeGreaterThan(0);
+  // 선택 테두리 색이 배지 점 색으로 번지지 않는다
+  expect(badgeWhenSelected).not.toContain(SELECTED);
+
+  await card(5).click({ position: { x: 300, y: 20 } });
+  await expect(card(5)).toHaveCSS('border-top-color', SELECTED);
+  await expect(card(2)).toHaveCSS('border-top-color', NEUTRAL);
+  expect(await dotColors(2)).toEqual(badgeWhenSelected); // 선택이 풀려도 배지 색 그대로
+  expect(await dotColors(5)).toEqual(badgeOther); // 선택돼도 배지 색 그대로
+  expect(await ctaBg()).toBe(ctaBefore);
+
+  // 키보드 focus — 선택 테두리와 별개로 브라우저 focus outline 이 보인다(선택 색으로 덮지 않는다)
+  await card(5).focus();
+  await page.keyboard.press('Shift+Tab');
+  await page.keyboard.press('Tab');
+  await expect(card(5)).toBeFocused();
+  const outline = await card(5).evaluate((el) => ({ style: getComputedStyle(el).outlineStyle, width: parseFloat(getComputedStyle(el).outlineWidth) }));
+  expect(outline.style).not.toBe('none');
+  expect(outline.width).toBeGreaterThan(0);
 });
 
 test('기본 Mock — 판정 없는 정상 섹션은 번역 예정이고, 자동 제외에는 근거 판정이 있다', async ({ page }) => {
