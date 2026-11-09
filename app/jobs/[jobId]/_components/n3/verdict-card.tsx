@@ -2,15 +2,15 @@ import type { ApiSectionVerdict, ApiVerdictType } from '@/lib/api/n3-schema';
 import { getN3VerdictBadgeLabel } from '@/lib/n3/verdict';
 
 // ─────────────────────────────────────────────────────────────────
-// N3 — 판정 배지 + 카드 (Figma 540:3119의 Badge/판정 카드 실측 반영).
+// N3 — 판정 배지 + 카드 (Figma 1422:10176 「N3 섹션 확인 / 디폴트」의 Badge 반영).
 //
-// 색상 톤은 Figma Badge 컴포넌트를 그대로 옮겼다(실제 dot SVG를 받아
-// hex를 확인함):
-//   - regulatory(규제위반) → red(#e5484d)
-//   - channel_policy(채널정책) → orange(#ff6a38)
-//   - 나머지(현지 무의미/현지 기준 수정 필요/조건부 규제) → 중립(흰 배경 +
-//     회색 테두리), 다만 dot 색만 현지 무의미는 orange, 나머지는 gray로
-//     갈린다 — chrome은 같지만 시급도만 dot으로 구분하는 Figma 실측 그대로.
+// 색상 톤(Figma Badge variant):
+//   - regulatory(규제 위반) → red(#e5484d)
+//   - local_irrelevant(현지 수정 필수) · needs_fix(현지 확인 필요) → orange(#ff6a38)
+//   - regulatory_replaceable(규제 표현) · regulatory_conditional(조건부 규제)
+//     → 중립(흰 배경 + 회색 테두리) — 제외 이유가 아닌 낮은 강조
+//   - channel_policy(채널 정책, 12월)는 이번 9월 정렬 범위가 아니라 기존 값을 둔다
+//     (Figma는 red).
 //
 // regulatory_replaceable(규제 표현)은 Figma에 표본이 없는 variant라
 // 4단계에서 근거를 다시 확인했다. Figma Badge/Status Chip 디자인시스템
@@ -31,12 +31,10 @@ const TONE_BY_VERDICT_TYPE: Record<ApiVerdictType, BadgeTone> = {
   regulatory: 'red',
   regulatory_replaceable: 'neutral',
   regulatory_conditional: 'neutral',
-  local_irrelevant: 'neutral',
-  needs_fix: 'neutral',
+  local_irrelevant: 'orange',
+  needs_fix: 'orange',
   channel_policy: 'orange',
 };
-
-const NEUTRAL_ORANGE_DOT_TYPES = new Set<ApiVerdictType>(['local_irrelevant']);
 
 const TONE_CHROME: Record<BadgeTone, { bg: string; border: string; text: string }> = {
   red: { bg: 'bg-[#fcebec]', border: 'border-[#e5484d]', text: 'text-[#e5484d]' },
@@ -44,10 +42,10 @@ const TONE_CHROME: Record<BadgeTone, { bg: string; border: string; text: string 
   neutral: { bg: 'bg-white', border: 'border-[#eaeaea]', text: 'text-[#171717]' },
 };
 
-function dotColorFor(type: ApiVerdictType, tone: BadgeTone): string {
+function dotColorFor(tone: BadgeTone): string {
   if (tone === 'red') return '#e5484d';
   if (tone === 'orange') return '#ff6a38';
-  return NEUTRAL_ORANGE_DOT_TYPES.has(type) ? '#ff6a38' : '#707070';
+  return '#707070';
 }
 
 function BadgeShell({
@@ -69,7 +67,7 @@ function BadgeShell({
 export function VerdictBadge({ type }: { type: ApiVerdictType }) {
   const tone = TONE_BY_VERDICT_TYPE[type] ?? 'neutral';
   const chrome = TONE_CHROME[tone];
-  const dot = dotColorFor(type, tone);
+  const dot = dotColorFor(tone);
   return (
     <BadgeShell bg={chrome.bg} border={chrome.border}>
       <span className="size-[6px] shrink-0 rounded-full" style={{ backgroundColor: dot }} />
@@ -80,22 +78,15 @@ export function VerdictBadge({ type }: { type: ApiVerdictType }) {
   );
 }
 
-/** verdictType이 없는 일반 정보 배지(예: 섹션 자동 제외 사유) — 중립 톤 고정 */
-export function InfoBadge({ label }: { label: string }) {
-  return (
-    <BadgeShell bg="bg-white" border="border-[#eaeaea]">
-      <span className="size-[6px] shrink-0 rounded-full bg-[#707070]" />
-      <span className="whitespace-nowrap text-[12px] tracking-[-0.02em] text-[#171717]">{label}</span>
-    </BadgeShell>
-  );
-}
-
 /**
  * 판정 카드. Figma는 제목/설명/근거 3단이고, 실제 계약(ApiSectionVerdict)도
  * problemText/reason/basisArticle 3개 필드로 나뉘어 있어(구 계약은
  * problemText/basis 2개뿐이라 설명 줄을 근거에 합쳐 썼었다) 이제 그대로
  * 3단으로 대응시킨다. 각 줄은 값이 없으면(계약상 전부 nullable) 생략한다 —
  * 빈 문자열을 억지로 그리지 않는다.
+ *
+ * 근거 줄의 [보기]는 서버가 준 evidenceUrl이 있을 때만 그린다 — basisArticle로
+ * URL을 만들지 않는다. PRD의 「국가 + 규정 이름」은 계약에 규정 이름이 없어 아직 그리지 않는다.
  */
 export function VerdictCard({ verdict }: { verdict: ApiSectionVerdict }) {
   if (!verdict.verdictType) return null;
@@ -108,8 +99,22 @@ export function VerdictCard({ verdict }: { verdict: ApiSectionVerdict }) {
           <p className="text-[18px] font-medium tracking-[-0.03em] text-[#171717]">{verdict.problemText}</p>
         )}
         {verdict.reason && <p className="text-[14px] tracking-[-0.01em] text-[#171717]">{verdict.reason}</p>}
-        {verdict.basisArticle && (
-          <p className="text-[12px] font-light tracking-[-0.04em] text-[#707070]">{verdict.basisArticle}</p>
+        {(verdict.basisArticle || verdict.evidenceUrl) && (
+          <p className="flex items-start gap-1 text-[12px] font-light tracking-[-0.04em] text-[#707070]">
+            {verdict.basisArticle && <span>{verdict.basisArticle}</span>}
+            {verdict.evidenceUrl && (
+              <a
+                href={verdict.evidenceUrl}
+                target="_blank"
+                rel="noreferrer"
+                data-testid="n3-verdict-evidence-link"
+                aria-label={verdict.basisArticle ? `${verdict.basisArticle} 근거 보기(새 창)` : '근거 보기(새 창)'}
+                className="underline hover:text-[#171717]"
+              >
+                [보기]
+              </a>
+            )}
+          </p>
         )}
       </div>
     </div>

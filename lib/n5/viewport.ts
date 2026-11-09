@@ -192,6 +192,19 @@ export function clampPan(pan: Point, canvas: Size, zoom: number, usable: Size): 
   };
 }
 
+/**
+ * 캔버스가 화면보다 클 때 스크롤 표시 막대의 크기·위치(0~1 비율). 화면 안에 다 들어오면 null.
+ * pan 범위는 clampPanAxis와 같다. 표시 전용이라 pan·zoom 계산에는 쓰지 않는다.
+ */
+export function computeScrollThumb(pan: number, scaledSize: number, usableSize: number): { start: number; size: number } | null {
+  if (scaledSize <= usableSize || usableSize <= 0) return null;
+  const size = Math.max(usableSize / scaledSize, 0.05);
+  const max = usableSize / 2;
+  const min = usableSize / 2 - scaledSize;
+  const progress = Math.min(1, Math.max(0, (max - pan) / (max - min)));
+  return { start: progress * (1 - size), size };
+}
+
 // ─────────────────────────────────────────────────────────────────
 // 배율 직접 입력
 // ─────────────────────────────────────────────────────────────────
