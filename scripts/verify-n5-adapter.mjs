@@ -417,6 +417,10 @@ console.log('\nN5 오류 상태');
   check('제외 → 제외된 섹션', label(50, 'excluded') === '제외된 섹션');
   check('렌더 완료 → 없음', label(50, 'ready') === null);
   check('진행 문구는 canvas 공간을 쓰지 않는다', getSectionCanvasHeaderHeight(buildSectionStatus(50, [], [], undefined, 'unresolved')) === 0);
+  const withNotice = { ...status, previewNotice: '이전 결과' };
+  check('미리보기 안내는 canvas 공간을 쓰지 않는다(저장마다 viewer 가 밀리지 않게)', getSectionCanvasHeaderHeight(withNotice) === getSectionCanvasHeaderHeight(status));
+  check('미리보기 안내만 있으면 canvas 공간 0', getSectionCanvasHeaderHeight({ ...running, previewNotice: '이전 결과' }) === 0);
+  check('우측 패널 행 수에는 미리보기 안내가 그대로 들어간다', getSectionStatusRowCount(withNotice) === getSectionStatusRowCount(status) + 1);
   check('warningBadge로 렌더 실패를 판별하지 않는다', buildSectionStatus(30, [], [], { warningBadge: 'processing_failed' }).failedStages.length === 0);
 }
 

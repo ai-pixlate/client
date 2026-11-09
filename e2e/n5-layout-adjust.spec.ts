@@ -116,6 +116,28 @@ test('move — 손을 놓을 때 1회, box 만 · 서버 trans1 · 최신 revisi
   for (const key of ['left', 'top', 'width', 'height'] as const) expect(Math.abs(synced[key] - after[key])).toBeLessThan(0.01);
 });
 
+test('저장 뒤 미리보기 안내는 section 위 상태 자리에 보이고, viewer·section 위치는 움직이지 않는다', async ({ page }) => {
+  await open(page);
+  const tops = () =>
+    page.evaluate(() => [501, 502, 503, 504, 505].map((id) => document.querySelector(`[data-testid="n5-slice-translated-${id}"]`)!.getBoundingClientRect().top));
+  const before = await tops();
+  const slot = page.getByTestId('n5-preview-status-slot-502');
+  await expect(slot).toBeAttached();
+  await expect(slot).toBeEmpty();
+
+  await page.getByTestId('n5-block-editor-9112').fill('Visible effect');
+  await page.getByTestId('n5-block-save-9112').click();
+  // 재렌더 동안 — 안내가 상태 자리에 보이고, 이미지 위 공간(헤더)은 생기지 않는다
+  await expect(slot.getByTestId('n5-canvas-section-status-notice')).toBeVisible();
+  await expect(page.getByTestId('n5-section-header-2')).toHaveCount(0);
+  expect(await tops()).toEqual(before);
+  // 우측 패널에는 같은 안내가 그대로 있다
+  await expect(page.getByTestId('n5-section-status-2-notice')).toBeVisible();
+  // 재렌더가 끝나면 안내가 사라지고 위치는 여전히 같다
+  await expect(slot).toBeEmpty({ timeout: 20_000 });
+  expect(await tops()).toEqual(before);
+});
+
 test('resize(Auto Height) — 손을 놓을 때 1회, box 만 · 높이는 줄바꿈 결과 그대로', async ({ page }) => {
   const patches = trackPatches(page);
   await open(page);
