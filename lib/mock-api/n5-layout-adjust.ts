@@ -79,3 +79,18 @@ export function isSameMockLayout(a: ApiLayoutAdjust | null | undefined, b: ApiLa
       : left.box.x === right.box.x && left.box.y === right.box.y && left.box.w === right.box.w && left.box.h === right.box.h;
   return sameBox && left.fontScale === right.fontScale;
 }
+
+/**
+ * legacy 적용 박스(server PR #116 대비) — /blocks 의 layoutAdjust 는 null 인데 렌더 입력(renderInput.box)에는 이전 저장 출처의 박스가
+ * 적용되는 상태. Mock 내부 상태이며 /blocks DTO 에는 싣지 않는다(?mockScenario=n5-layout-legacy).
+ * 셀러가 box 를 정하거나(box 키) 전부 해제하면(layoutAdjust null) 사라진다 — 그래서 null → null 저장도 적용 박스가 바뀌는 실제 변경이다.
+ */
+export function clearsMockLegacyBox(patch: ApiLayoutAdjustPatch | null): boolean {
+  return patch === null || 'box' in patch;
+}
+
+/** 렌더 입력 계산용 — 셀러 박스가 없으면 legacy 박스를 적용값으로 얹는다(배율은 셀러 값 그대로) */
+export function withMockLegacyBox<T extends { layoutAdjust?: ApiLayoutAdjust | null }>(block: T, legacyBox: ApiLayoutBox | undefined): T {
+  if (!legacyBox || block.layoutAdjust?.box) return block;
+  return { ...block, layoutAdjust: { box: legacyBox, fontScale: block.layoutAdjust?.fontScale ?? null } };
+}
