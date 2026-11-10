@@ -425,12 +425,8 @@ for (const [label, response, expected] of [
 
 // ── 소셜 로그인 완료(콜백) ─────────────────────
 console.log('\n[callback]');
-function completeDeps(extra = {}) {
-  return import('../lib/api/auth.ts').then((m) => ({ complete: m.postSocialComplete, refresh: m.postAuthRefresh, me: m.getAuthMe, attemptStore: memoryAttempt(), waitMs: 20, ...extra }));
-}
-function memoryAttempt(initial = null) {
-  let value = initial;
-  return { read: () => value, write: (v) => (value = v), clear: () => (value = null), peek: () => value };
+function completeDeps() {
+  return import('../lib/api/auth.ts').then((m) => ({ complete: m.postSocialComplete }));
 }
 const params = { provider: 'kakao', code: 'code-1', state: 'state-1' };
 {
@@ -438,17 +434,16 @@ const params = { provider: 'kakao', code: 'code-1', state: 'state-1' };
   const server = createServer({ 'POST /auth/social': [async () => (await sleep(20), json(200, { accessToken: 'social-t', seller: SELLER_1 }))] });
   const deps = await completeDeps();
   const before = wireLog.length;
-  // Strict Mode 처럼 같은 effect 가 두 번 실행돼도 요청은 1회
+  // 같은 document 안에서 같은 effect 가 두 번 실행돼도(Strict Mode) 요청은 1회
   const [first, second] = await Promise.all([completeSocialLogin(params, deps), completeSocialLogin(params, deps)]);
   const third = await completeSocialLogin(params, deps);
   const call = server.last('POST /auth/social');
-  check('콜백 완료 POST 정확히 1회(이중 실행·재호출 포함)', server.count('POST /auth/social') === 1);
-  check('이중 실행은 같은 결과를 공유', first === second && second === third);
+  check('같은 document: 콜백 완료 POST 정확히 1회(이중 실행·재호출 포함)', server.count('POST /auth/social') === 1);
+  check('같은 document: 이중 실행은 같은 결과를 공유', first === second && second === third);
   check('완료 body = { provider, code, state }', call.body === JSON.stringify(params));
   check('완료 요청 X-Requested-With·credentials include', call.headers.get('X-Requested-With') === 'XMLHttpRequest' && call.credentials === 'include');
   check('성공 → access 메모리·seller 반영', first.kind === 'success' && getAccessToken() === 'social-t' && getAuthSnapshot().seller?.id === 1);
   check('성공 → 다른 탭 login-complete(sellerId 만)', wireLog.slice(before).includes(JSON.stringify({ type: 'login-complete', sellerId: 1 })));
-  check('성공 → 콜백 시도 기록 정리', deps.attemptStore.peek() === null);
 }
 {
   setupTab({ path: '/login/callback/kakao' });
@@ -468,41 +463,47 @@ for (const [label, response, expected] of [
   check(`${label} → ${expected}`, result.kind === 'error' && result.error === expected);
   check(`${label} → 완료 요청 자동 반복 없음·로그인 안 됨`, server.count('POST /auth/social') === 1 && getAccessToken() === null);
 }
+
+console.log('\n[callback — 새로고침(새 document)]');
+{
+  // 첫 document: 완료 요청이 끝나기 전에 사라짐(응답을 받지 못함)
+  setupTab({ path: '/login/callback/google' });
+  const gParams = { provider: 'google', code: 'code-g', state: 'state-g' };
+  let release;
+  const server = createServer({
+    'POST /auth/social': [() => new Promise((resolve) => (release = resolve)), async () => json(200, { accessToken: 'social-g', seller: SELLER_2 })],
+    'POST /auth/refresh': [okRefresh('old-session-t')],
+    'GET /auth/me': [meReturns(SELLER_1)],
+  });
+  const deps = await completeDeps();
+  void completeSocialLogin(gParams, deps);
+  await sleep(5);
+  // 새 document — 모듈 상태(먼저 보낸 Promise)가 없다
+  resetSocialLoginForTest();
+  const result = await completeSocialLogin(gParams, deps);
+  check('새로고침 뒤 새 document 는 같은 콜백을 한 번 다시 보냄', server.count('POST /auth/social') === 2);
+  check('새로고침 뒤 서버 성공 응답으로 로그인 완료(선택한 계정)', result.kind === 'success' && result.seller.id === 2 && getAccessToken() === 'social-g');
+  check('새로고침 뒤 refresh 로 결과를 추측하지 않음(이전 세션 계정으로 로그인되지 않음)', server.count('POST /auth/refresh') === 0 && server.count('GET /auth/me') === 0);
+  release?.(json(499, null));
+}
+{
+  // 첫 요청을 서버가 이미 처리해 code·state 를 써 버린 경우 — 다시 보낸 요청은 state_invalid → 처음부터 다시
+  setupTab({ path: '/login/callback/kakao' });
+  const server = createServer({ 'POST /auth/social': [async () => authError(401, 'UNAUTHORIZED', 'state_invalid')], 'POST /auth/refresh': [okRefresh('old-session-t')] });
+  const result = await completeSocialLogin(params, await completeDeps());
+  check('새로고침 뒤 다시 보낸 요청이 state_invalid → 재시도 가능한 오류(멈추지 않음)', result.kind === 'error' && result.error === 'state-invalid');
+  check('그때 refresh 를 부르지 않음', server.count('POST /auth/refresh') === 0);
+}
 {
   setupTab({ path: '/login/callback/kakao' });
   const server = createServer({
     'POST /auth/social': [async () => authError(409, 'DUPLICATE', 'login_in_progress')],
-    'POST /auth/refresh': [okRefresh('resumed-t')],
+    'POST /auth/refresh': [okRefresh('old-session-t')],
     'GET /auth/me': [meReturns(SELLER_1)],
   });
   const result = await completeSocialLogin(params, await completeDeps());
-  check('409 login_in_progress → 오류로 바꾸지 않고 먼저 시작된 로그인을 이어받음', result.kind === 'success' && getAccessToken() === 'resumed-t');
-  check('login_in_progress → 완료 POST 를 다시 보내지 않음', server.count('POST /auth/social') === 1 && server.count('POST /auth/refresh') === 1);
-}
-{
-  setupTab({ path: '/login/callback/kakao' });
-  const server = createServer({ 'POST /auth/social': [async () => authError(409, 'DUPLICATE', 'login_in_progress')], 'POST /auth/refresh': [async () => authError(401, 'UNAUTHORIZED', 'refresh_invalid')] });
-  const result = await completeSocialLogin(params, await completeDeps());
-  check('먼저 시작된 로그인도 실패 → 처음부터 다시 로그인 안내', result.kind === 'error' && result.error === 'state-invalid' && server.count('POST /auth/social') === 1);
-}
-{
-  // 완료 요청 중 새로고침 — 같은 탭이 이미 보낸 콜백이면 code 를 다시 쓰지 않는다
-  setupTab({ path: '/login/callback/kakao' });
-  const server = createServer({ 'POST /auth/social': [async () => json(200, { accessToken: 'x', seller: SELLER_1 })], 'POST /auth/refresh': [okRefresh('reload-t')], 'GET /auth/me': [meReturns(SELLER_1)] });
-  const deps = await completeDeps({ attemptStore: memoryAttempt('kakao:state-1') });
-  const result = await completeSocialLogin(params, deps);
-  check('새로고침 뒤 같은 콜백 → 완료 POST 0회, refresh 로 이어받음', server.count('POST /auth/social') === 0 && result.kind === 'success' && getAccessToken() === 'reload-t');
-  check('콜백 시도 기록에는 provider:state 만(코드·토큰 없음)', !'kakao:state-1'.includes('code-1'));
-}
-{
-  // 새로고침으로 끊긴 완료 요청(네트워크 실패) — 서버가 받았을 수 있어 기록을 지우지 않는다
-  setupTab({ path: '/login/callback/kakao' });
-  globalThis.fetch = async () => {
-    throw new TypeError('Failed to fetch');
-  };
-  const deps = await completeDeps();
-  const result = await completeSocialLogin(params, deps);
-  check('완료 요청 네트워크 실패 → 콜백 시도 기록 유지(같은 code 재전송 방지)', result.kind === 'error' && deps.attemptStore.peek() === 'kakao:state-1');
+  check('409 login_in_progress(다른 document 의 같은 시도) → 결과를 받을 계약이 없어 「처음부터 다시」로 끝냄', result.kind === 'error' && result.error === 'in-progress');
+  check('login_in_progress → refresh 로 추측하지 않음·완료 POST 재반복 없음', server.count('POST /auth/refresh') === 0 && server.count('POST /auth/social') === 1 && getAccessToken() === null);
 }
 
 // ── 로그아웃 ───────────────────────────────────
