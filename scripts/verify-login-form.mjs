@@ -1,11 +1,11 @@
 /**
- * G1 로그인 입력 검증과 개발용 자동 로그인 제외 경로 순수 함수 검증.
+ * G1 로그인 화면의 개발용 자동 로그인 제외 경로와 GIF 대비 계산 순수 함수 검증.
+ * 이메일 로그인 폼은 제품 범위에서 제외되어 입력 검증 항목이 없다.
  *
  * 실행: npm run verify:login-form
  */
 
 import { shouldBootstrapBackendSession } from '../lib/api/session.ts';
-import { validateLoginForm } from '../lib/auth/login-form.ts';
 import {
   LOGIN_GIF_GRAPHEME_ORANGE_RATIO,
   computeCoverMapping,
@@ -29,27 +29,13 @@ function check(name, condition, detail = '') {
   }
 }
 
-console.log('\n[1] 입력 검증');
-const ok = { email: 'seller@example.com', password: 'x' };
-check('정상 → 오류 없음', Object.keys(validateLoginForm(ok)).length === 0);
-check('이메일 빈 값', validateLoginForm({ ...ok, email: '' }).email === '이메일을 입력해주세요.');
-check('이메일 공백만 → 빈 값', validateLoginForm({ ...ok, email: '   ' }).email === '이메일을 입력해주세요.');
-for (const email of ['seller', 'seller@', '@example.com', 'seller@example', 'sel ler@example.com', 'a@b@c.com']) {
-  check(`형식 오류: ${email}`, validateLoginForm({ ...ok, email }).email === '올바른 이메일 형식으로 입력해주세요.');
-}
-check('앞뒤 공백은 형식 오류로 보지 않음', validateLoginForm({ ...ok, email: ' seller@example.com ' }).email === undefined);
-check('비밀번호 빈 값', validateLoginForm({ ...ok, password: '' }).password === '비밀번호를 입력해주세요.');
-check('비밀번호 정책 없음(한 글자·공백 통과)', !validateLoginForm({ ...ok, password: 'a' }).password && !validateLoginForm({ ...ok, password: ' ' }).password);
-const both = validateLoginForm({ email: '', password: '' });
-check('두 필드 동시 오류', both.email && both.password);
-
-console.log('\n[2] 개발용 자동 로그인 제외 경로');
+console.log('\n[1] 개발용 자동 로그인 제외 경로');
 check('/login 만 제외', shouldBootstrapBackendSession('/login') === false);
 for (const path of ['/', '/brand', '/jobs/new', '/jobs/1', '/login-help']) {
   check(`${path} 는 유지`, shouldBootstrapBackendSession(path) === true);
 }
 
-console.log('\n[3] 주황 판별 — pixlate_login.gif 실측 색');
+console.log('\n[2] 주황 판별 — pixlate_login.gif 실측 색');
 check('검정 → false', !isLoginGifOrangePixel(0, 0, 0));
 check('어두운 번짐(43,17,8) → false', !isLoginGifOrangePixel(43, 17, 8));
 check('대비 전환점 아래(135,56,29) → false', !isLoginGifOrangePixel(135, 56, 29));
@@ -62,7 +48,7 @@ check('따뜻한 밝은 회색(200,190,180) → false', !isLoginGifOrangePixel(2
 check('노란색(254,229,0) → false', !isLoginGifOrangePixel(254, 229, 0));
 check('빨강(255,0,0) → false(G>B 아님)', !isLoginGifOrangePixel(255, 0, 0));
 
-console.log('\n[4] 글자 전환 기준');
+console.log('\n[3] 글자 전환 기준');
 check('기준 0.5', LOGIN_GIF_GRAPHEME_ORANGE_RATIO === 0.5);
 check('0/9 → normal', !shouldDarkenGrapheme(0, 9));
 check('4/9 → normal', !shouldDarkenGrapheme(4, 9));
@@ -70,13 +56,13 @@ check('5/9 → dark', shouldDarkenGrapheme(5, 9));
 check('9/9 → dark', shouldDarkenGrapheme(9, 9));
 check('샘플 없음 → normal', !shouldDarkenGrapheme(0, 0));
 
-console.log('\n[5] grapheme');
+console.log('\n[4] grapheme');
 check('한글 음절 단위', splitGraphemes('검수합니다.').join('|') === '검|수|합|니|다|.');
 check('공백·쉼표 유지, 이어 붙이면 원문', splitGraphemes('필요한 순간, 당신').join('') === '필요한 순간, 당신');
 check('조합형 한글(ᄒ+ᅡ+ᆫ)은 한 글자', splitGraphemes('\u1112\u1161\u11ab').length === 1);
 check('이모지 결합은 한 글자', splitGraphemes('👩‍💻').length === 1);
 
-console.log('\n[6] object-fit: cover 좌표');
+console.log('\n[5] object-fit: cover 좌표');
 const source = { width: 1120, height: 1080 };
 const same = computeCoverMapping(source, source);
 check('1120×1080 → 1:1, crop 없음', same.scale === 1 && same.sourceX === 0 && same.sourceY === 0);
@@ -100,7 +86,7 @@ isGraphemeOnOrange({ left: 84, top: 0, width: 6, height: 6 }, laptop, (x, y) => 
 });
 check('cover crop 을 반영한 원본 좌표를 읽음', Math.abs(seen[0][0] - (56 + 85 / laptop.scale)) < 1e-9 && Math.abs(seen[0][1] - 1 / laptop.scale) < 1e-9);
 
-console.log('\n[7] 문구별 글자 판정 — 작은 문구·보조 문구·하단 문구');
+console.log('\n[6] 문구별 글자 판정 — 작은 문구·보조 문구·하단 문구');
 /** 한 줄을 글자 폭으로 나눈 패널 좌표 상자. orange 는 원본 좌표 x 범위 */
 function darkGraphemes(text, line, glyphWidth, cover, orange) {
   const chars = splitGraphemes(text);
