@@ -1,13 +1,16 @@
 import { type Page, expect, test } from '@playwright/test';
 
 // ─────────────────────────────────────────────────────────────────
-// G1 로그인 (Figma 835:6511) — UI 전용, Chromium.
-// 로그인 API 가 실제 서버에 없어 화면·입력 검증·키보드·비동작 버튼과 "인증 요청 0건"만 확인한다.
+// G1 로그인 (Figma 835:6511) — 카카오·Google 소셜 로그인 전용 화면, Chromium.
+// 소셜 인증 API 가 확정되지 않아 화면·고지·키보드·비동작 버튼과 "인증 요청 0건"만 확인한다.
+// 이메일·비밀번호·자동 로그인·비밀번호 찾기·회원가입은 제품 범위에서 제외되어 화면에 없어야 한다.
 // Mock 을 끈 환경의 자동 로그인 범위는 g1-login-backend-mode.spec.ts 가 맡는다.
 // ─────────────────────────────────────────────────────────────────
 
 test.skip(({ browserName }) => browserName !== 'chromium', 'G1 검증은 Chromium 기준이다');
 test.use({ viewport: { width: 1920, height: 1080 } });
+
+const CONSENT = '계속하면 픽슬레이트 이용약관과 개인정보 처리방침에 동의하는 것으로 봅니다.';
 
 /** public/auth 의 정적 자산을 뺀 /auth/* 요청 — 서버 인증 API 호출이다 */
 function recordAuthRequests(page: Page): string[] {
@@ -21,12 +24,11 @@ function recordAuthRequests(page: Page): string[] {
 
 async function open(page: Page) {
   await page.goto('/login');
-  await expect(page.getByTestId('g1-form')).toBeVisible();
+  await expect(page.getByTestId('g1-social')).toBeVisible();
 }
 
-const email = (page: Page) => page.getByLabel('이메일');
-const password = (page: Page) => page.getByLabel('비밀번호');
-const submit = (page: Page) => page.getByTestId('g1-submit');
+const kakao = (page: Page) => page.getByTestId('g1-social-kakao');
+const google = (page: Page) => page.getByTestId('g1-social-google');
 
 async function box(page: Page, testId: string) {
   const b = await page.getByTestId(testId).boundingBox();
@@ -34,7 +36,7 @@ async function box(page: Page, testId: string) {
   return b;
 }
 
-test('G1 이 렌더되고 Figma 문구가 모두 보인다', async ({ page }) => {
+test('G1 이 렌더되고 Figma 문구와 동의 고지가 보인다', async ({ page }) => {
   await open(page);
   for (const text of [
     'AI LOCALIZATION WORKSPACE',
@@ -43,18 +45,56 @@ test('G1 이 렌더되고 Figma 문구가 모두 보인다', async ({ page }) =>
     'AI가 분석하고 번역하고 검수합니다.',
     '필요한 순간, 당신 옆엔 픽슬레이트',
     'LOCALIZE · VERIFY · EXPORT',
-    'WELCOME BACK',
-    '다시 만나서 반가워요.',
-    '자동 로그인',
-    '비밀번호 찾기',
-    '회원가입',
+    'WELCOME',
+    '만나서 반가워요.',
     '카카오로 시작하기',
     'Google로 계속하기',
   ]) {
     await expect(page.getByText(text, { exact: true })).toBeVisible();
   }
-  await expect(submit(page)).toHaveText('로그인');
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText('다시 만나서 반가워요.');
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('만나서 반가워요.');
+  await expect(page.getByTestId('g1-consent')).toHaveText(CONSENT);
+  expect((await page.getByTestId('g1-consent').textContent())!.replace(/\s+/g, ' ').trim()).toBe(CONSENT);
+});
+
+test('이메일 계열 UI 와 자동 로그인은 화면에 없다', async ({ page }) => {
+  await open(page);
+  await expect(page.locator('input')).toHaveCount(0);
+  await expect(page.locator('form')).toHaveCount(0);
+  await expect(page.locator('input[type="email"], input[type="password"]')).toHaveCount(0);
+  await expect(page.getByRole('textbox')).toHaveCount(0);
+  await expect(page.getByRole('checkbox')).toHaveCount(0);
+  for (const text of ['이메일', '비밀번호', '자동 로그인', '비밀번호 찾기', '회원가입', '로그인']) {
+    await expect(page.getByText(text, { exact: true })).toHaveCount(0);
+  }
+  for (const id of ['g1-form', 'g1-fields', 'g1-remember', 'g1-submit', 'g1-links', 'g1-find-password', 'g1-signup']) {
+    await expect(page.getByTestId(id)).toHaveCount(0);
+  }
+  // 오른쪽 패널의 조작 요소는 소셜 버튼 두 개뿐이고, 비활성·추후 구현 안내를 남기지 않는다
+  const buttons = page.getByTestId('g1-auth-panel').getByRole('button');
+  await expect(buttons).toHaveCount(2);
+  await expect(page.locator('[title], [role="tooltip"]')).toHaveCount(0);
+  await expect(page.locator('body')).not.toContainText('추후');
+  await expect(page.locator('body')).not.toContainText('준비 중');
+});
+
+test('동의 고지는 체크박스 없는 텍스트이며 약관 표기는 링크가 아니다', async ({ page }) => {
+  await open(page);
+  const consent = page.getByTestId('g1-consent');
+  await expect(consent).toHaveCSS('font-size', '14px');
+  await expect(consent).toHaveCSS('line-height', '22px');
+  await expect(consent).toHaveCSS('color', 'rgb(112, 112, 112)');
+  await expect(consent).toHaveCSS('text-align', 'center');
+  for (const term of ['이용약관', '개인정보 처리방침']) {
+    const el = consent.getByText(term, { exact: true });
+    await expect(el).toHaveCSS('text-decoration-line', 'underline');
+    await expect(el).toHaveCSS('font-weight', '500');
+  }
+  // 문서 페이지가 아직 없어 가짜 링크를 만들지 않는다
+  await expect(page.locator('a')).toHaveCount(0);
+  await expect(page.getByRole('link')).toHaveCount(0);
+  // Figma 처럼 두 줄로 표시된다
+  expect((await box(page, 'g1-consent')).height).toBe(44);
 });
 
 test('GIF 는 public 정적 자산으로 실제 로드되고 왼쪽 패널을 cover 로 채운다', async ({ page }) => {
@@ -92,12 +132,11 @@ test('1920×1080 위치가 Figma 와 일치한다', async ({ page }) => {
     ['g1-brand-subcopy', { x: 60, y: 433, height: 38 }],
     ['g1-brand-footer', { x: 60, y: 1002 }],
     ['g1-auth-logo', { x: 1276, y: 120, width: 128, height: 39 }],
-    ['g1-form', { x: 1276, y: 274, width: 432, height: 436 }],
-    ['g1-remember', { x: 1276, y: 274 + 124 + 138, height: 20 }],
-    ['g1-submit', { x: 1276, y: 274 + 342, width: 432, height: 45 }],
-    ['g1-social', { x: 1276, y: 858, width: 432, height: 102 }],
-    ['g1-social-kakao', { x: 1276, y: 858, width: 432, height: 45 }],
-    ['g1-social-google', { x: 1276, y: 915, width: 432, height: 45 }],
+    ['g1-heading', { x: 1276, y: 401, width: 432, height: 68 }],
+    ['g1-social', { x: 1276, y: 521, width: 432, height: 106 }],
+    ['g1-social-kakao', { x: 1276, y: 521, width: 432, height: 45 }],
+    ['g1-social-google', { x: 1276, y: 582, width: 432, height: 45 }],
+    ['g1-consent', { y: 683, height: 44 }],
   ];
   for (const [id, want] of expected) {
     const got = await box(page, id);
@@ -105,44 +144,20 @@ test('1920×1080 위치가 Figma 와 일치한다', async ({ page }) => {
       expect(got[key as keyof typeof got], `${id}.${key}`).toBeCloseTo(value, 1);
     }
   }
-  for (const name of ['이메일', '비밀번호']) {
-    const b = (await page.getByLabel(name).boundingBox())!;
-    expect([b.x, b.width, b.height]).toEqual([1276, 432, 39]);
-  }
-  const emailBox = (await email(page).boundingBox())!;
-  const passwordBox = (await password(page).boundingBox())!;
-  expect(emailBox.y).toBe(274 + 124 + 18);
-  expect(passwordBox.y).toBe(274 + 124 + 69 + 18);
-  const links = await box(page, 'g1-links');
-  expect(links.y).toBe(274 + 342 + 77);
-  expect(Math.abs(links.x - (1276 + 136))).toBeLessThanOrEqual(1);
+  // 고지 문구는 432 묶음 가운데에 놓인다(Figma x 1345 = 1276 + (432 - 294) / 2)
+  const consent = await box(page, 'g1-consent');
+  expect(Math.abs(consent.x + consent.width / 2 - (1276 + 216))).toBeLessThanOrEqual(1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(1920);
   expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBe(1080);
 
-  await expect(email(page)).toHaveCSS('border-color', 'rgb(234, 234, 234)');
-  await expect(email(page)).toHaveCSS('border-radius', '6px');
-  await expect(email(page)).toHaveCSS('padding-left', '16px');
-  await expect(submit(page)).toHaveCSS('background-color', 'rgb(23, 23, 23)');
-  await expect(page.getByTestId('g1-social-kakao')).toHaveCSS('background-color', 'rgb(254, 229, 0)');
-  await expect(page.getByTestId('g1-social-google')).toHaveCSS('border-color', 'rgb(234, 234, 234)');
+  await expect(kakao(page)).toHaveCSS('background-color', 'rgb(254, 229, 0)');
+  await expect(kakao(page)).toHaveCSS('border-radius', '6px');
+  await expect(google(page)).toHaveCSS('border-color', 'rgb(234, 234, 234)');
+  await expect(google(page)).toHaveCSS('background-color', 'rgb(255, 255, 255)');
+  await expect(page.getByRole('heading', { level: 1 })).toHaveCSS('font-size', '32px');
   await expect(page.getByTestId('g1-brand-micro')).toHaveCSS('letter-spacing', '0.88px');
   await expect(page.getByTestId('g1-brand-headline')).toHaveCSS('font-size', '46px');
   await expect(page.getByTestId('g1-brand-headline')).toHaveCSS('font-weight', '600');
-});
-
-test('1440×900 에서 가로·세로 넘침 없이 폼과 소셜 버튼이 겹치지 않는다', async ({ page }) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await open(page);
-  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(1440);
-  expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBe(900);
-  const panel = await box(page, 'g1-auth-panel');
-  expect(panel.x).toBeCloseTo(840, 0);
-  const form = await box(page, 'g1-form');
-  const social = await box(page, 'g1-social');
-  expect(form.width).toBe(432);
-  expect(form.x + form.width).toBeLessThanOrEqual(1440);
-  expect(social.y).toBeGreaterThanOrEqual(form.y + form.height);
-  expect(social.y + social.height).toBeLessThanOrEqual(900);
 });
 
 /** DOM 실측 세로 여백 — 위 요소 아래 경계에서 아래 요소 위 경계까지 */
@@ -151,105 +166,69 @@ async function verticalGaps(page: Page) {
     const b = await box(page, id);
     return { top: b.y, bottom: b.y + b.height };
   };
-  const [micro, headline, subcopy, leftLogo, logo, heading, fields, remember, button, links, social] = await Promise.all(
-    ['g1-brand-micro', 'g1-brand-headline', 'g1-brand-subcopy', 'g1-brand-logo', 'g1-auth-logo', 'g1-heading', 'g1-fields', 'g1-remember', 'g1-submit', 'g1-links', 'g1-social'].map(rect),
-  );
+  const [leftLogo, logo, heading, social, consent] = await Promise.all(['g1-brand-logo', 'g1-auth-logo', 'g1-heading', 'g1-social', 'g1-consent'].map(rect));
   return {
     leftTop: leftLogo.top,
     rightTop: logo.top,
-    microToHeadline: headline.top - micro.bottom,
-    headlineToSubcopy: subcopy.top - headline.bottom,
     logoToHeading: heading.top - logo.bottom,
-    headingToFields: fields.top - heading.bottom,
-    rememberToButton: button.top - remember.bottom,
-    buttonToLinks: links.top - button.bottom,
-    linksToSocial: social.top - links.bottom,
-    socialBottom: social.bottom,
+    headingToSocial: social.top - heading.bottom,
+    socialToConsent: consent.top - social.bottom,
+    consentBottom: consent.bottom,
   };
 }
 
-test('1920×1080 세로 여백이 Figma 값이고 위치가 그대로다', async ({ page }) => {
+test('1920×1080 세로 여백이 Figma 값이다', async ({ page }) => {
   await open(page);
   const gaps = await verticalGaps(page);
   console.log(`[gap] 1920×1080 ${JSON.stringify(gaps)}`);
-  expect(gaps.leftTop).toBe(120);
-  expect(gaps.rightTop).toBe(120);
-  expect(Math.abs(gaps.microToHeadline - 91.19)).toBeLessThanOrEqual(1);
-  expect(Math.abs(gaps.headlineToSubcopy - 32.24)).toBeLessThanOrEqual(1);
-  expect(gaps.logoToHeading).toBe(115);
-  expect(gaps.headingToFields).toBe(60);
-  expect(gaps.rememberToButton).toBe(60);
-  expect(gaps.buttonToLinks).toBe(32);
-  expect(gaps.linksToSocial).toBe(148);
-  for (const [id, y] of [['g1-heading', 274], ['g1-fields', 398], ['g1-remember', 536], ['g1-submit', 616], ['g1-links', 693], ['g1-social', 858]] as const) {
-    expect((await box(page, id)).y, id).toBe(y);
-  }
+  expect(gaps).toEqual({ leftTop: 120, rightTop: 120, logoToHeading: 242, headingToSocial: 52, socialToConsent: 56, consentBottom: 727 });
 });
 
 // 1728×885·918 은 실제 노트북 Chrome 창(1728×1005, 내장 화면 1728×1117)에서 브라우저 상단 UI 높이를 뺀 값의 범위다
-for (const [width, height] of [[1440, 900], [1728, 918], [1728, 885], [1512, 860]] as const) {
-  test(`${width}×${height} 에서 여백이 같은 비율로 줄고 겹치지 않는다`, async ({ page }) => {
+for (const [width, height] of [[1440, 900], [1728, 918], [1728, 885], [1512, 860], [1366, 768], [1280, 720]] as const) {
+  test(`${width}×${height} 에서 넘침·겹침 없이 남은 공간을 Figma 비율로 나눈다`, async ({ page }) => {
     await page.setViewportSize({ width, height });
     await open(page);
     const gaps = await verticalGaps(page);
     console.log(`[gap] ${width}×${height} ${JSON.stringify(gaps)}`);
 
-    // 내부 여백은 하나의 배율을 공유해 Figma 비율을 유지한다
-    const scale = gaps.headingToFields / 60;
-    expect(scale).toBeLessThan(1);
-    expect(Math.abs(gaps.logoToHeading - 115 * scale)).toBeLessThanOrEqual(1);
-    expect(Math.abs(gaps.rememberToButton - 60 * scale)).toBeLessThanOrEqual(1);
-    expect(Math.abs(gaps.buttonToLinks - 32 * scale)).toBeLessThanOrEqual(1);
-    expect(Math.abs(gaps.microToHeadline - 91.19 * scale)).toBeLessThanOrEqual(1);
-    expect(gaps.logoToHeading).toBeGreaterThanOrEqual(80);
-    expect(gaps.headingToFields).toBeGreaterThanOrEqual(40);
-    expect(gaps.buttonToLinks).toBeGreaterThanOrEqual(24);
-
-    // 제목과 보조 문구 묶음은 유지하고, 양쪽 로고 높이는 같다
-    expect(Math.abs(gaps.headlineToSubcopy - 32.24)).toBeLessThanOrEqual(1);
-    expect(gaps.leftTop).toBe(gaps.rightTop);
-
-    // 스크롤 없이 들어오고 소셜과 겹치지 않으며 아래 여백이 위 여백과 같다
     expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBe(height);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
-    expect(gaps.linksToSocial).toBeGreaterThan(gaps.logoToHeading * 0.8);
-    expect(Math.abs(height - gaps.socialBottom - gaps.rightTop)).toBeLessThanOrEqual(1);
+    expect(gaps.leftTop).toBe(gaps.rightTop);
+
+    // 묶음 안 간격은 Figma 값 그대로이고, 로고 아래·고지 아래 남는 공간은 242 : 233 으로 나뉜다
+    expect(gaps.headingToSocial).toBe(52);
+    expect(gaps.socialToConsent).toBe(56);
+    const bottomSpace = height - gaps.rightTop - gaps.consentBottom;
+    expect(gaps.logoToHeading).toBeGreaterThan(24);
+    expect(bottomSpace).toBeGreaterThan(24);
+    expect(Math.abs(gaps.logoToHeading / bottomSpace - 242 / 233)).toBeLessThanOrEqual(0.02);
 
     // 요소 크기와 글자는 줄지 않는다
-    expect((await email(page).boundingBox())!.height).toBe(39);
-    expect((await box(page, 'g1-submit')).height).toBe(45);
     expect((await box(page, 'g1-social-kakao')).height).toBe(45);
-    expect((await box(page, 'g1-form')).width).toBe(432);
+    expect((await box(page, 'g1-social-google')).height).toBe(45);
+    // 묶음 폭은 432 이고, 패널 안쪽 폭이 더 좁을 때만 줄어든다(1280 폭에서 405px)
+    const panelInner = await page.getByTestId('g1-auth-panel').evaluate((el) => {
+      const s = getComputedStyle(el);
+      return el.clientWidth - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight);
+    });
+    expect(Math.abs((await box(page, 'g1-social')).width - Math.min(432, panelInner))).toBeLessThanOrEqual(0.5);
+    expect((await box(page, 'g1-consent')).height).toBe(44);
     await expect(page.getByTestId('g1-brand-headline')).toHaveCSS('font-size', '46px');
     await expect(page.getByRole('heading', { level: 1 })).toHaveCSS('font-size', '32px');
   });
 }
 
-test('낮은 화면에서 오류 문구가 늘어나도 소셜 버튼과 겹치지 않는다', async ({ page }) => {
-  await page.setViewportSize({ width: 1728, height: 885 });
-  await open(page);
-  await submit(page).click();
-  await expect(page.getByTestId('login-password-error')).toBeVisible();
-  const gaps = await verticalGaps(page);
-  expect(gaps.linksToSocial).toBeGreaterThanOrEqual(24);
-  expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBe(885);
-});
-
-test('입력과 버튼 폭은 모두 432px 이고 x 위치가 같다', async ({ page }) => {
+test('제목·소셜·고지 묶음은 폭 432px 이고 x 위치가 같다', async ({ page }) => {
   for (const [width, height, x] of [[1920, 1080, 1276], [1728, 885, null], [1512, 860, null], [1440, 900, null]] as const) {
     await page.setViewportSize({ width, height });
     await open(page);
-    const controls = [email(page), password(page), submit(page), page.getByTestId('g1-social-kakao'), page.getByTestId('g1-social-google'), page.getByTestId('g1-form'), page.getByTestId('g1-social')];
-    const boxes = await Promise.all(controls.map(async (c) => (await c.boundingBox())!));
-    console.log(`[width] ${width}×${height} ${boxes.map((b) => b.width).join(', ')} / x ${boxes[0].x}`);
+    const boxes = await Promise.all(['g1-content', 'g1-heading', 'g1-social', 'g1-social-kakao', 'g1-social-google'].map((id) => box(page, id)));
     for (const b of boxes) {
       expect(Math.abs(b.width - 432), `${width}×${height}`).toBeLessThanOrEqual(0.5);
       expect(b.x).toBe(boxes[0].x);
     }
-    if (x !== null) {
-      expect(boxes[0].x).toBe(x);
-      expect(boxes[0].x + boxes[0].width).toBe(1708);
-    }
+    if (x !== null) expect(boxes[0].x).toBe(x);
   }
 });
 
@@ -257,11 +236,11 @@ test('패널이 432px 보다 좁을 때만 줄어들고 넘치지 않는다', as
   await page.setViewportSize({ width: 900, height: 800 });
   await open(page);
   const panel = await box(page, 'g1-auth-panel');
-  const form = await box(page, 'g1-form');
   const social = await box(page, 'g1-social');
-  expect(form.width).toBeLessThan(432);
-  expect(form.width).toBe(social.width);
-  expect(form.x + form.width).toBeLessThanOrEqual(panel.x + panel.width);
+  const consent = await box(page, 'g1-consent');
+  expect(social.width).toBeLessThan(432);
+  expect(social.x + social.width).toBeLessThanOrEqual(panel.x + panel.width);
+  expect(consent.x + consent.width).toBeLessThanOrEqual(panel.x + panel.width);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(900);
 });
 
@@ -548,142 +527,50 @@ test('모션 감소 환경은 추적을 멈추고 #999 를 유지한다', async 
   await expect(page.getByTestId('g1-brand-footer').locator('[data-g1-grapheme]').first()).toHaveCSS('color', 'rgb(153, 153, 153)');
 });
 
-test('이메일·비밀번호는 실제 input 이며 비밀번호는 가려진다', async ({ page }) => {
-  await open(page);
-  await expect(email(page)).toHaveAttribute('type', 'email');
-  await expect(email(page)).toHaveAttribute('placeholder', 'name@example.com');
-  await expect(password(page)).toHaveAttribute('type', 'password');
-  await expect(password(page)).toHaveAttribute('placeholder', '비밀번호를 입력해주세요');
-  await email(page).fill('seller@example.com');
-  await password(page).fill('secret');
-  await expect(email(page)).toHaveValue('seller@example.com');
-  await expect(password(page)).toHaveValue('secret');
-  await expect(page.locator('body')).not.toContainText('secret');
-});
-
-test('자동 로그인은 화면 상태만 바꾸고 어디에도 저장하지 않는다', async ({ page }) => {
-  await open(page);
-  const checkbox = page.getByTestId('g1-remember-checkbox');
-  const frame = (await checkbox.boundingBox())!;
-  expect([frame.width, frame.height]).toEqual([20, 20]);
-  const visual = page.getByTestId('g1-remember').locator('[data-checkbox-visual]');
-  await expect(visual).toHaveCSS('width', '18px');
-  await expect(visual).toHaveCSS('border-radius', '4px');
-  await expect(visual).toHaveCSS('border-color', 'rgb(234, 234, 234)');
-
-  await page.getByText('자동 로그인', { exact: true }).click();
-  await expect(checkbox).toBeChecked();
-  await expect(visual).toHaveCSS('border-color', 'rgb(255, 106, 56)');
-  // 마우스로 선택한 뒤 modifier 키를 눌러도 포커스 링이 켜지지 않는다(M1 공용 규칙)
-  await page.keyboard.press('Shift');
-  await expect(visual).toHaveCSS('outline-style', 'none');
-
-  await email(page).fill('seller@example.com');
-  await password(page).fill('secret');
-  await submit(page).click();
-  const saved = await page.evaluate(() => [JSON.stringify(localStorage), JSON.stringify(sessionStorage), document.cookie].join('|'));
-  expect(saved).not.toMatch(/seller@example\.com|secret|token|remember/i);
-
-  await checkbox.uncheck();
-  await expect(checkbox).not.toBeChecked();
-});
-
-test('빈 값과 잘못된 이메일에만 오류를 표시한다', async ({ page }) => {
-  await open(page);
-  // 오류가 없으면 helper 자리를 차지하지 않는다
-  await expect(page.getByTestId('login-email-error')).toHaveCount(0);
-
-  await submit(page).click();
-  await expect(page.getByTestId('login-email-error')).toHaveText('이메일을 입력해주세요.');
-  await expect(page.getByTestId('login-password-error')).toHaveText('비밀번호를 입력해주세요.');
-  await expect(email(page)).toHaveAttribute('aria-invalid', 'true');
-  await expect(email(page)).toHaveCSS('border-color', 'rgb(229, 72, 77)');
-  await expect(email(page)).toBeFocused();
-
-  await email(page).fill('seller');
-  await expect(page.getByTestId('login-email-error')).toHaveCount(0);
-  await submit(page).click();
-  await expect(page.getByTestId('login-email-error')).toHaveText('올바른 이메일 형식으로 입력해주세요.');
-
-  await email(page).fill('seller@example.com');
-  await submit(page).click();
-  await expect(page.getByTestId('login-email-error')).toHaveCount(0);
-  await expect(password(page)).toBeFocused();
-});
-
-test('유효한 제출은 이동·결과 문구·요청 없이 끝난다', async ({ page }) => {
-  const auth = recordAuthRequests(page);
-  await open(page);
-  expect(auth).toEqual([]);
-  const before = await page.getByTestId('g1-auth-panel').innerText();
-
-  await email(page).fill('seller@example.com');
-  await password(page).fill('secret');
-  await submit(page).click();
-  await page.waitForTimeout(300);
-
-  expect(new URL(page.url()).pathname).toBe('/login');
-  expect(await page.getByTestId('g1-auth-panel').innerText()).toBe(before);
-  await expect(page.getByTestId('login-email-error')).toHaveCount(0);
-  await expect(page.getByTestId('login-password-error')).toHaveCount(0);
-  await expect(page.getByTestId('g1-auth-panel').locator('[role="alert"], [role="status"]')).toHaveCount(0);
-  await expect(email(page)).toHaveValue('seller@example.com');
-  expect(auth).toEqual([]);
-});
-
-test('Enter 는 입력창과 로그인 버튼에서 제출되어 검증을 실행한다', async ({ page }) => {
-  const auth = recordAuthRequests(page);
-  await open(page);
-  await password(page).press('Enter');
-  await expect(page.getByTestId('login-email-error')).toBeVisible();
-
-  await email(page).fill('seller@example.com');
-  await submit(page).focus();
-  await page.keyboard.press('Enter');
-  await expect(page.getByTestId('login-password-error')).toBeVisible();
-  expect(auth).toEqual([]);
-});
-
-test('소셜·비밀번호 찾기·회원가입은 눌러도 요청이나 이동이 없다', async ({ page }) => {
+test('소셜 버튼은 정상 버튼으로 보이지만 눌러도 요청·이동·저장이 없다', async ({ page }) => {
   const auth = recordAuthRequests(page);
   await open(page);
   const requests: string[] = [];
   page.on('request', (r) => {
     if (!/\/_next\/|\/auth\/.*\.(svg|gif)$/.test(r.url())) requests.push(r.url());
   });
-  for (const id of ['g1-social-kakao', 'g1-social-google', 'g1-find-password', 'g1-signup']) {
-    const button = page.getByTestId(id);
-    await expect(button).toHaveAttribute('aria-disabled', 'true');
+  const before = await page.getByTestId('g1-auth-panel').innerText();
+  for (const button of [kakao(page), google(page)]) {
     await expect(button).toHaveAttribute('type', 'button');
+    await expect(button).toHaveAttribute('aria-disabled', 'true');
+    // 비활성처럼 흐리게 보이지 않는다
+    await expect(button).toHaveCSS('opacity', '1');
+    await expect(button).toHaveCSS('filter', 'none');
     // aria-disabled 는 Playwright 가 비활성으로 봐서 force 로 실제 클릭을 보낸다
     await button.click({ force: true });
   }
+  await kakao(page).focus();
+  await page.keyboard.press('Enter');
+  await google(page).focus();
+  await page.keyboard.press('Space');
   await page.waitForTimeout(300);
+
   expect(new URL(page.url()).pathname).toBe('/login');
   expect(requests).toEqual([]);
   expect(auth).toEqual([]);
-  await expect(page.getByTestId('login-email-error')).toHaveCount(0);
-  await expect(page.locator('a[href="#"]')).toHaveCount(0);
-  await expect(page.locator('a')).toHaveCount(0);
+  expect(await page.getByTestId('g1-auth-panel').innerText()).toBe(before);
+  await expect(page.getByTestId('g1-auth-panel').locator('[role="alert"], [role="status"]')).toHaveCount(0);
+  const saved = await page.evaluate(() => [JSON.stringify(localStorage), JSON.stringify(sessionStorage), document.cookie].join('|'));
+  expect(saved).not.toMatch(/token|kakao|google/i);
 });
 
-test('Tab·Shift+Tab 이동과 Space 토글이 동작하고 포커스가 보인다', async ({ page }) => {
+test('Tab·Shift+Tab 으로 두 소셜 버튼을 오가고 포커스가 보인다', async ({ page }) => {
   await open(page);
-  await email(page).focus();
-  await expect(email(page)).toHaveCSS('border-color', 'rgb(255, 106, 56)');
-  await email(page).press('Tab');
-  await expect(password(page)).toBeFocused();
-  await password(page).press('Shift+Tab');
-  await expect(email(page)).toBeFocused();
-  await email(page).press('Tab');
-  await password(page).press('Tab');
-  const checkbox = page.getByTestId('g1-remember-checkbox');
-  await expect(checkbox).toBeFocused();
-  await page.keyboard.press('Space');
-  await expect(checkbox).toBeChecked();
-  await expect(checkbox).toBeFocused();
-  await expect(page.getByTestId('g1-remember').locator('[data-checkbox-visual]')).toHaveCSS('outline-style', 'solid');
+  // dev 도구 등 페이지 밖 요소가 앞에 있을 수 있어 카카오 버튼에 닿을 때까지 Tab 만으로 이동한다
+  for (let i = 0; i < 10 && !(await kakao(page).evaluate((el) => el === document.activeElement)); i += 1) {
+    await page.keyboard.press('Tab');
+  }
+  await expect(kakao(page)).toBeFocused();
+  await expect(kakao(page)).toHaveCSS('outline-style', 'solid');
+  await expect(kakao(page)).toHaveCSS('outline-color', 'rgb(255, 106, 56)');
   await page.keyboard.press('Tab');
-  await expect(submit(page)).toBeFocused();
-  await expect(submit(page)).toHaveCSS('outline-style', 'solid');
+  await expect(google(page)).toBeFocused();
+  await expect(google(page)).toHaveCSS('outline-style', 'solid');
+  await page.keyboard.press('Shift+Tab');
+  await expect(kakao(page)).toBeFocused();
 });
