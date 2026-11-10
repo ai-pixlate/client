@@ -28,10 +28,10 @@ export function isSocialLoginEnabled(): boolean {
 }
 
 /**
- * 앱 진입 때 「서버 로그아웃 미완료」 기록이 있으면 로그아웃을 다시 보내는 동작.
- * TODO(AUTH-CONTRACT): confirm cookie-only logout contract with BE — access 없이 쿠키만으로 로그아웃되는지 확정 전에는 켜지 않는다.
- * TODO(AUTH-CONTRACT): BE to decide no-session logout = 204 vs 401
+ * 앱 진입 때 「서버 로그아웃 미완료」 기록이 있으면 로그인 복원보다 로그아웃(쿠키만)을 먼저 다시 보내는 동작.
+ * 계약(쿠키만으로 로그아웃 204·끝낼 세션 없음 204·검증 불가 쿠키 refresh_invalid)은 확정됐다. 서버 세션 방식('session')에서만 켠다.
+ * TODO(AUTH-CONTRACT): server#124 최신 로그아웃 계약 배포 뒤 실서버가 'session' 모드로 바뀌면 함께 켜진다.
  */
 export function isLogoutPendingRetryEnabled(): boolean {
-  return false;
+  return getAuthMode() === 'session';
 }

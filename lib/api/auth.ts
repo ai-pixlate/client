@@ -60,7 +60,7 @@ export function getAuthMe(accessToken: string): Promise<AuthApiResult<AuthSeller
 
 /**
  * POST /auth/logout. accessToken 이 있으면 Bearer 로 함께 보낸다(만료됐어도 사전 refresh 없이 그대로).
- * TODO(AUTH-CONTRACT): confirm cookie-only logout contract with BE — accessToken 없이 쿠키만으로 로그아웃되는지는 BE 최종 답변 대기
+ * accessToken 이 없으면 쿠키만으로 보낸다(유효한 refresh 쿠키만으로 로그아웃 — FE↔BE 합의·server#124).
  */
 export function postAuthLogout(options: { accessToken?: string | null } = {}): Promise<AuthApiResult<true>> {
   const headers = csrfHeaders();

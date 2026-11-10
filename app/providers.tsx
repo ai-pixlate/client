@@ -7,8 +7,7 @@ import { useEffect, useState } from "react";
 import { AuthNoticeAnnouncer } from "@/app/_components/auth/auth-notice-announcer";
 import { ensureBackendSession, isApiMockingEnabled, shouldBootstrapBackendSession } from "@/lib/api/session";
 import { getAuthMode, isLogoutPendingRetryEnabled } from "@/lib/auth/capability";
-import { retryPendingLogout } from "@/lib/auth/logout";
-import { isLogoutPending } from "@/lib/auth/logout-pending";
+import { resumePendingLogout } from "@/lib/auth/logout";
 import { configureAuthRuntime, startAuthTabSync } from "@/lib/auth/runtime";
 
 /**
@@ -89,11 +88,11 @@ export default function Providers({ children }: { children: React.ReactNode }) {
   // enableMocking()은 module-level Promise를 캐시해 두므로 여러 번(HMR 재마운트
   // 등) 불려도 안전하다 — 그래서 이 effect는 의존성 없이 마운트 시 한 번만
   // 실행하면 된다. 실백엔드 모드에서는 그 직후 개발용 JWT를 받아 둔다.
+  // 서버 로그아웃 미완료 기록이 있으면 세션 복원보다 로그아웃(쿠키만) 재시도를 먼저 하고 G1 에 둔다(lib/auth/logout.ts).
   // 'session' 모드는 앱 진입 때 refresh 를 미리 보내지 않고 첫 401 에서 복구한다(lib/api/pixlate.ts authorizedFetch).
-  // 서버 로그아웃 미완료 기록이 있으면 복구하지 않는다(lib/auth/refresh.ts). 진입 때 로그아웃 재시도는 계약 확정 전이라 꺼져 있다.
   useEffect(() => {
     enableMocking()
-      .then(() => (isLogoutPending() && isLogoutPendingRetryEnabled() ? retryPendingLogout().then(() => undefined) : undefined))
+      .then(() => (isLogoutPendingRetryEnabled() ? resumePendingLogout().then(() => undefined) : undefined))
       .then(() => (getAuthMode() !== 'dev-login' || !shouldBootstrapBackendSession(window.location.pathname) ? Promise.resolve() : ensureBackendSession()))
       .then(() => setMockingReady(true))
       .catch((err) => {
