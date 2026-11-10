@@ -65,10 +65,12 @@ export function classifySocialCompleteFailure(error: AuthErrorInfo): SocialCompl
 }
 
 /** 소셜 로그인 오류 문구. 제공자·state 문제는 같은 시도로 되살릴 수 없어 처음부터 다시 로그인하도록 안내한다 */
-export type SocialLoginErrorKind = SocialStartFailureKind | SocialCompleteFailureKind | 'cancelled';
+export type SocialLoginErrorKind = SocialStartFailureKind | SocialCompleteFailureKind | 'cancelled' | 'callback-unconfirmed';
 
 export function socialLoginErrorMessage(kind: SocialLoginErrorKind): string {
   switch (kind) {
+    case 'callback-unconfirmed':
+      return '로그인 완료 여부를 확인할 수 없습니다. 다시 로그인해 주세요.';
     case 'not-available':
       return '지금은 이 방법으로 로그인할 수 없습니다.';
     case 'unavailable':

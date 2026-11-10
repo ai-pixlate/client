@@ -1,4 +1,5 @@
 import { getAuthMe, postAuthRefresh } from '../api/auth.ts';
+import { clearCallbackState, isSessionRestoreSuppressed, readCallbackState } from './callback-state.ts';
 import { AUTH_HOME_PATH, AUTH_LOGIN_PATH } from './constants.ts';
 import { createAuthChannel, type AuthChannel, type AuthTabEvent } from './cross-tab.ts';
 import { isLogoutPending } from './logout-pending.ts';
@@ -68,6 +69,7 @@ function defaultRecoveryDeps(): RecoveryDeps {
     lock: getAuthLock(),
     channel: getAuthChannel(),
     isLogoutPending,
+    isSessionRestoreSuppressed,
     onOutcome: applyRecoveryOutcome,
   };
 }
@@ -93,6 +95,10 @@ export function applyRecoveryOutcome(outcome: RecoveryOutcome): void {
     case 'session-ended':
       endSessionLocally();
       getAuthChannel().post({ type: 'logout' });
+      return;
+    case 'restore-suppressed':
+      // 이 탭만 G1 로 — 다른 탭의 세션은 건드리지 않는다(logout 알림 없음). 새 start 로 다시 로그인한다
+      endSessionLocally();
       return;
     case 'rotated-exhausted':
       // 서버 세션이 폐기됐다고 단정하지 않는다 — 다른 탭에 로그아웃을 알리지 않고, 이 탭의 자동 복구만 멈춘다
@@ -126,6 +132,8 @@ export function handleAuthTabEvent(event: AuthTabEvent): void {
       return;
     case 'login-complete':
     case 'account-changed': {
+      // 다른 탭의 새 로그인이 끝났다 — 브라우저 쿠키는 그 새 세션이므로 이 탭의 「완료 여부 모름」 차단을 푼다
+      if (event.type === 'login-complete' && readCallbackState() === 'unconfirmed') clearCallbackState();
       const { seller, status } = getAuthSnapshot();
       if (seller?.id === event.sellerId) return;
       if (seller) {

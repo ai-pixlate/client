@@ -43,6 +43,8 @@ export function SocialCallbackView({
     void completeSocialLogin({ provider, code, state }).then((result) => {
       if (!active) return;
       if (result.kind === 'success') router.replace(AUTH_HOME_PATH);
+      // 완료 여부를 알 수 없음(응답 전 새로고침·login_in_progress 등) — G1 에서 안내하고 새 start 를 기다린다
+      else if (result.error === 'callback-unconfirmed') router.replace(AUTH_LOGIN_PATH);
       else setView({ kind: 'error', error: result.error });
     });
     return () => {

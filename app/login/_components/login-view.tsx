@@ -2,8 +2,9 @@
 
 /* eslint-disable @next/next/no-img-element -- GIF 와 고정 크기 Figma 자산은 next/image 최적화 대상이 아니다 */
 
-import { type CSSProperties, useEffect, useRef, useState } from 'react';
+import { type CSSProperties, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 
+import { readCallbackState } from '@/lib/auth/callback-state';
 import { isSocialLoginEnabled } from '@/lib/auth/capability';
 import type { SocialProvider } from '@/lib/auth/constants';
 import { socialLoginErrorMessage, type SocialLoginErrorKind } from '@/lib/auth/errors';
@@ -81,10 +82,16 @@ const FOCUS_RING = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus
  * 소셜 로그인 버튼 동작. 소셜 OAuth 서버가 없는 실서버 모드에서는 눌러도 아무 요청도 보내지 않는다(lib/auth/capability.ts).
  * Mock 에서는 POST /auth/social/{provider}/start → authorizeUrl 이동까지 실제 흐름을 탄다. 진행 중에는 두 버튼 모두 다시 시작하지 않는다.
  */
+const subscribeNothing = () => () => {};
+
 function useSocialLoginButtons() {
   const enabled = isSocialLoginEnabled();
   const [pending, setPending] = useState<SocialProvider | null>(null);
   const [error, setError] = useState<SocialLoginErrorKind | null>(null);
+
+  // 이전 callback 의 완료 여부를 알 수 없으면(lib/auth/callback-state.ts) 다시 로그인하도록 안내한다. 새 start 성공 때 기록이 지워진다.
+  // sessionStorage 값이라 서버 렌더에서는 false 로 두고 hydration 뒤에 읽는다
+  const callbackUnconfirmed = useSyncExternalStore(subscribeNothing, () => readCallbackState() === 'unconfirmed', () => false);
 
   // 제공자 화면에서 뒤로 가기 → bfcache 복원이면 진행 중 표시와 시작 잠금을 푼다
   useEffect(() => {
@@ -116,7 +123,7 @@ function useSocialLoginButtons() {
       onClick: () => void start(provider),
     }) as const;
 
-  return { buttonProps, error };
+  return { buttonProps, error: error ?? (callbackUnconfirmed ? ('callback-unconfirmed' as const) : null) };
 }
 
 function SocialButtons({ buttonProps }: { buttonProps: ReturnType<typeof useSocialLoginButtons>['buttonProps'] }) {

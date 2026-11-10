@@ -21,6 +21,8 @@ export type RecoveryOutcome =
   | { kind: 'same-account' }
   | { kind: 'account-changed'; seller: AuthSeller }
   | { kind: 'session-ended' }
+  /** 소셜 callback 완료 여부를 모름 — 남은 refresh 쿠키가 이전 계정일 수 있어 복원하지 않는다(lib/auth/callback-state.ts) */
+  | { kind: 'restore-suppressed' }
   | { kind: 'rotated-exhausted' }
   | { kind: 'unavailable' }
   | { kind: 'failed' };
@@ -32,6 +34,8 @@ export interface RecoveryDeps {
   channel: Pick<AuthChannel, 'post' | 'waitFor'>;
   /** 서버 로그아웃 미완료 기록이 있으면 refresh 로 로그인을 되살리지 않는다 */
   isLogoutPending: () => boolean;
+  /** callback 결과 불확정 동안 refresh 로 세션을 되살리지 않는다 */
+  isSessionRestoreSuppressed: () => boolean;
   /** 사건당 한 번 호출된다 */
   onOutcome?: (outcome: RecoveryOutcome) => void;
   eventWaitMs?: number;
@@ -75,6 +79,7 @@ export function createSessionRecovery(deps: RecoveryDeps): SessionRecovery {
 
   async function run(): Promise<RecoveryOutcome> {
     if (deps.isLogoutPending()) return { kind: 'session-ended' };
+    if (deps.isSessionRestoreSuppressed()) return { kind: 'restore-suppressed' };
 
     const refreshed = await refreshWithinLimit();
     if (!refreshed.ok) return refreshed.outcome;

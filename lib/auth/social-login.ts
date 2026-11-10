@@ -1,4 +1,5 @@
 import { postSocialComplete, postSocialStart } from '../api/auth.ts';
+import { clearCallbackState, markCallbackInFlight, markCallbackUnconfirmed, readCallbackState } from './callback-state.ts';
 import type { SocialProvider } from './constants.ts';
 import { classifySocialCompleteFailure, classifySocialStartFailure, type SocialLoginErrorKind } from './errors.ts';
 import { clearLogoutPending } from './logout-pending.ts';
@@ -39,6 +40,8 @@ export async function startSocialLogin(provider: SocialProvider, deps: SocialSta
     startLocked = false;
     return { kind: 'error', error: classifySocialStartFailure(result.error) };
   }
+  // 새 로그인 흐름이 시작됐다 — 이전 callback 의 「완료 여부 모름」 차단을 푼다
+  clearCallbackState();
   deps.redirect(result.data.authorizeUrl);
   return { kind: 'redirecting' };
 }
@@ -71,11 +74,13 @@ const defaultCompleteDeps: SocialCompleteDeps = { complete: postSocialComplete }
 /**
  * 같은 provider+code+state 완료 요청은 같은 document 안에서 한 번만 보낸다. 다시 불러도(Strict Mode effect 재실행·재마운트) 같은 Promise 를 기다린다.
  *
- * 새로고침은 다르게 다룬다 — 새 document 에는 먼저 보낸 요청의 Promise 가 없고, 그 결과를 다시 받을 방법(계약)도 없다.
- * 그래서 새 document 는 같은 콜백을 한 번 다시 보내고, 서버 응답만으로 성공·실패를 정한다(성공 → 로그인, 실패 → 처음부터 다시).
- * refresh 로 결과를 추측하지 않는다: 먼저 보낸 요청이 끝나지 않았는데 브라우저에 이전 세션 쿠키가 있으면 다른 계정으로 로그인될 수 있다.
+ * 새로고침(새 document)은 다르게 다룬다 — 확정 계약(2차): 응답 전 새로고침된 callback 은 같은 /auth/social 을 다시 보내지 않고,
+ * refresh 로 성공을 추측하지도 않는다. 이 document 에 Promise 가 없는데 callback 상태 기록이 있으면 이전 document 가 이미 보낸 것으로 보고
+ * 「완료 여부를 확인할 수 없음」으로 끝낸다(세션 자동 복원 차단 → G1 → 새 start). 서버 쪽 결과 재전달은 계약에 없다.
  */
 const completions = new Map<string, Promise<SocialCompleteResult>>();
+
+const UNCONFIRMED: SocialCompleteResult = { kind: 'error', error: 'callback-unconfirmed' };
 
 export function completeSocialLogin(
   params: { provider: SocialProvider; code: string; state: string },
@@ -84,7 +89,15 @@ export function completeSocialLogin(
   const key = `${params.provider}\u0000${params.code}\u0000${params.state}`;
   const existing = completions.get(key);
   if (existing) return existing;
-  const promise = runCompletion(params, deps);
+  let promise: Promise<SocialCompleteResult>;
+  if (readCallbackState() !== null) {
+    markCallbackUnconfirmed();
+    promise = Promise.resolve(UNCONFIRMED);
+  } else {
+    // 첫 await 전에 동기로 기록한다 — 응답 전에 새로고침되면 새 document 가 이 기록을 본다
+    markCallbackInFlight();
+    promise = runCompletion(params, deps);
+  }
   completions.set(key, promise);
   return promise;
 }
@@ -92,12 +105,20 @@ export function completeSocialLogin(
 async function runCompletion(params: { provider: SocialProvider; code: string; state: string }, deps: SocialCompleteDeps): Promise<SocialCompleteResult> {
   const result = await deps.complete(params);
   if (result.ok) {
+    clearCallbackState();
     setAuthenticated(result.data.accessToken, result.data.seller);
     clearLogoutPending();
     getAuthChannel().post({ type: 'login-complete', sellerId: result.data.seller.id });
     return { kind: 'success', seller: result.data.seller };
   }
-  // in-progress(409 login_in_progress, BE 후보)는 다른 document 가 먼저 보낸 같은 시도다 — 그 결과를 받을 계약이 없어
-  // 기다리지 않고 「처음부터 다시」로 끝낸다. TODO(AUTH-CONTRACT): callback 요청 진행 중 document reload 시 완료 결과 복구 방식 필요
-  return { kind: 'error', error: classifySocialCompleteFailure(result.error) };
+  const kind = classifySocialCompleteFailure(result.error);
+  // 결과를 알 수 없는 경우 — 네트워크 끊김(새로고침으로 끊긴 요청 포함), login_in_progress(다른 document 의 같은 시도).
+  // 자동 반복·refresh 추측 없이 불확정으로 끝내고 세션 자동 복원을 막는다
+  if (result.error.status === 0 || kind === 'in-progress') {
+    markCallbackUnconfirmed();
+    return UNCONFIRMED;
+  }
+  // 서버가 이번 시도를 거절했다(로그인되지 않음이 확정) — 차단할 이유가 없다
+  clearCallbackState();
+  return { kind: 'error', error: kind };
 }
