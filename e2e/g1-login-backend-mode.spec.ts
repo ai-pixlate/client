@@ -21,10 +21,9 @@ async function recordAuth(page: import('@playwright/test').Page) {
 test('/login 은 Mock 이 꺼져 있어도 자동 로그인 요청을 보내지 않는다', async ({ page }) => {
   const logins = await recordAuth(page);
   await page.goto('/login');
-  await expect(page.getByTestId('g1-form')).toBeVisible();
-  await page.getByLabel('이메일').fill('seller@example.com');
-  await page.getByLabel('비밀번호').fill('secret');
-  await page.getByTestId('g1-submit').click();
+  await expect(page.getByTestId('g1-social')).toBeVisible();
+  await page.getByTestId('g1-social-kakao').click({ force: true });
+  await page.getByTestId('g1-social-google').click({ force: true });
   await page.waitForTimeout(500);
   expect(logins).toEqual([]);
   expect(await page.evaluate(() => sessionStorage.getItem('pixlate.accessToken'))).toBeNull();
