@@ -77,19 +77,37 @@ test.describe('소셜 로그인 시작·완료', () => {
     expect(auth.count('POST', '/auth/social')).toBe(1);
   });
 
-  test('완료 요청 중 새로고침 → 새 document 가 같은 콜백을 한 번 다시 보내고 서버 응답으로 M1 에 도달', async ({ page }) => {
+  test('이전 Kakao 세션이 있는 브라우저에서 Google 완료 요청 중 새로고침 → 재전송·추측·자동 복원 없이 G1 에서 다시 로그인', async ({ page }) => {
     const auth = recordAuth(page);
+    // Mock 기본 상태 = 계정 1(Kakao) 세션이 남아 있는 브라우저
     await openLogin(page, { completeDelayMs: 1500 });
     await page.getByTestId('g1-social-google').click();
     await page.waitForURL((url) => url.pathname.startsWith('/login/callback/google'));
     await expect.poll(() => auth.count('POST', '/auth/social')).toBe(1);
     await page.reload();
-    await page.waitForURL((url) => url.pathname === '/');
-    // 먼저 보낸 요청의 Promise 는 새 document 에 없다 — 같은 콜백을 1회 다시 보내 결과를 서버에서 받는다
-    expect(auth.count('POST', '/auth/social')).toBe(2);
-    // refresh 로 결과를 추측하지 않는다(이전 세션 계정으로 로그인되는 것 방지)
+
+    // 새 document: 같은 /auth/social 재전송 없이 G1 로, 다시 로그인 안내
+    await page.waitForURL((url) => url.pathname === '/login');
+    await expect(page.getByTestId('g1-social-error')).toHaveText('로그인 완료 여부를 확인할 수 없습니다. 다시 로그인해 주세요.');
+    await page.waitForTimeout(500);
+    expect(auth.count('POST', '/auth/social')).toBe(1);
     expect(auth.count('POST', '/auth/refresh')).toBe(0);
-    await expect(page.getByTestId('auth-notice')).toBeAttached();
+    expect(auth.count('GET', '/auth/me')).toBe(0);
+
+    // G1 에서 M1 을 직접 열어 401 이 나도 이전 Kakao 세션으로 복원하지 않고 G1 에 남는다
+    await setScenario(page, { expireOnce: true });
+    await page.goto('/jobs/new');
+    await page.waitForURL((url) => url.pathname === '/login');
+    expect(auth.count('POST', '/auth/refresh')).toBe(0);
+    expect(auth.count('GET', '/auth/me')).toBe(0);
+
+    // 새 start 부터 다시 → 선택한 Google 계정으로 M1
+    await setScenario(page, {});
+    await page.getByTestId('g1-social-google').click();
+    await page.waitForURL((url) => url.pathname === '/');
+    expect(auth.count('POST', '/auth/social/google/start')).toBe(2);
+    expect(auth.count('POST', '/auth/social')).toBe(2);
+    expect(await page.evaluate(() => sessionStorage.getItem('pixlate:auth:callback-state'))).toBeNull();
   });
 
   test('새로고침한 콜백이 이미 쓰인 state 면 재시도 가능한 오류로 끝난다', async ({ page }) => {
@@ -164,17 +182,19 @@ test.describe('소셜 로그인 시작·완료', () => {
     expect(auth.count('POST', '/auth/social')).toBe(1);
   });
 
-  test('409 login_in_progress(후보) → 결과를 받을 계약이 없어 refresh 추측 없이 「처음부터 다시」', async ({ page }) => {
+  test('409 login_in_progress → polling·refresh·재POST 없이 G1 에서 다시 로그인', async ({ page }) => {
     const auth = recordAuth(page);
     await openLogin(page, { complete: 'login_in_progress' });
     await page.getByTestId('g1-social-kakao').click();
-    await expect(page.getByTestId('g1-callback-error')).toHaveAttribute('data-error', 'in-progress');
-    await expect(page.getByTestId('g1-callback-error')).toHaveText('로그인을 완료하지 못했습니다. 처음부터 다시 로그인해 주세요.');
+    await page.waitForURL((url) => url.pathname === '/login');
+    await expect(page.getByTestId('g1-social-error')).toHaveText('로그인 완료 여부를 확인할 수 없습니다. 다시 로그인해 주세요.');
     await page.waitForTimeout(500);
     expect(auth.count('POST', '/auth/social')).toBe(1);
     expect(auth.count('POST', '/auth/refresh')).toBe(0);
-    await page.getByTestId('g1-callback-retry').click();
-    await page.waitForURL((url) => url.pathname === '/login');
+    expect(auth.count('GET', '/auth/me')).toBe(0);
+    await setScenario(page, {});
+    await page.getByTestId('g1-social-kakao').click();
+    await page.waitForURL((url) => url.pathname === '/');
   });
 
   test('제공자 화면에서 취소하면 완료 요청 없이 안내한다', async ({ page }) => {

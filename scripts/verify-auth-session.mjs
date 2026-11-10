@@ -16,6 +16,7 @@ import { configureAuthRuntimeForTest, handleAuthTabEvent, recoverSession } from 
 import { getAccessToken, getAuthSnapshot, resetAuthStoreForTest, setAuthenticated } from '../lib/auth/session-store.ts';
 import { completeSocialLogin, resetSocialLoginForTest, startSocialLogin } from '../lib/auth/social-login.ts';
 import { AuthLockTimeoutError, createAuthLock } from '../lib/auth/tab-lock.ts';
+import { isSessionRestoreSuppressed, readCallbackState, setCallbackStateStorageForTest } from '../lib/auth/callback-state.ts';
 
 let pass = 0;
 let fail = 0;
@@ -104,6 +105,8 @@ function setupTab({ bus = createBus(), path = '/jobs/1', eventWaitMs = 40, lock 
   resetSocialLoginForTest();
   const storage = memoryStorage();
   setLogoutPendingStorageForTest(storage);
+  const callbackStorage = memoryStorage();
+  setCallbackStateStorageForTest(callbackStorage);
   const navigations = [];
   let cleared = 0;
   const channel = createAuthChannel(() => bus.channel());
@@ -113,7 +116,12 @@ function setupTab({ bus = createBus(), path = '/jobs/1', eventWaitMs = 40, lock 
     lock: lock ?? ((task) => task()),
     recoveryDeps: { eventWaitMs },
   });
-  return { bus, channel, navigations, storage, cleared: () => cleared };
+  return { bus, channel, navigations, storage, callbackStorage, cleared: () => cleared };
+}
+
+async function tabMarkUnconfirmed() {
+  const { markCallbackUnconfirmed } = await import('../lib/auth/callback-state.ts');
+  markCallbackUnconfirmed();
 }
 
 /** 원 요청 대역: 처음 n 번은 401, 그 뒤 200 */
@@ -464,46 +472,95 @@ for (const [label, response, expected] of [
   check(`${label} → 완료 요청 자동 반복 없음·로그인 안 됨`, server.count('POST /auth/social') === 1 && getAccessToken() === null);
 }
 
-console.log('\n[callback — 새로고침(새 document)]');
+console.log('\n[callback — 새로고침(새 document) · 확정 계약 B]');
 {
-  // 첫 document: 완료 요청이 끝나기 전에 사라짐(응답을 받지 못함)
-  setupTab({ path: '/login/callback/google' });
+  // 같은 document: Strict Mode 두 번째 실행은 기록을 보고 「새로고침」으로 오해하지 않는다
+  setupTab({ path: '/login/callback/kakao' });
+  const server = createServer({ 'POST /auth/social': [async () => (await sleep(20), json(200, { accessToken: 'social-t', seller: SELLER_1 }))] });
+  const deps = await completeDeps();
+  const first = completeSocialLogin(params, deps);
+  check('완료 요청 시작 시 callback 상태 in-flight 기록', readCallbackState() === 'in-flight');
+  const second = completeSocialLogin(params, deps);
+  const [a, b] = await Promise.all([first, second]);
+  check('같은 document 재실행은 같은 Promise(성공)·POST 1회', a === b && a.kind === 'success' && server.count('POST /auth/social') === 1);
+  check('성공 → callback 상태 기록 삭제', readCallbackState() === null);
+}
+{
+  // 이전 Kakao 세션이 있는 브라우저에서 Google callback 중 새로고침
+  const tab = setupTab({ path: '/login/callback/google' });
   const gParams = { provider: 'google', code: 'code-g', state: 'state-g' };
-  let release;
   const server = createServer({
-    'POST /auth/social': [() => new Promise((resolve) => (release = resolve)), async () => json(200, { accessToken: 'social-g', seller: SELLER_2 })],
-    'POST /auth/refresh': [okRefresh('old-session-t')],
+    'POST /auth/social': [() => new Promise(() => {}), async () => json(200, { accessToken: 'social-g', seller: SELLER_2 })],
+    'POST /auth/refresh': [okRefresh('old-kakao-session-t')],
     'GET /auth/me': [meReturns(SELLER_1)],
   });
   const deps = await completeDeps();
-  void completeSocialLogin(gParams, deps);
+  void completeSocialLogin(gParams, deps); // 응답 전에 document 가 사라짐
   await sleep(5);
-  // 새 document — 모듈 상태(먼저 보낸 Promise)가 없다
-  resetSocialLoginForTest();
+  resetSocialLoginForTest(); // 새 document — Promise 없음, sessionStorage 기록만 남음
+  const before = wireLog.length;
   const result = await completeSocialLogin(gParams, deps);
-  check('새로고침 뒤 새 document 는 같은 콜백을 한 번 다시 보냄', server.count('POST /auth/social') === 2);
-  check('새로고침 뒤 서버 성공 응답으로 로그인 완료(선택한 계정)', result.kind === 'success' && result.seller.id === 2 && getAccessToken() === 'social-g');
-  check('새로고침 뒤 refresh 로 결과를 추측하지 않음(이전 세션 계정으로 로그인되지 않음)', server.count('POST /auth/refresh') === 0 && server.count('GET /auth/me') === 0);
-  release?.(json(499, null));
+  check('새 document: 같은 /auth/social 재전송 0회', server.count('POST /auth/social') === 1);
+  check('새 document: 「로그인 완료 여부 확인 불가」로 끝남', result.kind === 'error' && result.error === 'callback-unconfirmed' && readCallbackState() === 'unconfirmed');
+  check('새 document: refresh·/auth/me 로 성공 추측 0회', server.count('POST /auth/refresh') === 0 && server.count('GET /auth/me') === 0);
+  check('새 document: 로그인 상태가 되지 않음', getAccessToken() === null && getAuthSnapshot().seller === null);
+  // G1 로 돌아간 뒤 첫 401 이 나도 이전 Kakao 세션으로 복원하지 않는다
+  const outcome = await recoverSession();
+  check('불확정 동안 세션 자동 복원 차단(refresh 0회)', outcome.kind === 'restore-suppressed' && server.count('POST /auth/refresh') === 0 && isSessionRestoreSuppressed());
+  check('불확정 → 이 탭만 G1, 다른 탭에 logout 알림 없음', tab.navigations.join() === '/login' && !wireLog.slice(before).some((m) => m.includes('logout')));
+  check('이전 Kakao 계정(seller 1)으로 로그인되지 않음', getAuthSnapshot().seller?.id !== 1 && getAccessToken() === null);
+  const r = originalRequest(1);
+  const res = await fetchWithSessionRecovery(r.send).catch(() => ({ status: 'changed' }));
+  check('불확정 동안 일반 API 401 → 원 요청 재시도·refresh 없음', r.sends === 1 && server.count('POST /auth/refresh') === 0 && res.status !== 200);
+  // 새 start 성공 → 차단 해제
+  const { postSocialStart } = await import('../lib/api/auth.ts');
+  createServer({ 'POST /auth/social/google/start': [async () => json(200, { authorizeUrl: '/x' })] });
+  await startSocialLogin('google', { start: postSocialStart, redirect: () => {} });
+  check('새 start 성공 → 차단 해제', readCallbackState() === null && !isSessionRestoreSuppressed());
 }
 {
-  // 첫 요청을 서버가 이미 처리해 code·state 를 써 버린 경우 — 다시 보낸 요청은 state_invalid → 처음부터 다시
-  setupTab({ path: '/login/callback/kakao' });
-  const server = createServer({ 'POST /auth/social': [async () => authError(401, 'UNAUTHORIZED', 'state_invalid')], 'POST /auth/refresh': [okRefresh('old-session-t')] });
-  const result = await completeSocialLogin(params, await completeDeps());
-  check('새로고침 뒤 다시 보낸 요청이 state_invalid → 재시도 가능한 오류(멈추지 않음)', result.kind === 'error' && result.error === 'state-invalid');
-  check('그때 refresh 를 부르지 않음', server.count('POST /auth/refresh') === 0);
+  setupTab({ path: '/login' });
+  const { postSocialStart } = await import('../lib/api/auth.ts');
+  await tabMarkUnconfirmed();
+  createServer({ 'POST /auth/social/kakao/start': [async () => authError(503, 'SERVICE_UNAVAILABLE', null)] });
+  await startSocialLogin('kakao', { start: postSocialStart, redirect: () => {} });
+  check('start 가 실패하면 차단 유지(새 로그인이 시작되지 않음)', readCallbackState() === 'unconfirmed');
 }
 {
   setupTab({ path: '/login/callback/kakao' });
-  const server = createServer({
-    'POST /auth/social': [async () => authError(409, 'DUPLICATE', 'login_in_progress')],
-    'POST /auth/refresh': [okRefresh('old-session-t')],
-    'GET /auth/me': [meReturns(SELLER_1)],
-  });
+  const server = createServer({ 'POST /auth/social': [async () => authError(409, 'DUPLICATE', 'login_in_progress')], 'POST /auth/refresh': [okRefresh('old-session-t')], 'GET /auth/me': [meReturns(SELLER_1)] });
   const result = await completeSocialLogin(params, await completeDeps());
-  check('409 login_in_progress(다른 document 의 같은 시도) → 결과를 받을 계약이 없어 「처음부터 다시」로 끝냄', result.kind === 'error' && result.error === 'in-progress');
-  check('login_in_progress → refresh 로 추측하지 않음·완료 POST 재반복 없음', server.count('POST /auth/refresh') === 0 && server.count('POST /auth/social') === 1 && getAccessToken() === null);
+  check('login_in_progress → 불확정(처음부터 다시)·차단', result.kind === 'error' && result.error === 'callback-unconfirmed' && readCallbackState() === 'unconfirmed');
+  check('login_in_progress → polling·refresh·재POST 없음', server.count('POST /auth/social') === 1 && server.count('POST /auth/refresh') === 0 && server.count('GET /auth/me') === 0);
+}
+{
+  setupTab({ path: '/login/callback/kakao' });
+  globalThis.fetch = async () => {
+    throw new TypeError('Failed to fetch');
+  };
+  const result = await completeSocialLogin(params, await completeDeps());
+  check('완료 요청 네트워크 끊김(결과 모름) → 불확정·차단', result.kind === 'error' && result.error === 'callback-unconfirmed' && readCallbackState() === 'unconfirmed');
+}
+{
+  setupTab({ path: '/login/callback/kakao' });
+  createServer({ 'POST /auth/social': [async () => authError(401, 'UNAUTHORIZED', 'state_invalid')] });
+  const result = await completeSocialLogin(params, await completeDeps());
+  check('서버가 거절(state_invalid — 로그인 안 됨 확정) → 차단하지 않음', result.kind === 'error' && result.error === 'state-invalid' && readCallbackState() === null);
+}
+{
+  const tab = setupTab({ path: '/login' });
+  await tabMarkUnconfirmed();
+  handleAuthTabEvent({ type: 'logout' });
+  handleAuthTabEvent({ type: 'login-complete', sellerId: 2 });
+  check('다른 탭의 새 로그인 완료 → 이 탭 차단 해제', readCallbackState() === null && tab.navigations.at(-1) === '/');
+}
+{
+  setupTab({ path: '/' });
+  await tabMarkUnconfirmed();
+  markLogoutPending();
+  const server = createServer({ 'POST /auth/refresh': [okRefresh('x')] });
+  const outcome = await recoverSession();
+  check('logoutPending 과 함께 있으면 logoutPending 우선(세션 종료)·refresh 없음', outcome.kind === 'session-ended' && server.count('POST /auth/refresh') === 0);
 }
 
 // ── 로그아웃 ───────────────────────────────────
