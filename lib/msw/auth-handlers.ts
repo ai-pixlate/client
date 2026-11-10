@@ -106,18 +106,25 @@ export const authHandlers = [
     return HttpResponse.json(seller);
   }),
 
+  // 로그아웃 — FE↔BE 최신 합의: 끝낼 세션이 없어도 204(쿠키 삭제), 쿠키만으로도 204,
+  // Bearer 를 검증할 수 없으면 401 invalid_token(아무것도 바꾸지 않음), 쿠키 자체를 검증할 수 없으면 401 refresh_invalid + 쿠키 삭제
   http.post('/auth/logout', ({ request }) => {
     const csrf = requireCsrf(request);
     if (csrf) return csrf;
     const step = takeMockAuthStep('logout');
-    if (step === 'invalid_token') return authError(401, 'UNAUTHORIZED', 'invalid_token');
+    const authorization = request.headers.get('Authorization');
+    if (step === 'invalid_token' || (authorization && sellerIdFromMockAccess(authorization) == null)) {
+      return authError(401, 'UNAUTHORIZED', 'invalid_token');
+    }
+    if (step === 'refresh_invalid') {
+      // 서버는 검증할 수 없는 쿠키를 지운다(Set-Cookie 삭제) — Mock 에서는 브라우저 쿠키 대신 세션 표시를 지운다
+      writeMockAuthServer({ ...readMockAuthServer(), sellerId: null });
+      return authError(401, 'UNAUTHORIZED', 'refresh_invalid');
+    }
     if (step === 'origin_not_allowed') return authError(401, 'UNAUTHORIZED', 'origin_not_allowed');
     if (step === 'validation') return authError(422, 'VALIDATION_ERROR', null);
     if (step === 'unavailable') return unavailable();
-    const server = readMockAuthServer();
-    // 끝낼 세션 없음: 현행 후보는 401(사유 없음) — 204 로 바뀔 수 있다(BE 결정 대기)
-    if (step === 'no_session' || server.sellerId == null) return authError(401, 'UNAUTHORIZED', null);
-    writeMockAuthServer({ ...server, sellerId: null });
+    writeMockAuthServer({ ...readMockAuthServer(), sellerId: null });
     return new HttpResponse(null, { status: 204 });
   }),
 ];

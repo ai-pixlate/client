@@ -13,7 +13,7 @@ export const MOCK_AUTH_SERVER_KEY = 'pixlate:mock-auth-server';
  * { start?: 'not_found' | 'unavailable' | 'origin_not_allowed',
  *   complete?: 'state_invalid' | 'provider_auth_failed' | 'provider_unavailable' | 'login_in_progress',
  *   refresh?: Array<'ok' | 'rotated' | 'reused' | 'invalid' | 'unavailable' | 'origin_not_allowed' | `switch:${number}`>,
- *   logout?: Array<'ok' | 'invalid_token' | 'no_session' | 'origin_not_allowed' | 'validation' | 'unavailable'>,
+ *   logout?: Array<'ok' | 'invalid_token' | 'refresh_invalid' | 'origin_not_allowed' | 'validation' | 'unavailable'>,
  *   expireOnce?: boolean, startDelayMs?: number, completeDelayMs?: number }
  * refresh·logout 배열은 요청마다 앞에서 하나씩 쓴다. 비면 기본 동작이다.
  */
