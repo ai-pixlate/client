@@ -9,8 +9,8 @@ import { test, expect } from '@playwright/test';
 //   9003 비타민C 세럼 / US·en / site     / 2026-10-12
 //   9004 히알루론산 토너 / AE·ar / original / 2026-09-19 / thumbnailUrl 있음
 //
-// 삭제·다운로드·다른 버전 만들기는 계약 미확정이라 클릭 결과를 검증하지 않는다 —
-// 다운로드·삭제는 API 계약 확정 전까지 항상 비활성인지만 본다.
+// 삭제·다운로드·다른 버전 만들기는 계약 미확정이라 실제 결과를 검증하지 않는다 —
+// 삭제·다른 버전 만들기는 비활성, 다운로드는 선택이 있을 때 모달만 열고 모달 안 다운로드는 비활성인지 본다.
 // master 실패/빈 배열 시 code fallback은 MSW(Service Worker) 응답을 e2e에서 바꿀 수 없어
 // scripts/verify-library-view.mjs의 getCodeLabel 검증으로 확인한다.
 // ─────────────────────────────────────────────────────────────────
@@ -243,6 +243,69 @@ test('이미지 추가 생성 카드 → N1(/jobs/new)', async ({ page }) => {
   await expect(page.getByTestId('library-add-card-link')).toHaveAttribute('href', '/jobs/new');
   await page.getByTestId('library-add-card-link').click();
   await expect(page).toHaveURL(/\/jobs\/new$/);
+});
+
+// ── 2차 정책(PM 확정): 로그인 후 M1 에서 다음 기능으로 진입하는 활성 액션은 "새 작업 → N1" 하나다.
+// 검색·필터·선택·pagination 은 화면 안 조작이라 범위에 넣지 않는다. 다운로드 모달은 기존 2차 검증 항목이라 그대로 둔다.
+const MUTATING = /^(POST|PUT|PATCH|DELETE)$/;
+
+test('2차 범위 — 다른 화면으로 가는 링크는 새 작업(N1) 하나이고, 후속 범위 버튼은 비활성이다', async ({ page }) => {
+  const main = page.locator('main');
+  await expect(main.locator('a')).toHaveCount(1);
+  await expect(main.locator('a').first()).toHaveAttribute('href', '/jobs/new');
+  await expect(main.locator('a[href="#"], [role="link"]:not(a)')).toHaveCount(0);
+
+  // 후속 범위 — 삭제·다른 버전 만들기는 native disabled, 뒤로가기는 렌더하지 않는다
+  await expect(page.getByTestId('library-delete')).toBeDisabled();
+  for (const jobId of [9001, 9002, 9003, 9004]) {
+    await expect(page.getByTestId(`library-card-version-${jobId}`)).toBeDisabled();
+  }
+  await expect(page.getByRole('button', { name: '뒤로 가기' })).toHaveCount(0);
+  // "+" 원형 아이콘은 장식이고, 카드 본문은 상세로 가는 버튼·링크가 아니다
+  await expect(page.getByTestId('library-add-card').getByRole('button')).toHaveCount(0);
+  await expect(card(page, 9001).locator('a, [role="button"]')).toHaveCount(0);
+});
+
+test('2차 범위 — 화면 안 조작과 후속 범위 버튼은 이동·쓰기 요청을 만들지 않는다', async ({ page }) => {
+  const writes: string[] = [];
+  page.on('request', (r) => {
+    if (MUTATING.test(r.method())) writes.push(`${r.method()} ${new URL(r.url()).pathname}`);
+  });
+
+  await card(page, 9001).click({ position: { x: 200, y: 140 } });
+  await page.getByTestId('library-card-select-9001').check();
+  await page.getByTestId('library-select-all').check();
+  await page.getByTestId('library-search').fill('세럼');
+  await page.getByTestId('library-search').fill('');
+  await page.getByTestId('library-delete').click({ force: true });
+  await page.getByTestId('library-card-version-9002').click({ force: true });
+  await page.getByTestId('library-download').click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  // 모달 안 실제 다운로드 버튼들은 계약 대기라 비활성이다
+  for (const button of await dialog.getByRole('button', { name: /다운로드/ }).all()) {
+    await expect(button).toBeDisabled();
+  }
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await page.waitForTimeout(300);
+
+  expect(new URL(page.url()).pathname).toBe('/');
+  expect(writes).toEqual([]);
+});
+
+test('2차 범위 — 새 작업은 기존 N1 경로로 가고, 브랜드·작업을 자동으로 만들지 않는다', async ({ page }) => {
+  const writes: string[] = [];
+  page.on('request', (r) => {
+    if (MUTATING.test(r.method())) writes.push(`${r.method()} ${new URL(r.url()).pathname}`);
+  });
+  await page.getByTestId('library-add-card-link').click();
+  await expect(page).toHaveURL(/\/jobs\/new$/);
+  await expect(page.getByRole('heading', { name: '이미지 입력' })).toBeVisible();
+  // 쿼리 없이 들어오며, FE 가 임의 brandId 를 붙이거나 브랜드·작업을 만들지 않는다
+  expect(new URL(page.url()).search).toBe('');
+  await page.waitForTimeout(500);
+  expect(writes).toEqual([]);
 });
 
 type Box = { x: number; y: number; width: number; height: number };
