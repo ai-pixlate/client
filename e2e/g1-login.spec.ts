@@ -2,7 +2,7 @@ import { type Page, expect, test } from '@playwright/test';
 
 // ─────────────────────────────────────────────────────────────────
 // G1 로그인 (Figma 835:6511) — 카카오·Google 소셜 로그인 전용 화면, Chromium.
-// 소셜 인증 API 가 확정되지 않아 화면·고지·키보드·비동작 버튼과 "인증 요청 0건"만 확인한다.
+// 화면·고지·키보드와 "화면을 열기만 해서는 인증 요청 0건"을 확인한다. 소셜 버튼을 누른 뒤의 Mock 흐름은 g1-social-auth.spec.ts 가 맡는다.
 // 이메일·비밀번호·자동 로그인·비밀번호 찾기·회원가입은 제품 범위에서 제외되어 화면에 없어야 한다.
 // Mock 을 끈 환경의 자동 로그인 범위는 g1-login-backend-mode.spec.ts 가 맡는다.
 // ─────────────────────────────────────────────────────────────────
@@ -527,33 +527,18 @@ test('모션 감소 환경은 추적을 멈추고 #999 를 유지한다', async 
   await expect(page.getByTestId('g1-brand-footer').locator('[data-g1-grapheme]').first()).toHaveCSS('color', 'rgb(153, 153, 153)');
 });
 
-test('소셜 버튼은 정상 버튼으로 보이지만 눌러도 요청·이동·저장이 없다', async ({ page }) => {
+test('화면을 열기만 해서는 인증 요청이 없고, 소셜 버튼은 활성 버튼이다', async ({ page }) => {
   const auth = recordAuthRequests(page);
   await open(page);
-  const requests: string[] = [];
-  page.on('request', (r) => {
-    if (!/\/_next\/|\/auth\/.*\.(svg|gif)$/.test(r.url())) requests.push(r.url());
-  });
-  const before = await page.getByTestId('g1-auth-panel').innerText();
+  await page.waitForTimeout(300);
+  expect(auth).toEqual([]);
   for (const button of [kakao(page), google(page)]) {
     await expect(button).toHaveAttribute('type', 'button');
-    await expect(button).toHaveAttribute('aria-disabled', 'true');
-    // 비활성처럼 흐리게 보이지 않는다
+    // Mock 에서는 소셜 로그인 시작이 열려 있다 — 누른 뒤 흐름은 g1-social-auth.spec.ts 가 맡는다
+    await expect(button).toHaveAttribute('aria-disabled', 'false');
     await expect(button).toHaveCSS('opacity', '1');
     await expect(button).toHaveCSS('filter', 'none');
-    // aria-disabled 는 Playwright 가 비활성으로 봐서 force 로 실제 클릭을 보낸다
-    await button.click({ force: true });
   }
-  await kakao(page).focus();
-  await page.keyboard.press('Enter');
-  await google(page).focus();
-  await page.keyboard.press('Space');
-  await page.waitForTimeout(300);
-
-  expect(new URL(page.url()).pathname).toBe('/login');
-  expect(requests).toEqual([]);
-  expect(auth).toEqual([]);
-  expect(await page.getByTestId('g1-auth-panel').innerText()).toBe(before);
   await expect(page.getByTestId('g1-auth-panel').locator('[role="alert"], [role="status"]')).toHaveCount(0);
   const saved = await page.evaluate(() => [JSON.stringify(localStorage), JSON.stringify(sessionStorage), document.cookie].join('|'));
   expect(saved).not.toMatch(/token|kakao|google/i);
