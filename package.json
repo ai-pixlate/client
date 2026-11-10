@@ -34,6 +34,7 @@
     "verify:n1-category": "node --experimental-strip-types scripts/verify-n1-category-tree.mjs",
     "verify:login-form": "node --experimental-strip-types scripts/verify-login-form.mjs",
     "verify:m2-form": "node --experimental-strip-types scripts/verify-m2-form.mjs",
+    "verify:auth-session": "node --experimental-strip-types scripts/verify-auth-session.mjs",
     "typecheck": "tsc --noEmit",
     "test:e2e": "playwright test"
   },

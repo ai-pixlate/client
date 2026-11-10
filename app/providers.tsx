@@ -1,9 +1,14 @@
 ﻿"use client";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import { AuthNoticeAnnouncer } from "@/app/_components/auth/auth-notice-announcer";
 import { ensureBackendSession, isApiMockingEnabled, shouldBootstrapBackendSession } from "@/lib/api/session";
+import { getAuthMode, isLogoutPendingRetryEnabled } from "@/lib/auth/capability";
+import { resumePendingLogout } from "@/lib/auth/logout";
+import { configureAuthRuntime, startAuthTabSync } from "@/lib/auth/runtime";
 
 /**
  * 서버에서 가져오는 모든 데이터는 TanStack Query를 통해서만 다룹니다.
@@ -64,13 +69,31 @@ export default function Providers({ children }: { children: React.ReactNode }) {
   );
 
   const [mockingReady, setMockingReady] = useState(false);
+  const router = useRouter();
+
+  // 인증 실행부(lib/auth/runtime.ts)에 화면 동작을 넣고 다른 탭 알림을 구독한다.
+  // 계정 전환·로그아웃 때 이전 계정 query 를 취소하고 캐시를 비운다 — polling 도 같이 멈춘다
+  useEffect(() => {
+    configureAuthRuntime({
+      navigate: (path) => router.replace(path),
+      currentPath: () => window.location.pathname,
+      clearClientData: () => {
+        void queryClient.cancelQueries();
+        queryClient.clear();
+      },
+    });
+    return startAuthTabSync();
+  }, [router, queryClient]);
 
   // enableMocking()은 module-level Promise를 캐시해 두므로 여러 번(HMR 재마운트
   // 등) 불려도 안전하다 — 그래서 이 effect는 의존성 없이 마운트 시 한 번만
   // 실행하면 된다. 실백엔드 모드에서는 그 직후 개발용 JWT를 받아 둔다.
+  // 서버 로그아웃 미완료 기록이 있으면 세션 복원보다 로그아웃(쿠키만) 재시도를 먼저 하고 G1 에 둔다(lib/auth/logout.ts).
+  // 'session' 모드는 앱 진입 때 refresh 를 미리 보내지 않고 첫 401 에서 복구한다(lib/api/pixlate.ts authorizedFetch).
   useEffect(() => {
     enableMocking()
-      .then(() => (isApiMockingEnabled() || !shouldBootstrapBackendSession(window.location.pathname) ? Promise.resolve() : ensureBackendSession()))
+      .then(() => (isLogoutPendingRetryEnabled() ? resumePendingLogout().then(() => undefined) : undefined))
+      .then(() => (getAuthMode() !== 'dev-login' || !shouldBootstrapBackendSession(window.location.pathname) ? Promise.resolve() : ensureBackendSession()))
       .then(() => setMockingReady(true))
       .catch((err) => {
         console.error(err);
@@ -81,6 +104,7 @@ export default function Providers({ children }: { children: React.ReactNode }) {
   return (
     <QueryClientProvider client={queryClient}>
       {mockingReady ? children : null}
+      <AuthNoticeAnnouncer />
     </QueryClientProvider>
   );
 }

@@ -2,9 +2,14 @@
 
 /* eslint-disable @next/next/no-img-element -- GIF 와 고정 크기 Figma 자산은 next/image 최적화 대상이 아니다 */
 
-import { type CSSProperties, useRef } from 'react';
+import { type CSSProperties, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 
+import { readCallbackState } from '@/lib/auth/callback-state';
+import { isSocialLoginEnabled } from '@/lib/auth/capability';
+import type { SocialProvider } from '@/lib/auth/constants';
+import { socialLoginErrorMessage, type SocialLoginErrorKind } from '@/lib/auth/errors';
 import { splitGraphemes } from '@/lib/auth/login-gif-contrast';
+import { releaseSocialLoginStart, startSocialLogin } from '@/lib/auth/social-login';
 
 import { useLoginGifContrast } from './use-login-gif-contrast';
 
@@ -71,15 +76,61 @@ function BrandLayer() {
   );
 }
 
-/** 소셜 인증 API 계약이 확정되지 않아 아직 연결하지 않은 동작. 가짜 로그인·토큰·이동을 만들지 않으려고 눌러도 아무 일도 일어나지 않게 둔다 */
-const INERT_BUTTON = { type: 'button', 'aria-disabled': true } as const;
 const FOCUS_RING = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ff6a38]';
 
-function SocialButtons() {
+/**
+ * 소셜 로그인 버튼 동작. 소셜 OAuth 서버가 없는 실서버 모드에서는 눌러도 아무 요청도 보내지 않는다(lib/auth/capability.ts).
+ * Mock 에서는 POST /auth/social/{provider}/start → authorizeUrl 이동까지 실제 흐름을 탄다. 진행 중에는 두 버튼 모두 다시 시작하지 않는다.
+ */
+const subscribeNothing = () => () => {};
+
+function useSocialLoginButtons() {
+  const enabled = isSocialLoginEnabled();
+  const [pending, setPending] = useState<SocialProvider | null>(null);
+  const [error, setError] = useState<SocialLoginErrorKind | null>(null);
+
+  // 이전 callback 의 완료 여부를 알 수 없으면(lib/auth/callback-state.ts) 다시 로그인하도록 안내한다. 새 start 성공 때 기록이 지워진다.
+  // sessionStorage 값이라 서버 렌더에서는 false 로 두고 hydration 뒤에 읽는다
+  const callbackUnconfirmed = useSyncExternalStore(subscribeNothing, () => readCallbackState() === 'unconfirmed', () => false);
+
+  // 제공자 화면에서 뒤로 가기 → bfcache 복원이면 진행 중 표시와 시작 잠금을 푼다
+  useEffect(() => {
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (!event.persisted) return;
+      releaseSocialLoginStart();
+      setPending(null);
+    };
+    window.addEventListener('pageshow', onPageShow);
+    return () => window.removeEventListener('pageshow', onPageShow);
+  }, []);
+
+  const start = async (provider: SocialProvider) => {
+    if (!enabled || pending) return;
+    setPending(provider);
+    setError(null);
+    const result = await startSocialLogin(provider);
+    if (result.kind === 'error') {
+      setError(result.error);
+      setPending(null);
+    }
+  };
+
+  const buttonProps = (provider: SocialProvider) =>
+    ({
+      type: 'button',
+      'aria-disabled': !enabled || pending !== null,
+      'aria-busy': pending === provider || undefined,
+      onClick: () => void start(provider),
+    }) as const;
+
+  return { buttonProps, error: error ?? (callbackUnconfirmed ? ('callback-unconfirmed' as const) : null) };
+}
+
+function SocialButtons({ buttonProps }: { buttonProps: ReturnType<typeof useSocialLoginButtons>['buttonProps'] }) {
   return (
     <div data-testid="g1-social" className={`flex ${AUTH_CONTROL_WIDTH} flex-col gap-4`}>
       <button
-        {...INERT_BUTTON}
+        {...buttonProps('kakao')}
         data-testid="g1-social-kakao"
         className={`box-border flex h-[45px] w-full cursor-default items-center justify-center gap-2 rounded-[6px] bg-[#fee500] text-[16px] leading-[19px] tracking-[-0.48px] text-black/85 ${FOCUS_RING}`}
       >
@@ -87,7 +138,7 @@ function SocialButtons() {
         카카오로 시작하기
       </button>
       <button
-        {...INERT_BUTTON}
+        {...buttonProps('google')}
         data-testid="g1-social-google"
         className={`box-border flex h-[45px] w-full cursor-default items-center justify-center gap-2 rounded-[6px] border border-[#eaeaea] bg-white text-[16px] leading-[19px] tracking-[-0.48px] text-black/85 ${FOCUS_RING}`}
       >
@@ -122,10 +173,11 @@ function ConsentNotice() {
 
 /**
  * G1 로그인(Figma 835:6511) — 카카오·Google 소셜 로그인 전용 화면이다. 이메일 로그인·회원가입·자동 로그인은 제품 범위에서 제외되었다.
- * 소셜 인증 API 가 확정되지 않아 어떤 요청도 보내지 않는다. 실제 인증은 계약 확정 후 별도 작업으로 연결한다.
+ * 소셜 버튼은 Mock 에서만 실제 시작 요청을 보낸다. 소셜 OAuth 서버가 없는 실서버 모드에서는 어떤 요청도 보내지 않는다(lib/auth/capability.ts).
  * 세로 배치: 로고 아래 남은 공간을 Figma 비율(위 242 : 아래 233)로 나눠 제목·소셜·고지 묶음을 놓는다.
  */
 export function LoginView() {
+  const { buttonProps, error } = useSocialLoginButtons();
   return (
     <main data-testid="g1-login" style={VERTICAL_RHYTHM} className="flex min-h-screen w-full">
       <BrandLayer />
@@ -142,10 +194,16 @@ export function LoginView() {
             <h1 className="text-[32px] font-bold leading-[38px] tracking-[-0.64px] text-[#171717]">만나서 반가워요.</h1>
           </div>
           <div className="mt-[52px]">
-            <SocialButtons />
+            <SocialButtons buttonProps={buttonProps} />
           </div>
           <div className="mt-[56px]">
             <ConsentNotice />
+            {/* 오류 표시는 Figma 상태 디자인이 없어 기존 오류 색(#e5484d)과 고지 글자 크기로 최소한만 둔다 */}
+            {error ? (
+              <p role="alert" data-testid="g1-social-error" className="mt-3 text-center text-[14px] leading-[22px] tracking-[-0.42px] text-[#e5484d]">
+                {socialLoginErrorMessage(error)}
+              </p>
+            ) : null}
           </div>
         </div>
         <div aria-hidden="true" className="min-h-6 grow-[233]" />

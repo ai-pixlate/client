@@ -56,6 +56,7 @@ import {
   withMockLegacyBox,
 } from '@/lib/mock-api/n5-layout-adjust';
 import { mockMasterCategories } from '@/lib/mock-api/category-fixtures';
+import { authHandlers } from './auth-handlers';
 import { m2BrandHandlers } from './m2-brand-handlers';
 import type { ApiJob, ApiJobAsyncTaskItem, ApiTextBlock } from '@/lib/api/n5-schema';
 import type { ApiAcceptedTask, ApiAnalysisProgress, ApiJobPatch, ApiSourceImageUploadResult } from '@/lib/api/job-schema';
@@ -922,6 +923,9 @@ function sortedDraftImages(draft: MockN1Draft): ApiSourceImage[] {
 // ─────────────────────────────────────────────
 
 export const handlers = [
+  // 인증(G1 소셜 로그인·세션 refresh·로그아웃) — 일반 API 의 access 만료 시나리오가 다른 handler 보다 먼저 봐야 해서 맨 앞에 둔다
+  ...authHandlers,
+
 
   // ── health (기존 유지). N1→N6 화면 흐름과 무관한 MSW 자체 점검용
   // 엔드포인트라 오늘 /api 경로 정리 대상이 아니다 — 실제 OpenAPI에도 대응

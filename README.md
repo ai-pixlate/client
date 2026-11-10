@@ -48,6 +48,8 @@ cp .env.example .env.local
 | `NEXT_PUBLIC_API_MOCKING` | `enabled` / 미설정(또는 그 외 값) | `enabled`면 MSW(Mock Service Worker)를 사용합니다. 미설정 또는 그 외 값이면 실제 backend를 사용합니다(`NODE_ENV`와는 무관합니다). |
 | `NEXT_PUBLIC_DEV_SELLER_EMAIL` | 이메일 문자열 | 실백엔드 개발 세션 로그인용 이메일입니다. 미설정 시 코드 기본값을 사용합니다. |
 
+인증 모드(`lib/auth/capability.ts`): Mock에서는 소셜 로그인(G1 → `/login/callback/{provider}` → M1)과 세션 복구(401 → refresh → `/auth/me` → 원 요청 1회 재시도)를 MSW로 확인할 수 있습니다. 실백엔드에서는 소셜 OAuth 서버가 아직 없어 소셜 버튼이 요청을 보내지 않고, 위 개발용 간이 로그인을 계속 씁니다. 어느 쪽이든 access token은 메모리에만 두고 브라우저 저장소에 쓰지 않습니다. Mock 인증 시험 시나리오는 `lib/mock-api/auth-fixtures.ts`의 `pixlate:mock-auth-scenario`(sessionStorage) 설명을 참고합니다.
+
 Mock(`NEXT_PUBLIC_API_MOCKING=enabled`)에서만 동작하는 확인용 주소입니다. Mock이 꺼져 있으면 무시됩니다.
 
 | 주소 | 용도 |
@@ -89,8 +91,10 @@ Secret(JWT, access token, password 등)은 절대 Git에 커밋하지 않습니�
 | `npm run verify:displayed-progress` | N2·N4 처리 화면 표시 %(관측 단계는 상한만 염·점프·감소 없음·처리 중 100 없음·실패 시 멈춤·완료 응답 뒤 100 표시) 순수 계산 자동 검증 (브라우저 불필요) |
 | `npm run verify:n1-category` | N1 카테고리 트리(GET /master/categories → 트리, 하위 없는 항목만 leaf)와 [다음] 진행 조건 순수 함수 자동 검증 (브라우저 불필요) |
 | `npm run verify:login-form` | G1 로그인 보조 문구 GIF 대비 판별(주황 판별·글자 전환 기준·cover 좌표), 개발용 자동 로그인 제외 경로 순수 함수 자동 검증 (브라우저 불필요) |
-| `npx playwright test e2e/g1-login.spec.ts --project=chromium` | G1 로그인 화면(`/login`, UI 전용) 검증 — Figma 835:6511 위치, GIF 로드, 입력 검증, 키보드, 비동작 버튼, 인증 요청 0건 (Chromium, dev 서버 필요) |
-| `E2E_REAL_BACKEND_MODE=1 npx playwright test e2e/g1-login-backend-mode.spec.ts --project=chromium` | Mock을 끈 dev 서버(`NEXT_PUBLIC_API_MOCKING=disabled npm run dev`)에서 `/login`은 인증 요청 0건, 다른 화면은 개발용 자동 로그인 유지인지 검증 |
+| `npm run verify:auth-session` | 인증 세션 FE 로직 자동 검증 — refresh single-flight·`/auth/me` 계정 확인·`refresh_rotated` 복구 상한·503과 세션 종료 구분·탭 사이 알림(토큰 미포함)·소셜 시작/콜백 중복 방어·로그아웃 전용 처리와 logout pending (브라우저 불필요) |
+| `npx playwright test e2e/g1-login.spec.ts --project=chromium` | G1 로그인 화면(`/login`) 검증 — Figma 835:6511 위치, GIF 로드, 동의 고지, 키보드, 화면 진입 시 인증 요청 0건 (Chromium, dev 서버 필요) |
+| `npx playwright test e2e/g1-social-auth.spec.ts --project=chromium` | Mock 소셜 로그인·세션 흐름 검증 — start→콜백→M1, 콜백 완료 1회(Strict Mode·새로고침), 시작/완료 오류, 401→refresh→`/auth/me`, 여러 탭 logout·계정 전환 (Chromium, Mock dev 서버 필요) |
+| `E2E_REAL_BACKEND_MODE=1 npx playwright test e2e/g1-login-backend-mode.spec.ts --project=chromium` | Mock을 끈 dev 서버(`NEXT_PUBLIC_API_MOCKING=disabled npm run dev`)에서 `/login`은 인증 요청 0건, 다른 화면은 개발용 자동 로그인 유지·access 메모리 보관(브라우저 저장소 미사용)인지 검증 |
 | `npm run generate:openapi-types` | 최신 OpenAPI 계약(`ai-pixlate.github.io/server/openapi.yaml`)에서 타입 재생성 → `lib/api/generated/openapi.d.ts` (직접 수정 금지, 재실행으로만 갱신) |
 | `npm run make:ruler` | 스파이크용 눈금 테스트 이미지 재생성 |
 | `npm run make:n5-section-fixtures` | N5 실제 계약(v3.4.2, 섹션별 원문/렌더 이미지) mock fixture 이미지 재생성 |
