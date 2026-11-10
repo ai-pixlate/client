@@ -214,4 +214,51 @@ test.describe('N5 섹션 제외·되돌리기 — 서버 저장', () => {
     await page.getByTestId('n5-section-restore-505').click();
     await expect(page.getByTestId('n5-confirm-button')).toBeEnabled();
   });
+
+  test.describe('섹션 저장 중에는 [저장하러 가기]로 확정하지 않는다', () => {
+    function trackConfirms(page: Page) {
+      const confirms: string[] = [];
+      page.on('request', (req) => {
+        if (req.method() === 'POST' && req.url().endsWith('/confirm')) confirms.push(req.url());
+      });
+      return confirms;
+    }
+
+    /** 확인창이 뜨면 [확인하고 저장]으로 넘긴다 — 확인 항목 유무는 Mock 블록 상태에 따른다 */
+    async function confirmAndContinue(page: Page) {
+      await page.getByTestId('n5-confirm-button').click();
+      const dialog = page.getByTestId('n5-review-dialog');
+      if (await dialog.isVisible().catch(() => false)) await page.getByTestId('n5-review-continue').click();
+    }
+
+    for (const [label, sectionId, action] of [
+      ['제외', 501, 'exclude'],
+      ['되돌리기', 503, 'restore'],
+    ] as const) {
+      test(`${label} PATCH 진행 중 → 비활성·confirm 0건, 완료 후 다시 활성·정상 confirm`, async ({ page }) => {
+        const confirms = trackConfirms(page);
+        await interceptSectionPatch(page, 'delay', 1500);
+        const confirmButton = page.getByTestId('n5-confirm-button');
+        await expect(confirmButton).toBeEnabled();
+
+        await page.getByTestId(`n5-section-${action}-${sectionId}`).click();
+        await expect(confirmButton).toBeDisabled();
+        // 비활성 버튼을 강제로 눌러도(클릭 이벤트 직접 발생) 확정 요청은 나가지 않는다
+        await confirmButton.click({ force: true });
+        await confirmButton.dispatchEvent('click');
+        await page.waitForTimeout(300);
+        expect(confirms).toEqual([]);
+
+        // PATCH 완료 → 다시 활성
+        if (action === 'exclude') await expect(page.getByTestId(`n5-section-excluded-${sectionId}`)).toBeVisible();
+        else await expect(page.getByTestId(`n5-section-excluded-${sectionId}`)).toHaveCount(0);
+        await expect(confirmButton).toBeEnabled();
+        expect(confirms).toEqual([]);
+
+        await confirmAndContinue(page);
+        await expect.poll(() => confirms.length).toBe(1);
+        await expect(page.getByText('번역이 완료되었습니다.')).toBeVisible({ timeout: 10_000 });
+      });
+    }
+  });
 });
