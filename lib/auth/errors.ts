@@ -49,7 +49,8 @@ export function classifySocialStartFailure(error: AuthErrorInfo): SocialStartFai
 
 /**
  * 소셜 로그인 완료(POST /auth/social) 실패 분류. HTTP 상태는 아직 확정 전이라 reason 으로 먼저 나눈다.
- * in-progress(409 DUPLICATE + login_in_progress)는 BE 후보 계약이다 — 오류 화면으로 바꾸지 않고 먼저 시작된 요청을 기다린다.
+ * in-progress(409 DUPLICATE + login_in_progress)는 BE 후보 계약이다. 같은 document 안의 중복은 요청 전에 막으므로(social-login.ts)
+ * 이 응답은 새로고침 등 다른 document 가 같은 시도를 다시 보냈을 때만 온다 — 먼저 시작된 요청의 결과를 받을 계약이 없어 다시 로그인하도록 안내한다.
  */
 export type SocialCompleteFailureKind = 'state-invalid' | 'provider-auth-failed' | 'provider-unavailable' | 'in-progress' | 'unavailable' | 'failed';
 
@@ -64,7 +65,7 @@ export function classifySocialCompleteFailure(error: AuthErrorInfo): SocialCompl
 }
 
 /** 소셜 로그인 오류 문구. 제공자·state 문제는 같은 시도로 되살릴 수 없어 처음부터 다시 로그인하도록 안내한다 */
-export type SocialLoginErrorKind = SocialStartFailureKind | Exclude<SocialCompleteFailureKind, 'in-progress'> | 'cancelled';
+export type SocialLoginErrorKind = SocialStartFailureKind | SocialCompleteFailureKind | 'cancelled';
 
 export function socialLoginErrorMessage(kind: SocialLoginErrorKind): string {
   switch (kind) {
@@ -75,6 +76,7 @@ export function socialLoginErrorMessage(kind: SocialLoginErrorKind): string {
       return '일시적으로 로그인할 수 없습니다. 처음부터 다시 로그인해 주세요.';
     case 'state-invalid':
     case 'provider-auth-failed':
+    case 'in-progress':
     case 'cancelled':
       return '로그인을 완료하지 못했습니다. 처음부터 다시 로그인해 주세요.';
     case 'failed':

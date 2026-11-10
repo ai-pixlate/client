@@ -1,8 +1,8 @@
-import { getAuthMe, postAuthRefresh, postSocialComplete, postSocialStart } from '../api/auth.ts';
-import { AUTH_REFRESH_EVENT_WAIT_MS, type SocialProvider } from './constants.ts';
+import { postSocialComplete, postSocialStart } from '../api/auth.ts';
+import type { SocialProvider } from './constants.ts';
 import { classifySocialCompleteFailure, classifySocialStartFailure, type SocialLoginErrorKind } from './errors.ts';
 import { clearLogoutPending } from './logout-pending.ts';
-import { getAuthChannel, getAuthLock } from './runtime.ts';
+import { getAuthChannel } from './runtime.ts';
 import { setAuthenticated } from './session-store.ts';
 import type { AuthApiResult, AuthSeller } from './types.ts';
 
@@ -64,54 +64,22 @@ export type SocialCompleteResult = { kind: 'success'; seller: AuthSeller } | { k
 
 export interface SocialCompleteDeps {
   complete: typeof postSocialComplete;
-  refresh: typeof postAuthRefresh;
-  me: typeof getAuthMe;
-  /** 같은 탭에서 이미 보낸 콜백 표시(새로고침 대비). 값은 provider:state 뿐 — code·토큰은 저장하지 않는다 */
-  attemptStore: { read(): string | null; write(value: string): void; clear(): void } | null;
-  waitMs?: number;
 }
 
-const ATTEMPT_KEY = 'pixlate:auth:callback-attempt';
+const defaultCompleteDeps: SocialCompleteDeps = { complete: postSocialComplete };
 
-const sessionAttemptStore: SocialCompleteDeps['attemptStore'] = {
-  read() {
-    try {
-      return window.sessionStorage.getItem(ATTEMPT_KEY);
-    } catch {
-      return null;
-    }
-  },
-  write(value) {
-    try {
-      window.sessionStorage.setItem(ATTEMPT_KEY, value);
-    } catch {
-      // 무시 — 같은 페이지 안 중복 방어(아래 completions)는 그대로 동작한다
-    }
-  },
-  clear() {
-    try {
-      window.sessionStorage.removeItem(ATTEMPT_KEY);
-    } catch {
-      // 무시
-    }
-  },
-};
-
-function defaultCompleteDeps(): SocialCompleteDeps {
-  return {
-    complete: postSocialComplete,
-    refresh: postAuthRefresh,
-    me: getAuthMe,
-    attemptStore: typeof window === 'undefined' ? null : sessionAttemptStore,
-  };
-}
-
-/** 같은 provider+code+state 완료 요청은 페이지 안에서 한 번만 보낸다. 다시 불러도(Strict Mode effect 재실행 등) 같은 결과를 기다린다 */
+/**
+ * 같은 provider+code+state 완료 요청은 같은 document 안에서 한 번만 보낸다. 다시 불러도(Strict Mode effect 재실행·재마운트) 같은 Promise 를 기다린다.
+ *
+ * 새로고침은 다르게 다룬다 — 새 document 에는 먼저 보낸 요청의 Promise 가 없고, 그 결과를 다시 받을 방법(계약)도 없다.
+ * 그래서 새 document 는 같은 콜백을 한 번 다시 보내고, 서버 응답만으로 성공·실패를 정한다(성공 → 로그인, 실패 → 처음부터 다시).
+ * refresh 로 결과를 추측하지 않는다: 먼저 보낸 요청이 끝나지 않았는데 브라우저에 이전 세션 쿠키가 있으면 다른 계정으로 로그인될 수 있다.
+ */
 const completions = new Map<string, Promise<SocialCompleteResult>>();
 
 export function completeSocialLogin(
   params: { provider: SocialProvider; code: string; state: string },
-  deps: SocialCompleteDeps = defaultCompleteDeps(),
+  deps: SocialCompleteDeps = defaultCompleteDeps,
 ): Promise<SocialCompleteResult> {
   const key = `${params.provider}\u0000${params.code}\u0000${params.state}`;
   const existing = completions.get(key);
@@ -121,43 +89,15 @@ export function completeSocialLogin(
   return promise;
 }
 
-function finishLogin(accessToken: string, seller: AuthSeller): SocialCompleteResult {
-  setAuthenticated(accessToken, seller);
-  clearLogoutPending();
-  getAuthChannel().post({ type: 'login-complete', sellerId: seller.id });
-  return { kind: 'success', seller };
-}
-
 async function runCompletion(params: { provider: SocialProvider; code: string; state: string }, deps: SocialCompleteDeps): Promise<SocialCompleteResult> {
-  const marker = `${params.provider}:${params.state}`;
-  // 같은 탭이 이 콜백을 이미 보냈다(완료 요청 중 새로고침). code 는 한 번만 쓸 수 있어 다시 보내지 않고, 먼저 보낸 요청이 남긴 세션으로 이어 간다
-  if (deps.attemptStore?.read() === marker) return resumeEarlierLogin(deps);
-  deps.attemptStore?.write(marker);
-
   const result = await deps.complete(params);
   if (result.ok) {
-    deps.attemptStore?.clear();
-    return finishLogin(result.data.accessToken, result.data.seller);
+    setAuthenticated(result.data.accessToken, result.data.seller);
+    clearLogoutPending();
+    getAuthChannel().post({ type: 'login-complete', sellerId: result.data.seller.id });
+    return { kind: 'success', seller: result.data.seller };
   }
-  const kind = classifySocialCompleteFailure(result.error);
-  // 먼저 시작된 같은 로그인이 진행 중 — 오류로 바꾸지 않고 그 결과를 기다린다(409 login_in_progress 는 BE 후보 계약)
-  if (kind === 'in-progress') return resumeEarlierLogin(deps);
-  // 네트워크 실패(새로고침으로 끊긴 요청 포함)는 서버가 요청을 받았는지 알 수 없다 — 기록을 남겨 같은 code 를 다시 보내지 않게 한다
-  if (result.error.status !== 0) deps.attemptStore?.clear();
-  return { kind: 'error', error: kind };
-}
-
-/**
- * 먼저 보낸 완료 요청의 결과를 이어받는다. 그 요청이 성공했다면 브라우저에 refresh 쿠키가 있으므로 refresh → /auth/me 로 로그인을 마친다.
- * 다른 탭의 login-complete 를 잠깐 기다린 뒤 한 번만 시도하고, 실패하면 처음부터 다시 로그인하도록 안내한다(자동 반복 없음).
- */
-async function resumeEarlierLogin(deps: SocialCompleteDeps): Promise<SocialCompleteResult> {
-  await getAuthChannel().waitFor('login-complete', deps.waitMs ?? AUTH_REFRESH_EVENT_WAIT_MS);
-  const refreshed = await getAuthLock()(() => deps.refresh());
-  deps.attemptStore?.clear();
-  if (!refreshed.ok) return { kind: 'error', error: refreshed.error.status === 503 || refreshed.error.status === 0 ? 'unavailable' : 'state-invalid' };
-  const me = await deps.me(refreshed.data.accessToken);
-  if (!me.ok) return { kind: 'error', error: me.error.status === 503 || me.error.status === 0 ? 'unavailable' : 'state-invalid' };
-  getAuthChannel().post({ type: 'refresh-complete' });
-  return finishLogin(refreshed.data.accessToken, me.data);
+  // in-progress(409 login_in_progress, BE 후보)는 다른 document 가 먼저 보낸 같은 시도다 — 그 결과를 받을 계약이 없어
+  // 기다리지 않고 「처음부터 다시」로 끝낸다. TODO(AUTH-CONTRACT): callback 요청 진행 중 document reload 시 완료 결과 복구 방식 필요
+  return { kind: 'error', error: classifySocialCompleteFailure(result.error) };
 }
