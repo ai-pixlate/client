@@ -1,35 +1,26 @@
-/**
- * 로컬 실백엔드 연동용 간이 세션.
- *
- * 백엔드는 Bearer JWT가 필요하고(GET /master/* 제외), FE에는 아직 로그인
- * 화면이 없다. mock이 꺼진 동안만 개발용 이메일로 /auth/login 한 뒤
- * accessToken을 sessionStorage에 둔다. MSW 모드에서는 호출하지 않는다.
- */
-const TOKEN_KEY = 'pixlate.accessToken';
+import { getAccessToken, setAccessToken } from '../auth/session-store.ts';
 
+/**
+ * 로컬 실백엔드 연동용 개발용 간이 세션(인증 모드 'dev-login' — lib/auth/capability.ts).
+ *
+ * 실서버에는 아직 소셜 로그인과 세션 refresh 회전(server#124)이 배포되지 않았다. mock 이 꺼진 동안만 개발용 이메일로
+ * /auth/login 한 뒤 accessToken 을 메모리(lib/auth/session-store.ts)에 둔다 — 브라우저 저장소에는 쓰지 않으므로
+ * 새로고침하면 다시 간이 로그인한다. MSW 모드에서는 호출하지 않는다.
+ *
+ * TODO(AUTH-CONTRACT): 실서버가 'session' 모드로 바뀌면 이 간이 로그인은 제거한다.
+ */
 let inflight: Promise<void> | null = null;
 
 export function isApiMockingEnabled(): boolean {
   return process.env.NEXT_PUBLIC_API_MOCKING === 'enabled';
 }
 
-export function getAccessToken(): string | null {
-  if (typeof window === 'undefined') return null;
-  return sessionStorage.getItem(TOKEN_KEY);
-}
-
-export function setAccessToken(token: string | null): void {
-  if (typeof window === 'undefined') return;
-  if (token) sessionStorage.setItem(TOKEN_KEY, token);
-  else sessionStorage.removeItem(TOKEN_KEY);
-}
-
 /**
- * 앱 시작 때 개발용 자동 로그인을 실행할 화면인지 판단한다. 로그인 화면은 서버 인증 요청을 보내지 않아야 하므로 제외한다.
+ * 앱 시작 때 개발용 자동 로그인을 실행할 화면인지 판단한다. G1 과 소셜 콜백(/login/callback/*)은 서버 인증 요청을 따로 다루므로 제외한다.
  * 다른 화면의 동작은 그대로이고, 로그인 화면에서 넘어가도 첫 API 호출 때 authorizedFetch 가 세션을 만든다.
  */
 export function shouldBootstrapBackendSession(pathname: string): boolean {
-  return pathname !== '/login';
+  return pathname !== '/login' && !pathname.startsWith('/login/');
 }
 
 export function ensureBackendSession(): Promise<void> {

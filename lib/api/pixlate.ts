@@ -1,4 +1,7 @@
-import { ensureBackendSession, getAccessToken, isApiMockingEnabled, setAccessToken } from '@/lib/api/session';
+import { ensureBackendSession } from '@/lib/api/session';
+import { fetchWithSessionRecovery } from '@/lib/auth/authorized-request';
+import { getAuthMode } from '@/lib/auth/capability';
+import { getAccessToken, setAccessToken } from '@/lib/auth/session-store';
 import type { ApiBlockPatch, ApiBlockPatchResponse, ApiConfirmRequest, ApiJob, ApiJobTaskStatus, ApiReviewPreview, ApiTextBlock } from '@/lib/api/n5-schema';
 import type { ApiAcceptedTask, ApiJobPatch, ApiSourceImageUploadResult } from '@/lib/api/job-schema';
 import type { ApiSection, ApiSectionList, ApiSectionPatch, ApiSourceImage } from '@/lib/api/n3-schema';
@@ -38,10 +41,9 @@ const API_PROXY_HEADER = 'x-pixlate-api-proxy';
 function withProxyHeader(init?: RequestInit): RequestInit {
   const headers = new Headers(init?.headers);
   headers.set(API_PROXY_HEADER, '1');
-  if (!isApiMockingEnabled()) {
-    const token = getAccessToken();
-    if (token) headers.set('Authorization', `Bearer ${token}`);
-  }
+  // access 는 메모리(lib/auth/session-store.ts)에만 있다. Mock 에서도 같은 헤더를 실어 refresh 흐름을 MSW 로 검증한다
+  const token = getAccessToken();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
   return { ...init, headers };
 }
 
@@ -56,14 +58,19 @@ function errorMessageFromBody(body: unknown, status: number): string {
 }
 
 async function authorizedFetch(url: string, init?: RequestInit): Promise<Response> {
-  await ensureBackendSession();
-  let res = await fetch(url, withProxyHeader(init));
-  if (res.status === 401 && !isApiMockingEnabled()) {
-    setAccessToken(null);
+  if (getAuthMode() === 'dev-login') {
     await ensureBackendSession();
-    res = await fetch(url, withProxyHeader(init));
+    let res = await fetch(url, withProxyHeader(init));
+    if (res.status === 401) {
+      setAccessToken(null);
+      await ensureBackendSession();
+      res = await fetch(url, withProxyHeader(init));
+    }
+    return res;
   }
-  return res;
+
+  // 'session' 모드 — 401 이면 refresh → /auth/me 로 같은 계정임을 확인한 뒤에만 원 요청을 다시 보낸다(최대 1회)
+  return fetchWithSessionRecovery(() => fetch(url, withProxyHeader(init)));
 }
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
