@@ -683,6 +683,9 @@ export function N5Panel({
   // 로드된 sections로 미리 계산한다 — 실패가 확실한 요청을 막을 뿐, FE가
   // 새 조건을 지어내는 게 아니다(lib/n5/adapter.ts의 areAllSectionsExcluded 참고).
   const allSectionsExcluded = areAllSectionsExcluded(sections);
+  // 섹션 제외·되돌리기 PATCH 가 끝나기 전에 확정하면 서버가 이전 섹션 상태로 N6 를 확정할 수 있다 — 저장 중에는 확정하지 않는다.
+  // 제외·되돌리기 모두 같은 pendingSectionIds 를 쓴다(use-n5-edit-session.ts saveSectionBucket). 다른 편집 저장은 여기서 막지 않는다
+  const isSectionSaving = editSession.pendingSectionIds.size > 0;
 
   // 번역문 미저장 초안 — blockId → { draft, lastSaveFailed }. 원문 보기 전환으로 편집기가 사라져도 초안이 남고 실행 취소도
   // 같은 초안을 보도록 N5 편집 세션(use-n5-edit-session.ts)이 들고 있다. 서버·브라우저 저장소에는 두지 않는다.
@@ -696,7 +699,7 @@ export function N5Panel({
   const closeReviewDialog = useCallback(() => setReviewIssues(null), []);
 
   function handleConfirmClick() {
-    if (confirmMutation.isPending) return;
+    if (confirmMutation.isPending || isSectionSaving) return;
     const failedDraftBlockIds = new Set<number>();
     for (const [blockId, entry] of translationDrafts) if (isFailedDraft(entry)) failedDraftBlockIds.add(blockId);
     const issues = buildN5ReviewIssues({ sections, blocks, sectionStatusById, blockTaskFailuresById, failedDraftBlockIds });
@@ -714,7 +717,7 @@ export function N5Panel({
   }
 
   async function handleConfirm() {
-    if (confirmMutation.isPending) return; // 중복 confirm 방지
+    if (confirmMutation.isPending || isSectionSaving) return; // 중복 confirm·섹션 저장 중 confirm 방지
     setConfirmError(null);
     try {
       const response = await confirmMutation.mutateAsync({
@@ -888,7 +891,7 @@ export function N5Panel({
           ref={confirmButtonRef}
           type="button"
           data-testid="n5-confirm-button"
-          disabled={allSectionsExcluded || confirmMutation.isPending}
+          disabled={allSectionsExcluded || confirmMutation.isPending || isSectionSaving}
           title={allSectionsExcluded ? '모든 섹션이 제외되어 있어 확정할 수 없습니다.' : undefined}
           onClick={handleConfirmClick}
           className="flex h-[45px] w-full items-center justify-center rounded-md bg-[#171717] px-8 text-[14px] font-medium tracking-[-0.42px] text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
