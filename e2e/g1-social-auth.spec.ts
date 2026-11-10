@@ -258,3 +258,49 @@ test.describe('여러 탭', () => {
     expect(new URL(a.url()).pathname).toBe('/jobs/new');
   });
 });
+
+test.describe('logoutPending — 앱 진입', () => {
+  const PENDING_KEY = 'pixlate:auth:logout-pending';
+
+  async function reopenWithPending(page: Page, logoutSteps: string[]) {
+    await page.goto('/login');
+    await page.evaluate(
+      ([key, scenarioKey, scenario]) => {
+        localStorage.setItem(key, '1');
+        sessionStorage.setItem(scenarioKey, scenario);
+      },
+      [PENDING_KEY, SCENARIO_KEY, JSON.stringify({ logout: logoutSteps })] as const,
+    );
+    const auth = recordAuth(page);
+    await page.goto('/');
+    return auth;
+  }
+
+  const pending = (page: Page) => page.evaluate((key) => localStorage.getItem(key), PENDING_KEY);
+
+  test('대기 + 쿠키만 204 → 세션 복원보다 로그아웃 먼저, 대기 해제, G1', async ({ page }) => {
+    const auth = await reopenWithPending(page, []);
+    await page.waitForURL((url) => url.pathname === '/login');
+    await expect.poll(() => pending(page)).toBeNull();
+    expect(auth.calls.map((c) => `${c.method} ${c.path}`)).toEqual(['POST /auth/logout']);
+    expect(auth.calls[0].auth).toBeNull();
+  });
+
+  test('대기 + refresh_invalid → 대기 해제·G1, 추가 요청 없음', async ({ page }) => {
+    const auth = await reopenWithPending(page, ['refresh_invalid']);
+    await page.waitForURL((url) => url.pathname === '/login');
+    await expect.poll(() => pending(page)).toBeNull();
+    await page.waitForTimeout(500);
+    expect(auth.calls.map((c) => `${c.method} ${c.path}`)).toEqual(['POST /auth/logout']);
+  });
+
+  test('대기 + 503 → 대기 유지·G1·자동 반복 없음', async ({ page }) => {
+    const auth = await reopenWithPending(page, ['unavailable']);
+    await page.waitForURL((url) => url.pathname === '/login');
+    await page.waitForTimeout(500);
+    expect(await pending(page)).toBe('1');
+    expect(auth.count('POST', '/auth/logout')).toBe(1);
+    expect(auth.count('POST', '/auth/refresh')).toBe(0);
+    await expect(page.getByTestId('auth-notice')).toHaveAttribute('data-notice', 'logout-pending');
+  });
+});

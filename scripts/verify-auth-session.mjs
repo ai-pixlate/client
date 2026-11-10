@@ -10,7 +10,7 @@
 import { fetchWithSessionRecovery, AuthSessionChangedError } from '../lib/auth/authorized-request.ts';
 import { AUTH_REFRESH_MAX_ATTEMPTS, AUTH_ORIGINAL_REQUEST_MAX_RETRIES, AUTH_REFRESH_EVENT_WAIT_MS, AUTH_REFRESH_LOCK_WAIT_MS } from '../lib/auth/constants.ts';
 import { createAuthChannel, toWireEvent } from '../lib/auth/cross-tab.ts';
-import { logout, retryPendingLogout } from '../lib/auth/logout.ts';
+import { logout, resumePendingLogout, retryPendingLogout } from '../lib/auth/logout.ts';
 import { isLogoutPending, markLogoutPending, setLogoutPendingStorageForTest } from '../lib/auth/logout-pending.ts';
 import { configureAuthRuntimeForTest, handleAuthTabEvent, recoverSession } from '../lib/auth/runtime.ts';
 import { getAccessToken, getAuthSnapshot, resetAuthStoreForTest, setAuthenticated } from '../lib/auth/session-store.ts';
@@ -507,41 +507,67 @@ for (const [label, response, expected] of [
 
 // ── 로그아웃 ───────────────────────────────────
 console.log('\n[logout]');
+const logoutCalls = (server) => server.calls.filter((c) => c.key === 'POST /auth/logout');
 {
   const tab = setupTab();
   setAuthenticated('t1', SELLER_1);
+  markLogoutPending();
   const server = createServer({ 'POST /auth/logout': [async () => json(204, null)] });
   const before = wireLog.length;
   const result = await logout();
   const call = server.last('POST /auth/logout');
-  check('204 → 완료', result.kind === 'done');
-  check('logout 은 X-Requested-With·credentials include·Bearer', call.headers.get('X-Requested-With') === 'XMLHttpRequest' && call.credentials === 'include' && call.headers.get('Authorization') === 'Bearer t1');
+  check('204 → 완료(서버 로그아웃 확인)', result.kind === 'done' && result.serverConfirmed === true);
+  check('logout 은 X-Requested-With·credentials include·현재 access 를 Bearer 로', call.headers.get('X-Requested-With') === 'XMLHttpRequest' && call.credentials === 'include' && call.headers.get('Authorization') === 'Bearer t1');
   check('204 → 인증 정리·G1·모든 탭 logout', getAccessToken() === null && getAuthSnapshot().status === 'signed-out' && tab.navigations.join() === '/login' && wireLog.slice(before).includes(JSON.stringify({ type: 'logout' })));
-  check('204 → 서버 로그아웃 미완료 기록 없음', !isLogoutPending());
+  check('204 → logoutPending 제거', !isLogoutPending());
+}
+{
+  setupTab();
+  const server = createServer({ 'POST /auth/logout': [async () => json(204, null)] });
+  const result = await logout();
+  check('access 가 없으면 쿠키만으로 보내고 204 → 완료', result.kind === 'done' && server.last('POST /auth/logout').headers.get('Authorization') === null);
 }
 {
   setupTab();
   setAuthenticated('t1', SELLER_1);
   const server = createServer({ 'POST /auth/logout': [async () => authError(401, 'UNAUTHORIZED', 'invalid_token'), async () => json(204, null)], 'POST /auth/refresh': [okRefresh('never')] });
   const result = await logout();
-  const calls = server.calls.filter((c) => c.key === 'POST /auth/logout');
+  const calls = logoutCalls(server);
   check('logout 은 공통 인증 복구를 거치지 않음(refresh 0회)', server.count('POST /auth/refresh') === 0);
   check('invalid_token → Authorization 없이 정확히 1회 재시도', calls.length === 2 && calls[0].headers.get('Authorization') === 'Bearer t1' && calls[1].headers.get('Authorization') === null);
-  check('재시도 204 → 완료', result.kind === 'done');
+  check('invalid_token → 쿠키만 204 → 완료', result.kind === 'done' && result.serverConfirmed === true && !isLogoutPending());
 }
 {
   setupTab();
   setAuthenticated('t1', SELLER_1);
   const server = createServer({ 'POST /auth/logout': [async () => authError(401, 'UNAUTHORIZED', 'invalid_token')] });
   const result = await logout();
-  check('invalid_token 이 반복돼도 재시도는 1회뿐(무한 반복 없음)', server.count('POST /auth/logout') === 2 && result.kind === 'pending');
+  check('invalid_token 이 반복돼도 재시도는 1회뿐', server.count('POST /auth/logout') === 2);
+  check('invalid_token 반복은 완료로 보지 않음(횟수로 대기 해제 금지) → pending 유지', result.kind === 'pending' && isLogoutPending());
+}
+{
+  const tab = setupTab();
+  setAuthenticated('t1', SELLER_1);
+  markLogoutPending();
+  const server = createServer({ 'POST /auth/logout': [async () => authError(401, 'UNAUTHORIZED', 'invalid_token'), async () => authError(401, 'UNAUTHORIZED', 'refresh_invalid')] });
+  const result = await logout();
+  check('invalid_token → 쿠키만 → refresh_invalid → FE 로그아웃 완료·대기 해제', result.kind === 'done' && !isLogoutPending() && tab.navigations.join() === '/login');
+  check('refresh_invalid → 서버 세션 폐기 미확인(serverConfirmed=false)', result.kind === 'done' && result.serverConfirmed === false && result.reason === 'refresh_invalid');
+  check('refresh_invalid 뒤 추가 요청 없음(총 2회)', server.count('POST /auth/logout') === 2);
+}
+{
+  setupTab();
+  markLogoutPending();
+  const server = createServer({ 'POST /auth/logout': [async () => json(422, { error: { code: 'VALIDATION_ERROR', details: { reason: 'refresh_invalid' } } })] });
+  const result = await retryPendingLogout();
+  check('reason 만 refresh_invalid 이고 code 가 UNAUTHORIZED 가 아니면 대기 유지(계약 기준만 사용)', result.kind === 'pending' && isLogoutPending() && server.count('POST /auth/logout') === 1);
 }
 {
   setupTab();
   setAuthenticated('t1', SELLER_1);
   const server = createServer({ 'POST /auth/logout': [async () => authError(401, 'UNAUTHORIZED', null)] });
   const result = await logout();
-  check('끝낼 세션 없음 401(사유 없음) → 완료로 처리(204·401 둘 다 수용)', result.kind === 'done' && server.count('POST /auth/logout') === 1 && !isLogoutPending());
+  check('사유 없는 401 은 완료로 보지 않음 → pending', result.kind === 'pending' && isLogoutPending() && server.count('POST /auth/logout') === 1);
 }
 for (const [label, response] of [
   ['503', () => authError(503, 'SERVICE_UNAVAILABLE', null)],
@@ -554,7 +580,7 @@ for (const [label, response] of [
   const before = wireLog.length;
   const result = await logout();
   check(`${label} → 화면은 로그아웃·G1·모든 탭 logout`, getAuthSnapshot().status === 'signed-out' && tab.navigations.join() === '/login' && wireLog.slice(before).includes(JSON.stringify({ type: 'logout' })));
-  check(`${label} → 서버 로그아웃 미완료 기록(logout pending)`, result.kind === 'pending' && isLogoutPending() && getAuthSnapshot().notice === 'logout-pending');
+  check(`${label} → logoutPending 유지·안내`, result.kind === 'pending' && isLogoutPending() && getAuthSnapshot().notice === 'logout-pending');
   check(`${label} → 자동 반복 없음`, server.count('POST /auth/logout') === 1);
   check(`${label} → 저장 값은 '1' 뿐(토큰·계정 없음)`, [...tab.storage.map.values()].join() === '1');
 }
@@ -565,12 +591,58 @@ for (const [label, response] of [
   await Promise.all([logout(), logout()]);
   check('로그아웃을 두 번 눌러도 요청 1회', server.count('POST /auth/logout') === 1);
 }
+
+console.log('\n[logoutPending — 앱 진입]');
+{
+  const tab = setupTab();
+  const server = createServer({ 'POST /auth/logout': [async () => json(204, null)] });
+  const result = await resumePendingLogout();
+  check('대기 기록 없음 → 로그아웃 요청 없이 정상 복원 진행(null)', result === null && server.count('POST /auth/logout') === 0 && tab.navigations.length === 0);
+}
+{
+  const tab = setupTab({ path: '/' });
+  markLogoutPending();
+  const server = createServer({ 'POST /auth/logout': [async () => json(204, null)], 'POST /auth/refresh': [okRefresh('never')] });
+  const before = wireLog.length;
+  const result = await resumePendingLogout();
+  check('대기 있음 → refresh 보다 로그아웃(쿠키만) 먼저', server.calls[0]?.key === 'POST /auth/logout' && server.count('POST /auth/refresh') === 0 && server.last('POST /auth/logout').headers.get('Authorization') === null);
+  check('대기 + 204 → 대기 해제·G1·logout 알림', result.kind === 'done' && !isLogoutPending() && tab.navigations.join() === '/login' && wireLog.slice(before).includes(JSON.stringify({ type: 'logout' })));
+}
+{
+  const tab = setupTab({ path: '/' });
+  markLogoutPending();
+  const server = createServer({ 'POST /auth/logout': [async () => authError(401, 'UNAUTHORIZED', 'refresh_invalid')] });
+  const result = await resumePendingLogout();
+  check('대기 + refresh_invalid → 대기 해제·로컬 정리·G1', result.kind === 'done' && !isLogoutPending() && getAuthSnapshot().status === 'signed-out' && tab.navigations.join() === '/login');
+  check('대기 + refresh_invalid → 서버 폐기 미확인·추가 요청 없음', result.kind === 'done' && result.serverConfirmed === false && server.calls.length === 1);
+}
+{
+  const tab = setupTab({ path: '/' });
+  markLogoutPending();
+  const server = createServer({ 'POST /auth/logout': [async () => authError(503, 'SERVICE_UNAVAILABLE', null)] });
+  const result = await resumePendingLogout();
+  check('대기 + 503 → 대기 유지·G1·자동 반복 없음', result.kind === 'pending' && isLogoutPending() && tab.navigations.join() === '/login' && server.calls.length === 1 && getAuthSnapshot().notice === 'logout-pending');
+}
+{
+  setupTab({ path: '/' });
+  markLogoutPending();
+  const server = createServer({ 'POST /auth/logout': [async () => (await sleep(15), authError(503, 'SERVICE_UNAVAILABLE', null))] });
+  await Promise.all([resumePendingLogout(), resumePendingLogout()]);
+  check('앱 진입 처리가 두 번 실행돼도(Strict Mode) 로그아웃 재시도는 1회', server.calls.length === 1);
+}
+{
+  setupTab();
+  markLogoutPending();
+  const server = createServer({ 'POST /auth/logout': [async () => authError(401, 'UNAUTHORIZED', 'invalid_token')] });
+  const result = await retryPendingLogout();
+  check('쿠키만 보낸 요청의 invalid_token 은 다시 보내지 않고 대기 유지', result.kind === 'pending' && server.calls.length === 1 && isLogoutPending());
+}
 {
   setupTab();
   markLogoutPending();
   const server = createServer({ 'POST /auth/logout': [async () => json(204, null)] });
   const result = await retryPendingLogout();
-  check('미완료 로그아웃 다시 시도 → Authorization 없이 보내고 성공 시 기록 해제', result.kind === 'done' && !isLogoutPending() && server.last('POST /auth/logout').headers.get('Authorization') === null);
+  check('[다시 시도] → Authorization 없이 보내고 204 면 대기 해제', result.kind === 'done' && !isLogoutPending() && server.last('POST /auth/logout').headers.get('Authorization') === null);
 }
 
 // ── 전체: 채널에 토큰이 실린 적 없음 ──────────
