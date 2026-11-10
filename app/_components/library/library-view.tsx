@@ -50,6 +50,11 @@ import { LibraryPagination } from './library-pagination';
 // 계약이 없어 연결하지 않은 것: 삭제(DELETE /library/{jobId} 12월 미확정), 다운로드(bulk API 없음),
 // 다른 버전 만들기(POST /jobs/{jobId}/versions 12월 미확정), 미완료 카드(status/currentStep 없음).
 //
+// 2차 정책(PM 확정): 로그인 후 기존·신규 계정 모두 M1 로 오고, 다음 기능으로 진입하는 활성 액션은
+// "이미지 추가 생성 카드 → N1(/jobs/new)" 하나다. 검색·필터·선택·pagination 은 화면 안 조작이라 범위 밖이고,
+// 다운로드 모달(파일 다운로드는 비활성)은 기존 검증 범위로 유지한다. 신규 계정의 빈 보관함은 추가 생성 카드만
+// 보이는 기존 상태를 쓰며, FE 가 브랜드를 만들거나 N1 으로 강제 이동시키지 않는다.
+//
 // 좌측 상단 back 버튼은 렌더하지 않는다 — 브라우저 히스토리(router.back)를 쓰면 진입 경로에 따라
 // N1·N6·앱 외부로 이동했다. 12월 M0 브랜드 목록이 생기면 "M0로 가기"로 다시 연결한다
 // (Figma 위치 x40 y40 40×40, ArrowLeftGlyph16). absolute 배치였으므로 숨겨도 레이아웃은 그대로다.
