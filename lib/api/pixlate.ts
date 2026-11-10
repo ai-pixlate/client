@@ -14,6 +14,7 @@ import type {
   ApiExportArtifactType,
 } from '@/lib/api/n6-schema';
 import type { ApiCountry, ApiLanguage } from '@/lib/api/master-schema';
+import type { ApiBrand, ApiBrandLogo, ApiBrandUpdate } from '@/lib/api/brand-schema';
 
 // ─────────────────────────────────────────────
 // 공통 fetch 헬퍼
@@ -380,4 +381,49 @@ export function getMasterCountries(): Promise<ApiCountry[]> {
 
 export function getMasterLanguages(): Promise<ApiLanguage[]> {
   return apiFetch<ApiLanguage[]>('/master/languages');
+}
+
+// ─────────────────────────────────────────────
+// M2 — 브랜드 정보·로고 (brandList/brandGet/brandUpdate/brandLogoList/brandLogoCreate/brandLogoDelete).
+// 404(미소유 포함)를 화면에서 구분해야 해서 실패 시 status·body 를 보존하는 ApiRequestError 를 던진다.
+// ─────────────────────────────────────────────
+
+async function brandFetch<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await authorizedFetch(url, init);
+  if (!res.ok) throw new ApiRequestError(res.status, await res.json().catch(() => null));
+  return res.json() as Promise<T>;
+}
+
+export function getBrands(): Promise<ApiBrand[]> {
+  return brandFetch<ApiBrand[]>('/brands');
+}
+
+export function getBrand(brandId: number): Promise<ApiBrand> {
+  return brandFetch<ApiBrand>(`/brands/${brandId}`);
+}
+
+/** 부분 수정 — 바뀐 항목만 보낸다. 응답 Brand 가 화면 정본이다 */
+export function updateBrand(brandId: number, payload: ApiBrandUpdate): Promise<ApiBrand> {
+  return brandFetch<ApiBrand>(`/brands/${brandId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+/** order_no ASC 그대로 온다 */
+export function getBrandLogos(brandId: number): Promise<ApiBrandLogo[]> {
+  return brandFetch<ApiBrandLogo[]>(`/brands/${brandId}/logos`);
+}
+
+/** 로고 1개 multipart(field `file`). 포맷 검증·SVG sanitize 는 서버 책임(415) — Content-Type 은 브라우저가 boundary 와 함께 정한다 */
+export function uploadBrandLogo(brandId: number, file: File): Promise<ApiBrandLogo> {
+  const formData = new FormData();
+  formData.append('file', file);
+  return brandFetch<ApiBrandLogo>(`/brands/${brandId}/logos`, { method: 'POST', body: formData });
+}
+
+export async function deleteBrandLogo(brandId: number, logoId: number): Promise<void> {
+  const res = await authorizedFetch(`/brands/${brandId}/logos/${logoId}`, { method: 'DELETE' });
+  if (!res.ok) throw new ApiRequestError(res.status, await res.json().catch(() => null));
 }

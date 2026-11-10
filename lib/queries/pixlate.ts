@@ -28,6 +28,10 @@ import {
   getLibrary,
   getMasterCountries,
   getMasterLanguages,
+  getBrands,
+  getBrand,
+  getBrandLogos,
+  ApiRequestError,
 } from '@/lib/api/pixlate';
 import type { ApiJobPatch } from '@/lib/api/job-schema';
 import {
@@ -67,6 +71,9 @@ export const pixlateKeys = {
   library: () => ['pixlate', 'library'] as const,
   masterCountries: () => ['pixlate', 'master', 'countries'] as const,
   masterLanguages: () => ['pixlate', 'master', 'languages'] as const,
+  brands: () => ['pixlate', 'brands'] as const,
+  brand: (brandId: number) => ['pixlate', 'brands', brandId] as const,
+  brandLogos: (brandId: number) => ['pixlate', 'brands', brandId, 'logos'] as const,
 };
 
 // ─────────────────────────────────────────────
@@ -494,5 +501,36 @@ export function useUpdateSectionBucketMutation(jobId: string) {
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: pixlateKeys.sections(jobId) });
     },
+  });
+}
+
+// ─────────────────────────────────────────────
+// M2 — 브랜드 정보·로고. 404(없음·미소유)는 다시 시도해도 같아서 재시도하지 않는다.
+// 로고 logoUrl 은 presigned(만료 5분)라 오래 캐시하지 않는다(staleTime 0 — 다시 볼 때 새 URL 을 받는다).
+// ─────────────────────────────────────────────
+
+const retryUnlessNotFound = (failureCount: number, error: unknown) =>
+  !(error instanceof ApiRequestError && error.status === 404) && failureCount < 1;
+
+export function useBrandsQuery(enabled: boolean) {
+  return useQuery({ queryKey: pixlateKeys.brands(), queryFn: getBrands, enabled });
+}
+
+export function useBrandQuery(brandId: number | null) {
+  return useQuery({
+    queryKey: pixlateKeys.brand(brandId ?? -1),
+    queryFn: () => getBrand(brandId as number),
+    enabled: brandId != null,
+    retry: retryUnlessNotFound,
+  });
+}
+
+export function useBrandLogosQuery(brandId: number | null) {
+  return useQuery({
+    queryKey: pixlateKeys.brandLogos(brandId ?? -1),
+    queryFn: () => getBrandLogos(brandId as number),
+    enabled: brandId != null,
+    retry: retryUnlessNotFound,
+    staleTime: 0,
   });
 }
