@@ -1,12 +1,13 @@
 ﻿"use client";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { AuthNoticeAnnouncer } from "@/app/_components/auth/auth-notice-announcer";
 import { ensureBackendSession, isApiMockingEnabled, shouldBootstrapBackendSession } from "@/lib/api/session";
 import { getAuthMode, isLogoutPendingRetryEnabled } from "@/lib/auth/capability";
+import { AUTH_LOGIN_PATH } from "@/lib/auth/constants";
 import { resumePendingLogout } from "@/lib/auth/logout";
 import { configureAuthRuntime, startAuthTabSync } from "@/lib/auth/runtime";
 
@@ -50,7 +51,7 @@ function enableMocking(): Promise<void> {
  * 요청하는 화면이면 어디서든 같은 방식으로 재현될 수 있는 문제라(N2/N3/N4/N6
  * 공용 useJobStatusQuery가 진입 직후 첫 요청을 보낸다), 이 파일(공용 Providers)
  * 하나만 고치면 전체가 해결된다 — 개별 화면의 polling 로직은 건드리지 않는다.
- * mockingReady === false인 동안 children을 아예 마운트하지 않아 그 어떤 쿼리도
+ * bootstrap이 'ready'가 아닌 동안 children을 아예 마운트하지 않아 그 어떤 쿼리도
  * MSW 등록 전에 나가지 못하게 한다. isApiMockingEnabled()가 false면
  * enableMocking()이 즉시 resolve하므로 지연 자체가 거의 없다.
  */
@@ -68,8 +69,21 @@ export default function Providers({ children }: { children: React.ReactNode }) {
       }),
   );
 
-  const [mockingReady, setMockingReady] = useState(false);
+  /**
+   * 앱 진입 준비 상태.
+   *   loading     — MSW·로그아웃 재시도·개발용 세션 준비 중. 화면을 마운트하지 않는다
+   *   ready       — 정상 진입
+   *   signed-out  — 이번 진입에서 서버 로그아웃 재시도(resumePendingLogout)를 실행했다. 결과(204·refresh_invalid·503 …)와
+   *                 상관없이 이번 진입은 로그아웃으로 끝난다. router.replace('/login') 이 반영되기 전의 이전 경로(M1·N5 …)를
+   *                 마운트하면 그 화면의 첫 API 401 이 recoverSession() → refresh 를 시작하고, session-ended 처리의 clearAuth() 가
+   *                 logout-pending 안내를 지운다. 그래서 G1 에 도착할 때까지 화면을 마운트하지 않는다
+   */
+  const [bootstrap, setBootstrap] = useState<"loading" | "ready" | "signed-out">("loading");
   const router = useRouter();
+  const pathname = usePathname();
+
+  // G1 에 도착하면 로그아웃 진입을 끝낸다 — 그다음 사용자 행동(새 로그인 등)부터는 정상 흐름이다. 렌더 중 상태 조정(effect 없이)
+  if (bootstrap === "signed-out" && pathname === AUTH_LOGIN_PATH) setBootstrap("ready");
 
   // 인증 실행부(lib/auth/runtime.ts)에 화면 동작을 넣고 다른 탭 알림을 구독한다.
   // 계정 전환·로그아웃 때 이전 계정 query 를 취소하고 캐시를 비운다 — polling 도 같이 멈춘다
@@ -89,21 +103,29 @@ export default function Providers({ children }: { children: React.ReactNode }) {
   // 등) 불려도 안전하다 — 그래서 이 effect는 의존성 없이 마운트 시 한 번만
   // 실행하면 된다. 실백엔드 모드에서는 그 직후 개발용 JWT를 받아 둔다.
   // 서버 로그아웃 미완료 기록이 있으면 세션 복원보다 로그아웃(쿠키만) 재시도를 먼저 하고 G1 에 둔다(lib/auth/logout.ts).
+  // 이 경우 결과와 상관없이 refresh·개발용 세션 준비·이전 화면 마운트를 하지 않는다(위 bootstrap 'signed-out').
   // 'session' 모드는 앱 진입 때 refresh 를 미리 보내지 않고 첫 401 에서 복구한다(lib/api/pixlate.ts authorizedFetch).
   useEffect(() => {
     enableMocking()
-      .then(() => (isLogoutPendingRetryEnabled() ? resumePendingLogout().then(() => undefined) : undefined))
-      .then(() => (getAuthMode() !== 'dev-login' || !shouldBootstrapBackendSession(window.location.pathname) ? Promise.resolve() : ensureBackendSession()))
-      .then(() => setMockingReady(true))
+      .then(() => (isLogoutPendingRetryEnabled() ? resumePendingLogout() : null))
+      .then(async (resumed) => {
+        // 로그아웃 재시도를 실행한 진입은 세션 준비·복원을 이어서 하지 않는다
+        if (resumed) {
+          setBootstrap("signed-out");
+          return;
+        }
+        if (getAuthMode() === 'dev-login' && shouldBootstrapBackendSession(window.location.pathname)) await ensureBackendSession();
+        setBootstrap("ready");
+      })
       .catch((err) => {
         console.error(err);
-        setMockingReady(true); // 실패해도 앱이 영구히 빈 화면에 머물지 않게 한다
+        setBootstrap("ready"); // 실패해도 앱이 영구히 빈 화면에 머물지 않게 한다
       });
   }, []);
 
   return (
     <QueryClientProvider client={queryClient}>
-      {mockingReady ? children : null}
+      {bootstrap === "ready" ? children : null}
       <AuthNoticeAnnouncer />
     </QueryClientProvider>
   );

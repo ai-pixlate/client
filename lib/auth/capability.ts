@@ -44,3 +44,12 @@ export function isSocialLoginEnabled(): boolean {
 export function isLogoutPendingRetryEnabled(): boolean {
   return getAuthMode() === 'session';
 }
+
+/**
+ * 로컬 실서버 인증 연동 시험 모드 — `next dev` + NEXT_PUBLIC_AUTH_MODE=session + Mock(MSW) 꺼짐.
+ * BE 와 실제 브라우저로 인증 계약을 시험할 때만 쓰는 임시 진입점(M1 임시 로그아웃 버튼)의 노출 기준이다.
+ * 일반 Mock 개발 환경·production build 에서는 false. 정식 로그아웃 UX 위치는 별도 디자인 확정 대상이다.
+ */
+export function isLocalAuthTestMode(): boolean {
+  return isLocalSessionAuthEnabled() && !isApiMockingEnabled();
+}
