@@ -17,6 +17,7 @@ import { getAccessToken, getAuthSnapshot, resetAuthStoreForTest, setAuthenticate
 import { completeSocialLogin, resetSocialLoginForTest, startSocialLogin } from '../lib/auth/social-login.ts';
 import { AuthLockTimeoutError, createAuthLock } from '../lib/auth/tab-lock.ts';
 import { isSessionRestoreSuppressed, readCallbackState, setCallbackStateStorageForTest } from '../lib/auth/callback-state.ts';
+import { getAuthMode, isLogoutPendingRetryEnabled, isSocialLoginEnabled } from '../lib/auth/capability.ts';
 
 let pass = 0;
 let fail = 0;
@@ -147,6 +148,46 @@ check('refresh 알림 대기 2초', AUTH_REFRESH_EVENT_WAIT_MS === 2000);
 check('잠금 대기 10초', AUTH_REFRESH_LOCK_WAIT_MS === 10000);
 check('사건당 refresh 최대 2회', AUTH_REFRESH_MAX_ATTEMPTS === 2);
 check('원 요청 재시도 최대 1회', AUTH_ORIGINAL_REQUEST_MAX_RETRIES === 1);
+
+// ── 인증 기능 gate(capability) ───────────────
+console.log('\n[capability — 로컬 실서버 인증 스위치]');
+{
+  const ENV_KEYS = ['NODE_ENV', 'NEXT_PUBLIC_API_MOCKING', 'NEXT_PUBLIC_AUTH_MODE'];
+  const saved = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
+  const withEnv = (env, read) => {
+    for (const key of ENV_KEYS) {
+      if (env[key] === undefined) delete process.env[key];
+      else process.env[key] = env[key];
+    }
+    try {
+      return read();
+    } finally {
+      for (const key of ENV_KEYS) {
+        if (saved[key] === undefined) delete process.env[key];
+        else process.env[key] = saved[key];
+      }
+    }
+  };
+  const snapshot = () => ({ mode: getAuthMode(), social: isSocialLoginEnabled(), pending: isLogoutPendingRetryEnabled() });
+  const same = (a, b) => a.mode === b.mode && a.social === b.social && a.pending === b.pending;
+  const SESSION = { mode: 'session', social: true, pending: true };
+  const DEV_LOGIN = { mode: 'dev-login', social: false, pending: false };
+
+  const mock = withEnv({ NODE_ENV: 'development', NEXT_PUBLIC_API_MOCKING: 'enabled' }, snapshot);
+  check('Mock(MSW) → session·social·logoutPending 재시도 유지', same(mock, SESSION), JSON.stringify(mock));
+  const mockProd = withEnv({ NODE_ENV: 'production', NEXT_PUBLIC_API_MOCKING: 'enabled' }, snapshot);
+  check('Mock(MSW) + production → 기존처럼 session', same(mockProd, SESSION), JSON.stringify(mockProd));
+  const devNoSwitch = withEnv({ NODE_ENV: 'development' }, snapshot);
+  check('실서버 + next dev + 스위치 없음 → dev-login·social 꺼짐', same(devNoSwitch, DEV_LOGIN), JSON.stringify(devNoSwitch));
+  const devOtherValue = withEnv({ NODE_ENV: 'development', NEXT_PUBLIC_AUTH_MODE: 'dev-login' }, snapshot);
+  check('실서버 + next dev + 스위치 값이 session 이 아니면 → dev-login', same(devOtherValue, DEV_LOGIN), JSON.stringify(devOtherValue));
+  const devSwitch = withEnv({ NODE_ENV: 'development', NEXT_PUBLIC_AUTH_MODE: 'session' }, snapshot);
+  check('실서버 + next dev + NEXT_PUBLIC_AUTH_MODE=session → session·social·logoutPending 재시도', same(devSwitch, SESSION), JSON.stringify(devSwitch));
+  const prodSwitch = withEnv({ NODE_ENV: 'production', NEXT_PUBLIC_AUTH_MODE: 'session' }, snapshot);
+  check('production + NEXT_PUBLIC_AUTH_MODE=session → 스위치 무시, dev-login 유지', same(prodSwitch, DEV_LOGIN), JSON.stringify(prodSwitch));
+  const testSwitch = withEnv({ NODE_ENV: 'test', NEXT_PUBLIC_AUTH_MODE: 'session' }, snapshot);
+  check('test 환경 + NEXT_PUBLIC_AUTH_MODE=session → 스위치 무시', same(testSwitch, DEV_LOGIN), JSON.stringify(testSwitch));
+}
 
 // ── refresh ───────────────────────────────────
 console.log('\n[refresh — single-flight·계정 확인]');
