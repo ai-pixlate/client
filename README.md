@@ -47,8 +47,9 @@ cp .env.example .env.local
 |---|---|---|
 | `NEXT_PUBLIC_API_MOCKING` | `enabled` / 미설정(또는 그 외 값) | `enabled`면 MSW(Mock Service Worker)를 사용합니다. 미설정 또는 그 외 값이면 실제 backend를 사용합니다(`NODE_ENV`와는 무관합니다). |
 | `NEXT_PUBLIC_DEV_SELLER_EMAIL` | 이메일 문자열 | 실백엔드 개발 세션 로그인용 이메일입니다. 미설정 시 코드 기본값을 사용합니다. |
+| `NEXT_PUBLIC_AUTH_MODE` | `session` / 미설정 | 로컬 개발 전용 실서버 인증 스위치입니다. `next dev`(`NODE_ENV=development`)에서 `session`이면 Mock을 끈 실백엔드에서도 세션 인증·소셜 로그인·로그아웃 재시도를 켭니다. production build에서는 값이 있어도 무시합니다. |
 
-인증 모드(`lib/auth/capability.ts`): Mock에서는 소셜 로그인(G1 → `/login/callback/{provider}` → M1)과 세션 복구(401 → refresh → `/auth/me` → 원 요청 1회 재시도)를 MSW로 확인할 수 있습니다. 실백엔드에서는 소셜 OAuth 서버가 아직 없어 소셜 버튼이 요청을 보내지 않고, 위 개발용 간이 로그인을 계속 씁니다. 어느 쪽이든 access token은 메모리에만 두고 브라우저 저장소에 쓰지 않습니다. Mock 인증 시험 시나리오는 `lib/mock-api/auth-fixtures.ts`의 `pixlate:mock-auth-scenario`(sessionStorage) 설명을 참고합니다.
+인증 모드(`lib/auth/capability.ts`): Mock에서는 소셜 로그인(G1 → `/login/callback/{provider}` → M1)과 세션 복구(401 → refresh → `/auth/me` → 원 요청 1회 재시도)를 MSW로 확인할 수 있습니다. 실백엔드에서는 소셜 OAuth 서버가 아직 없어 소셜 버튼이 요청을 보내지 않고, 위 개발용 간이 로그인을 계속 씁니다. BE와 실제 브라우저로 소셜 로그인을 시험할 때는 `BACKEND_ORIGIN=http://127.0.0.1:8000 NEXT_PUBLIC_API_MOCKING=disabled NEXT_PUBLIC_AUTH_MODE=session npx next dev -p 3000`으로 실행하고 `http://localhost:3000`으로 접속합니다(BE의 Origin·callback·쿠키가 `localhost:3000` 기준). 어느 쪽이든 access token은 메모리에만 두고 브라우저 저장소에 쓰지 않습니다. Mock 인증 시험 시나리오는 `lib/mock-api/auth-fixtures.ts`의 `pixlate:mock-auth-scenario`(sessionStorage) 설명을 참고합니다.
 
 Mock(`NEXT_PUBLIC_API_MOCKING=enabled`)에서만 동작하는 확인용 주소입니다. Mock이 꺼져 있으면 무시됩니다.
 
