@@ -17,7 +17,7 @@ import { getAccessToken, getAuthSnapshot, resetAuthStoreForTest, setAuthenticate
 import { completeSocialLogin, resetSocialLoginForTest, startSocialLogin } from '../lib/auth/social-login.ts';
 import { AuthLockTimeoutError, createAuthLock } from '../lib/auth/tab-lock.ts';
 import { isSessionRestoreSuppressed, readCallbackState, setCallbackStateStorageForTest } from '../lib/auth/callback-state.ts';
-import { getAuthMode, isLogoutPendingRetryEnabled, isSocialLoginEnabled } from '../lib/auth/capability.ts';
+import { getAuthMode, isLocalAuthTestMode, isLogoutPendingRetryEnabled, isSocialLoginEnabled } from '../lib/auth/capability.ts';
 
 let pass = 0;
 let fail = 0;
@@ -187,6 +187,15 @@ console.log('\n[capability — 로컬 실서버 인증 스위치]');
   check('production + NEXT_PUBLIC_AUTH_MODE=session → 스위치 무시, dev-login 유지', same(prodSwitch, DEV_LOGIN), JSON.stringify(prodSwitch));
   const testSwitch = withEnv({ NODE_ENV: 'test', NEXT_PUBLIC_AUTH_MODE: 'session' }, snapshot);
   check('test 환경 + NEXT_PUBLIC_AUTH_MODE=session → 스위치 무시', same(testSwitch, DEV_LOGIN), JSON.stringify(testSwitch));
+
+  // 로컬 실서버 인증 시험용 임시 로그아웃 진입점 노출 기준 — next dev + session 스위치 + Mock 꺼짐에서만
+  const testMode = (env) => withEnv(env, isLocalAuthTestMode);
+  check('임시 로그아웃 진입점: next dev + session + Mock 꺼짐 → 보임', testMode({ NODE_ENV: 'development', NEXT_PUBLIC_AUTH_MODE: 'session' }) === true);
+  check('임시 로그아웃 진입점: next dev + session + Mock 켜짐 → 숨김', testMode({ NODE_ENV: 'development', NEXT_PUBLIC_AUTH_MODE: 'session', NEXT_PUBLIC_API_MOCKING: 'enabled' }) === false);
+  check('임시 로그아웃 진입점: 일반 Mock 개발 → 숨김', testMode({ NODE_ENV: 'development', NEXT_PUBLIC_API_MOCKING: 'enabled' }) === false);
+  check('임시 로그아웃 진입점: 스위치 없는 실서버 dev → 숨김', testMode({ NODE_ENV: 'development' }) === false);
+  check('임시 로그아웃 진입점: production + session + Mock 꺼짐 → 숨김', testMode({ NODE_ENV: 'production', NEXT_PUBLIC_AUTH_MODE: 'session' }) === false);
+  check('임시 로그아웃 진입점: test + session → 숨김', testMode({ NODE_ENV: 'test', NEXT_PUBLIC_AUTH_MODE: 'session' }) === false);
 }
 
 // ── refresh ───────────────────────────────────
