@@ -1,10 +1,12 @@
 # FE 컨테이너 — 외부 백엔드(AWS ALB)에 붙는 실서버 연동용.
 # `next build` + `next start` 방식이며 npm(package-lock.json) 기준이다.
 #
-# 아래 두 값은 "빌드 시점"에 굳는다 (그래서 ARG로만 받는다).
+# 아래 값은 "빌드 시점"에 굳는다 (그래서 ARG로만 받는다). runtime env를 바꿔도 반영되지 않는다.
 #  - BACKEND_ORIGIN: next.config.ts의 rewrites()가 build 때 평가되어 routes-manifest에 기록된다.
 #  - NEXT_PUBLIC_API_MOCKING: client 번들에 문자열로 치환된다.
-# secret은 넣지 않는다. (이 두 값은 공개 가능한 설정값이다.)
+#  - NEXT_PUBLIC_AUTH_MODE: client 번들에 문자열로 치환된다. `session`이면 실서버 session/social 인증을 켜고,
+#    비우면(기본) 기존 dev-login을 쓴다. 인증 방식을 바꾸려면 다시 빌드해야 한다.
+# secret은 넣지 않는다. (이 값들은 공개 가능한 설정값이다.)
 
 FROM node:22-alpine AS deps
 WORKDIR /app
@@ -15,8 +17,10 @@ FROM node:22-alpine AS build
 WORKDIR /app
 ARG BACKEND_ORIGIN
 ARG NEXT_PUBLIC_API_MOCKING=disabled
+ARG NEXT_PUBLIC_AUTH_MODE
 ENV BACKEND_ORIGIN=${BACKEND_ORIGIN} \
     NEXT_PUBLIC_API_MOCKING=${NEXT_PUBLIC_API_MOCKING} \
+    NEXT_PUBLIC_AUTH_MODE=${NEXT_PUBLIC_AUTH_MODE} \
     NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
