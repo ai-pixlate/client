@@ -15,8 +15,17 @@ import { isApiMockingEnabled } from '../api/session.ts';
  */
 export type AuthMode = 'session' | 'dev-login';
 
+/**
+ * 로컬 개발 전용 실서버 인증 스위치. `next dev`(NODE_ENV=development)에서 NEXT_PUBLIC_AUTH_MODE=session 일 때만 켜져
+ * 실서버(API 모드)에서도 Mock 과 같은 'session'·소셜 로그인·logoutPending 재시도 흐름을 쓴다. BE 와 실제 브라우저 소셜 로그인
+ * 연동 시험용이다. production build 에서는 값이 있어도 무시한다. process.env 는 빌드 때 인라인되도록 직접 참조한다.
+ */
+export function isLocalSessionAuthEnabled(): boolean {
+  return process.env.NODE_ENV === 'development' && process.env.NEXT_PUBLIC_AUTH_MODE === 'session';
+}
+
 export function getAuthMode(): AuthMode {
-  return isApiMockingEnabled() ? 'session' : 'dev-login';
+  return isApiMockingEnabled() || isLocalSessionAuthEnabled() ? 'session' : 'dev-login';
 }
 
 /**
@@ -24,7 +33,7 @@ export function getAuthMode(): AuthMode {
  * TODO(AUTH-CONTRACT): 실제 카카오·Google OAuth 서버(POST /auth/social/{provider}/start, POST /auth/social)가 배포되면 실서버도 연다.
  */
 export function isSocialLoginEnabled(): boolean {
-  return isApiMockingEnabled();
+  return isApiMockingEnabled() || isLocalSessionAuthEnabled();
 }
 
 /**
@@ -34,4 +43,13 @@ export function isSocialLoginEnabled(): boolean {
  */
 export function isLogoutPendingRetryEnabled(): boolean {
   return getAuthMode() === 'session';
+}
+
+/**
+ * 로컬 실서버 인증 연동 시험 모드 — `next dev` + NEXT_PUBLIC_AUTH_MODE=session + Mock(MSW) 꺼짐.
+ * BE 와 실제 브라우저로 인증 계약을 시험할 때만 쓰는 임시 진입점(M1 임시 로그아웃 버튼)의 노출 기준이다.
+ * 일반 Mock 개발 환경·production build 에서는 false. 정식 로그아웃 UX 위치는 별도 디자인 확정 대상이다.
+ */
+export function isLocalAuthTestMode(): boolean {
+  return isLocalSessionAuthEnabled() && !isApiMockingEnabled();
 }

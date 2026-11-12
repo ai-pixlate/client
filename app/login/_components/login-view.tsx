@@ -11,6 +11,7 @@ import { socialLoginErrorMessage, type SocialLoginErrorKind } from '@/lib/auth/e
 import { splitGraphemes } from '@/lib/auth/login-gif-contrast';
 import { releaseSocialLoginStart, startSocialLogin } from '@/lib/auth/social-login';
 
+import { LogoutPendingNotice } from './logout-pending-notice';
 import { useLoginGifContrast } from './use-login-gif-contrast';
 
 /**
@@ -204,6 +205,10 @@ export function LoginView() {
                 {socialLoginErrorMessage(error)}
               </p>
             ) : null}
+            {/* 서버 로그아웃 미완료 안내 — 소셜 로그인 오류와 다른 인증 계약 상태라 따로 둔다 */}
+            <div className="mt-4 empty:hidden">
+              <LogoutPendingNotice />
+            </div>
           </div>
         </div>
         <div aria-hidden="true" className="min-h-6 grow-[233]" />

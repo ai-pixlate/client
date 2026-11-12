@@ -27,6 +27,15 @@ function recordAuth(page: Page) {
   };
 }
 
+/** 앱 API(프록시 식별 헤더가 붙은 보호 API) 요청을 기록한다 */
+function recordProtectedApi(page: Page) {
+  const calls: string[] = [];
+  page.on('request', (request: Request) => {
+    if (request.headers()['x-pixlate-api-proxy']) calls.push(`${request.method()} ${new URL(request.url()).pathname}`);
+  });
+  return calls;
+}
+
 async function setScenario(page: Page, scenario: Scenario) {
   await page.evaluate(([key, value]) => sessionStorage.setItem(key, value), [SCENARIO_KEY, JSON.stringify(scenario)] as const);
 }
@@ -302,14 +311,18 @@ test.describe('여러 탭', () => {
 test.describe('logoutPending — 앱 진입', () => {
   const PENDING_KEY = 'pixlate:auth:logout-pending';
 
-  async function reopenWithPending(page: Page, logoutSteps: string[]) {
+  /**
+   * expireOnce: 보호 API 첫 요청을 401 로 막는다 — 실서버에서 access 없이 이전 화면(M1)의 query 가 나가면 401 이 나는 상황.
+   * 이전 화면이 잠깐이라도 마운트되면 그 401 이 refresh 를 시작하는지 드러난다(BE 실측: logout 204 → refresh 401)
+   */
+  async function reopenWithPending(page: Page, logoutSteps: string[], { expireOnce = false } = {}) {
     await page.goto('/login');
     await page.evaluate(
       ([key, scenarioKey, scenario]) => {
         localStorage.setItem(key, '1');
         sessionStorage.setItem(scenarioKey, scenario);
       },
-      [PENDING_KEY, SCENARIO_KEY, JSON.stringify({ logout: logoutSteps })] as const,
+      [PENDING_KEY, SCENARIO_KEY, JSON.stringify({ logout: logoutSteps, expireOnce })] as const,
     );
     const auth = recordAuth(page);
     await page.goto('/');
@@ -342,5 +355,112 @@ test.describe('logoutPending — 앱 진입', () => {
     expect(auth.count('POST', '/auth/logout')).toBe(1);
     expect(auth.count('POST', '/auth/refresh')).toBe(0);
     await expect(page.getByTestId('auth-notice')).toHaveAttribute('data-notice', 'logout-pending');
+  });
+
+  // ── 앱 진입에서 로그아웃 재시도를 실행하면 결과와 상관없이 이번 진입은 G1 으로 끝난다 — refresh·이전 화면 API 없음 ──
+  for (const [label, steps, keepsPending] of [
+    ['204', [], false],
+    ['refresh_invalid', ['refresh_invalid'], false],
+    ['503', ['unavailable'], true],
+  ] as const) {
+    test(`대기 + ${label} → 이전 화면을 마운트하지 않아 refresh·보호 API 0회`, async ({ page }) => {
+      const api = recordProtectedApi(page);
+      const auth = await reopenWithPending(page, [...steps], { expireOnce: true });
+      await page.waitForURL((url) => url.pathname === '/login');
+      await expect(page.getByTestId('g1-social')).toBeVisible();
+      await page.waitForTimeout(800);
+      expect(auth.calls.map((c) => `${c.method} ${c.path}`)).toEqual(['POST /auth/logout']);
+      expect(auth.count('POST', '/auth/refresh')).toBe(0);
+      expect(api).toEqual([]);
+      expect(await pending(page)).toBe(keepsPending ? '1' : null);
+      if (keepsPending) {
+        // 안내가 이전 화면의 401 처리(clearAuth)로 지워지지 않고 화면에 보인다
+        await expect(page.getByTestId('auth-notice')).toHaveAttribute('data-notice', 'logout-pending');
+        await expect(page.getByTestId('g1-logout-pending')).toContainText('로그아웃했지만 서버 로그아웃을 확인하지 못했습니다.');
+        await expect(page.getByTestId('g1-social-error')).toHaveCount(0);
+      } else {
+        await expect(page.getByTestId('g1-logout-pending')).toHaveCount(0);
+      }
+    });
+  }
+
+  test('G1 에 도착한 뒤에는 새 로그인부터 정상 흐름(M1 데이터 요청)이 다시 동작한다', async ({ page }) => {
+    const api = recordProtectedApi(page);
+    await reopenWithPending(page, []);
+    await page.waitForURL((url) => url.pathname === '/login');
+    await setScenario(page, {});
+    await page.getByTestId('g1-social-kakao').click();
+    await page.waitForURL((url) => url.pathname === '/');
+    await expect.poll(() => api.includes('GET /library')).toBe(true);
+  });
+});
+
+test.describe('G1 서버 로그아웃 미완료 — [다시 시도]', () => {
+  const PENDING_KEY = 'pixlate:auth:logout-pending';
+  const pending = (page: Page) => page.evaluate((key) => localStorage.getItem(key), PENDING_KEY);
+
+  /** 앱 진입 503 으로 안내가 보이는 G1 을 만든 뒤, 다음 재시도 응답을 정한다 */
+  async function pendingOnLogin(page: Page, retrySteps: string[]) {
+    await page.goto('/login');
+    await page.evaluate(
+      ([key, scenarioKey, scenario]) => {
+        localStorage.setItem(key, '1');
+        sessionStorage.setItem(scenarioKey, scenario);
+      },
+      [PENDING_KEY, SCENARIO_KEY, JSON.stringify({ logout: ['unavailable', ...retrySteps] })] as const,
+    );
+    const auth = recordAuth(page);
+    await page.reload();
+    await expect(page.getByTestId('g1-logout-pending')).toBeVisible();
+    expect(auth.count('POST', '/auth/logout')).toBe(1);
+    return auth;
+  }
+
+  for (const [label, step] of [
+    ['204', null],
+    ['refresh_invalid', 'refresh_invalid'],
+  ] as const) {
+    test(`재시도 ${label} → 대기·안내 해제, G1 유지, refresh 없음`, async ({ page }) => {
+      const auth = await pendingOnLogin(page, step ? [step] : []);
+      await page.getByTestId('g1-logout-pending-retry').click();
+      await expect(page.getByTestId('g1-logout-pending')).toHaveCount(0);
+      await expect(page.getByTestId('auth-notice')).toHaveAttribute('data-notice', '');
+      await page.waitForTimeout(500);
+      expect(await pending(page)).toBeNull();
+      expect(auth.count('POST', '/auth/logout')).toBe(2);
+      expect(auth.calls.at(-1)!.auth).toBeNull();
+      expect(auth.count('POST', '/auth/refresh')).toBe(0);
+      expect(new URL(page.url()).pathname).toBe('/login');
+    });
+  }
+
+  for (const [label, step] of [
+    ['503', 'unavailable'],
+    ['origin_not_allowed', 'origin_not_allowed'],
+    ['422', 'validation'],
+  ] as const) {
+    test(`재시도 ${label} → 대기·안내 유지, 자동 반복 없음, 다시 누를 때만 재시도`, async ({ page }) => {
+      const auth = await pendingOnLogin(page, [step]);
+      await page.getByTestId('g1-logout-pending-retry').click();
+      await expect.poll(() => auth.count('POST', '/auth/logout')).toBe(2);
+      await page.waitForTimeout(800);
+      expect(auth.count('POST', '/auth/logout')).toBe(2);
+      expect(auth.count('POST', '/auth/refresh')).toBe(0);
+      expect(await pending(page)).toBe('1');
+      await expect(page.getByTestId('g1-logout-pending')).toBeVisible();
+      await expect(page.getByTestId('auth-notice')).toHaveAttribute('data-notice', 'logout-pending');
+      // 다시 누르면(이번엔 204) 그때만 한 번 더 보낸다
+      await page.getByTestId('g1-logout-pending-retry').click();
+      await expect(page.getByTestId('g1-logout-pending')).toHaveCount(0);
+      expect(auth.count('POST', '/auth/logout')).toBe(3);
+    });
+  }
+});
+
+test.describe('로컬 실서버 인증 시험용 임시 로그아웃 진입점', () => {
+  test('일반 Mock 개발 환경에서는 M1 에 보이지 않는다', async ({ page }) => {
+    await loginWith(page, 'kakao');
+    await expect(page.getByRole('heading', { name: '보관함' })).toBeVisible();
+    await expect(page.getByTestId('local-auth-test-logout')).toHaveCount(0);
   });
 });

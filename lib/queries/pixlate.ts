@@ -43,9 +43,10 @@ import {
   n2DisplayedProgressKey,
   n4DisplayedProgressKey,
 } from '@/lib/processing/displayed-progress-storage';
-import type { ApiBlockPatch, ApiConfirmRequest, ApiJobTaskStatus, ApiReviewPreview, ApiTextBlock } from '@/lib/api/n5-schema';
+import type { ApiBlockPatch, ApiConfirmRequest, ApiJobTaskStatus, ApiTextBlock } from '@/lib/api/n5-schema';
 import type { ApiExportRequest, ApiExportArtifactType } from '@/lib/api/n6-schema';
-import type { ApiSection, ApiSectionBucket, ApiSectionList, ApiSectionPatch } from '@/lib/api/n3-schema';
+import { sectionBucketMutationOptions } from '@/lib/queries/section-bucket-mutation';
+import type { ApiSection } from '@/lib/api/n3-schema';
 
 // ─────────────────────────────────────────────
 // Query Keys
@@ -566,56 +567,14 @@ export function useMasterCategoriesQuery() {
 export function useUpdateSectionBucketMutation(jobId: string) {
   const queryClient = useQueryClient();
 
-  return useMutation({
-    mutationFn: ({ sectionId, bucket }: { sectionId: number; bucket: ApiSectionBucket }) => {
-      const action: ApiSectionPatch['action'] = bucket === 'include' ? 'restore' : 'exclude';
-      return updateSectionBucket(jobId, sectionId, { action });
-    },
-    onMutate: async ({ sectionId, bucket }) => {
-      await queryClient.cancelQueries({ queryKey: pixlateKeys.sections(jobId) });
-      const previous = queryClient.getQueryData<ApiSectionList>(pixlateKeys.sections(jobId));
-
-      if (previous) {
-        const exclude = previous.exclude ?? [];
-        const include = previous.include ?? [];
-        const moving = exclude.find((s) => s.id === sectionId) ?? include.find((s) => s.id === sectionId);
-
-        if (moving) {
-          const moved: ApiSection = { ...moving, bucket };
-          const withoutMoving = { exclude: exclude.filter((s) => s.id !== sectionId), include: include.filter((s) => s.id !== sectionId) };
-          queryClient.setQueryData<ApiSectionList>(
-            pixlateKeys.sections(jobId),
-            bucket === 'include'
-              ? { exclude: withoutMoving.exclude, include: [...withoutMoving.include, moved] }
-              : { exclude: [...withoutMoving.exclude, moved], include: withoutMoving.include },
-          );
-        }
-      }
-
-      return { previous };
-    },
-    onSuccess: (saved) => {
-      queryClient.setQueryData<ApiReviewPreview>(pixlateKeys.n5Preview(jobId), (prev) =>
-        prev?.sections
-          ? {
-              ...prev,
-              sections: prev.sections.map((s) =>
-                s.id === saved.id ? { ...s, bucket: saved.bucket ?? s.bucket, excludedStage: saved.excludedStage ?? null } : s,
-              ),
-            }
-          : prev,
-      );
-    },
-    onError: (_err, _vars, context) => {
-      if (context?.previous) {
-        queryClient.setQueryData(pixlateKeys.sections(jobId), context.previous);
-      }
-    },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: pixlateKeys.sections(jobId) });
-      queryClient.invalidateQueries({ queryKey: pixlateKeys.n5Preview(jobId) });
-    },
-  });
+  return useMutation(
+    sectionBucketMutationOptions({
+      queryClient,
+      sectionsKey: pixlateKeys.sections(jobId),
+      previewKey: pixlateKeys.n5Preview(jobId),
+      update: (sectionId, payload) => updateSectionBucket(jobId, sectionId, payload),
+    }),
+  );
 }
 
 // ─────────────────────────────────────────────
