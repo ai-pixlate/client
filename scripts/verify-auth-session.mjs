@@ -150,7 +150,7 @@ check('사건당 refresh 최대 2회', AUTH_REFRESH_MAX_ATTEMPTS === 2);
 check('원 요청 재시도 최대 1회', AUTH_ORIGINAL_REQUEST_MAX_RETRIES === 1);
 
 // ── 인증 기능 gate(capability) ───────────────
-console.log('\n[capability — 로컬 실서버 인증 스위치]');
+console.log('\n[capability — 실서버 session 인증 opt-in 스위치]');
 {
   const ENV_KEYS = ['NODE_ENV', 'NEXT_PUBLIC_API_MOCKING', 'NEXT_PUBLIC_AUTH_MODE'];
   const saved = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
@@ -183,10 +183,16 @@ console.log('\n[capability — 로컬 실서버 인증 스위치]');
   check('실서버 + next dev + 스위치 값이 session 이 아니면 → dev-login', same(devOtherValue, DEV_LOGIN), JSON.stringify(devOtherValue));
   const devSwitch = withEnv({ NODE_ENV: 'development', NEXT_PUBLIC_AUTH_MODE: 'session' }, snapshot);
   check('실서버 + next dev + NEXT_PUBLIC_AUTH_MODE=session → session·social·logoutPending 재시도', same(devSwitch, SESSION), JSON.stringify(devSwitch));
-  const prodSwitch = withEnv({ NODE_ENV: 'production', NEXT_PUBLIC_AUTH_MODE: 'session' }, snapshot);
-  check('production + NEXT_PUBLIC_AUTH_MODE=session → 스위치 무시, dev-login 유지', same(prodSwitch, DEV_LOGIN), JSON.stringify(prodSwitch));
+  const prodNoSwitch = withEnv({ NODE_ENV: 'production', NEXT_PUBLIC_API_MOCKING: 'disabled' }, snapshot);
+  check('production + 실서버 + 스위치 없음 → 기본 dev-login·social 꺼짐', same(prodNoSwitch, DEV_LOGIN), JSON.stringify(prodNoSwitch));
+  const prodOtherValue = withEnv({ NODE_ENV: 'production', NEXT_PUBLIC_AUTH_MODE: 'Session' }, snapshot);
+  check('production + 스위치 값이 정확히 session 이 아니면 → dev-login', same(prodOtherValue, DEV_LOGIN), JSON.stringify(prodOtherValue));
+  const prodSwitch = withEnv({ NODE_ENV: 'production', NEXT_PUBLIC_API_MOCKING: 'disabled', NEXT_PUBLIC_AUTH_MODE: 'session' }, snapshot);
+  check('production + 실서버 + NEXT_PUBLIC_AUTH_MODE=session → session·social·logoutPending 재시도(명시적 opt-in)', same(prodSwitch, SESSION), JSON.stringify(prodSwitch));
+  const prodMockSwitch = withEnv({ NODE_ENV: 'production', NEXT_PUBLIC_API_MOCKING: 'enabled', NEXT_PUBLIC_AUTH_MODE: 'session' }, snapshot);
+  check('production + Mock + session 스위치 → Mock 정책과 충돌 없이 session', same(prodMockSwitch, SESSION), JSON.stringify(prodMockSwitch));
   const testSwitch = withEnv({ NODE_ENV: 'test', NEXT_PUBLIC_AUTH_MODE: 'session' }, snapshot);
-  check('test 환경 + NEXT_PUBLIC_AUTH_MODE=session → 스위치 무시', same(testSwitch, DEV_LOGIN), JSON.stringify(testSwitch));
+  check('test 환경 + NEXT_PUBLIC_AUTH_MODE=session → NODE_ENV 와 관계없이 session', same(testSwitch, SESSION), JSON.stringify(testSwitch));
 
   // 로컬 실서버 인증 시험용 임시 로그아웃 진입점 노출 기준 — next dev + session 스위치 + Mock 꺼짐에서만
   const testMode = (env) => withEnv(env, isLocalAuthTestMode);
@@ -196,6 +202,8 @@ console.log('\n[capability — 로컬 실서버 인증 스위치]');
   check('임시 로그아웃 진입점: 스위치 없는 실서버 dev → 숨김', testMode({ NODE_ENV: 'development' }) === false);
   check('임시 로그아웃 진입점: production + session + Mock 꺼짐 → 숨김', testMode({ NODE_ENV: 'production', NEXT_PUBLIC_AUTH_MODE: 'session' }) === false);
   check('임시 로그아웃 진입점: test + session → 숨김', testMode({ NODE_ENV: 'test', NEXT_PUBLIC_AUTH_MODE: 'session' }) === false);
+  check('임시 로그아웃 진입점: production + 스위치 없음 → 숨김', testMode({ NODE_ENV: 'production', NEXT_PUBLIC_API_MOCKING: 'disabled' }) === false);
+  check('임시 로그아웃 진입점: production + Mock → 숨김', testMode({ NODE_ENV: 'production', NEXT_PUBLIC_API_MOCKING: 'enabled', NEXT_PUBLIC_AUTH_MODE: 'session' }) === false);
 }
 
 // ── refresh ───────────────────────────────────
