@@ -51,12 +51,14 @@ cp .env.example .env.local
 
 인증 모드(`lib/auth/capability.ts`):
 
-| 조합 | 인증 방식 | 소셜 로그인 | 로그아웃 재시도 | M1 임시 로그아웃 시험 버튼 |
-|---|---|---|---|---|
-| Mock(`NEXT_PUBLIC_API_MOCKING=enabled`) | session | 켜짐 | 켜짐 | 숨김 |
-| 실백엔드 + `NEXT_PUBLIC_AUTH_MODE` 미설정(기본) | dev-login | 꺼짐(버튼 비활성, 요청 없음) | 꺼짐 | 숨김 |
-| 실백엔드 + `NEXT_PUBLIC_AUTH_MODE=session` + `next dev` | session | 켜짐 | 켜짐 | **보임**(`isLocalAuthTestMode()`) |
-| 실백엔드 + `NEXT_PUBLIC_AUTH_MODE=session` + production build | session | 켜짐 | 켜짐 | 숨김 |
+| 조합 | 인증 방식 | 소셜 로그인 | 로그아웃 재시도 | M1 정식 `로그아웃` 버튼 | M1 임시 로그아웃 시험 버튼 |
+|---|---|---|---|---|---|
+| Mock(`NEXT_PUBLIC_API_MOCKING=enabled`) | session | 켜짐 | 켜짐 | 보임 | 숨김 |
+| 실백엔드 + `NEXT_PUBLIC_AUTH_MODE` 미설정(기본) | dev-login | 꺼짐(버튼 비활성, 요청 없음) | 꺼짐 | 숨김 | 숨김 |
+| 실백엔드 + `NEXT_PUBLIC_AUTH_MODE=session` + `next dev` | session | 켜짐 | 켜짐 | 숨김 | **보임**(`isLocalAuthTestMode()`) |
+| 실백엔드 + `NEXT_PUBLIC_AUTH_MODE=session` + production build | session | 켜짐 | 켜짐 | **보임** | 숨김 |
+
+M1 정식 `로그아웃` 버튼(`isAccountLogoutEnabled()` = session 모드이고 로컬 인증 시험 모드가 아님)은 Figma 확정 전 임시 위치(M1 우측 상단)이며 기존 `lib/auth/logout.ts` `logout()`만 부릅니다. 정식·임시 버튼은 동시에 보이지 않습니다.
 
 Mock에서는 소셜 로그인(G1 → `/login/callback/{provider}` → M1)과 세션 복구(401 → refresh → `/auth/me` → 원 요청 1회 재시도)를 MSW로 확인할 수 있습니다. 실백엔드 기본값은 위 개발용 간이 로그인이며 소셜 버튼은 요청을 보내지 않습니다. 실백엔드에서 session/social 인증을 쓰려면 `NEXT_PUBLIC_AUTH_MODE=session`을 명시해 실행·빌드합니다. BE와 실제 브라우저로 소셜 로그인을 시험할 때는 `BACKEND_ORIGIN=http://127.0.0.1:8000 NEXT_PUBLIC_API_MOCKING=disabled NEXT_PUBLIC_AUTH_MODE=session npx next dev -p 3000`으로 실행하고 `http://localhost:3000`으로 접속합니다(BE의 Origin·callback·쿠키가 `localhost:3000` 기준). 이 로컬 실서버 인증 시험 모드(`next dev` + `NEXT_PUBLIC_AUTH_MODE=session` + Mock 꺼짐, `isLocalAuthTestMode()`)에서만 M1 우측 상단에 **임시 로그아웃 진입점**(`로그아웃(인증 시험)`)이 보입니다. BE 로그아웃 계약 시험용이며 정식 로그아웃 UX 위치는 별도 디자인 확정 대상입니다. 일반 Mock 개발 환경과 production build에서는 보이지 않습니다 — production build에서 `NEXT_PUBLIC_AUTH_MODE=session`으로 session을 켜도 임시 시험 버튼은 숨겨집니다. 어느 쪽이든 access token은 메모리에만 두고 브라우저 저장소에 쓰지 않습니다. Mock 인증 시험 시나리오는 `lib/mock-api/auth-fixtures.ts`의 `pixlate:mock-auth-scenario`(sessionStorage) 설명을 참고합니다.
 
@@ -106,6 +108,7 @@ Secret(JWT, access token, password 등)은 절대 Git에 커밋하지 않습니�
 | `npx playwright test e2e/g1-login.spec.ts --project=chromium` | G1 로그인 화면(`/login`) 검증 — Figma 835:6511 위치, GIF 로드, 동의 고지, 키보드, 화면 진입 시 인증 요청 0건 (Chromium, dev 서버 필요) |
 | `npx playwright test e2e/g1-social-auth.spec.ts --project=chromium` | Mock 소셜 로그인·세션 흐름 검증 — start→콜백→M1, 콜백 완료 1회(Strict Mode·새로고침), 시작/완료 오류, 401→refresh→`/auth/me`, 여러 탭 logout·계정 전환, logoutPending 앱 진입(refresh·보호 API 0회)·G1 미완료 안내와 [다시 시도], 임시 로그아웃 진입점 미노출 (Chromium, Mock dev 서버 필요) |
 | `E2E_LOCAL_AUTH_LOGOUT=visible npx playwright test e2e/auth-local-test-logout.spec.ts --project=chromium` | 로컬 실서버 인증 시험 모드 dev 서버(`NEXT_PUBLIC_API_MOCKING=disabled NEXT_PUBLIC_AUTH_MODE=session npx next dev -p 3000`)에서 임시 로그아웃 진입점 노출과 로그아웃 계약(204·`invalid_token` 쿠키만 1회·`refresh_invalid`·503 pending·중복 클릭·여러 탭) 검증. 백엔드는 route 로 대신한다. `E2E_LOCAL_AUTH_LOGOUT=hidden` + 같은 env 의 production build(`next build && next start`)에서는 미노출 검증 |
+| `E2E_PROD_AUTH=session npx playwright test e2e/auth-production-logout.spec.ts --project=chromium` | `NEXT_PUBLIC_AUTH_MODE=session` production 서버에서 M1 정식 `로그아웃` 버튼 노출(임시 버튼 미노출)과 로그아웃 계약(204·`invalid_token` 쿠키만 1회·`refresh_invalid`·503 pending과 [다시 시도]·진행 중 잠금·여러 탭) 검증. `E2E_PROD_AUTH=unset` + 기본 production build에서는 정식·임시 버튼 모두 미노출 검증. 백엔드는 route 로 대신한다 |
 | `E2E_PROD_AUTH=unset npx playwright test e2e/auth-production-mode.spec.ts --project=chromium` | 기본 production build(`NEXT_PUBLIC_API_MOCKING=disabled npx next build && npx next start -p 3000`)에서 dev-login 유지·소셜 버튼 비활성(요청 없음)·임시 로그아웃 버튼 미노출 검증. `E2E_PROD_AUTH=session` + `NEXT_PUBLIC_AUTH_MODE=session`으로 빌드한 production 서버에서는 소셜 버튼 활성·`POST /auth/social/{provider}/start` 요청 발생·임시 로그아웃 버튼 미노출 검증. 백엔드는 route 로 대신하며 실제 OAuth 완료는 검증하지 않는다 |
 | `E2E_REAL_BACKEND_MODE=1 npx playwright test e2e/g1-login-backend-mode.spec.ts --project=chromium` | Mock을 끈 dev 서버(`NEXT_PUBLIC_API_MOCKING=disabled npm run dev`)에서 `/login`은 인증 요청 0건, 다른 화면은 개발용 자동 로그인 유지·access 메모리 보관(브라우저 저장소 미사용)인지 검증 |
 | `npm run generate:openapi-types` | 최신 OpenAPI 계약(`ai-pixlate.github.io/server/openapi.yaml`)에서 타입 재생성 → `lib/api/generated/openapi.d.ts` (직접 수정 금지, 재실행으로만 갱신) |
@@ -147,7 +150,7 @@ docker build \
   -t pixlate-fe .
 ```
 
-session/social 인증 production build(명시적 opt-in, M1 임시 로그아웃 시험 버튼은 숨김):
+session/social 인증 production build(명시적 opt-in, M1 정식 `로그아웃` 버튼 보임·임시 로그아웃 시험 버튼은 숨김):
 
 ```bash
 docker build \
