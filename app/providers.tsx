@@ -1,6 +1,7 @@
 ﻿"use client";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { shouldRetryQuery } from "@/lib/auth/query-retry";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
@@ -61,8 +62,9 @@ export default function Providers({ children }: { children: React.ReactNode }) {
       new QueryClient({
         defaultOptions: {
           queries: {
-            // 실패 시 무한 재시도로 화면이 계속 로딩 상태에 머무는 것을 방지
-            retry: 1,
+            // 실패 시 무한 재시도로 화면이 계속 로딩 상태에 머무는 것을 방지. 일반 오류는 최대 1회,
+            // 인증 계층이 이미 최종 판단한 오류(복구 실패·세대 변경)는 0회 — 재시도가 새 refresh 를 만들지 않게(lib/auth/query-retry.ts)
+            retry: shouldRetryQuery,
             staleTime: 60 * 1000,
           },
         },
