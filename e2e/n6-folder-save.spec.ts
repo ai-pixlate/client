@@ -9,7 +9,7 @@ import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 //
 // 지원 환경(secure context + showDirectoryPicker): 클릭 → 폴더 선택 → POST /export →
 // artifactId → GET /exports/{artifactId}/download → presigned URL fetch → 고른 폴더에 쓰기 →
-// "저장 완료". 미지원/insecure 환경과 presigned fetch 실패는 기존 다운로드 링크로 돌아간다.
+// "저장 완료". 미지원/insecure 환경과 presigned fetch 실패는 브라우저 다운로드를 바로 시작한다(두 번째 버튼 없음).
 //
 // File System Access API 는 가짜로 바꿔(helpers/directory-picker.ts) 호출 순서와 인자만 본다 —
 // 실제 로컬 파일은 만들지 않는다. 가짜 picker 는 Chromium 에서만 쓴다(Firefox/WebKit 은 실제로
@@ -115,7 +115,7 @@ test.describe('지원 환경(secure context + showDirectoryPicker)', () => {
     expect(pageErrors).toEqual([]);
   });
 
-  test('D. presigned fetch 가 실패(CORS/네트워크)하면 산출물은 성공으로 두고 기존 다운로드 링크를 보여 준다', async ({
+  test('D. presigned fetch 가 실패(CORS/네트워크)하면 산출물은 성공으로 두고 브라우저 다운로드를 바로 시작한다(두 번째 버튼 없음)', async ({
     page,
   }) => {
     const order = trackOrder(page);
@@ -124,15 +124,13 @@ test.describe('지원 환경(secure context + showDirectoryPicker)', () => {
     order.length = 0;
 
     await setMockFlag(page, MOCK_PRESIGNED_FETCH_FAIL_ONCE_FLAG);
+    const browserDownload = page.waitForEvent('download', { timeout: 10_000 });
     await page.getByTestId('n6-export-button').click();
 
+    expect((await browserDownload).url()).toMatch(/mock-presigned/);
     await expect(page.getByTestId('n6-direct-save-fallback')).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByTestId('n6-direct-save-fallback')).toHaveText(
-      '직접 저장을 사용할 수 없어 다운로드 링크를 준비했습니다.',
-    );
-    const link = page.getByTestId('n6-download-link');
-    await expect(link).toBeVisible();
-    await expect(link).toHaveAttribute('href', /mock-presigned/);
+    await expect(page.getByTestId('n6-direct-save-fallback')).toHaveText('선택한 폴더에 저장하지 못해 브라우저 다운로드로 내려받았습니다.');
+    await expect(page.getByTestId('n6-download-link')).toHaveCount(0);
     // export 자체는 실패가 아니다
     await expect(page.getByTestId('n6-export-error')).toHaveCount(0);
     await expect(page.getByTestId('n6-download-error')).toHaveCount(0);
@@ -207,25 +205,25 @@ test.describe('지원 환경(secure context + showDirectoryPicker)', () => {
   });
 });
 
-test.describe('미지원 / insecure 환경 — 기존 다운로드 링크 fallback', () => {
-  test('C-1. showDirectoryPicker 가 없으면 기존 export → download 링크 흐름을 그대로 쓴다', async ({ page }) => {
+test.describe('미지원 / insecure 환경 — 브라우저 다운로드 fallback', () => {
+  test('C-1. showDirectoryPicker 가 없으면 export → download → 브라우저 다운로드가 클릭 한 번으로 이어진다', async ({ page }) => {
     const order = trackOrder(page);
     await disableDirectoryPicker(page);
     await reachN6(page);
     order.length = 0;
 
+    const browserDownload = page.waitForEvent('download', { timeout: 10_000 });
     await page.getByTestId('n6-export-button').click();
-    const link = page.getByTestId('n6-download-link');
-    await expect(link).toBeVisible({ timeout: 10_000 });
-    await expect(link).toHaveAttribute('href', /mock-presigned/);
+    expect((await browserDownload).url()).toMatch(/mock-presigned/);
+    await expect(page.getByTestId('n6-download-link')).toHaveCount(0);
     await expect(page.getByTestId('n6-direct-save-done')).toHaveCount(0);
     await expect(page.getByTestId('n6-direct-save-fallback')).toHaveCount(0);
     expect(count(order, EXPORT_POST)).toBe(1);
     expect(count(order, DOWNLOAD_GET)).toBe(1);
-    expect(count(order, PRESIGNED_GET)).toBe(0); // FE 가 직접 내려받지 않는다
+    expect(count(order, PRESIGNED_GET)).toBeLessThanOrEqual(1); // 브라우저 다운로드 자체의 요청뿐(FE 가 fetch 하지 않는다)
   });
 
-  test('C-2. insecure context 이면 picker 가 있어도 쓰지 않고 기존 다운로드 링크 흐름을 쓴다', async ({ page }) => {
+  test('C-2. insecure context 이면 picker 가 있어도 쓰지 않고 브라우저 다운로드를 바로 시작한다', async ({ page }) => {
     const order = trackOrder(page);
     const fs = await installFakeDirectoryPicker(page, order);
     await forceInsecureContext(page);
@@ -233,15 +231,17 @@ test.describe('미지원 / insecure 환경 — 기존 다운로드 링크 fallba
     expect(await page.evaluate(() => window.isSecureContext)).toBe(false);
     order.length = 0;
 
+    const browserDownload = page.waitForEvent('download', { timeout: 10_000 });
     await page.getByTestId('n6-export-button').click();
-    await expect(page.getByTestId('n6-download-link')).toBeVisible({ timeout: 10_000 });
+    await browserDownload;
+    await expect(page.getByTestId('n6-download-link')).toHaveCount(0);
     await expect(page.getByTestId('n6-direct-save-done')).toHaveCount(0);
     expect(fs).toEqual([]);
     expect(count(order, EXPORT_POST)).toBe(1);
     expect(count(order, DOWNLOAD_GET)).toBe(1);
   });
 
-  test('C-3. 이 API 가 없는 브라우저(Firefox/WebKit)는 아무 설정 없이도 기존 다운로드 링크를 쓴다', async ({
+  test('C-3. 이 API 가 없는 브라우저(Firefox/WebKit)는 아무 설정 없이도 브라우저 다운로드를 쓴다', async ({
     page,
     browserName,
   }) => {
@@ -249,8 +249,10 @@ test.describe('미지원 / insecure 환경 — 기존 다운로드 링크 fallba
     expect(await page.evaluate(() => 'showDirectoryPicker' in window)).toBe(false);
     await reachN6(page);
 
+    const browserDownload = page.waitForEvent('download', { timeout: 10_000 });
     await page.getByTestId('n6-export-button').click();
-    await expect(page.getByTestId('n6-download-link')).toBeVisible({ timeout: 10_000 });
+    await browserDownload;
+    await expect(page.getByTestId('n6-download-link')).toHaveCount(0);
     await expect(page.getByTestId('n6-direct-save-done')).toHaveCount(0);
   });
 });

@@ -79,3 +79,20 @@ export async function writeFileToDirectory(
     throw error;
   }
 }
+
+/**
+ * 브라우저 기본 다운로드를 바로 시작한다 — 임시 <a download>를 만들어 누르고 곧바로 지운다(화면에 남는 버튼이 없다).
+ * 폴더 직접 저장을 쓸 수 없거나 실패했을 때 [선택 항목 내보내기] 한 번으로 다운로드까지 이어지게 하는 용도다.
+ * 다른 출처(presigned) 주소는 download 속성이 무시될 수 있어, 파일 이름·저장 방식은 서버 응답(Content-Disposition)을 따른다.
+ */
+export function startBrowserDownload(url: string, fileName: string | undefined, doc: Document | undefined = globalThis.document): void {
+  if (!doc) return;
+  const link = doc.createElement('a');
+  link.href = url;
+  if (fileName) link.download = fileName;
+  link.rel = 'noreferrer';
+  link.style.display = 'none';
+  doc.body.appendChild(link);
+  link.click();
+  link.remove();
+}

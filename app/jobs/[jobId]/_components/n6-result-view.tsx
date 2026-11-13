@@ -19,6 +19,7 @@ import {
   getDirectoryPicker,
   isDirectoryPickerAbort,
   resolveSaveFileName,
+  startBrowserDownload,
   writeFileToDirectory,
 } from '@/lib/n6/directory-save';
 import { useModalDialog } from '@/app/_components/use-modal-dialog';
@@ -580,7 +581,7 @@ function ArtifactRow({
  * - saving   : 폴더를 골랐고 POST /export → GET download → 파일 쓰기 진행 중
  * - saved    : 고른 폴더에 파일을 썼다(전체 경로는 브라우저가 주지 않아 폴더 이름만 안다)
  * - fallback : 산출물은 만들어졌지만 직접 저장을 못 했다(presigned fetch CORS/네트워크 실패 등)
- *              → 기존 다운로드 링크를 보여 준다
+ *              → 브라우저 기본 다운로드를 바로 시작한다(두 번째 다운로드 버튼을 보이지 않는다)
  */
 type DirectSaveState =
   | { phase: 'idle' }
@@ -705,14 +706,19 @@ function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeli
   const [directSave, setDirectSave] = useState<DirectSaveState>(DIRECT_SAVE_IDLE);
   const isDirectSaving = directSave.phase === 'saving';
 
-  // 기존 흐름(지원하지 않는 환경의 fallback): POST /export → artifactId → GET download →
-  // 다운로드 링크. 계약 순서와 오류 처리는 PR #37 그대로다.
-  const exportWithDownloadLink = () => {
+  // 폴더 직접 저장을 쓸 수 없는 환경: POST /export → artifactId → GET download → 브라우저 다운로드 시작.
+  // [선택 항목 내보내기] 한 번으로 끝난다 — Figma 에 없는 두 번째 [다운로드] 버튼을 띄우지 않는다. 계약 순서와 오류 표시는 그대로다.
+  const exportAndDownload = () => {
     exportMutation.mutate(
       { components: [...selected] },
       {
         onSuccess: (response) => {
-          if (response.artifactId != null) downloadMutation.mutate(response.artifactId);
+          if (response.artifactId == null) return;
+          downloadMutation.mutate(response.artifactId, {
+            onSuccess: (download) => {
+              if (download.url) startBrowserDownload(download.url, download.fileName);
+            },
+          });
         },
       },
     );
@@ -741,7 +747,7 @@ function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeli
     }
 
     if (!download.url) {
-      setDirectSave({ phase: 'fallback' });
+      setDirectSave(DIRECT_SAVE_IDLE); // 내려받을 주소가 없다 — 저장·다운로드 어느 쪽도 시작하지 않는다
       return;
     }
     const fileName = resolveSaveFileName(download, `pixlate_export_${artifactId}.zip`);
@@ -750,6 +756,8 @@ function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeli
       await writeFileToDirectory(directory, fileName, file);
       setDirectSave({ phase: 'saved', directoryName: directory.name, fileName });
     } catch {
+      // presigned fetch(CORS·네트워크)나 파일 쓰기 실패 — 같은 URL 로 브라우저 기본 다운로드를 시작한다
+      startBrowserDownload(download.url, download.fileName ?? fileName);
       setDirectSave({ phase: 'fallback' });
     }
   };
@@ -758,7 +766,7 @@ function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeli
     if (exportMutation.isPending || isDirectSaving) return;
     const pickDirectory = getDirectoryPicker();
     if (!pickDirectory) {
-      exportWithDownloadLink();
+      exportAndDownload();
       return;
     }
 
@@ -769,13 +777,11 @@ function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeli
       directory = await pickDirectory({ id: 'pixlate-export', mode: 'readwrite' });
     } catch (error) {
       if (isDirectoryPickerAbort(error)) return; // 취소 — 아무 요청도 보내지 않고 화면을 그대로 둔다
-      exportWithDownloadLink(); // 그 밖의 picker 오류는 기존 다운로드 링크 흐름으로 진행한다
+      exportAndDownload(); // 그 밖의 picker 오류는 브라우저 기본 다운로드로 진행한다
       return;
     }
     await exportToDirectory(directory);
   };
-
-  const showDownloadLink = downloadMutation.data && (directSave.phase === 'idle' || directSave.phase === 'fallback');
 
   return (
     <div
@@ -855,7 +861,7 @@ function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeli
             </p>
           )}
           {downloadMutation.isPending && !isDirectSaving && (
-            <p className="text-[12px] text-[#999]">다운로드 링크 준비 중...</p>
+            <p className="text-[12px] text-[#999]">다운로드 준비 중...</p>
           )}
           {isDirectSaving && (
             <p className="text-[12px] text-[#999]" data-testid="n6-direct-save-progress">
@@ -876,20 +882,8 @@ function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeli
           )}
           {directSave.phase === 'fallback' && downloadMutation.data && (
             <p className="text-[12px] text-[#707070]" data-testid="n6-direct-save-fallback">
-              직접 저장을 사용할 수 없어 다운로드 링크를 준비했습니다.
+              선택한 폴더에 저장하지 못해 브라우저 다운로드로 내려받았습니다.
             </p>
-          )}
-          {showDownloadLink && downloadMutation.data && (
-            <a
-              href={downloadMutation.data.url}
-              download={downloadMutation.data.fileName}
-              target="_blank"
-              rel="noreferrer"
-              data-testid="n6-download-link"
-              className="w-full rounded-[6px] border border-[#eaeaea] bg-white px-8 py-3 text-center text-[14px] font-medium tracking-[-0.03em] text-[#ff6a38] hover:bg-[#faf3ed]"
-            >
-              {downloadMutation.data.fileName} 다운로드
-            </a>
           )}
           {downloadMutation.isError && (
             <p className="text-[12px] text-red-500" data-testid="n6-download-error">

@@ -16,7 +16,7 @@ import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 // ─────────────────────────────────────────────────────────────────
 
 // "선택 항목 내보내기"는 지원 환경(Chromium localhost = secure context)에서 폴더 선택 창을 연다.
-// 이 파일은 기존 다운로드 링크 흐름을 검증하므로 picker 를 없앤 미지원 환경으로 고정한다
+// 이 파일은 미지원 환경의 브라우저 다운로드 흐름을 검증하므로 picker 를 없앤 환경으로 고정한다
 // (폴더 저장 흐름은 e2e/n6-folder-save.spec.ts).
 test.beforeEach(async ({ page }) => {
   await disableDirectoryPicker(page);
@@ -119,11 +119,13 @@ test('render → deliverables → validation → export → download → save �
       new URL(r.url()).pathname === `/jobs/${MOCK_JOB_ID}/export` &&
       new Set(JSON.parse(r.request().postData() ?? '{}').components ?? []).size === 2,
   );
+  // [선택 항목 내보내기] 한 번으로 export → download URL → 브라우저 다운로드까지 이어진다(두 번째 다운로드 버튼 없음)
+  const browserDownload = page.waitForEvent('download', { timeout: 10_000 });
   await page.getByTestId('n6-export-button').click();
   const bundleExportBody = await (await bundleExport).json();
   expect(bundleExportBody.artifactType).toBe('zip');
-
-  await expect(page.getByTestId('n6-download-link')).toBeVisible({ timeout: 10_000 });
+  const started = await browserDownload;
+  await expect(page.getByTestId('n6-download-link')).toHaveCount(0);
 
   // 행 다운로드가 먼저 POST /export 를 한 번 냈으므로, 묶음 내보내기는 그 다음 요청이다
   const exportReq = requests.filter((r) => r.method === 'POST' && r.path === `/jobs/${MOCK_JOB_ID}/export`)[1];
@@ -136,7 +138,7 @@ test('render → deliverables → validation → export → download → save �
     (r) => r.method === 'GET' && new RegExp(`^/jobs/${MOCK_JOB_ID}/exports/\\d+/download$`).test(r.path),
   );
   expect(downloadReq).toBeDefined();
-  const href = await page.getByTestId('n6-download-link').getAttribute('href');
+  const href = started.url();
   expect(href).toContain('mock-presigned');
   expect(href).toContain('export.zip');
 
