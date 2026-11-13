@@ -260,7 +260,10 @@ export function useN5EditSession({
   // 이 effect 가 넣은 박스는 객체 참조로 기억한다 — bboxDrafts 의 값이 그 참조가 아니면 사용자가 만든 박스(resize·move·
   // 글자 배율·번역 저장·실행 취소)로 보고 다시는 건드리지 않는다. 측정기·서버 글꼴이 아직 준비되지 않았으면(fitForText null)
   // 서버 박스를 그대로 두고, 준비 뒤(measurer·isFontReady 변경) 다시 계산한다. 결과가 지금 박스와 같으면 state 를 바꾸지 않는다.
+  // 배치 저장(layoutAdjust 쓰기, 지금은 Mock opt-in·서버 구현 대기)이 켜진 렌더 대상 block 은 건너뛴다 — 그 모드에서는 화면 박스가
+  // 저장된 배치의 정본이라, 표시 보정이 다음 사용자 조작의 저장값(높이)과 「원본으로 되돌리면 null」 정규화에 섞여 들어간다.
   const autoFitBoxesRef = useRef<Map<number, BoundingBox>>(new Map());
+  const skipAutoFitForLayoutWrite = isLayoutAdjustWriteEnabled();
   useEffect(() => {
     if (viewMode !== 'translated' || !measurer) return;
     const owned = autoFitBoxesRef.current;
@@ -270,6 +273,7 @@ export function useN5EditSession({
       if (current === undefined) owned.delete(block.id);
       else if (current !== owned.get(block.id)) continue; // 사용자 박스
       if (fontScaleDrafts.has(block.id)) continue; // 사용자 글자 배율
+      if (skipAutoFitForLayoutWrite && isLayoutRenderTarget(block)) continue; // 배치 저장 모드
       const translationDraft = translationDrafts.get(block.id)?.draft;
       if (translationDraft !== undefined && translationDraft !== block.translatedText) continue; // 편집 중인 글
       const section = sections.find((candidate) => candidate.id === block.sectionId);
@@ -299,7 +303,7 @@ export function useN5EditSession({
       }
       return next ?? drafts;
     });
-  }, [viewMode, measurer, blocks, sections, bboxDrafts, fontScaleDrafts, translationDrafts, fitForText]);
+  }, [viewMode, measurer, blocks, sections, bboxDrafts, fontScaleDrafts, translationDrafts, fitForText, skipAutoFitForLayoutWrite]);
 
   // ── 번역문 ─ 초안·재렌더 task·충돌을 여기 두어 패널의 저장과 실행 취소가 같은 값을 본다
   const updateTranslationDraft = useCallback(
