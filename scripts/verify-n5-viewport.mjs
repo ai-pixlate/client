@@ -20,6 +20,8 @@ import {
   clampPan,
   parseZoomPercentInput,
   computeScrollThumb,
+  computeMinimalRevealPan,
+  REVEAL_MARGIN,
 } from '../lib/n5/viewport.ts';
 
 let pass = 0;
@@ -237,6 +239,46 @@ check('화면 안에 다 들어오면 표시하지 않는다', computeScrollThum
   check('pan 최대면 시작 위치', top.start === 0 && top.size === 0.5);
   check('pan 최소면 끝 위치', Math.abs(bottom.start + bottom.size - 1) < 1e-9);
   check('아주 긴 캔버스도 막대가 보인다', computeScrollThumb(0, 1e6, 900).size === 0.05);
+}
+
+console.log('\ncomputeMinimalRevealPan — 선택 대상 최소 reveal(정중앙 이동 없음)');
+{
+  const usable = { width: 800, height: 600 };
+  const pan = { x: 0, y: 0 };
+  const M = REVEAL_MARGIN;
+  const same = (a, b) => Math.abs(a.x - b.x) < 1e-9 && Math.abs(a.y - b.y) < 1e-9;
+  // A. 완전히 보임 → 같은 pan 객체(이동 없음)
+  check('완전히 보이면 pan 불변(같은 객체)', computeMinimalRevealPan(pan, 1, { left: 100, top: 100, width: 200, height: 40 }, usable) === pan);
+  check('margin 안쪽 가장자리에 붙어 있어도 이동 없음', computeMinimalRevealPan(pan, 1, { left: 0, top: 0, width: 800, height: 600 }, usable) === pan);
+  // B. 조금만 잘림 → 이동 없음
+  check('오른쪽 3px 잘림 → 이동 없음', computeMinimalRevealPan(pan, 1, { left: 603, top: 100, width: 200, height: 40 }, usable) === pan);
+  check('아래 25% 잘림(경계) → 이동 없음', computeMinimalRevealPan(pan, 1, { left: 100, top: 570, width: 200, height: 40 }, usable) === pan);
+  // C. 실제로 벗어남 → 벗어난 쪽 가장자리만 margin 안쪽까지
+  const right = computeMinimalRevealPan(pan, 1, { left: 700, top: 100, width: 200, height: 40 }, usable);
+  check('오른쪽으로 벗어남 → 오른쪽 가장자리를 usable-margin 까지, y 불변', same(right, { x: 800 - M - 900, y: 0 }), JSON.stringify(right));
+  const left = computeMinimalRevealPan(pan, 1, { left: -150, top: 100, width: 200, height: 40 }, usable);
+  check('왼쪽으로 벗어남 → 왼쪽 가장자리를 margin 까지', same(left, { x: M + 150, y: 0 }), JSON.stringify(left));
+  const up = computeMinimalRevealPan(pan, 1, { left: 100, top: -500, width: 200, height: 40 }, usable);
+  check('위로 완전히 벗어남 → 위 가장자리를 margin 까지', same(up, { x: 0, y: M + 500 }), JSON.stringify(up));
+  const down = computeMinimalRevealPan(pan, 1, { left: 100, top: 2000, width: 200, height: 40 }, usable);
+  check('아래로 완전히 벗어남 → 아래 가장자리를 usable-margin 까지', same(down, { x: 0, y: 600 - M - 2040 }), JSON.stringify(down));
+  const downScreenCenter = down.y + 2000 + 20;
+  check('reveal 결과는 정중앙이 아니다', Math.abs(downScreenCenter - 300) > 100, `center=${downScreenCenter}`);
+  // zoom·pan 반영
+  const zoomed = computeMinimalRevealPan({ x: -100, y: -50 }, 2, { left: 500, top: 50, width: 50, height: 20 }, usable);
+  check('zoom 2 → 화면 px 로 계산(x 만 이동)', same(zoomed, { x: 800 - M - (-100 + 1100) + -100, y: -50 }), JSON.stringify(zoomed));
+  // 대각선 — 필요한 축만
+  const diag = computeMinimalRevealPan(pan, 1, { left: 900, top: 700, width: 100, height: 40 }, usable);
+  check('두 축 모두 벗어나면 두 축만 최소 이동', same(diag, { x: 800 - M - 1000, y: 600 - M - 740 }), JSON.stringify(diag));
+  // 큰 대상 — 가까운 가장자리만
+  const bigBelow = computeMinimalRevealPan(pan, 1, { left: 0, top: 500, width: 800, height: 3000 }, usable);
+  check('viewport 보다 큰 section 이 아래쪽에 조금만 보임 → 위 가장자리를 margin 에', same(bigBelow, { x: 0, y: M - 500 }), JSON.stringify(bigBelow));
+  const bigAbove = computeMinimalRevealPan(pan, 1, { left: 0, top: -3000, width: 800, height: 3100 }, usable);
+  check('viewport 보다 큰 section 이 위쪽에 조금만 보임 → 아래 가장자리를 usable-margin 에', same(bigAbove, { x: 0, y: 600 - M - 100 }), JSON.stringify(bigAbove));
+  check('viewport 를 가득 채운 큰 section → 이동 없음', computeMinimalRevealPan(pan, 1, { left: 0, top: -1000, width: 800, height: 3000 }, usable) === pan);
+  check('usable 0 → 이동 없음', computeMinimalRevealPan(pan, 1, { left: 5000, top: 5000, width: 10, height: 10 }, { width: 0, height: 0 }) === pan);
+  // 같은 대상 재요청 — reveal 결과에서 다시 계산하면 이동 없음
+  check('reveal 직후 같은 대상 재요청 → 이동 없음', computeMinimalRevealPan(down, 1, { left: 100, top: 2000, width: 200, height: 40 }, usable) === down);
 }
 
 console.log(`\n결과: PASS ${pass} / FAIL ${fail}\n`);

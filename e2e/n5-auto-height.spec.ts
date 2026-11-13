@@ -245,6 +245,188 @@ test.describe('Auto Height', () => {
   });
 });
 
+// ─────────────────────────────────────────────────────────────────
+// 최초 진입 Auto Height — 선택·편집·resize·글자 배율 없이도 진입 직후 박스가 번역문 높이를 감싼다.
+// 사용자 편집이 아니라 화면 표시 정상화다: 실행 취소 이력·서버 쓰기·저장 안내가 없다(use-n5-edit-session.ts).
+// ─────────────────────────────────────────────────────────────────
+
+/** 조판 글 아래 끝과 overlay 아래 끝(화면 px) */
+const bottoms = (page: Page, id = BLOCK) =>
+  page.evaluate((blockId) => {
+    const text = document.querySelector(`[data-typeset-render="${blockId}"]`)!;
+    const range = document.createRange();
+    range.selectNodeContents(text);
+    const overlay = document.querySelector(`[data-testid="n5-block-overlay-${blockId}"]`)!;
+    return { text: range.getBoundingClientRect().bottom, box: overlay.getBoundingClientRect().bottom };
+  }, id);
+
+/** 박스 높이가 실제 조판 글 높이와 같아질 때까지 기다리고, 글이 박스 밖으로 나가지 않는지 본다 */
+async function expectWrapsText(page: Page, id = BLOCK) {
+  await expect.poll(async () => Math.abs((await boxOf(page, id)).height - (await textHeight(page, id))), { timeout: 10_000 }).toBeLessThanOrEqual(1);
+  const b = await bottoms(page, id);
+  expect(b.text, `block ${id} 글 아래 끝 ≤ 박스 아래 끝`).toBeLessThanOrEqual(b.box + 1);
+}
+
+const LONG = 'A high-concentration vitamin C serum that brightens skin tone, protects against daily stress and keeps moisture all day long.';
+
+/** 화면을 거치지 않고 Mock 서버의 번역문만 바꾼다 — 그 block 에는 세션 초안이 생기지 않는다 */
+async function setServerText(page: Page, id: number, trans1: string) {
+  const status = await page.evaluate(
+    async ([path, text]) => {
+      const res = await fetch(path, { method: 'PATCH', headers: { 'content-type': 'application/json', 'x-pixlate-api-proxy': '1' }, body: JSON.stringify({ trans1: text, revision: 1 }) });
+      return res.status;
+    },
+    [`/jobs/${MOCK_JOB_ID}/blocks/${id}`, trans1] as const,
+  );
+  expect(status).toBe(200);
+}
+
+/** 다른 block(9101) 저장으로 blocks 를 재조회시킨다 */
+async function refetchBlocksViaOtherSave(page: Page) {
+  const editor = page.getByTestId('n5-block-editor-9101');
+  await editor.fill(`${await editor.inputValue()}!`);
+  await page.getByTestId('n5-block-save-9101').click();
+}
+
+test.describe('최초 진입 Auto Height', () => {
+  test('A·B. QA 화면 진입만으로 박스가 글 높이를 감싸고, 위쪽·왼쪽·폭은 서버 박스 그대로이며 이력·쓰기가 없다', async ({ page }) => {
+    const writes = recordWrites(page);
+    await page.goto(QA_URL);
+    await expect(page.getByTestId('n5-qa-badge')).toBeVisible({ timeout: 20_000 });
+    for (const id of [9101, BLOCK, 9103]) await expectWrapsText(page, id);
+    const normalized = await boxOf(page);
+
+    // 「번역 전」(원본 bbox)과 비교 — Auto Height 는 높이만 바꾼다
+    await page.getByTestId('n5-view-mode-original').click();
+    const original = await boxOf(page);
+    near(normalized.left, original.left, 'left', 0.02);
+    near(normalized.top, original.top, 'top', 0.02);
+    near(normalized.width, original.width, 'width', 0.02);
+    expect(normalized.height).not.toBeCloseTo(original.height, 0);
+    await page.getByTestId('n5-view-mode-translated').click();
+    sameBox(await boxOf(page), normalized);
+
+    await expect(page.getByTestId('n5-undo')).toBeDisabled();
+    await expect(page.getByTestId('n5-redo')).toBeDisabled();
+    expect(writes).toEqual([]);
+  });
+
+  test('C·D. 사용자 resize 박스는 보기 전환·재조회 뒤에도 덮어쓰지 않고, 번역문 저장 뒤 Auto Height 는 그대로 동작한다', async ({ page }) => {
+    await page.goto(QA_URL);
+    await expect(page.getByTestId('n5-qa-badge')).toBeVisible({ timeout: 20_000 });
+    await expectWrapsText(page);
+    await page.getByTestId(`n5-block-pin-${BLOCK}`).click();
+    await dragHandle(page, 'e', -120, 0);
+    const resized = await boxOf(page);
+
+    await page.getByTestId('n5-view-mode-original').click();
+    await page.getByTestId('n5-view-mode-translated').click();
+    await refetchBlocksViaOtherSave(page);
+    await expect(page.getByText('재렌더링 중…')).toHaveCount(0, { timeout: 15_000 });
+    sameBox(await boxOf(page), resized);
+
+    // 번역문 저장 — 사용자 폭 그대로 다시 줄바꿈해 높이를 맞춘다
+    const editor = page.getByTestId(`n5-block-editor-${BLOCK}`);
+    await editor.fill(LONG);
+    await page.getByTestId(`n5-block-save-${BLOCK}`).click();
+    await expect.poll(async () => (await boxOf(page)).height).toBeGreaterThan(resized.height);
+    const saved = await boxOf(page);
+    near(saved.width, resized.width);
+    near(saved.top, resized.top);
+    await expectWrapsText(page);
+  });
+
+  test('E. 편집하지 않은 block 의 글자 배율 — 진입 높이에서 다시 재서 글을 감싼다', async ({ page }) => {
+    await page.goto(QA_URL);
+    await expect(page.getByTestId('n5-qa-badge')).toBeVisible({ timeout: 20_000 });
+    await expectWrapsText(page);
+    const start = await boxOf(page);
+    await page.getByTestId(`n5-block-pin-${BLOCK}`).click();
+    await page.getByTestId('n5-font-scale-handle').click();
+    await page.getByTestId('n5-font-scale-increase').click();
+    await expect.poll(async () => (await boxOf(page)).height).toBeGreaterThan(start.height);
+    await expectWrapsText(page);
+  });
+
+  test('좁은 폭·넓은 폭 — 서버 번역문이 길어지면 편집하지 않은 block 도 폭에 맞춰 다시 줄바꿈한 높이가 된다', async ({ page }) => {
+    const WIDE = 9104; // caution, 폭 900
+    const NARROW = 9112; // caution, 폭 500
+    await page.goto(QA_URL);
+    await expect(page.getByTestId('n5-qa-badge')).toBeVisible({ timeout: 20_000 });
+    await expectWrapsText(page, WIDE);
+    await expectWrapsText(page, NARROW);
+    await setServerText(page, WIDE, LONG);
+    await setServerText(page, NARROW, LONG);
+    await refetchBlocksViaOtherSave(page);
+    for (const id of [WIDE, NARROW]) {
+      await expect(page.locator(`[data-typeset-render="${id}"]`)).toContainText('moisture all day long', { timeout: 15_000 });
+      await expectWrapsText(page, id);
+    }
+    // 같은 글·같은 역할 — 좁은 폭이 줄이 더 많고 박스도 더 높다
+    expect(await lineCount(page, NARROW)).toBeGreaterThan(await lineCount(page, WIDE));
+    expect((await boxOf(page, NARROW)).height).toBeGreaterThan((await boxOf(page, WIDE)).height);
+    await expect(page.getByTestId('n5-undo')).toBeEnabled(); // 9101 저장 1단계뿐
+    await page.getByTestId('n5-undo').click();
+    await expect(page.getByTestId('n5-undo')).toBeDisabled();
+  });
+
+  test('F. section 아래 공간이 모자라면 경계까지만 늘리고 넘침을 알린다', async ({ page }) => {
+    await page.goto(QA_URL);
+    await expect(page.getByTestId('n5-qa-badge')).toBeVisible({ timeout: 20_000 });
+    await expectWrapsText(page);
+    await setServerText(page, BLOCK, Array.from({ length: 60 }, () => 'A long translated sentence for overflow check.').join(' '));
+    await refetchBlocksViaOtherSave(page);
+    const sectionHeight = (await page.getByTestId('n5-slice-translated-501').boundingBox())!.height;
+    await expect.poll(async () => {
+      const now = await boxOf(page);
+      return Math.abs(now.top + now.height - sectionHeight);
+    }, { timeout: 15_000 }).toBeLessThanOrEqual(1);
+    expect(await textHeight(page)).toBeGreaterThan((await boxOf(page)).height);
+    await page.getByTestId(`n5-block-pin-${BLOCK}`).click();
+    await expect(page.getByTestId('n5-block-selection')).toHaveAttribute('data-auto-height-overflow', 'true');
+    await expect(page.getByTestId('n5-qa-overflow')).toBeVisible();
+  });
+
+  test('G. 일반 N5(renderInput serverStyle) — 진입 직후 글을 감싸고 이력·쓰기가 없다', async ({ page }) => {
+    const writes = recordWrites(page);
+    await reachN5(page); // N1~N4 를 거치며 생기는 요청은 이 검증 대상이 아니다
+    await expect(page.getByTestId('n5-slice-translated-501')).toHaveAttribute('data-preview-display', 'local-typeset');
+    await expectWrapsText(page);
+    await expect(page.getByTestId('n5-undo')).toBeDisabled();
+    expect(writes.filter((w) => w.includes('/blocks'))).toEqual([]);
+  });
+
+  test('글꼴 로딩 지연 — 준비 전에는 서버 박스를 두고, 준비되면 정확한 높이를 적용한다', async ({ page, context }) => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    // Pretendard CSS 는 local() 을 먼저 써서 설치된 기기에서는 파일 요청이 없다 — local() 을 빼고 글꼴 파일 주소를
+    // 별도 host 로 바꿔, 그 파일 응답만 gate 가 풀릴 때까지 늦춘다(CSS 자체는 바로 보내 화면 진입은 막지 않는다)
+    const FONT_HOST = 'https://font-delay.pixlate.test/';
+    const FONT_BASE = 'https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/';
+    await context.route(/pretendard\.css/, async (route) => {
+      const response = await route.fetch();
+      const css = (await response.text()).replace(/local\('[^']*'\),\s*/g, '').replace(/url\(\.\.\/\.\.\/\.\.\//g, `url(${FONT_HOST}`);
+      await route.fulfill({ response, body: css });
+    });
+    await context.route(`${FONT_HOST}**`, async (route) => {
+      await gate;
+      const real = await route.fetch({ url: route.request().url().replace(FONT_HOST, FONT_BASE) });
+      await route.fulfill({ response: real, headers: { ...real.headers(), 'access-control-allow-origin': '*' } });
+    });
+    await page.goto(QA_URL, { waitUntil: 'commit' }); // 늦춘 글꼴 요청이 load 를 붙잡는다
+    await expect(page.getByTestId(`n5-block-overlay-${BLOCK}`)).toBeVisible({ timeout: 20_000 });
+    await page.waitForTimeout(1000);
+    // 서버 박스(900×200) 비율 그대로 — 대체 글꼴로 먼저 확정하지 않는다
+    const waiting = await boxOf(page);
+    near(waiting.height, (waiting.width * 200) / 900, 'server height', 0.5);
+
+    release();
+    await expectWrapsText(page);
+    expect((await boxOf(page)).height).not.toBeCloseTo(waiting.height, 0);
+    await expect(page.getByTestId('n5-undo')).toBeDisabled();
+  });
+});
+
 test.describe('낮은 block의 글자크기 손잡이', () => {
   const center = async (page: Page, testId: string) => {
     const b = (await page.getByTestId(testId).boundingBox())!;
@@ -297,7 +479,11 @@ test.describe('낮은 block의 글자크기 손잡이', () => {
   test('높은 block은 누르는 영역을 바꾸지 않는다', async ({ page }) => {
     await page.goto(QA_URL);
     await expect(page.getByTestId('n5-qa-badge')).toBeVisible({ timeout: 20_000 });
-    await page.getByTestId(`n5-block-pin-${BLOCK}`).click(); // 표시 높이 80
+    await page.getByTestId(`n5-block-pin-${BLOCK}`).click();
+    // 최초 진입부터 Auto Height 가 적용돼 한 줄 높이다 — 폭을 좁혀 여러 줄(손잡이 기준 48 이상)로 만든다
+    await dragHandle(page, 'e', -560, 0);
+    const overlay = (await page.getByTestId(`n5-block-overlay-${BLOCK}`).boundingBox())!;
+    expect(overlay.height).toBeGreaterThanOrEqual(48);
     const e = await center(page, 'n5-block-handle-e');
     expect(await hitAt(page, e.x + 6.5, e.y)).toBe('n5-block-handle-e');
     expect(await hitAt(page, e.x + 10, e.y)).not.toBe('n5-block-handle-e');

@@ -384,6 +384,139 @@ test.describe('F-CFM-13 양방향 계약 — 우→좌 자동 이동', () => {
   });
 });
 
+// ─────────────────────────────────────────────────────────────────
+// 선택 자동 이동 최소화 — 정중앙으로 보내지 않고 scrollIntoView 'nearest' 처럼 최소 거리만 이동한다.
+// 기준: lib/n5/viewport.ts computeMinimalRevealPan(REVEAL_MARGIN 16, 축별 25% 이하 잘림은 이동 없음).
+// ─────────────────────────────────────────────────────────────────
+
+const REVEAL_MARGIN_PX = 16;
+
+/** 요소의 rect 를 viewport usable 영역(border·padding 안쪽) 기준 좌표로 */
+async function usableRect(page: Page, testId: string) {
+  return page.evaluate((tid) => {
+    const viewport = document.querySelector('[data-testid="n5-viewport"]') as HTMLElement;
+    const el = document.querySelector(`[data-testid="${tid}"]`);
+    if (!viewport || !el) throw new Error(`${tid} 없음`);
+    const v = viewport.getBoundingClientRect();
+    const style = getComputedStyle(viewport);
+    const originX = v.left + viewport.clientLeft + parseFloat(style.paddingLeft);
+    const originY = v.top + viewport.clientTop + parseFloat(style.paddingTop);
+    const usableW = viewport.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    const usableH = viewport.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+    const e = el.getBoundingClientRect();
+    return { left: e.left - originX, top: e.top - originY, right: e.right - originX, bottom: e.bottom - originY, height: e.height, usableW, usableH };
+  }, testId);
+}
+
+/** 캔버스 위에서 plain wheel — pan.y 가 deltaY 만큼 줄어든다(음수면 내용이 아래로) */
+async function wheelPan(page: Page, deltaY: number) {
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  const box = await page.getByTestId('n5-viewport').boundingBox();
+  if (!box) throw new Error('viewport bounding box를 찾지 못했습니다');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  const before = await readTransform(page);
+  await page.mouse.wheel(0, deltaY);
+  await expect.poll(async () => (await readTransform(page)).panY).not.toBe(before.panY);
+}
+
+test.describe('선택 자동 이동 최소화 — 정중앙 강제 이동 없음', () => {
+  test('A. 이미 보이는 block 을 우측에서 선택 → pan·zoom 불변', async ({ page }) => {
+    expect(await isFullyWithinViewport(page, 'n5-block-overlay-9101')).toBe(true);
+    const before = await readTransform(page);
+    await page.getByTestId('n5-block-row-9101').click();
+    await expect(page.getByTestId('n5-block-overlay-9101')).toHaveAttribute('aria-pressed', 'true');
+    await page.waitForTimeout(200);
+    expect(await readTransform(page)).toEqual(before);
+  });
+
+  test('B. 조금만 잘린 block 선택 → 이동 없음(중앙 이동 없음)', async ({ page }) => {
+    await page.getByTestId('n5-block-row-9110').click(); // 화면 안으로 최소 reveal
+    const revealed = await usableRect(page, 'n5-block-overlay-9110');
+    // 아래 가장자리를 viewport 밖으로 block 높이의 약 15% 만 밀어낸다
+    const clip = Math.max(2, Math.floor(revealed.height * 0.15));
+    await wheelPan(page, -(REVEAL_MARGIN_PX + clip));
+    const clipped = await usableRect(page, 'n5-block-overlay-9110');
+    expect(clipped.bottom).toBeGreaterThan(clipped.usableH); // 실제로 조금 잘렸다
+    const before = await readTransform(page);
+
+    await page.getByTestId('n5-block-row-9110').click();
+    await page.waitForTimeout(200);
+    expect(await readTransform(page)).toEqual(before);
+  });
+
+  test('C·D. 화면 밖 block 을 우측 row 에서 선택 → 좌측 highlight + 아래 가장자리만 margin 안쪽까지 최소 reveal(중앙 아님)', async ({ page }) => {
+    expect(await isFullyWithinViewport(page, 'n5-block-overlay-9110')).toBe(false);
+    const before = await readTransform(page);
+
+    await page.getByTestId('n5-block-row-9110').click();
+    await expect(page.getByTestId('n5-block-row-9110')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('n5-block-overlay-9110')).toHaveAttribute('aria-pressed', 'true');
+    await expect.poll(() => isFullyWithinViewport(page, 'n5-block-overlay-9110')).toBe(true);
+
+    const rect = await usableRect(page, 'n5-block-overlay-9110');
+    expect(Math.abs(rect.bottom - (rect.usableH - REVEAL_MARGIN_PX))).toBeLessThanOrEqual(2);
+    const after = await readTransform(page);
+    expect(after.zoom).toBe(before.zoom);
+    expect(after.panX).toBe(before.panX); // 가로는 이미 보였으므로 움직이지 않는다
+  });
+
+  test('E. 같은 block 재클릭 — 보이면 pan 불변, 수동 pan 으로 화면 밖에 보낸 뒤에는 최소 reveal', async ({ page }) => {
+    await page.getByTestId('n5-block-row-9110').click();
+    await expect.poll(() => isFullyWithinViewport(page, 'n5-block-overlay-9110')).toBe(true);
+    const revealed = await readTransform(page);
+
+    await page.getByTestId('n5-block-row-9110').click(); // 보이는 상태에서 재클릭
+    await page.waitForTimeout(200);
+    expect(await readTransform(page)).toEqual(revealed);
+
+    await wheelPan(page, -600); // 내용을 아래로 — 9110 이 viewport 아래로 나간다
+    expect(await isFullyWithinViewport(page, 'n5-block-overlay-9110')).toBe(false);
+
+    await page.getByTestId('n5-block-row-9110').click();
+    await expect.poll(() => isFullyWithinViewport(page, 'n5-block-overlay-9110')).toBe(true);
+    const rect = await usableRect(page, 'n5-block-overlay-9110');
+    expect(Math.abs(rect.bottom - (rect.usableH - REVEAL_MARGIN_PX))).toBeLessThanOrEqual(2);
+    const again = await readTransform(page);
+    expect(Math.abs(again.panY - revealed.panY)).toBeLessThanOrEqual(1);
+  });
+
+  test('사용자가 맞춘 zoom·pan 은 보이는 block 선택으로 덮어쓰지 않는다', async ({ page }) => {
+    await page.getByTestId('n5-zoom-value').fill('130');
+    await page.getByTestId('n5-zoom-value').press('Enter');
+    await expect(page.getByTestId('n5-zoom-value')).toHaveValue('130');
+    await wheelPan(page, 40);
+    expect(await isFullyWithinViewport(page, 'n5-block-overlay-9103')).toBe(true);
+    const before = await readTransform(page);
+    await page.getByTestId('n5-block-overlay-9103').click({ force: true });
+    await expect(page.getByTestId('n5-block-row-9103')).toHaveAttribute('aria-pressed', 'true');
+    await page.waitForTimeout(200);
+    expect(await readTransform(page)).toEqual(before);
+  });
+
+  test('F. section 선택도 같은 원칙 — 보이면 불변, 화면 밖이면 가까운 가장자리만 margin 안쪽까지', async ({ page }) => {
+    const initial = await readTransform(page);
+    await page.getByTestId('n5-section-tag-1').click(); // 첫 section — 이미 화면을 채우고 있다
+    await expect(page.getByTestId('n5-section-tag-1')).toHaveAttribute('aria-pressed', 'true');
+    await page.waitForTimeout(200);
+    expect(await readTransform(page)).toEqual(initial);
+
+    const slice = await usableRect(page, 'n5-slice-translated-505');
+    expect(slice.top).toBeGreaterThan(slice.usableH); // 처음에는 화면 아래에 있다
+    await page.getByTestId('n5-section-tag-5').click();
+    await expect(page.getByTestId('n5-section-tag-5')).toHaveAttribute('aria-pressed', 'true');
+    await expect.poll(async () => (await readTransform(page)).panY).not.toBe(initial.panY);
+
+    const rect = await usableRect(page, 'n5-slice-translated-505');
+    if (rect.height + REVEAL_MARGIN_PX * 2 <= rect.usableH) {
+      expect(Math.abs(rect.bottom - (rect.usableH - REVEAL_MARGIN_PX))).toBeLessThanOrEqual(2);
+    } else {
+      // viewport 보다 큰 section — 가까운 위 가장자리만 맞춘다(section 전체를 가운데로 보내지 않는다)
+      expect(Math.abs(rect.top - REVEAL_MARGIN_PX)).toBeLessThanOrEqual(2);
+    }
+    expect((await readTransform(page)).zoom).toBe(initial.zoom);
+  });
+});
+
 test.describe('번역 수정 — PATCH + revision → rerender polling → blocks/preview 재조회', () => {
   test('trans1 저장 후 revision이 갱신되고, 재렌더 완료 후에만 overflow/autoAdjust가 바뀐다', async ({
     page,
