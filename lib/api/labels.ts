@@ -72,3 +72,9 @@ export const SIGNAL_LABELS: Record<SellerSignalCode, string> = {
 export function getSignalLabel(code: ApiSignalCode): string {
   return (SIGNAL_LABELS as Record<string, string>)[code] ?? '확인 필요';
 }
+
+/** Section.warningBadge(OpenAPI WarningBadge) 표시 문구. 렌더 실패 판별에는 쓰지 않는다(JOB-05 items로 판별) */
+export const SECTION_WARNING_LABELS: Record<'processing_failed' | 'quality_warning', string> = {
+  processing_failed: '인페인팅 처리 실패',
+  quality_warning: '품질 주의',
+};

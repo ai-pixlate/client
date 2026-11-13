@@ -1,6 +1,4 @@
-import Link from 'next/link';
 
-import { StepNav, type StepNavStep } from '../step-nav';
 
 // ─────────────────────────────────────────────────────────────────
 // N2/N4 공용 processing 화면 레이아웃 (Figma 660:4139 "N2 / 분석중" ·
@@ -18,6 +16,8 @@ import { StepNav, type StepNavStep } from '../step-nav';
 // 어느 한쪽에 맞지 않는 값이 새어 들어갈 위험이 있다.
 // ─────────────────────────────────────────────────────────────────
 
+import { ProcessingErrorContent, type ProcessingErrorState } from './processing-error-content';
+
 export type ProcessingStepState = 'done' | 'active' | 'pending';
 
 export interface ProcessingStep {
@@ -34,8 +34,6 @@ export interface ProcessingFailedItem {
 }
 
 export interface ProcessingStageLayoutProps {
-  /** 좌측 StepNav의 현재 단계 — N1~N6 공용 StepNav를 그대로 쓴다. */
-  currentStep: StepNavStep;
   header: {
     title: string;
     description: string;
@@ -63,19 +61,8 @@ export interface ProcessingStageLayoutProps {
   /** 일시정지 버튼은 비활성 상태로만 존재한다(중단 API가 계약에 없음) — 이유 설명 문구. */
   pauseButtonTitle: string;
   failedItems: ProcessingFailedItem[];
-  /** 실패 안내 배너 제목 — 기본은 부분 실패 문구다. */
-  failedItemsTitle?: string;
-}
-
-function ExitIcon() {
-  // Figma("보관함으로 나가기") glyph는 7일 만료 원격 asset이라 커밋
-  // 코드에 하드링크하지 않는다 — N1/N2가 이미 같은 위치·크기의 아이콘을
-  // 이 inline SVG로 재구현해 뒀으므로 그 패턴을 그대로 재사용한다.
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path d="M4 4L12 12M12 4L4 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-    </svg>
-  );
+  /** job 전체 실패(jobStatus=failed)일 때만 넘긴다. 패널 내용을 오류 화면으로 바꾼다. 부분 실패는 failedItems 로 표시한다 */
+  error?: ProcessingErrorState;
 }
 
 function PauseIcon() {
@@ -101,13 +88,13 @@ function StageRow({ no, label, state }: ProcessingStep) {
   const dotClass = isActive ? 'bg-[#ff6a38]' : isDone ? 'bg-[#171717]' : 'border border-[#eaeaea] bg-transparent';
 
   const titleClass = isActive
-    ? "font-['Pretendard:SemiBold'] text-[14px] text-[#171717]"
-    : `font-['Pretendard:Regular'] text-[14px] tracking-[-0.01em] ${isDone ? 'text-[#171717]' : 'text-[#999]'}`;
+    ? "font-semibold leading-[normal] text-[14px] text-[#171717]"
+    : `font-normal leading-[normal] text-[14px] tracking-[-0.01em] ${isDone ? 'text-[#171717]' : 'text-[#999]'}`;
 
   const captionText = isDone ? '완료' : isActive ? '진행 중' : '대기';
   const captionClass = isActive
-    ? "font-['Pretendard:Regular'] text-[12px] text-[#ff6a38]"
-    : "font-['Pretendard:Light'] text-[12px] tracking-[-0.04em] text-[#999]";
+    ? "font-normal leading-[normal] text-[12px] text-[#ff6a38]"
+    : "font-light leading-[normal] text-[12px] tracking-[-0.04em] text-[#999]";
 
   // 68px(Figma 1920 기준)를 상한으로, 패널 자신의 렌더링 폭(cqw)과
   // 세로 크기(cqh) 중 더 작은 쪽에 비례해 줄어든다 — 가로만 넓고 세로가
@@ -126,7 +113,6 @@ function StageRow({ no, label, state }: ProcessingStep) {
 }
 
 export function ProcessingStageLayout({
-  currentStep,
   header,
   statusTagLabel,
   visual,
@@ -136,32 +122,19 @@ export function ProcessingStageLayout({
   progressHint,
   pauseButtonTitle,
   failedItems,
-  failedItemsTitle = '일부 항목을 처리하지 못했습니다',
+  error,
 }: ProcessingStageLayoutProps) {
   return (
     <div className="flex h-full w-full bg-white">
-      {/* 좌측 rail — 나가기 버튼 + StepNav (N1과 같은 패턴 재사용). */}
-      <div className="relative ml-9 h-full w-[44px] shrink-0">
-        <Link
-          href="/"
-          aria-label="보관함으로 나가기"
-          className="absolute top-10 left-1/2 z-20 flex size-10 -translate-x-1/2 shrink-0 items-center justify-center rounded-md border border-[#eaeaea] bg-white text-[#171717] transition-colors hover:bg-gray-50"
-        >
-          <ExitIcon />
-        </Link>
-        <div className="absolute inset-0 pt-[100px] pb-6">
-          <StepNav currentStep={currentStep} />
-        </div>
-      </div>
-
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        {/* 헤더 — Figma("N1 / Header") 그대로 고정값이다. */}
-        <div className="shrink-0 px-10 pt-10 pb-6">
+        {/* 헤더 — Figma("N1 / Header") x140 y60. 패널 왼쪽 +20을 유지하고, 낮은 화면에서는 ✕와 맞추며 위로 올린다.
+            높이 94는 아래 패널 위치 계산(10vh - 94px)의 기준이라 바꾸지 않는다. */}
+        <div className="h-[94px] shrink-0 pt-[clamp(46px,calc(10vh_-_48px),60px)] pr-10 pl-[calc(clamp(0px,calc(6.25vw_-_80px),40px)_+_20px)]">
           <div className="flex items-center gap-4">
-            <h1 className="font-['Pretendard:SemiBold'] text-[20px] tracking-[-0.02em] text-[#171717]">
+            <h1 className="font-semibold leading-[normal] text-[20px] tracking-[-0.02em] text-[#171717]">
               {header.title}
             </h1>
-            <p className="font-['Pretendard:Regular'] text-[14px] tracking-[-0.01em] text-[#707070]">
+            <p className="font-normal leading-[normal] text-[14px] tracking-[-0.01em] text-[#707070]">
               {header.description}
             </p>
           </div>
@@ -223,186 +196,192 @@ export function ProcessingStageLayout({
               Figma 1920×1080 실측값이라 여유 있는 뷰포트에서는 이전과
               동일하게 보인다. */}
           <div className="relative flex h-full min-h-0 min-w-0 w-full [container-type:size] gap-[clamp(60px,4.17vw,80px)] overflow-y-auto rounded-[8px] bg-[#f5f5f5] pt-[clamp(43.5px,3.02vw,58px)] pr-[clamp(45px,3.13vw,60px)] pb-[clamp(43.5px,3.02vw,58px)] pl-[clamp(51px,3.54vw,68px)]">
-            {/* 좌측 — 진행 비주얼. cqw 기준값은 패널의 content-box 폭
-                (border-box 1740 − pl68 − pr60 = 1612, 1920 기준)이다 —
-                container query 단위는 컨테이너 자신의 padding을 제외한
-                content-box만 기준으로 삼는다. 그래서 계수는
-                "Figma값 / 16.12"다. */}
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-[clamp(16px,min(3.350cqw,7cqh),54px)]">
-              <div className="flex max-w-[820px] shrink-0 flex-col gap-[clamp(8px,min(1.241cqw,2.6cqh),20px)]">
-                <div className="flex h-[26px] w-fit items-center justify-center rounded-[6px] bg-[#f5f5f5] px-2">
-                  <p className="font-['Pretendard:Regular'] text-[12px] leading-[14px] text-[#171717]">
-                    {statusTagLabel}
-                  </p>
-                </div>
-                <div className="flex flex-col gap-[clamp(5px,min(0.744cqw,1.55cqh),12px)]">
-                  <p className="font-['Pretendard:SemiBold'] text-[28px] tracking-[-0.015em] text-[#171717]">
-                    {visual.headline}
-                  </p>
-                  <p className="font-['Pretendard:Regular'] text-[14px] tracking-[-0.01em] text-[#999]">
-                    {visual.description}
-                  </p>
-                </div>
-              </div>
+            {error ? (
+              <ProcessingErrorContent error={error} visualLabel={visual.overlayTopLabel} progressPercent={progressPercent} />
+            ) : (
+              <>
+                {/* 좌측 — 진행 비주얼. cqw 기준값은 패널의 content-box 폭
+                    (border-box 1740 − pl68 − pr60 = 1612, 1920 기준)이다 —
+                    container query 단위는 컨테이너 자신의 padding을 제외한
+                    content-box만 기준으로 삼는다. 그래서 계수는
+                    "Figma값 / 16.12"다. */}
+                <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-[clamp(16px,min(3.350cqw,7cqh),54px)]">
+                  <div className="flex max-w-[820px] shrink-0 flex-col gap-[clamp(8px,min(1.241cqw,2.6cqh),20px)]">
+                    <div className="flex h-[26px] w-fit items-center justify-center rounded-[6px] bg-[#f5f5f5] px-2">
+                      <p className="font-normal text-[12px] leading-[14px] text-[#171717]">
+                        {statusTagLabel}
+                      </p>
+                    </div>
+                    <div className="flex flex-col gap-[clamp(5px,min(0.744cqw,1.55cqh),12px)]">
+                      <p className="font-semibold leading-[normal] text-[28px] tracking-[-0.015em] text-[#171717]">
+                        {visual.headline}
+                      </p>
+                      <p className="font-normal leading-[normal] text-[14px] tracking-[-0.01em] text-[#999]">
+                        {visual.description}
+                      </p>
+                    </div>
+                  </div>
 
-              {/* 슬롯 — 헤드라인 블록(shrink-0)을 뺀 좌측 컬럼의 나머지
-                  세로 공간을 그대로 받는다(flex-1 + min-h-0). 이 슬롯
-                  자체는 비율을 주장하지 않는다 — 세로 공간이 얼마가
-                  남든(뷰포트가 짧아도) 그 이상 커지거나 넘치지 않는다. */}
-              <div className="min-h-0 w-full flex-1">
-                {/* 실제 비주얼 박스 — aspect-[1044/520]로 Figma 비율을
-                    "목표"로 유지하되 max-h-full로 위 슬롯 높이를 넘지
-                    않게 캡핑한다. 세로 공간이 넉넉하면 정확히 1044:520로
-                    렌더돼 Figma와 같고(이전과 동일), 부족하면 슬롯 높이
-                    만큼만 줄어든다 — width는 항상 100%를 유지하므로
-                    가로폭은 강제로 줄이지 않는다(회귀 금지 대상: 예전에
-                    max-height로 전체를 눌렀다가 좁은 노트북에서 폭까지
-                    같이 줄어 패널이 Figma보다 훨씬 좁게 떠버린 적이 있다
-                    — 이번엔 폭은 그대로 두고 높이만 캡핑한다).
+                  {/* 슬롯 — 헤드라인 블록(shrink-0)을 뺀 좌측 컬럼의 나머지
+                      세로 공간을 그대로 받는다(flex-1 + min-h-0). 이 슬롯
+                      자체는 비율을 주장하지 않는다 — 세로 공간이 얼마가
+                      남든(뷰포트가 짧아도) 그 이상 커지거나 넘치지 않는다. */}
+                  <div className="min-h-0 w-full flex-1">
+                    {/* 실제 비주얼 박스 — aspect-[1044/520]로 Figma 비율을
+                        "목표"로 유지하되 max-h-full로 위 슬롯 높이를 넘지
+                        않게 캡핑한다. 세로 공간이 넉넉하면 정확히 1044:520로
+                        렌더돼 Figma와 같고(이전과 동일), 부족하면 슬롯 높이
+                        만큼만 줄어든다 — width는 항상 100%를 유지하므로
+                        가로폭은 강제로 줄이지 않는다(회귀 금지 대상: 예전에
+                        max-height로 전체를 눌렀다가 좁은 노트북에서 폭까지
+                        같이 줄어 패널이 Figma보다 훨씬 좁게 떠버린 적이 있다
+                        — 이번엔 폭은 그대로 두고 높이만 캡핑한다).
 
-                    object-cover → object-contain: 박스가 1044:520보다
-                    납작해져도(세로 공간 부족) GIF를 crop하지 않는다 —
-                    항상 전체 프레임이 보인다. 남는 자리(letterbox)는
-                    GIF 자체 배경색과 같은 bg-black으로 채워 실측(코너/
-                    중앙 픽셀 (0,0,0)~(16,16,16))상 거의 티가 나지 않게
-                    한다. */}
-                <div className="relative aspect-[1044/520] max-h-full w-full overflow-hidden rounded-[8px] bg-black">
-                  {/* eslint-disable-next-line @next/next/no-img-element -- 애니메이션 보존을 위해 next/image 최적화 대상에서 제외(GIF) */}
-                  <img
-                    src={visual.src}
-                    alt=""
-                    aria-hidden="true"
-                    className="absolute inset-0 size-full object-contain opacity-[0.97]"
-                  />
-                  <p className="absolute top-7 left-6 whitespace-pre font-['Pretendard:Light'] text-[12px] tracking-[-0.04em] text-white/[58%]">
-                    {visual.overlayTopLabel}
-                  </p>
-                  {/* 9/23 — 흰색 description은 Figma처럼 항상 한 줄이다. 실측
-                      결과 컨테이너 자체가 좁아서 줄바꿈이 나던 게 아니라(우측
-                      GIF 영역 안에서 이 블록이 쓸 수 있는 폭은 여유가 있다)
-                      caption 문구 자체가 Figma 원본보다 길었던 게 원인이라,
-                      문구를 Figma 분량에 맞춰 짧게 정리하고 whitespace-nowrap
-                      으로 줄바꿈 자체를 막았다 — font-size를 줄이거나 <br>을
-                      넣지 않는다. w-max(콘텐츠 실제 폭만큼만)로 고정 max-w가
-                      불필요한 줄바꿈을 만들지 않게 하되, GIF 박스 좌측 끝을
-                      넘어가지 않도록 max-w-[calc(100%-48px)](좌우 6 inset
-                      상쇄)를 안전 상한으로만 둔다. */}
-                  <div className="absolute right-6 bottom-6 flex w-max max-w-[calc(100%-48px)] flex-col items-end gap-2 text-right">
-                    <p className="whitespace-nowrap font-['Pretendard:Medium'] text-[13px] text-[#ff6a38]">
-                      {visual.overlayBottomTitle}
-                    </p>
-                    <p className="whitespace-nowrap font-['Pretendard:Regular'] text-[12px] text-white/[58%]">
-                      {visual.overlayBottomDescription}
-                    </p>
+                        object-cover → object-contain: 박스가 1044:520보다
+                        납작해져도(세로 공간 부족) GIF를 crop하지 않는다 —
+                        항상 전체 프레임이 보인다. 남는 자리(letterbox)는
+                        GIF 자체 배경색과 같은 bg-black으로 채워 실측(코너/
+                        중앙 픽셀 (0,0,0)~(16,16,16))상 거의 티가 나지 않게
+                        한다. */}
+                    <div className="relative aspect-[1044/520] max-h-full w-full overflow-hidden rounded-[8px] bg-black">
+                      {/* eslint-disable-next-line @next/next/no-img-element -- 애니메이션 보존을 위해 next/image 최적화 대상에서 제외(GIF) */}
+                      <img
+                        src={visual.src}
+                        alt=""
+                        aria-hidden="true"
+                        className="absolute inset-0 size-full object-contain opacity-[0.97]"
+                      />
+                      <p className="absolute top-7 left-6 whitespace-pre font-light leading-[normal] text-[12px] tracking-[-0.04em] text-white/[58%]">
+                        {visual.overlayTopLabel}
+                      </p>
+                      {/* 9/23 — 흰색 description은 Figma처럼 항상 한 줄이다. 실측
+                          결과 컨테이너 자체가 좁아서 줄바꿈이 나던 게 아니라(우측
+                          GIF 영역 안에서 이 블록이 쓸 수 있는 폭은 여유가 있다)
+                          caption 문구 자체가 Figma 원본보다 길었던 게 원인이라,
+                          문구를 Figma 분량에 맞춰 짧게 정리하고 whitespace-nowrap
+                          으로 줄바꿈 자체를 막았다 — font-size를 줄이거나 <br>을
+                          넣지 않는다. w-max(콘텐츠 실제 폭만큼만)로 고정 max-w가
+                          불필요한 줄바꿈을 만들지 않게 하되, GIF 박스 좌측 끝을
+                          넘어가지 않도록 max-w-[calc(100%-48px)](좌우 6 inset
+                          상쇄)를 안전 상한으로만 둔다. */}
+                      <div className="absolute right-6 bottom-6 flex w-max max-w-[calc(100%-48px)] flex-col items-end gap-2 text-right">
+                        <p className="whitespace-nowrap font-medium leading-[normal] text-[13px] text-[#ff6a38]">
+                          {visual.overlayBottomTitle}
+                        </p>
+                        <p className="whitespace-nowrap font-normal leading-[normal] text-[12px] text-white/[58%]">
+                          {visual.overlayBottomDescription}
+                        </p>
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
-            </div>
 
-            {/* 구분선 */}
-            <div className="w-px shrink-0 self-stretch bg-[#eaeaea]" />
+                {/* 구분선 */}
+                <div className="w-px shrink-0 self-stretch bg-[#eaeaea]" />
 
-            {/* 우측 — 로그. 폭을 별도 vw 바닥값으로 고정하지 않는다 —
-                패널 자체가 Figma 비율(1740:892)로 크기가 정해지므로,
-                우측 컬럼도 그 패널 폭의 정확히 같은 비율(403/1740 ≈
-                23.16%)만 따라가면 된다. 패널이 비정상적으로 좁아지는
-                경우에 대한 안전장치로만 min-width 300px을 둔다. */}
-            <div className="flex w-[max(300px,25cqw)] shrink-0 flex-col gap-[clamp(16px,min(3.226cqw,6.7cqh),52px)]">
-              <div className="flex max-w-[370px] flex-col gap-[clamp(8px,min(1.489cqw,3.1cqh),24px)]">
-                <p className="font-['Pretendard:Regular'] text-[12px] tracking-[-0.02em] text-[#999]">
-                  {log.sectionLabel}
-                </p>
-                <div className="flex flex-col gap-[clamp(5px,min(0.744cqw,1.55cqh),12px)]">
-                  <h2 className="font-['Pretendard:SemiBold'] text-[20px] tracking-[-0.02em] text-[#171717]">
-                    {log.heading}
-                  </h2>
-                  {/* Figma처럼 항상 한 줄이다 — 긴 동적 문구(N2 analysisProgress)가 줄바꿈되면 아래 5단계·
-                      progress가 통째로 밀리므로 말줄임으로 자른다. 텍스트는 DOM에 그대로 있어 보조기기는
-                      전체를 읽고, 잘린 내용은 title로 확인한다. */}
-                  <p
-                    className="truncate font-['Pretendard:Light'] text-[12px] tracking-[-0.04em] text-[#999]"
-                    title={log.description}
-                    data-testid="processing-log-description"
-                  >
-                    {log.description}
-                  </p>
-                </div>
-              </div>
+                {/* 우측 — 로그. 폭을 별도 vw 바닥값으로 고정하지 않는다 —
+                    패널 자체가 Figma 비율(1740:892)로 크기가 정해지므로,
+                    우측 컬럼도 그 패널 폭의 정확히 같은 비율(403/1740 ≈
+                    23.16%)만 따라가면 된다. 패널이 비정상적으로 좁아지는
+                    경우에 대한 안전장치로만 min-width 300px을 둔다. */}
+                <div className="flex w-[max(300px,25cqw)] shrink-0 flex-col gap-[clamp(16px,min(3.226cqw,6.7cqh),52px)]">
+                  <div className="flex max-w-[370px] flex-col gap-[clamp(8px,min(1.489cqw,3.1cqh),24px)]">
+                    <p className="font-normal leading-[normal] text-[12px] tracking-[-0.02em] text-[#999]">
+                      {log.sectionLabel}
+                    </p>
+                    <div className="flex flex-col gap-[clamp(5px,min(0.744cqw,1.55cqh),12px)]">
+                      <h2 className="font-semibold leading-[normal] text-[20px] tracking-[-0.02em] text-[#171717]">
+                        {log.heading}
+                      </h2>
+                      {/* Figma처럼 항상 한 줄이다 — 긴 동적 문구(N2 analysisProgress)가 줄바꿈되면 아래 5단계·
+                          progress가 통째로 밀리므로 말줄임으로 자른다. 텍스트는 DOM에 그대로 있어 보조기기는
+                          전체를 읽고, 잘린 내용은 title로 확인한다. */}
+                      <p
+                        className="truncate font-light leading-[normal] text-[12px] tracking-[-0.04em] text-[#999]"
+                        title={log.description}
+                        data-testid="processing-log-description"
+                      >
+                        {log.description}
+                      </p>
+                    </div>
+                  </div>
 
-              {/* 항상 고정 5단계를 그린다(Figma "N2 / Step List", N4도
-                  같은 컴포넌트를 재사용) — 데이터 개수만큼 map하지
-                  않는다. 이 목록 높이가 늘/줄면 아래 진행률 블록이 패널
-                  위아래로 밀리므로, 개수를 고정해야 진행률이 항상 같은
-                  위치(패널 하단부)에 남는다. */}
-              <div className="flex flex-col">
-                {steps.map((step) => (
-                  <StageRow key={step.no} no={step.no} label={step.label} state={step.state} />
-                ))}
-              </div>
+                  {/* 항상 고정 5단계를 그린다(Figma "N2 / Step List", N4도
+                      같은 컴포넌트를 재사용) — 데이터 개수만큼 map하지
+                      않는다. 이 목록 높이가 늘/줄면 아래 진행률 블록이 패널
+                      위아래로 밀리므로, 개수를 고정해야 진행률이 항상 같은
+                      위치(패널 하단부)에 남는다. */}
+                  <div className="flex flex-col">
+                    {steps.map((step) => (
+                      <StageRow key={step.no} no={step.no} label={step.label} state={step.state} />
+                    ))}
+                  </div>
 
-              {/* progress 내부 3개 관계(퍼센트↔전체 분석 / 전체 분석↔bar /
-                  bar↔안내문)는 Figma 원본에서 서로 다른 간격이다 — 하나의
-                  공유 gap으로 뭉치지 않고 각 관계를 독립된 clamp로 둔다. */}
-              <div className="flex flex-col">
-                <div className="flex flex-col gap-[clamp(3px,min(0.372cqw,0.78cqh),6px)]">
-                  {/* 퍼센트 숫자와 일시정지 버튼이 Figma에서 같은 줄에
-                      놓여 있어 같은 flex row로 묶는다 — 버튼을 별도
-                      absolute 좌표로 흉내내지 않는다. */}
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-baseline">
-                      <span className="font-['Pretendard:SemiBold'] text-[58px] leading-[64px] text-[#171717]">
-                        {progressPercent}
-                      </span>
-                      <span className="font-['Pretendard:Medium'] text-[18px] tracking-[-0.03em] text-[#999]">%</span>
+                  {/* progress 내부 3개 관계(퍼센트↔전체 분석 / 전체 분석↔bar /
+                      bar↔안내문)는 Figma 원본에서 서로 다른 간격이다 — 하나의
+                      공유 gap으로 뭉치지 않고 각 관계를 독립된 clamp로 둔다. */}
+                  <div className="flex flex-col">
+                    <div className="flex flex-col gap-[clamp(3px,min(0.372cqw,0.78cqh),6px)]">
+                      {/* 퍼센트 숫자와 일시정지 버튼이 Figma에서 같은 줄에
+                          놓여 있어 같은 flex row로 묶는다 — 버튼을 별도
+                          absolute 좌표로 흉내내지 않는다. */}
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-baseline">
+                          <span className="font-semibold text-[58px] leading-[64px] text-[#171717]">
+                            {progressPercent}
+                          </span>
+                          <span className="font-medium leading-[normal] text-[18px] tracking-[-0.03em] text-[#999]">%</span>
+                        </div>
+
+                        {/* 중단 API가 계약에 없어(범위 밖) 클릭해도 아무 일도
+                            하지 않는 버튼을 만들지 않는다. "보여주되 비활성 +
+                            이유 설명"으로 최소 보완한다. */}
+                        <button
+                          type="button"
+                          disabled
+                          aria-disabled="true"
+                          title={pauseButtonTitle}
+                          className="flex size-7 shrink-0 cursor-not-allowed items-center justify-center rounded-[4px] border border-[#eaeaea] bg-white opacity-60"
+                        >
+                          <PauseIcon />
+                        </button>
+                      </div>
+                      <p className="font-light leading-[normal] text-[12px] tracking-[-0.04em] text-[#999]">전체 분석</p>
                     </div>
 
-                    {/* 중단 API가 계약에 없어(범위 밖) 클릭해도 아무 일도
-                        하지 않는 버튼을 만들지 않는다. "보여주되 비활성 +
-                        이유 설명"으로 최소 보완한다. */}
-                    <button
-                      type="button"
-                      disabled
-                      aria-disabled="true"
-                      title={pauseButtonTitle}
-                      className="flex size-7 shrink-0 cursor-not-allowed items-center justify-center rounded-[4px] border border-[#eaeaea] bg-white opacity-60"
+                    {/* 396px은 Figma 1920 실측값을 max-width로만 쓴다 — 우측
+                        panel 폭이 줄어들면 bar도 100%까지 자연스럽게
+                        좁아진다. 위쪽 간격(전체 분석 ↔ bar)은 Figma에서 세
+                        관계 중 가장 크다. */}
+                    <div
+                      className="mt-[clamp(12px,min(2.357cqw,4.9cqh),38px)] h-[3px] w-full max-w-[396px] overflow-hidden rounded-full bg-[rgba(112,112,112,0.16)]"
+                      role="progressbar"
+                      aria-valuenow={progressPercent}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
                     >
-                      <PauseIcon />
-                    </button>
+                      <div
+                        className="h-full rounded-full bg-[#ff6a38] transition-[width] duration-500 ease-out"
+                        style={{ width: `${progressPercent}%` }}
+                      />
+                    </div>
+
+                    <p className="mt-[clamp(8px,min(1.489cqw,3.1cqh),24px)] font-light leading-[normal] text-[12px] tracking-[-0.04em] text-[#999]">
+                      {progressHint}
+                    </p>
                   </div>
-                  <p className="font-['Pretendard:Light'] text-[12px] tracking-[-0.04em] text-[#999]">전체 분석</p>
                 </div>
-
-                {/* 396px은 Figma 1920 실측값을 max-width로만 쓴다 — 우측
-                    panel 폭이 줄어들면 bar도 100%까지 자연스럽게
-                    좁아진다. 위쪽 간격(전체 분석 ↔ bar)은 Figma에서 세
-                    관계 중 가장 크다. */}
-                <div
-                  className="mt-[clamp(12px,min(2.357cqw,4.9cqh),38px)] h-[3px] w-full max-w-[396px] overflow-hidden rounded-full bg-[rgba(112,112,112,0.16)]"
-                  role="progressbar"
-                  aria-valuenow={progressPercent}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                >
-                  <div
-                    className="h-full rounded-full bg-[#ff6a38] transition-[width] duration-500 ease-out"
-                    style={{ width: `${progressPercent}%` }}
-                  />
-                </div>
-
-                <p className="mt-[clamp(8px,min(1.489cqw,3.1cqh),24px)] font-['Pretendard:Light'] text-[12px] tracking-[-0.04em] text-[#999]">
-                  {progressHint}
-                </p>
-              </div>
-            </div>
+              </>
+            )}
           </div>
         </div>
 
         {/* 부분 실패 안내 — Figma엔 없는 상태다. 서버가 실패 task를
             보고하면 숨기지 않고 배너로 알린다. */}
-        {failedItems.length > 0 && (
+        {!error && failedItems.length > 0 && (
           <div className="shrink-0 px-10 pb-6">
             <div className="rounded-lg border border-orange-200 bg-orange-50 p-4">
-              <p className="mb-2 text-sm font-medium text-orange-700">{failedItemsTitle}</p>
+              <p className="mb-2 text-sm font-medium text-orange-700">일부 항목을 처리하지 못했습니다</p>
               <ul className="space-y-1">
                 {failedItems.map((item, index) => (
                   <li key={item.taskId ?? index} className="text-xs text-orange-600">

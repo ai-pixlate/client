@@ -1,6 +1,7 @@
 "use client";
 
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMemo } from 'react';
+import { useQueries, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 import {
   createJob,
@@ -9,6 +10,8 @@ import {
   deleteSourceImage,
   reorderSourceImages,
   patchJob,
+  cancelJob,
+  getSectionDetail,
   getSections,
   updateSectionBucket,
   proceedSections,
@@ -18,6 +21,7 @@ import {
   getN5Preview,
   patchN5Block,
   getJobTasks,
+  isJobNotFoundError,
   confirmN5,
   renderStart,
   getDeliverables,
@@ -28,6 +32,11 @@ import {
   getLibrary,
   getMasterCountries,
   getMasterLanguages,
+  getMasterCategories,
+  getBrands,
+  getBrand,
+  getBrandLogos,
+  ApiRequestError,
 } from '@/lib/api/pixlate';
 import type { ApiJobPatch } from '@/lib/api/job-schema';
 import {
@@ -37,7 +46,15 @@ import {
 } from '@/lib/processing/displayed-progress-storage';
 import type { ApiBlockPatch, ApiConfirmRequest, ApiJobTaskStatus, ApiTextBlock } from '@/lib/api/n5-schema';
 import type { ApiExportRequest, ApiExportArtifactType } from '@/lib/api/n6-schema';
-import type { ApiSection, ApiSectionBucket, ApiSectionList, ApiSectionPatch } from '@/lib/api/n3-schema';
+import { sectionBucketMutationOptions } from '@/lib/queries/section-bucket-mutation';
+import { shouldRetryQuery } from '@/lib/auth/query-retry';
+
+/** GET /tasks 재시도 — 404(없는 작업·미소유 작업)는 0회, 그 밖은 전역 정책(인증 최종 실패 0회 · 일반 오류 1회) */
+function retryTasksQuery(failureCount: number, error: unknown): boolean {
+  if (isJobNotFoundError(error)) return false;
+  return shouldRetryQuery(failureCount, error);
+}
+import type { ApiSection } from '@/lib/api/n3-schema';
 
 // ─────────────────────────────────────────────
 // Query Keys
@@ -58,15 +75,23 @@ export const pixlateKeys = {
   job: (jobId: string) => ['pixlate', 'job', jobId] as const,
   tasks: (jobId: string) => ['pixlate', 'job', jobId, 'tasks'] as const,
   sections: (jobId: string) => ['pixlate', 'job', jobId, 'sections'] as const,
+  // sections 아래에 둔다 — bucket 변경 뒤 sections invalidate가 상세까지 함께 갱신한다
+  sectionDetail: (jobId: string, sectionId: number) => ['pixlate', 'job', jobId, 'sections', sectionId] as const,
   sourceImages: (jobId: string) => ['pixlate', 'job', jobId, 'source-images'] as const,
   n5Blocks: (jobId: string) => ['pixlate', 'job', jobId, 'n5-blocks'] as const,
   n5Preview: (jobId: string) => ['pixlate', 'job', jobId, 'n5-preview'] as const,
   n5Task: (jobId: string, taskId: number | null) => ['pixlate', 'job', jobId, 'n5-task', taskId] as const,
+  // N3 캐시를 이어받지 않는다 — N4에서 바뀐 warningBadge 등을 N5 진입 시 새로 읽는다
+  n5SectionStatus: (jobId: string) => ['pixlate', 'job', jobId, 'n5-section-status'] as const,
   deliverables: (jobId: string) => ['pixlate', 'job', jobId, 'deliverables'] as const,
   validation: (jobId: string) => ['pixlate', 'job', jobId, 'validation'] as const,
   library: () => ['pixlate', 'library'] as const,
   masterCountries: () => ['pixlate', 'master', 'countries'] as const,
   masterLanguages: () => ['pixlate', 'master', 'languages'] as const,
+  masterCategories: () => ['pixlate', 'master', 'categories'] as const,
+  brands: () => ['pixlate', 'brands'] as const,
+  brand: (brandId: number) => ['pixlate', 'brands', brandId] as const,
+  brandLogos: (brandId: number) => ['pixlate', 'brands', brandId, 'logos'] as const,
 };
 
 // ─────────────────────────────────────────────
@@ -114,6 +139,15 @@ export function usePatchJobMutation() {
   });
 }
 
+export function useCancelJobMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (jobId: string) => cancelJob(jobId),
+    // 저장된 작업을 취소하면 보관함 카드도 사라진다
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: pixlateKeys.library() }),
+  });
+}
+
 export function useAnalyzeJobMutation() {
   return useMutation({
     mutationFn: (jobId: string) => analyzeJob(jobId),
@@ -135,15 +169,21 @@ export function useAnalyzeJobMutation() {
 // 서버 응답 그대로 쓴다).
 // ─────────────────────────────────────────────
 
+/**
+ * N6 최종 렌더 task — taskType=render 중 N5 블록 재렌더(text_block)·섹션 렌더(section)가 아닌 항목.
+ * 계약(JOB-05 items)에 「현재/최신」 표시가 없어 여러 시도가 함께 오면: 진행 중(pending·running) 시도가 있으면 그것(새 렌더가 끝나기 전에
+ * 이전 done 을 완료로 보지 않는다), 없으면 taskId(시도 id)가 가장 큰 시도. taskId 증가 순서는 BE 확인 대상이다.
+ */
+export function selectN6RenderTask(items: ApiJobTaskStatus['items']): NonNullable<ApiJobTaskStatus['items']>[number] | undefined {
+  const candidates = (items ?? []).filter((item) => item.taskType === 'render' && item.unitType !== 'text_block' && item.unitType !== 'section');
+  const active = candidates.find((item) => item.status === 'pending' || item.status === 'running');
+  if (active) return active;
+  return candidates.reduce<(typeof candidates)[number] | undefined>((latest, item) => (latest == null || (item.taskId ?? -1) > (latest.taskId ?? -1) ? item : latest), undefined);
+}
+
 function hasActiveN6RenderTask(data: ApiJobTaskStatus): boolean {
-  return (
-    data.items?.some(
-      (item) =>
-        item.taskType === 'render' &&
-        item.unitType !== 'text_block' &&
-        (item.status === 'pending' || item.status === 'running'),
-    ) ?? false
-  );
+  const item = selectN6RenderTask(data.items);
+  return item?.status === 'pending' || item?.status === 'running';
 }
 
 export function useJobTasksQuery(jobId: string, options: { polling?: boolean } = {}) {
@@ -153,12 +193,15 @@ export function useJobTasksQuery(jobId: string, options: { polling?: boolean } =
     queryKey: pixlateKeys.tasks(jobId),
     queryFn: () => getJobTasks(jobId),
     enabled: !!jobId,
+    retry: retryTasksQuery,
     refetchInterval: polling
       ? (query) => {
+          // 작업이 없거나 접근할 수 없음(404) — 종료 상태다. 같은 404 를 2초마다 다시 묻지 않는다
+          if (isJobNotFoundError(query.state.error)) return false;
           const data = query.state.data;
           if (!data) return 2_000; // 첫 응답 대기 중
-          // N2 전체 분석 실패(currentStep=N2 && jobStatus=failed)는 종료 상태라 폴링을 멈춘다
-          if (data.currentStep === 'N2' && data.jobStatus === 'failed') return false;
+          // N2·N4 전체 실패(jobStatus=failed)는 종료 상태라 폴링을 멈춘다
+          if ((data.currentStep === 'N2' || data.currentStep === 'N4') && data.jobStatus === 'failed') return false;
           if (data.currentStep === 'N2' || data.currentStep === 'N4') return 2_000;
           if (data.currentStep === 'N6') return hasActiveN6RenderTask(data) ? 2_000 : false;
           return false;
@@ -193,6 +236,15 @@ export function useSectionsQuery(jobId: string) {
     queryKey: pixlateKeys.sections(jobId),
     queryFn: () => getSections(jobId),
     enabled: !!jobId,
+  });
+}
+
+/** 선택한 섹션 1개의 상세(판정 근거). 카드마다 호출하지 않는다(N+1 금지) — N3 가운데 패널 전용. */
+export function useSectionDetailQuery(jobId: string, sectionId: number | null) {
+  return useQuery({
+    queryKey: pixlateKeys.sectionDetail(jobId, sectionId ?? -1),
+    queryFn: () => getSectionDetail(jobId, sectionId!),
+    enabled: !!jobId && sectionId != null,
   });
 }
 
@@ -252,8 +304,8 @@ export function usePatchN5BlockMutation(jobId: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ blockId, payload }: { blockId: number; payload: ApiBlockPatch }) =>
-      patchN5Block(jobId, blockId, payload),
+    mutationFn: ({ blockId, payload, idempotencyKey }: { blockId: number; payload: ApiBlockPatch; idempotencyKey?: string | null }) =>
+      patchN5Block(jobId, blockId, payload, { idempotencyKey }),
     onSuccess: (response) => {
       const updated = response.block;
       if (!updated) return;
@@ -269,20 +321,84 @@ export function usePatchN5BlockMutation(jobId: string) {
  * (요청 접수 전이거나 이미 종료됨). done/failed/cancelled에 도달하면 polling을
  * 멈춘다 — 호출부가 그 상태를 보고 blocks/preview invalidate 여부를 판단한다.
  */
-export function useN5TaskStatusQuery(jobId: string, taskId: number | null) {
-  return useQuery({
+export function n5TaskStatusQueryOptions(jobId: string, taskId: number | null) {
+  return {
     queryKey: pixlateKeys.n5Task(jobId, taskId),
     queryFn: () => getJobTasks(jobId),
     enabled: taskId != null,
-    refetchInterval: (query) => {
+    retry: retryTasksQuery,
+    refetchInterval: (query: { state: { data?: Awaited<ReturnType<typeof getJobTasks>>; error?: unknown } }) => {
       if (taskId == null) return false;
+      if (isJobNotFoundError(query.state.error)) return false;
       const item = query.state.data?.items?.find((i) => i.taskId === taskId);
       if (!item) return 2000; // 아직 목록에 반영 전 — 계속 polling
       return item.status === 'done' || item.status === 'failed' || item.status === 'cancelled'
         ? false
         : 2000;
     },
+  } as const;
+}
+
+/**
+ * 같은 task 는 같은 query key 를 쓴다 — 저장 응답의 rerenderTaskId 와 /preview render.attempt.taskId 가 같은 번호면 polling 이
+ * 하나로 합쳐진다(use-n5-preview-sync.ts 도 이 옵션을 쓴다).
+ */
+export function useN5TaskStatusQuery(jobId: string, taskId: number | null) {
+  return useQuery(n5TaskStatusQueryOptions(jobId, taskId));
+}
+
+// ─────────────────────────────────────────────
+// N5 — 검수 화면의 실패 상태(JOB-05)
+//
+// page.tsx와 같은 tasks 캐시를 본다. N5에서는 page 쪽 polling이 멈춰 있고, 캐시는 N4에서 넘어오는 순간의 응답일 수
+// 있어 N5 진입 때 한 번 새로 읽는다.
+// ─────────────────────────────────────────────
+
+export function useN5ReviewTasksQuery(jobId: string) {
+  return useQuery({
+    queryKey: pixlateKeys.tasks(jobId),
+    queryFn: () => getJobTasks(jobId),
+    enabled: !!jobId,
+    retry: retryTasksQuery,
+    refetchOnMount: 'always',
   });
+}
+
+/**
+ * N5 섹션 상태용 Section DTO(id별). 목록(SEC-01)의 포함 섹션은 verdicts가 비어 있어, 되살린 섹션만 상세(SEC-02)로
+ * 판정 배지를 읽는다(모든 섹션 상세를 부르지 않는다). 받지 못해도 검수를 막지 않고 그 표시만 생략한다.
+ */
+export function useN5SectionStatusQuery(jobId: string): ReadonlyMap<number, ApiSection> {
+  const list = useQuery({
+    queryKey: pixlateKeys.n5SectionStatus(jobId),
+    queryFn: () => getSections(jobId),
+    enabled: !!jobId,
+    staleTime: 0,
+  });
+  const restoredIds = useMemo(
+    () =>
+      [...(list.data?.include ?? []), ...(list.data?.exclude ?? [])].flatMap((s) =>
+        s.id != null && s.exclusionReason === 'restored_by_user' ? [s.id] : [],
+      ),
+    [list.data],
+  );
+  const detailData = useQueries({
+    queries: restoredIds.map((id) => ({
+      queryKey: pixlateKeys.sectionDetail(jobId, id),
+      queryFn: () => getSectionDetail(jobId, id),
+    })),
+    combine: (results) => results.map((r) => r.data),
+  });
+  return useMemo(() => {
+    const map = new Map<number, ApiSection>();
+    for (const s of [...(list.data?.include ?? []), ...(list.data?.exclude ?? [])]) {
+      if (s.id != null) map.set(s.id, s);
+    }
+    for (const s of detailData) {
+      if (s?.id != null) map.set(s.id, s);
+    }
+    return map;
+  }, [list.data, detailData]);
 }
 
 // ─────────────────────────────────────────────
@@ -303,8 +419,12 @@ export function useConfirmN5Mutation(jobId: string) {
   return useMutation({
     mutationFn: (payload: ApiConfirmRequest) => confirmN5(jobId, payload),
     onSuccess: (job) => {
+      // 새 최종 렌더가 시작됐다 — 이전 렌더의 산출물·검증 결과를 완료 결과처럼 다시 쓰지 않도록 버리고 tasks 를 새로 읽는다
+      queryClient.removeQueries({ queryKey: pixlateKeys.deliverables(jobId) });
+      queryClient.removeQueries({ queryKey: pixlateKeys.validation(jobId) });
       queryClient.setQueryData(pixlateKeys.job(jobId), job);
-      queryClient.invalidateQueries({ queryKey: pixlateKeys.tasks(jobId) });
+      // 이전 tasks 응답(이전 최종 렌더 done 포함)을 잠깐이라도 N6 완료로 보지 않게 비우고 다시 읽는다
+      void queryClient.resetQueries({ queryKey: pixlateKeys.tasks(jobId) });
     },
   });
 }
@@ -441,6 +561,14 @@ export function useMasterLanguagesQuery() {
   });
 }
 
+export function useMasterCategoriesQuery() {
+  return useQuery({
+    queryKey: pixlateKeys.masterCategories(),
+    queryFn: getMasterCategories,
+    staleTime: Infinity,
+  });
+}
+
 // ─────────────────────────────────────────────
 // N3 — 섹션 bucket 변경 (3단계: N3View가 이제 ApiSection/ApiSectionList를
 // 직접 쓰므로 캐시 shape도 실제 {exclude, include}로 맞춘다)
@@ -452,47 +580,54 @@ export function useMasterLanguagesQuery() {
 // optimistic update는 대상 section을 원래 배열에서 빼서 목표 배열로 옮기고
 // bucket 필드만 바꾼다 — exclusionReason/excludedStage는 서버가 파생하는
 // 값이라 FE가 임의로 채워 넣지 않는다. 최신 값은 onSettled의 refetch로 받는다.
-// N5(n5Blocks/n5Preview 캐시)는 이 낙관적 갱신의 영향을 받지 않는다 — 별도 query key.
+//
+// N5도 같은 SEC-03(N3·N5 공용)이라 이 hook을 그대로 쓴다. N5 프리뷰(n5Preview)는
+// 낙관적으로 바꾸지 않는다 — 저장 성공 응답의 bucket/excludedStage만 반영하고,
+// 성공·실패 모두 n5Preview를 다시 받아 서버 정본(displayTop 등 서버 계산값 포함)에
+// 맞춘다(계약: 프리뷰 재조회는 구성 변경 SEC-03·CFM-02 시). 섹션 bucket은 블록·job을
+// 바꾸지 않으므로 n5Blocks/job은 건드리지 않는다.
 // ─────────────────────────────────────────────
 
 export function useUpdateSectionBucketMutation(jobId: string) {
   const queryClient = useQueryClient();
 
-  return useMutation({
-    mutationFn: ({ sectionId, bucket }: { sectionId: number; bucket: ApiSectionBucket }) => {
-      const action: ApiSectionPatch['action'] = bucket === 'include' ? 'restore' : 'exclude';
-      return updateSectionBucket(jobId, sectionId, { action });
-    },
-    onMutate: async ({ sectionId, bucket }) => {
-      await queryClient.cancelQueries({ queryKey: pixlateKeys.sections(jobId) });
-      const previous = queryClient.getQueryData<ApiSectionList>(pixlateKeys.sections(jobId));
+  return useMutation(
+    sectionBucketMutationOptions({
+      queryClient,
+      sectionsKey: pixlateKeys.sections(jobId),
+      previewKey: pixlateKeys.n5Preview(jobId),
+      update: (sectionId, payload) => updateSectionBucket(jobId, sectionId, payload),
+    }),
+  );
+}
 
-      if (previous) {
-        const exclude = previous.exclude ?? [];
-        const include = previous.include ?? [];
-        const moving = exclude.find((s) => s.id === sectionId) ?? include.find((s) => s.id === sectionId);
+// ─────────────────────────────────────────────
+// M2 — 브랜드 정보·로고. 404(없음·미소유)는 다시 시도해도 같아서 재시도하지 않는다.
+// 로고 logoUrl 은 presigned(만료 5분)라 오래 캐시하지 않는다(staleTime 0 — 다시 볼 때 새 URL 을 받는다).
+// ─────────────────────────────────────────────
 
-        if (moving) {
-          const moved: ApiSection = { ...moving, bucket };
-          const withoutMoving = { exclude: exclude.filter((s) => s.id !== sectionId), include: include.filter((s) => s.id !== sectionId) };
-          queryClient.setQueryData<ApiSectionList>(
-            pixlateKeys.sections(jobId),
-            bucket === 'include'
-              ? { exclude: withoutMoving.exclude, include: [...withoutMoving.include, moved] }
-              : { exclude: [...withoutMoving.exclude, moved], include: withoutMoving.include },
-          );
-        }
-      }
+const retryUnlessNotFound = (failureCount: number, error: unknown) =>
+  !(error instanceof ApiRequestError && error.status === 404) && failureCount < 1;
 
-      return { previous };
-    },
-    onError: (_err, _vars, context) => {
-      if (context?.previous) {
-        queryClient.setQueryData(pixlateKeys.sections(jobId), context.previous);
-      }
-    },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: pixlateKeys.sections(jobId) });
-    },
+export function useBrandsQuery(enabled: boolean) {
+  return useQuery({ queryKey: pixlateKeys.brands(), queryFn: getBrands, enabled });
+}
+
+export function useBrandQuery(brandId: number | null) {
+  return useQuery({
+    queryKey: pixlateKeys.brand(brandId ?? -1),
+    queryFn: () => getBrand(brandId as number),
+    enabled: brandId != null,
+    retry: retryUnlessNotFound,
+  });
+}
+
+export function useBrandLogosQuery(brandId: number | null) {
+  return useQuery({
+    queryKey: pixlateKeys.brandLogos(brandId ?? -1),
+    queryFn: () => getBrandLogos(brandId as number),
+    enabled: brandId != null,
+    retry: retryUnlessNotFound,
+    staleTime: 0,
   });
 }

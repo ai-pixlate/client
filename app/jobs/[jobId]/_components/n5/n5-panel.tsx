@@ -1,29 +1,43 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
-import { ApiRequestError } from '@/lib/api/pixlate';
+import { ApiRequestError, getJobTasks } from '@/lib/api/pixlate';
 import type { ApiTextBlock } from '@/lib/api/n5-schema';
 import {
   areAllSectionsExcluded,
   buildAcknowledgedWarnings,
-  getRerenderTaskId,
-  getRevisionConflictLatestBlock,
+  getSectionStatusRowCount,
+  getSignalRows,
+  getTranslationFailure,
+  hasSectionStatus,
+  hasWidthOverflowSignal,
   isAllSectionsExcludedError,
   isInvalidStateError,
-  isRevisionConflict,
   parseApiError,
+  toBlockViewModel,
 } from '@/lib/n5/adapter';
-import type { BlockViewModel, PreviewSectionViewModel, SignalBadge } from '@/lib/n5/adapter';
+import type { BlockTaskFailures, BlockViewModel, PreviewSectionViewModel, RetryTarget, SectionStatusViewModel } from '@/lib/n5/adapter';
+import { PanelSectionStatus, RetryButton, SignalRows } from './n5-section-status';
+import { buildN5ReviewIssues, formatN5ReviewIssueLocation, groupN5ReviewIssues, type N5ReviewIssue } from '@/lib/n5/review-issues';
 import type { N5ViewMode } from '@/lib/n5/viewport';
 import {
+  editTranslationDraft,
+  type TranslationDraft,
+} from '@/lib/n5/failed-drafts';
+import { useModalDialog } from '@/app/_components/use-modal-dialog';
+import {
   pixlateKeys,
-  usePatchN5BlockMutation,
   useN5TaskStatusQuery,
   useConfirmN5Mutation,
 } from '@/lib/queries/pixlate';
 import { ViewModeToggle } from './n5-toolbar';
+import type { N5EditSessionApi } from './use-n5-edit-session';
+
+/** [저장하러 가기]가 재렌더 완료를 기다리는 polling 주기(계약 기본 2초)와 상한(약 3분) */
+const N5_CONFIRM_RERENDER_POLL_MS = 2_000;
+const N5_CONFIRM_RERENDER_MAX_POLLS = 90;
 
 // ─────────────────────────────────────────────────────────────────
 // N5 — 우측 검수 panel (Figma node 544:3168 "N5 검수" 기준)
@@ -87,38 +101,20 @@ import { ViewModeToggle } from './n5-toolbar';
 //   — 이 칩이 어디서 왔는지 추적한 결과 BlockViewModel.roleLabel(=DB role
 //   필드를 한글로만 바꾼 값, lib/n5/adapter.ts BLOCK_ROLE_LABELS)을 그대로
 //   렌더한 것이었다. 데이터 모델(block.role/roleLabel)은 그대로 둔다 —
-//   화면에 안 그릴 뿐이다. signal 경고 칩(SignalTag)은 role 구분과 무관한
-//   기능(translationFailed 등)이라 그대로 유지한다.
+//   화면에 안 그릴 뿐이다.
 // - 원문(SourceField)과 번역문(TranslationEditor/ReadOnlyTranslation)을
 //   한 카드 안에 동시에 쌓아 보여주던 구조를 없앴다. `viewMode`가 이제
 //   "같은 content slot에서 무엇을 보여줄지"를 결정한다 — 'original'이면
 //   원문만, 'translated'면 번역문(+확인 버튼+번역근거)만 보인다. 이
 //   viewMode는 이미 N5View가 소유하던 그 상태 그대로다(새 state 없음).
-// - "번역근거" 영역을 추가했다 — 단, Figma의 실제 문구("뭐 넣자고 했는데
-//   기억이 안남")는 디자이너 미완성 placeholder라 그대로 베끼지 않았다(이미
-//   n5-toolbar.tsx 이전 주석에서도 같은 문제가 지적됨). BlockViewModel에는
-//   "번역근거"에 해당하는 별도 필드가 없다 — 대신 이미 있는
-//   SignalBadge.reason/basisArticle(각 경고 signal이 갖고 있는 실제 근거
-//   텍스트, 지금까지는 SignalTag의 title 툴팁으로만 노출됐었다)을 재사용해,
-//   reason이 있는 badge만 "번역근거" 카드에 모아 보여준다(EvidenceSection).
-//   reason이 있는 badge가 하나도 없으면 이 영역 자체를 렌더하지 않는다 —
-//   빈 placeholder 박스를 새로 지어내지 않는다.
+//   (최신 Figma 1069:10267 기준으로 번역문 아래에 원문 참고 영역을 다시 둔다 — SourceReference. 번역 전 모드는 그대로 원문만 보인다.)
+// - "번역근거" 영역 — BlockViewModel에 번역근거 필드가 없어 값이 없으면 "—"다. signal 사유는 번호 아래 [라벨] 사유
+//   행(Figma 1244:8031, SignalRows)에서 직접 보여 준다(같은 글을 근거 칸에 또 쓰지 않는다).
 // - "US (EN) · N개 텍스트 블록" 줄을 없앴다 — 검수에 필요한 정보가 아니라
 //   디버깅성 메타였고 Figma에도 이 위치에 대응하는 요소가 없다. 이 줄에만
 //   쓰이던 targetCountry/targetLanguage props도 함께 걷어냈다(N5View →
 //   N5Panel로 내려오던 죽은 prop을 남기지 않는다).
 // ─────────────────────────────────────────────────────────────────
-
-function SignalTag({ badge }: { badge: SignalBadge }) {
-  return (
-    <span
-      className="rounded-[4px] border border-[#eaeaea] bg-white px-2 py-0.5 text-[11px] tracking-[-0.02em] text-[#707070]"
-      title={badge.reason ?? undefined}
-    >
-      {badge.label}
-    </span>
-  );
-}
 
 /**
  * block 선택 표시(Figma Card/Number 배지 값 그대로: size-5 원형, 기본/선택 2색).
@@ -179,40 +175,64 @@ function SourceField({ text }: { text: string }) {
 }
 
 /**
- * 번역근거 — Figma(903:7265/7274-7276) 기준: "번역근거" 제목과 내용 박스는
- * 번역문 모드에서 항상 보인다(재정합) — 이전엔 reason 데이터가 있는 badge가
- * 하나도 없으면 영역 전체를 숨겼는데, Figma는 제목 자체를 상시 요소로 둔다.
- * 실제 데이터는 이미 있는 badge(SignalBadge.reason/basisArticle)만 모은다 —
- * BlockViewModel에 번역근거 전용 필드가 없어(위 파일 상단 주석 참고)
- * 지어낸 문구를 넣지 않는다. 데이터가 없으면 Figma의 미완성 placeholder
- * 문구("뭐 넣자고 했는데 기억이 안남")를 그대로 쓰지 않고, 이 파일이 이미
- * 쓰는 빈 값 표기 관례("—", SourceField/ReadOnlyTranslation과 동일)를
- * 따른다.
+ * 번역근거 — Figma(903:7265/7274-7276): 제목과 내용 박스는 번역문 모드에서 항상 보인다. 번역근거 전용 API 필드가
+ * 없어 지어낸 문구를 넣지 않고 "—"로 둔다. 번역이 생성되지 않은 block만 Figma 1244:8238 문구를 보여 준다.
  */
-function EvidenceSection({ badges }: { badges: SignalBadge[] }) {
-  const withReason = badges.filter((b) => b.reason);
+function EvidenceSection({ translationFailed }: { translationFailed: boolean }) {
   return (
-    // 9/23 디테일 보정 — block 내부 그룹(번호/직접 수정하기/번역문/번역근거)이
-    // 서로 조금 더 조밀하게 묶이도록 이전 mt-4(16px)에서 4px 줄였다(mt-3,
-    // 12px). block과 block 사이(아래 BlockRow 목록의 gap)는 반대로 늘려
-    // 그룹 내부/그룹 간 간격 대비를 키운다.
-    <div className="mt-3 flex flex-col gap-2">
-      <p className="text-[14px] tracking-[-0.01em] text-[#707070]">번역근거</p>
-      <div className="rounded-[6px] border border-[#eaeaea] bg-white p-5">
-        {withReason.length > 0 ? (
-          <div className="flex flex-col gap-2">
-            {withReason.map((badge, i) => (
-              <p key={`${badge.code}-${i}`} className="text-[14px] tracking-[-0.01em] text-[#707070]">
-                {badge.reason}
-                {badge.basisArticle ? ` (${badge.basisArticle})` : ''}
-              </p>
-            ))}
-          </div>
+    <div className="mt-4 flex flex-col gap-1">
+      <p className="text-[14px] leading-[normal] tracking-[-0.01em] text-[#707070]">번역근거</p>
+      <div className="rounded-[6px] border border-[#eaeaea] bg-white px-5 py-4 leading-[normal]">
+        {translationFailed ? (
+          <p className="text-[14px] tracking-[-0.01em] text-[#707070]">번역문이 생성되지 않아 번역 근거가 없습니다.</p>
         ) : (
           <p className="text-[14px] tracking-[-0.01em] text-[#999]">—</p>
         )}
       </div>
     </div>
+  );
+}
+
+function AlertGlyph() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" className="shrink-0">
+      <path d="M7.99961 2.80005L14.3996 13.2H1.59961L7.99961 2.80005Z" stroke="#FF6A38" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M8 6.4668V9.73348M8 11.6001H8.008" stroke="#FF6A38" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function InfoGlyph() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" className="shrink-0">
+      <path
+        d="M8.00039 13.5999C11.0932 13.5999 13.6004 11.0927 13.6004 7.9999C13.6004 4.90711 11.0932 2.3999 8.00039 2.3999C4.9076 2.3999 2.40039 4.90711 2.40039 7.9999C2.40039 11.0927 4.9076 13.5999 8.00039 13.5999Z"
+        stroke="#707070"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path d="M8 11.333L8 7.07372M7.99993 5.33301L7.99993 4.99967" stroke="#707070" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/** Figma 「N5 실패문구」 variant(1244:8238) — 번역문 칸 안의 실패·안내 한 줄 */
+function CellFailureMessage({ kind }: { kind: 'translate' | 'verify' | 'preview' | 'overflow' }) {
+  const isInfo = kind === 'overflow';
+  const text = {
+    translate: '번역하지 못했습니다',
+    verify: '검사하지 못했습니다',
+    preview: '미리보기를 갱신하지 못했습니다',
+    overflow: '글자가 넘칩니다 — 짧은 표현이 필요합니다',
+  }[kind];
+  return (
+    <p
+      data-testid={`n5-cell-failure-${kind}`}
+      className={`flex items-center gap-1 text-[12px] leading-[normal] ${isInfo ? 'text-[#707070]' : 'text-[#ff6a38]'}`}
+    >
+      {isInfo ? <InfoGlyph /> : <AlertGlyph />}
+      {text}
+    </p>
   );
 }
 
@@ -236,22 +256,47 @@ function TranslationEditor({
   jobId,
   block,
   onSelect,
+  draftEntry,
+  onDraftUpdate,
+  taskFailures,
+  editSession,
 }: {
   jobId: string;
   block: BlockViewModel;
   onSelect: () => void;
+  taskFailures: BlockTaskFailures;
+  editSession: N5EditSessionApi;
+  /** 이 칸의 미저장 초안(N5Panel 소유 — 이 편집기가 사라졌다 다시 생겨도 남는다). 없으면 서버값 그대로 */
+  draftEntry: TranslationDraft | undefined;
+  onDraftUpdate: (
+    blockId: number,
+    update: (prev: TranslationDraft | undefined) => TranslationDraft | undefined,
+  ) => void;
 }) {
   const queryClient = useQueryClient();
-  const patchMutation = usePatchN5BlockMutation(jobId);
+  const [isSaving, setIsSaving] = useState(false);
 
-  const [draft, setDraft] = useState(block.translatedText);
+  // 초안의 정본은 N5Panel 의 draftEntry 다(원문 보기 전환으로 이 컴포넌트가 unmount 돼도 남아야 한다).
+  // 여기는 마지막으로 맞춘 서버값(syncedText/revision)과 409·오류 표시만 들고, 초안이 없으면 서버값을 보인다.
   const [syncedText, setSyncedText] = useState(block.translatedText);
   const [syncedRevision, setSyncedRevision] = useState(block.revision);
-  const [rerenderTaskId, setRerenderTaskId] = useState<number | null>(null);
-  const [conflictLatest, setConflictLatest] = useState<ApiTextBlock | null>(null);
+  // 재렌더 task 와 실행 취소 쪽 충돌은 편집 세션이 들고 있다 — 저장과 실행 취소가 같은 흐름으로 이어진다
+  const rerenderTaskId = editSession.rerenderTaskByBlock.get(block.id) ?? null;
+  const [saveConflict, setSaveConflict] = useState<ApiTextBlock | null>(null);
+  const conflictLatest = saveConflict ?? editSession.historyConflicts.get(block.id) ?? null;
   const [saveError, setSaveError] = useState<string | null>(null);
 
+  const draft = draftEntry?.draft ?? syncedText;
   const isDirty = draft !== syncedText;
+
+  function setDraft(text: string) {
+    onDraftUpdate(block.id, (prev) => editTranslationDraft(prev, text, syncedText));
+  }
+
+  // 다시 마운트됐을 때 서버값이 그 사이 초안과 같아졌다면 남은 초안 항목을 정리한다(미저장 변경이 아니다).
+  useEffect(() => {
+    if (draftEntry && draftEntry.draft === syncedText) onDraftUpdate(block.id, () => undefined);
+  }, [block.id, draftEntry, syncedText, onDraftUpdate]);
 
   // block.revision이 이 draft가 마지막으로 맞춰졌던 값과 달라졌는데 편집
   // 중(dirty)이 아니면 render 도중 바로 맞춘다 — React의 "prop이 바뀌면 state를
@@ -260,8 +305,7 @@ function TranslationEditor({
   // 생긴다 — 여기서는 그 프레임 지연 없이 즉시 맞춘다.
   if (block.revision !== syncedRevision && !isDirty) {
     setSyncedRevision(block.revision);
-    setSyncedText(block.translatedText);
-    setDraft(block.translatedText);
+    setSyncedText(block.translatedText); // 초안이 없으므로 화면도 이 값을 따른다
   }
 
   const taskQuery = useN5TaskStatusQuery(jobId, rerenderTaskId);
@@ -287,32 +331,45 @@ function TranslationEditor({
     if (activeTaskItem.status === 'done') {
       queryClient.invalidateQueries({ queryKey: pixlateKeys.n5Blocks(jobId) });
       queryClient.invalidateQueries({ queryKey: pixlateKeys.n5Preview(jobId) });
+      queryClient.invalidateQueries({ queryKey: pixlateKeys.tasks(jobId) }); // 이전 재렌더 실패 표시를 지운다
     }
   }, [activeTaskItem, jobId, queryClient]);
 
+  const translationFailure = getTranslationFailure(block.badges);
+  // 이 저장의 재렌더 실패를 우선하고, 없으면 서버 목록(JOB-05)의 실패를 본다
+  const previewFailure: RetryTarget | null = rerenderFailed
+    ? { taskId: rerenderTaskId as number, retryable: activeTaskItem?.retryable === true }
+    : isRerendering
+      ? null
+      : taskFailures.previewFailure;
+  // 고치는 중이거나 재렌더 전이면 이전 넘침 판정을 새 결과처럼 보이지 않는다
+  // 넘침 정본은 최신 서버 결과(isCurrent=true)의 overflow 다. 최신이 아니면 내지 않는다. 이번 계약 키가 없는 응답만 기존 signal 을 쓴다
+  const serverOverflow = block.serverOverflow === 'legacy' ? hasWidthOverflowSignal(block.badges) : block.serverOverflow === true;
+  const showOverflow = serverOverflow && !isDirty && !isRerendering;
+  const hasFailureMessage = translationFailure != null || taskFailures.verifyFailed || previewFailure != null || showOverflow;
+
   async function handleSave() {
-    if (patchMutation.isPending) return; // 저장 중 중복 PATCH 방지
+    if (isSaving) return; // 저장 중 중복 PATCH 방지(다른 서버 저장 중이면 saveTranslation 이 시작하지 않는다)
     setSaveError(null);
-    setConflictLatest(null);
+    setSaveConflict(null);
     handledTaskIdRef.current = null; // 새 저장 사이클이므로 이전 task 완료 처리 기록을 리셋
-    try {
-      const response = await patchMutation.mutateAsync({
-        blockId: block.id,
-        payload: { trans1: draft, revision: block.revision },
-      });
-      setSyncedText(draft);
-      setSyncedRevision(response.block?.revision ?? block.revision);
-      setRerenderTaskId(getRerenderTaskId(response));
-    } catch (err) {
-      if (err instanceof ApiRequestError && err.status === 409) {
-        const parsed = parseApiError(err.body);
-        if (parsed && isRevisionConflict(parsed)) {
-          setConflictLatest(getRevisionConflictLatestBlock(parsed));
-          return;
-        }
-      }
-      setSaveError(err instanceof Error ? err.message : '저장에 실패했습니다.');
+    const sentText = draft;
+    setIsSaving(true);
+    // 저장 경로는 [저장하러 가기]의 미저장 초안 저장과 같다(use-n5-edit-session.ts saveTranslation)
+    const result = await editSession.saveTranslation(block.id, sentText);
+    setIsSaving(false);
+    if (!result.started) return;
+    if (result.ok) {
+      setSyncedText(sentText);
+      setSyncedRevision(result.revision ?? block.revision);
+      return;
     }
+    // 초안은 그대로 두고 실패 표시만 켠다(PM: 번역문 저장 실패는 입력 유지) — 409 포함
+    if (result.conflict) {
+      setSaveConflict(result.conflict);
+      return;
+    }
+    setSaveError(result.error instanceof Error ? result.error.message : '저장에 실패했습니다.');
   }
 
   function handleLoadServerValue() {
@@ -321,10 +378,11 @@ function TranslationEditor({
     queryClient.setQueryData<ApiTextBlock[]>(pixlateKeys.n5Blocks(jobId), (prev) =>
       prev ? prev.map((b) => (b.id === latest.id ? latest : b)) : prev,
     );
-    setDraft(latest.trans1 ?? '');
     setSyncedText(latest.trans1 ?? '');
     setSyncedRevision(latest.revision ?? block.revision);
-    setConflictLatest(null);
+    setSaveConflict(null);
+    editSession.clearHistoryConflict(block.id);
+    onDraftUpdate(block.id, () => undefined); // 사용자가 최신 값을 고른 경우에만 초안을 버린다
   }
 
   return (
@@ -334,10 +392,10 @@ function TranslationEditor({
     // 라벨 자체가 없었다 — 새 인터랙션(클릭→editor 활성화)을 만들지
     // 않고, Figma가 보여준 그대로 "항상 보이는 설명 라벨 + 항상 편집
     // 가능한 박스" 구조로 복구했다. PATCH/revision 로직은 그대로다.
-    <div className="mt-3 flex flex-col gap-1">
-      <p className="text-[16px] tracking-[-0.03em] text-[#171717]">직접 수정하기</p>
+    <div className="mt-4 flex flex-col gap-1">
+      <p className="text-[16px] leading-[normal] tracking-[-0.03em] text-[#171717]">직접 수정하기</p>
       <div className="rounded-[6px] bg-[#f5f5f5] p-5">
-        <p className="text-[12px] font-light tracking-[-0.02em] text-[#999]">번역문</p>
+        <p className="text-[12px] leading-[normal] font-light tracking-[-0.04em] text-[#999]">번역문</p>
         {/* N5 3차 정렬 — 이제 번역문 모드가 기본값이라 이 textarea가 항상
             보이고, row 클릭(가운데 지점)이 이 textarea 위에 떨어지는 경우가
             흔해졌다. 이전엔 여기서 stopPropagation()으로 row의 onSelect
@@ -355,9 +413,19 @@ function TranslationEditor({
           onChange={(e) => setDraft(e.target.value)}
           onFocus={onSelect}
           rows={3}
-          className="mt-1 w-full resize-none bg-transparent text-[16px] tracking-[-0.03em] text-[#171717] outline-none"
+          placeholder={translationFailure ? '번역문을 직접 입력하세요' : undefined}
+          // Figma 1069:10215 — 글 높이만큼 늘어나고 버튼까지 60을 띄운다. 미지원 브라우저는 rows 높이로 표시된다
+          className="mt-1 block w-full resize-none bg-transparent text-[16px] leading-[normal] tracking-[-0.03em] text-[#171717] outline-none [field-sizing:content] placeholder:text-[#999]"
         />
-        <div className="mt-2 flex items-center justify-end gap-2">
+        {hasFailureMessage && (
+          <div data-testid={`n5-block-failures-${block.id}`} className="mt-2 flex flex-col gap-1">
+            {translationFailure && <CellFailureMessage kind="translate" />}
+            {taskFailures.verifyFailed && <CellFailureMessage kind="verify" />}
+            {previewFailure && <CellFailureMessage kind="preview" />}
+            {showOverflow && <CellFailureMessage kind="overflow" />}
+          </div>
+        )}
+        <div className="mt-[60px] flex items-center justify-end gap-2">
           {isRerendering && <span className="text-[11px] text-[#999]">재렌더링 중…</span>}
           <button
             type="button"
@@ -366,16 +434,13 @@ function TranslationEditor({
               e.stopPropagation();
               handleSave();
             }}
-            disabled={!isDirty || patchMutation.isPending}
-            className="rounded-[4px] bg-white px-2.5 py-[5px] text-[12px] text-[#171717] disabled:cursor-not-allowed disabled:opacity-40"
+            disabled={!isDirty || isSaving || editSession.isEditLocked}
+            className="flex h-6 items-center justify-center rounded-[4px] bg-white px-2.5 text-[12px] leading-[normal] tracking-[-0.02em] text-[#171717] disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {patchMutation.isPending ? '저장 중…' : '확인'}
+            {isSaving ? '저장 중…' : '확인'}
           </button>
         </div>
 
-        {rerenderFailed && (
-          <p className="mt-2 text-[11px] text-red-500">재렌더에 실패했습니다. 다시 시도해 주세요.</p>
-        )}
         {saveError && <p className="mt-2 text-[11px] text-red-500">{saveError}</p>}
 
         {conflictLatest && (
@@ -400,7 +465,27 @@ function TranslationEditor({
           </div>
         )}
       </div>
+      {/* Figma 1244:8238·8641 — 재시도 버튼은 번역문 칸 아래에 둔다(RetryButton 주석: 호출 없음) */}
+      {(translationFailure || previewFailure) && (
+        <div className="flex flex-wrap items-center gap-2">
+          {translationFailure && <RetryButton label="다시 시도" testId={`n5-block-translate-retry-${block.id}`} />}
+          {previewFailure && <RetryButton label="미리보기 다시 시도" testId={`n5-block-preview-retry-${block.id}`} />}
+        </div>
+      )}
     </div>
+  );
+}
+
+/** 번역문 아래 원문 참고 영역(Figma 1069:10267). 원문이 없으면 그리지 않는다 */
+function SourceReference({ text }: { text: string }) {
+  if (!text) return null;
+  return (
+    <p
+      data-testid="n5-block-source-reference"
+      className="mt-1 rounded-[6px] bg-[#f5f5f5] p-5 text-[14px] leading-[normal] tracking-[-0.01em] text-[#707070]"
+    >
+      {text}
+    </p>
   );
 }
 
@@ -422,16 +507,28 @@ function BlockRow({
   isSelected,
   onSelect,
   rowRef,
+  draftEntry,
+  onDraftUpdate,
+  taskFailures,
+  editSession,
 }: {
   jobId: string;
   block: BlockViewModel;
+  taskFailures: BlockTaskFailures;
+  editSession: N5EditSessionApi;
   index: number;
   /** content slot(원문/번역문)이 이 값에 따라 통째로 바뀐다 — 동시에 쌓아 보여주지 않는다. */
   viewMode: N5ViewMode;
   isSelected: boolean;
   onSelect: () => void;
   rowRef: (el: HTMLLIElement | null) => void;
+  draftEntry: TranslationDraft | undefined;
+  onDraftUpdate: (
+    blockId: number,
+    update: (prev: TranslationDraft | undefined) => TranslationDraft | undefined,
+  ) => void;
 }) {
+  const signalRows = getSignalRows(block.badges);
   return (
     <li ref={rowRef}>
       {/*
@@ -463,10 +560,14 @@ function BlockRow({
       >
         <div className="flex flex-wrap items-center gap-1.5">
           <BlockNumberBadge index={index} isSelected={isSelected} />
-          {block.badges.map((badge, i) => (
-            <SignalTag key={`${badge.code}-${i}`} badge={badge} />
-          ))}
         </div>
+
+        {/* Figma 1244:8031 — 번호 아래(16) [라벨] 사유 행. 사유는 hover 없이 바로 읽는다 */}
+        {signalRows.length > 0 && (
+          <div className="mt-4">
+            <SignalRows badges={signalRows} testIdPrefix={`n5-block-signal-${block.id}`} />
+          </div>
+        )}
 
         {/* content slot — 원문/번역문을 동시에 쌓지 않는다. 같은 자리에서
             viewMode에 따라 통째로 바뀐다(요청 5번). 번역근거는 Figma(903:7265)
@@ -479,16 +580,25 @@ function BlockRow({
         ) : (
           <>
             {block.editable ? (
-              <TranslationEditor jobId={jobId} block={block} onSelect={onSelect} />
+              <TranslationEditor
+                jobId={jobId}
+                block={block}
+                onSelect={onSelect}
+                draftEntry={draftEntry}
+                onDraftUpdate={onDraftUpdate}
+                taskFailures={taskFailures}
+                editSession={editSession}
+              />
             ) : (
               <ReadOnlyTranslation text={block.translatedText} />
             )}
+            <SourceReference text={block.sourceText} />
             {block.editable && block.autoAdjust.applied && (
               <p className="mt-2 text-[11px] tracking-[-0.02em] text-[#999]">
                 자동 글자 크기 조정 적용됨 ({Math.round(block.autoAdjust.fontScale * 100)}%)
               </p>
             )}
-            <EvidenceSection badges={block.badges} />
+            <EvidenceSection translationFailed={getTranslationFailure(block.badges) != null} />
           </>
         )}
       </div>
@@ -496,10 +606,11 @@ function BlockRow({
   );
 }
 
-/** section.id -> 그 section에 속한 block 목록(빈 section은 제외), sectionOrder 오름차순 */
+/** section.id -> 그 section에 속한 block 목록(block도 상태도 없는 section은 제외), sectionOrder 오름차순 */
 function groupBlocksBySection(
   sections: PreviewSectionViewModel[],
   blocks: BlockViewModel[],
+  sectionStatusById: ReadonlyMap<number, SectionStatusViewModel>,
 ): { sectionId: number; sectionOrder: number; blocks: BlockViewModel[] }[] {
   const bySection = new Map<number, BlockViewModel[]>();
   for (const block of blocks) {
@@ -513,31 +624,44 @@ function groupBlocksBySection(
       sectionOrder: section.sectionOrder,
       blocks: bySection.get(section.id) ?? [],
     }))
-    .filter((group) => group.blocks.length > 0);
+    .filter((group) => group.blocks.length > 0 || hasSectionStatus(sectionStatusById.get(group.sectionId)));
 }
+
+const NO_TASK_FAILURES: BlockTaskFailures = { verifyFailed: false, previewFailure: null };
 
 export function N5Panel({
   jobId,
   sections,
   blocks,
+  sectionStatusById,
+  blockTaskFailuresById,
+  revealRequestSeq,
   viewMode,
   onViewModeChange,
   selectedBlockId,
   selectedSectionId,
   onSelectBlock,
   onSelectSection,
+  editSession,
 }: {
   jobId: string;
   sections: PreviewSectionViewModel[];
   blocks: BlockViewModel[];
+  sectionStatusById: ReadonlyMap<number, SectionStatusViewModel>;
+  blockTaskFailuresById: ReadonlyMap<number, BlockTaskFailures>;
+  /** 같은 대상을 다시 골라도 그 위치를 다시 보여 달라는 요청 횟수(n5-view.tsx) */
+  revealRequestSeq: number;
   viewMode: N5ViewMode;
   onViewModeChange: (mode: N5ViewMode) => void;
   selectedBlockId: number | null;
   selectedSectionId: number | null;
   onSelectBlock: (block: BlockViewModel) => void;
   onSelectSection: (sectionId: number) => void;
+  /** N5 편집 세션(N5Loaded 소유) — 이력·번역문 초안의 정본이다 */
+  editSession: N5EditSessionApi;
 }) {
-  const groups = useMemo(() => groupBlocksBySection(sections, blocks), [sections, blocks]);
+  const groups = useMemo(() => groupBlocksBySection(sections, blocks, sectionStatusById), [sections, blocks, sectionStatusById]);
+  const firstGroupHasStatus = groups.length > 0 && getSectionStatusRowCount(sectionStatusById.get(groups[0].sectionId)) > 0;
 
   const confirmMutation = useConfirmN5Mutation(jobId);
   const queryClient = useQueryClient();
@@ -547,13 +671,132 @@ export function N5Panel({
   // 로드된 sections로 미리 계산한다 — 실패가 확실한 요청을 막을 뿐, FE가
   // 새 조건을 지어내는 게 아니다(lib/n5/adapter.ts의 areAllSectionsExcluded 참고).
   const allSectionsExcluded = areAllSectionsExcluded(sections);
+  // [저장하러 가기] = N5 최종 저장. 확정(POST /confirm)은 모든 N5 변경이 서버 정본에 반영된 뒤에만 보낸다 — BE 계약(release 44e7164):
+  // confirm 은 「confirm 시점에 DB 에 저장 완료된 값」(revision·번역문·layout/bbox·fontScale·style·배경 입력)으로 최종 렌더 입력을 고정한다.
+  // PATCH 를 먼저 보냈다는 것만으로 먼저 처리된다는 보장이 없고(job row lock 을 confirm 이 먼저 잡으면 이전 값으로 확정되고 늦은 PATCH 는
+  // 409 job_not_editable), 여러 block PATCH 는 한 transaction 이 아니다. 그래서 FE 가 저장 순서를 책임진다 — 서버 409 에 기대지 않는다. 확정 전 장벽:
+  //   ① 진행 중인 서버 저장(번역문·섹션·배치 PATCH·서버 실행 취소/다시 실행)이 있으면 시작하지 않는다(버튼 비활성 + 핸들러 재확인)
+  //   ② 서버값과 다른 번역문 초안을 같은 PATCH 경로(saveTranslation)로 하나씩 저장하고 각각의 성공 응답을 기다린다 — 하나라도 실패
+  //      (409·4xx·5xx·네트워크)하면 나머지를 보내지 않고 확정하지 않으며 N5 에 남는다(초안 유지·기존 충돌/실패 표시)
+  //   ③ 이 저장과 앞선 저장의 재렌더 task 가 끝날 때까지 기다린다(2초 polling). 실패·취소로 끝나면 확정하지 않고 기존 실패 표시로 남긴다.
+  //      이것은 N6 반영을 위한 서버 필수 조건이 아니다(confirm 은 진행 중 preview 재렌더를 취소하고 저장된 값으로 최종 렌더를 따로 만든다).
+  //      사용자가 최신 저장 결과의 미리보기를 확인하게 하는 UX 장벽이며, 재렌더 실패 시 진행 여부는 PM/UX 정책 확인 전까지 현재대로 막는다
+  //   ④ /blocks·/preview·/tasks 를 다시 읽고, 그 최신 서버 정본으로 확인 항목과 acknowledgedWarnings 를 만든다
+  // confirm 에 기대 block revision 집합을 보내는 필드는 아직 계약이 없다 — 임의 필드를 만들지 않는다.
+  // 저장하지 못한 번역문을 확인창에서 그대로 넘기던 정책(10/29)은 이번 요구(N5 수정값이 N6 에서 사라지면 안 된다)로 바뀌었다.
+  const isServerSaving = editSession.hasPendingServerEdits || editSession.pendingSectionIds.size > 0;
+  const [isFinalizing, setIsFinalizing] = useState(false);
+  const finalizingRef = useRef(false);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const { translationDrafts, updateTranslationDraft: handleDraftUpdate } = editSession;
+  // [저장하러 가기] 때 확인받을 항목(F-CFM-09). 항목이 없으면 확인창 없이 바로 확정한다. 항목은 열리는 순간의 값으로 고정한다.
+  const [reviewIssues, setReviewIssues] = useState<N5ReviewIssue[] | null>(null);
+  const confirmButtonRef = useRef<HTMLButtonElement>(null);
+  const closeReviewDialog = useCallback(() => setReviewIssues(null), []);
+  const isConfirmBlocked = allSectionsExcluded || confirmMutation.isPending || isFinalizing || isServerSaving;
+
+  /** 최신 /blocks 캐시(서버 정본) — 클릭 시점 closure 의 blocks 가 아니라 재조회 뒤의 값을 쓴다 */
+  function readLatestBlocks(): BlockViewModel[] {
+    const latest = queryClient.getQueryData<ApiTextBlock[]>(pixlateKeys.n5Blocks(jobId));
+    return latest ? latest.map(toBlockViewModel) : blocks;
+  }
+
+  /** ②·③·④ — 성공하면 true. 실패하면 안내를 남기고 false */
+  async function settleServerState(): Promise<boolean> {
+    // ② 미저장 초안 저장(서버값과 다른 초안만)
+    const serverText = new Map(readLatestBlocks().map((block) => [block.id, block.translatedText]));
+    const newTaskIds = new Set<number>();
+    for (const [blockId, entry] of translationDrafts) {
+      if (!serverText.has(blockId) || entry.draft === serverText.get(blockId)) continue;
+      const result = await editSession.saveTranslation(blockId, entry.draft);
+      if (!mountedRef.current) return false;
+      if (!result.started || !result.ok) {
+        const block = blocks.find((candidate) => candidate.id === blockId);
+        if (block) onSelectBlock(block);
+        setConfirmError('저장하지 못한 번역문이 있어 다음 단계로 넘어가지 않았습니다. 표시된 칸을 확인한 뒤 다시 시도해 주세요.');
+        return false;
+      }
+      if (result.rerenderTaskId != null) newTaskIds.add(result.rerenderTaskId);
+    }
+
+    // ③ 재렌더 task 완료 대기 — 이번 저장의 task 와, 클릭 때 아직 끝나지 않은 앞선 저장의 task
+    const knownTaskIds = [...editSession.rerenderTaskByBlock.values()].filter((id): id is number => id != null);
+    const watched = new Set<number>(newTaskIds);
+    for (let attempt = 0; ; attempt += 1) {
+      const list = await queryClient.fetchQuery({ queryKey: pixlateKeys.tasks(jobId), queryFn: () => getJobTasks(jobId), staleTime: 0 });
+      if (!mountedRef.current) return false;
+      const statusOf = (taskId: number) => list.items?.find((item) => item.taskId === taskId)?.status;
+      if (attempt === 0) {
+        for (const taskId of knownTaskIds) {
+          const status = statusOf(taskId);
+          if (status === 'pending' || status === 'running') watched.add(taskId);
+        }
+      }
+      const statuses = [...watched].map(statusOf);
+      if (statuses.some((status) => status === 'failed' || status === 'cancelled')) {
+        setConfirmError('미리보기를 다시 만들지 못한 칸이 있어 다음 단계로 넘어가지 않았습니다. 해당 칸에서 다시 시도해 주세요.');
+        return false;
+      }
+      // 목록에 아직 없는 새 task 도 끝난 것으로 보지 않는다
+      if (statuses.every((status) => status === 'done')) break;
+      if (attempt >= N5_CONFIRM_RERENDER_MAX_POLLS) {
+        setConfirmError('미리보기 재렌더가 끝나지 않아 다음 단계로 넘어가지 않았습니다. 잠시 뒤 다시 시도해 주세요.');
+        return false;
+      }
+      await new Promise((resolve) => setTimeout(resolve, N5_CONFIRM_RERENDER_POLL_MS));
+      if (!mountedRef.current) return false;
+    }
+
+    // ④ 최신 서버 정본 재조회
+    await Promise.all([
+      queryClient.refetchQueries({ queryKey: pixlateKeys.n5Blocks(jobId), exact: true }),
+      queryClient.refetchQueries({ queryKey: pixlateKeys.n5Preview(jobId), exact: true }),
+    ]);
+    return mountedRef.current;
+  }
+
+  async function handleConfirmClick() {
+    // ① 같은 tick 의 연속 클릭·강제 이벤트도 막도록 ref 로 다시 확인한다
+    if (finalizingRef.current || confirmMutation.isPending || allSectionsExcluded || editSession.isServerEditPending()) return;
+    finalizingRef.current = true;
+    setIsFinalizing(true);
+    setConfirmError(null);
+    try {
+      if (!(await settleServerState())) return;
+      // 미저장 초안은 모두 저장됐다 — 저장하지 못한 번역문 항목은 남지 않는다
+      const issues = buildN5ReviewIssues({ sections, blocks: readLatestBlocks(), sectionStatusById, blockTaskFailuresById, failedDraftBlockIds: new Set() });
+      if (issues.length > 0) {
+        setReviewIssues(issues);
+        return;
+      }
+      await handleConfirm();
+    } finally {
+      finalizingRef.current = false;
+      if (mountedRef.current) setIsFinalizing(false);
+    }
+  }
+
+  // [확인하고 저장] — 확정만 실행한다. 이 선택을 서버에 따로 남기지 않는다.
+  function handleReviewContinue() {
+    setReviewIssues(null);
+    void handleConfirm();
+  }
 
   async function handleConfirm() {
-    if (confirmMutation.isPending) return; // 중복 confirm 방지
+    // 확정 직전 재확인 — 진행 중인 서버 저장이 있으면 보내지 않는다(확인창이 열린 사이에 생긴 경우 포함)
+    if (confirmMutation.isPending || editSession.isServerEditPending()) return;
     setConfirmError(null);
     try {
       const response = await confirmMutation.mutateAsync({
-        acknowledgedWarnings: buildAcknowledgedWarnings(blocks),
+        // 최신 서버 정본의 경고 집합(클릭 시점 closure 가 아니다)
+        acknowledgedWarnings: buildAcknowledgedWarnings(readLatestBlocks()),
       });
       // 성공(200)이어도 응답이 실제로 N6를 가리킬 때만 성공으로 다룬다 —
       // 200이라는 이유만으로 N6 이동을 낙관적으로 가정하지 않는다.
@@ -603,10 +846,10 @@ export function N5Panel({
         .get(selectedSectionId)
         ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
-  }, [selectedBlockId, selectedSectionId]);
+  }, [selectedBlockId, selectedSectionId, revealRequestSeq]);
 
   return (
-    // width: Figma(544:3168) 실측 433px(1920 기준, 433/1920≈22.55vw)를 상한으로
+    // width: Figma(544:3168) 실측 433px(1920 기준 22.56vw에서 상한에 닿는다)를 상한으로
     // 쓰고, 하한(360px)은 패널이 지나치게 좁아지는 걸 막는 안전장치다.
     // pt/pb: 패널이 이제 rail과 같은 h-full(세로 전체)이라, Figma가 보여준
     // "패널 타이틀 y=60, 저장 버튼 하단 여백=80"을 패널 자신의 바깥 padding
@@ -614,37 +857,39 @@ export function N5Panel({
     // 같은 계수, ProcessingStageLayout의 pb-[clamp(60px,7.41vh,80px)] 참고).
     <div
       data-testid="n5-panel"
-      className="flex h-full w-[clamp(360px,22.55vw,433px)] shrink-0 flex-col pt-[clamp(24px,5.56vh,60px)] pb-[clamp(40px,7.41vh,80px)]"
+      className="flex h-full w-[var(--n5-panel-width)] shrink-0 flex-col pt-[clamp(24px,5.56vh,60px)] pb-[clamp(40px,7.41vh,80px)] [--n5-panel-width:clamp(360px,22.56vw,433px)]"
     >
       {/* Figma(544:3168)는 타이틀과 번역문/원문 토글이 한 줄에 justify-between으로
           나란히 있다. 국가/언어·블록 개수 메타 줄은 Figma에 대응 요소가 없고
           검수에 필수인 정보도 아니라 뺐다(위 파일 상단 주석 참고). */}
-      <div className="flex shrink-0 items-start justify-between pb-4">
-        <h2 className="text-[18px] font-medium tracking-[-0.03em] text-[#171717]">번역 결과</h2>
+      {/* Figma 1256:6916 — 높이 30, 아래 40 뒤에 목록(y130)이 시작한다 */}
+      {/* 첫 section에 상태가 있으면 Figma 1244:8444처럼 목록이 y123에서 시작한다(아래 33) */}
+      <div
+        className={`flex shrink-0 items-center justify-between ${
+          firstGroupHasStatus ? 'pb-[clamp(16px,3.06vh,33px)]' : 'pb-[clamp(16px,3.7vh,40px)]'
+        }`}
+      >
+        <h2 className="text-[18px] leading-[normal] font-medium tracking-[-0.03em] text-[#171717]">번역 결과</h2>
         <ViewModeToggle mode={viewMode} onChange={onViewModeChange} />
       </div>
 
-      {/* N5 3차 디테일 정렬 — Figma(903:7293 Scroll/Thumb)는 트랙이 거의
-          안 보이고 thumb만 약 3px 얇은 회색이다. 이전엔 thumb을 항상
-          bg-[#eaeaea]로 그려서 스크롤이 필요 없을 때도 늘 보였다 — 기본
-          상태는 thumb도 투명(사실상 안 보임)으로 두고, panel 자신에
-          hover했을 때만 thumb이 #eaeaea로 나타나게 한다. width(3px)는
-          hover 여부와 무관하게 항상 동일해서(scrollbar-width:thin 고정)
-          thumb 색만 바뀔 뿐 트랙 폭 자체가 늘었다 줄었다 하며 카드 폭을
-          흔들지 않는다. Firefox는 scrollbar-color(thumb track)로 같은
-          토글을 맞춘다. */}
-      <div
-        data-testid="n5-panel-body"
-        className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto pr-2 [scrollbar-width:thin] [scrollbar-color:transparent_transparent] hover:[scrollbar-color:#eaeaea_transparent] [&::-webkit-scrollbar]:w-[3px] [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-[2px] [&::-webkit-scrollbar-thumb]:bg-transparent hover:[&::-webkit-scrollbar-thumb]:bg-[#eaeaea]"
-      >
+      {/* 목록만 스크롤하고 저장 버튼은 아래에 남는다. 스크롤바(pix-hover-scroll, hover·focus·스크롤 때만 표시)는 패널
+          오른쪽 바깥 6px에 두어 내용 폭이 Figma 433 그대로다. 아래쪽 페이드는 Figma 1069:10284(높이 72). */}
+      <div className="relative flex min-h-0 flex-1">
+        <div
+          data-testid="n5-panel-body"
+          className="pix-hover-scroll -mr-1.5 min-h-0 flex-1"
+        >
+          <div className="flex w-[var(--n5-panel-width)] flex-col gap-6 pb-[72px]">
         {groups.length === 0 ? (
           <p className="flex flex-1 items-center justify-center text-center text-sm text-[#999]">
             표시할 텍스트 블록이 없습니다.
           </p>
         ) : (
           groups.map((group) => (
-            <div key={group.sectionId} className="flex flex-col gap-3">
+            <div key={group.sectionId} className="flex flex-col gap-7">
               <div
+                className="flex flex-col items-start gap-4"
                 ref={(el) => {
                   if (el) sectionHeaderRefs.current.set(group.sectionId, el);
                   else sectionHeaderRefs.current.delete(group.sectionId);
@@ -655,6 +900,12 @@ export function N5Panel({
                   isSelected={group.sectionId === selectedSectionId}
                   onSelect={() => onSelectSection(group.sectionId)}
                 />
+                {hasSectionStatus(sectionStatusById.get(group.sectionId)) && (
+                  <PanelSectionStatus
+                    sectionOrder={group.sectionOrder}
+                    status={sectionStatusById.get(group.sectionId) as SectionStatusViewModel}
+                  />
+                )}
               </div>
               {/* 9/23 디테일 보정 — block 카드 사이 간격을 이전 gap-4(16px)에서
                   8px 늘려 gap-6(24px)으로 뒀다. block 내부(번호~번역근거)
@@ -680,15 +931,26 @@ export function N5Panel({
                       if (el) blockRowRefs.current.set(block.id, el);
                       else blockRowRefs.current.delete(block.id);
                     }}
+                    draftEntry={translationDrafts.get(block.id)}
+                    onDraftUpdate={handleDraftUpdate}
+                    taskFailures={blockTaskFailuresById.get(block.id) ?? NO_TASK_FAILURES}
+                    editSession={editSession}
                   />
                 ))}
               </ul>
             </div>
           ))
         )}
+          </div>
+        </div>
+        <div
+          aria-hidden="true"
+          data-testid="n5-panel-fade"
+          className="pointer-events-none absolute right-0 bottom-0 left-0 h-[72px] bg-gradient-to-t from-white to-transparent"
+        />
       </div>
 
-      <div className="shrink-0 pt-6">
+      <div className="shrink-0 pt-[clamp(16px,3.7vh,40px)]">
         {confirmError && (
           <p data-testid="n5-confirm-error" className="mb-2 text-[12px] text-red-500">
             {confirmError}
@@ -699,16 +961,155 @@ export function N5Panel({
             모든 섹션이 제외되어 있어 저장할 수 없습니다. 최소 1개 섹션을 포함해 주세요.
           </p>
         )}
+        {/* 저장하지 못한 번역문은 disabled 조건에 넣지 않는다(PM 확정) — 확인창으로만 알린다 */}
         <button
+          ref={confirmButtonRef}
           type="button"
           data-testid="n5-confirm-button"
-          disabled={allSectionsExcluded || confirmMutation.isPending}
+          disabled={isConfirmBlocked}
           title={allSectionsExcluded ? '모든 섹션이 제외되어 있어 확정할 수 없습니다.' : undefined}
-          onClick={handleConfirm}
-          className="w-full rounded-md bg-[#171717] px-8 py-3.5 text-[14px] font-medium tracking-[-0.42px] text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
+          onClick={() => void handleConfirmClick()}
+          className="flex h-[45px] w-full items-center justify-center rounded-md bg-[#171717] px-8 text-[14px] font-medium tracking-[-0.42px] text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
         >
-          {confirmMutation.isPending ? '저장하는 중…' : '저장하러 가기'}
+          {confirmMutation.isPending || isFinalizing ? '저장하는 중…' : '저장하러 가기'}
         </button>
+      </div>
+      {reviewIssues && (
+        <ReviewIssuesDialog
+          issues={reviewIssues}
+          onCancel={closeReviewDialog}
+          onContinue={handleReviewContinue}
+          returnFocusRef={confirmButtonRef}
+        />
+      )}
+    </div>
+  );
+}
+
+/** 확인 항목이 이 개수 이상이면 목록을 5건 높이로 제한하고 목록만 스크롤한다 */
+const N5_REVIEW_SCROLL_FROM = 6;
+/** 묶음(section) 아래 여백 py-4 */
+const N5_REVIEW_ROW_BOTTOM_GAP = 16;
+
+/**
+ * 저장 전 확인창(Figma 1313:12384, F-CFM-09). 폭 518, 최대 높이 710(낮은 화면은 화면 높이 − 32). 항목 1~5건은 내용에 맞추고(HUG), 6건 이상은 목록을 5건 높이로 제한해 목록만 스크롤한다. 동작은 useModalDialog(배경 inert, focus trap, Escape=돌아가기, 닫히면
+ * [저장하러 가기]로 포커스 복귀)를 쓴다. 항목이 많으면 목록만 스크롤하고 버튼은 남는다. 저장하지 못한 번역문은 Figma에 없는
+ * 묶음이라 같은 형식으로 더했다.
+ */
+function ReviewIssuesDialog({
+  issues,
+  onCancel,
+  onContinue,
+  returnFocusRef,
+}: {
+  issues: N5ReviewIssue[];
+  onCancel: () => void;
+  onContinue: () => void;
+  returnFocusRef: RefObject<HTMLButtonElement | null>;
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useModalDialog(dialogRef, { onClose: onCancel, returnFocusRef });
+  const groups = groupN5ReviewIssues(issues);
+
+  // 스크롤 기준은 높이가 아니라 전체 항목 수(issues.length)다 — 1~5건은 내용에 맞추고(HUG), 6건 이상이면 목록을 5번째 항목까지
+  // 보이는 높이로 제한하고 목록만 스크롤한다. 묶음(group) 머리말 수에 따라 5건의 높이가 달라 실제로 그려진 5번째 항목의 아래 끝을 잰다.
+  // 화면 값만 바꾸는 측정이라 state 로 두지 않고 목록 요소에 바로 쓴다.
+  const listRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    if (issues.length < N5_REVIEW_SCROLL_FROM) {
+      list.style.maxHeight = '';
+      return;
+    }
+    const fifth = list.querySelectorAll<HTMLElement>('[data-review-issue]')[N5_REVIEW_SCROLL_FROM - 2];
+    if (!fifth) return;
+    // 5번째 항목 아래 끝 + 묶음 아래 여백(py-4) — 6번째 항목이 목록 아래에서 시작한다
+    const height = fifth.getBoundingClientRect().bottom - list.getBoundingClientRect().top + list.scrollTop + N5_REVIEW_ROW_BOTTOM_GAP;
+    list.style.maxHeight = `${Math.ceil(height)}px`;
+  }, [issues]);
+
+  return (
+    <div data-testid="n5-review-dim" className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(23,23,23,0.4)]">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="n5-review-title"
+        aria-describedby="n5-review-description"
+        tabIndex={-1}
+        data-testid="n5-review-dialog"
+        className="flex max-h-[min(710px,calc(100vh-32px))] w-[518px] max-w-[calc(100vw-32px)] flex-col gap-8 rounded-[8px] bg-white p-8 shadow-[0_8px_12px_rgba(0,0,0,0.08)] outline-none"
+      >
+        <div className="flex min-h-0 flex-1 flex-col gap-4">
+          <div className="flex shrink-0 flex-col items-center gap-1 text-center leading-[normal]">
+            <h2 id="n5-review-title" className="text-[20px] leading-[24px] font-semibold tracking-[-0.02em] text-[#171717]">
+              확인할 항목이 있습니다
+            </h2>
+            <p id="n5-review-description" className="text-[14px] leading-[17px] tracking-[-0.01em] text-[#707070]">
+              해결되지 않은 항목이 남아 있습니다.
+            </p>
+          </div>
+
+          <div className="flex min-h-0 flex-1 flex-col gap-2">
+            <p className="flex shrink-0 items-center justify-end gap-1 leading-[normal]">
+              <span className="text-[12px] tracking-[-0.02em] text-[#707070]">확인 필요</span>
+              <span data-testid="n5-review-total" className="text-[14px] font-medium tracking-[-0.03em] text-[#171717]">
+                {issues.length}건
+              </span>
+            </p>
+            <div ref={listRef} data-testid="n5-review-list" className="pix-hover-scroll min-h-0 flex-1 border-t border-[#eaeaea]">
+              {groups.map((group) => (
+                <section
+                  key={group.kind}
+                  data-testid={`n5-review-group-${group.kind}`}
+                  className="flex items-center justify-between gap-4 border-b border-[#eaeaea] py-4 last:border-b-0 last:pb-0"
+                >
+                  <div className="flex min-w-0 flex-col gap-3">
+                    <h3 className={`text-[18px] leading-[normal] font-medium tracking-[-0.03em] ${group.isWarning ? 'text-[#ff6a38]' : 'text-[#171717]'}`}>
+                      {group.title}
+                    </h3>
+                    {group.issues.map((issue, i) => (
+                      <div key={`${issue.sectionId}-${issue.blockId ?? issue.stageLabel}-${i}`} data-review-issue className="flex items-center gap-3">
+                        <span aria-hidden="true" className={`size-[5px] shrink-0 rounded-full ${group.isWarning ? 'bg-[#ff6a38]' : 'bg-[#707070]'}`} />
+                        <div className="flex min-w-0 flex-col gap-0.5 leading-[normal] text-[#707070]">
+                          <p className="text-[14px] tracking-[-0.01em]">{formatN5ReviewIssueLocation(issue)}</p>
+                          <p className="text-[12px] tracking-[-0.02em]">{issue.message}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <p data-testid={`n5-review-count-${group.kind}`} className="shrink-0 text-[18px] leading-[normal] font-medium tracking-[-0.03em] text-[#171717]">
+                    {group.issues.length}건
+                  </p>
+                </section>
+              ))}
+            </div>
+          </div>
+
+          <p className="shrink-0 bg-[#f5f5f5] p-4 text-center text-[12px] leading-[14px] tracking-[-0.02em] text-[#707070]">
+            확인하고 저장하면 그대로 최종 렌더링 단계로 이동합니다.
+          </p>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-3">
+          <button
+            type="button"
+            onClick={onCancel}
+            data-testid="n5-review-cancel"
+            className="flex h-[45px] min-w-0 flex-1 items-center justify-center rounded-[6px] border border-[#eaeaea] bg-white"
+          >
+            <span className="px-3 text-[14px] leading-[17px] font-medium tracking-[-0.03em] whitespace-nowrap text-[#171717]">돌아가서 확인</span>
+          </button>
+          <button
+            type="button"
+            onClick={onContinue}
+            data-testid="n5-review-continue"
+            className="flex h-[45px] min-w-0 flex-1 items-center justify-center rounded-[6px] bg-[#171717]"
+          >
+            <span className="px-3 text-[14px] leading-[17px] font-medium tracking-[-0.03em] whitespace-nowrap text-white">확인하고 저장</span>
+          </button>
+        </div>
       </div>
     </div>
   );

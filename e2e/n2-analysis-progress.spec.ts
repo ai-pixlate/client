@@ -278,7 +278,7 @@ test.describe('N2 analysisProgress 상세 진행', () => {
     await expect(page.getByText('분석 실패', { exact: true })).toHaveCount(0);
     await expect(page.getByText('이미지 분석에 실패했습니다')).toHaveCount(0);
 
-    await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 25_000 });
+    await expect(page.getByRole('button', { name: '이대로 진행' })).toBeVisible({ timeout: 25_000 });
     const last = responses.at(-1)!;
     expect(last.currentStep).toBe('N3');
     expect(last.hasAnalysisProgress).toBe(false);
@@ -302,17 +302,13 @@ test.describe('N2 analysisProgress 상세 진행', () => {
       },
     ]);
 
-    await expect(page.getByText('분석 실패', { exact: true }).first()).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText('이미지 분석에 실패했습니다')).toBeVisible();
-    await expect(page.getByText('이미지 분석을 완료하지 못했습니다.', { exact: true }).first()).toBeVisible();
+    await expect(page.getByTestId('processing-error')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('오류', { exact: true })).toBeVisible();
+    await expect(page.getByText('분석이 중단되었습니다')).toBeVisible();
+    await expect(page.getByText('이미지 분석 중 오류가 발생했습니다.')).toBeVisible();
+    // 진행 안내와 자동 이동 문구는 남기지 않는다
     await expect(page.getByText('상세페이지의 구조와 문맥을 읽고 있습니다.')).toHaveCount(0);
-    await expect(page.getByText('분석을 완료하지 못해 다음 단계로 자동 이동하지 않습니다.')).toBeVisible();
     await expect(page.getByText('분석이 끝나면 섹션 확인 단계로 자동 이동합니다.')).toHaveCount(0);
-    // 서버가 준 판정 실패 값은 그대로 보인다
-    await expect(logCaption(page)).toHaveText('판정 대상 5개 · 완료 2 · 자동 제외 0 · 진행 중 0 · 대기 0 · 실패 1 · 취소 2');
-    // 5단계 목록은 그대로 있고, 실패 상태에서 "진행 중" 행을 남기지 않는다
-    await expectFigmaFiveRows(page);
-    expect(Object.values((await rowsLog(page)).at(-1)!)).not.toContain('진행 중');
     // 화면은 N2 그대로(서버 currentStep 정본)
     await expect(page.getByRole('heading', { name: '이미지 분석' })).toBeVisible();
 
@@ -324,7 +320,7 @@ test.describe('N2 analysisProgress 상세 진행', () => {
     expect(responses.length, '실패 응답 뒤 추가 polling 없음').toBe(countAtFailure);
   });
 
-  test('G-2. analysisProgress 가 없는 레거시 실패 응답에서도 5단계 중 "진행 중" 행을 남기지 않는다', async ({ page }) => {
+  test('G-2. analysisProgress 가 없는 레거시 실패 응답도 전체 실패 화면으로 바뀌고 진행 중 표시를 남기지 않는다', async ({ page }) => {
     await setup(page, [
       { progress: 0, stages: stages('running', 'pending', 'pending'), items: [item(9001, 'ocr', 'job', 'running')] },
       // OpenAPI JobTasksN2Failed 에서 analysisProgress 만 뺀 응답
@@ -336,12 +332,11 @@ test.describe('N2 analysisProgress 상세 진행', () => {
       },
     ]);
 
-    await expect(page.getByText('이미지 분석에 실패했습니다')).toBeVisible({ timeout: 15_000 });
-    await expectFigmaFiveRows(page);
-    await expect(logCaption(page)).toHaveText(DEFAULT_LOG_CAPTION);
+    await expect(page.getByTestId('processing-error')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('이미지 분석 중 오류가 발생했습니다.')).toBeVisible();
     const rows = await rowsLog(page);
     expect(rows.some((r) => Object.values(r).includes('진행 중')), '실패 전에는 진행 중 행이 있었다').toBe(true);
-    expect(Object.values(rows.at(-1)!), JSON.stringify(rows)).not.toContain('진행 중');
+    await expect(page.getByText('진행 중', { exact: true })).toHaveCount(0);
   });
 
   test('H. analysisProgress 를 보이다 N3 로 넘어가면 완료 표시를 거쳐 N3 로 이동한다', async ({ page }) => {
@@ -361,7 +356,7 @@ test.describe('N2 analysisProgress 상세 진행', () => {
     ]);
 
     await expect(logCaption(page)).toHaveText('판정 대상 3개 · 완료 1 · 자동 제외 0 · 진행 중 1 · 대기 1');
-    await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 25_000 });
+    await expect(page.getByRole('button', { name: '이대로 진행' })).toBeVisible({ timeout: 25_000 });
     expect(responses.at(-1)?.currentStep).toBe('N3');
     // 마지막 poll 에 analysisProgress 가 없어도 N3 전환이면 완료 표시(5단계 전부 완료)를 그린 뒤 넘어간다
     const rows = await rowsLog(page);
@@ -612,7 +607,7 @@ test.describe('N2 로딩 표현', () => {
   test('L-4. 낮은 % 에서 바로 currentStep=N3 가 와도 100 까지 오르는 완료 표시를 보고 N3 로 넘어간다', async ({ page }) => {
     const rec = await recordProcessing(page);
     await setup(page, [ocr(S1), merge(S1), { progress: 1, stages: stages('done', 'done', 'done'), items: [item(9001, 'ocr', 'job', 'done')], advance: true }]);
-    await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole('button', { name: '이대로 진행' })).toBeVisible({ timeout: 20_000 });
 
     const timeline = formatTimeline(rec);
     const snaps = processingSnaps(rec, N2_TITLE, 'N3');
@@ -635,7 +630,7 @@ test.describe('N2 로딩 표현', () => {
   test('M-1. N3 응답 뒤 완료 표시 동안 상태 태그·LOG·안내가 모두 완료를 말하고, 그 전에는 완료라고 하지 않는다', async ({ page }) => {
     const rec = await recordProcessing(page);
     await setup(page, [ocr(S1), merge(S1), { progress: 1, stages: stages('done', 'done', 'done'), items: [item(9001, 'ocr', 'job', 'done')], advance: true }]);
-    await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole('button', { name: '이대로 진행' })).toBeVisible({ timeout: 20_000 });
 
     const timeline = formatTimeline(rec);
     expectCompletionPresentation(rec, N2_TITLE, 'N3', timeline);
@@ -652,7 +647,7 @@ test.describe('N2 로딩 표현', () => {
     test.setTimeout(60_000);
     const rec = await recordProcessing(page);
     await setup(page, []);
-    await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole('button', { name: '이대로 진행' })).toBeVisible({ timeout: 30_000 });
 
     const timeline = formatTimeline(rec);
     const snaps = processingSnaps(rec, N2_TITLE, 'N3');
@@ -881,7 +876,7 @@ test.describe('N2 대기·재시도·failed 동안 표시 % 일시정지', () =>
     await setup(page, [ocr, ...repeat(LOCAL_JUDGE_EXCLUDED_TICK, 3), N3_ADVANCE]);
     await expect(logCaption(page)).toHaveText(LOCAL_JUDGE_EXCLUDED_LINE, { timeout: 10_000 });
     await expectRows(page, rowsOf(D, D, D, A, A));
-    await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 25_000 });
+    await expect(page.getByRole('button', { name: '이대로 진행' })).toBeVisible({ timeout: 25_000 });
 
     const timeline = formatTimeline(rec);
     const snaps = processingSnaps(rec, N2_TITLE, 'N3');
@@ -899,7 +894,7 @@ test.describe('N2 대기·재시도·failed 동안 표시 % 일시정지', () =>
   test('P-8. waiting 으로 멈춘 낮은 숫자에서 N3 가 오면 그 숫자에서 100 까지 오르는 완료 표시 뒤 N3 로 넘어간다', async ({ page }) => {
     const rec = await recordProcessing(page);
     await setup(page, [ocr, ocr, analyzePaused('waiting'), analyzePaused('waiting'), N3_ADVANCE]);
-    await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 25_000 });
+    await expect(page.getByRole('button', { name: '이대로 진행' })).toBeVisible({ timeout: 25_000 });
 
     const timeline = formatTimeline(rec);
     const snaps = processingSnaps(rec, N2_TITLE, 'N3');
@@ -998,7 +993,7 @@ test.describe('N2 대기·재시도·failed 동안 표시 % 일시정지', () =>
   test('P-15. [방어] 상세 failed 와 jobStatus 가 불일치해 멈춘 낮은 숫자에서 N3 가 오면 그 숫자에서 100 까지 오르는 완료 표시 뒤 N3 로 넘어간다', async ({ page }) => {
     const rec = await recordProcessing(page);
     await setup(page, [ocr, ocr, judgeFailed, judgeFailed, N3_ADVANCE]);
-    await expect(page.getByRole('button', { name: '번역 시작' })).toBeVisible({ timeout: 25_000 });
+    await expect(page.getByRole('button', { name: '이대로 진행' })).toBeVisible({ timeout: 25_000 });
 
     const timeline = formatTimeline(rec);
     const snaps = processingSnaps(rec, N2_TITLE, 'N3');

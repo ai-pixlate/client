@@ -1,4 +1,7 @@
-import { ensureBackendSession, getAccessToken, isApiMockingEnabled, setAccessToken } from '@/lib/api/session';
+import { ensureBackendSession } from '@/lib/api/session';
+import { fetchWithSessionRecovery } from '@/lib/auth/authorized-request';
+import { getAuthMode } from '@/lib/auth/capability';
+import { getAccessToken, setAccessToken } from '@/lib/auth/session-store';
 import type { ApiBlockPatch, ApiBlockPatchResponse, ApiConfirmRequest, ApiJob, ApiJobTaskStatus, ApiReviewPreview, ApiTextBlock } from '@/lib/api/n5-schema';
 import type { ApiAcceptedTask, ApiJobPatch, ApiSourceImageUploadResult } from '@/lib/api/job-schema';
 import type { ApiSection, ApiSectionList, ApiSectionPatch, ApiSourceImage } from '@/lib/api/n3-schema';
@@ -13,7 +16,8 @@ import type {
   ApiLibraryCard,
   ApiExportArtifactType,
 } from '@/lib/api/n6-schema';
-import type { ApiCountry, ApiLanguage } from '@/lib/api/master-schema';
+import type { ApiCategory, ApiCountry, ApiLanguage } from '@/lib/api/master-schema';
+import type { ApiBrand, ApiBrandLogo, ApiBrandUpdate } from '@/lib/api/brand-schema';
 
 // ─────────────────────────────────────────────
 // 공통 fetch 헬퍼
@@ -37,10 +41,9 @@ const API_PROXY_HEADER = 'x-pixlate-api-proxy';
 function withProxyHeader(init?: RequestInit): RequestInit {
   const headers = new Headers(init?.headers);
   headers.set(API_PROXY_HEADER, '1');
-  if (!isApiMockingEnabled()) {
-    const token = getAccessToken();
-    if (token) headers.set('Authorization', `Bearer ${token}`);
-  }
+  // access 는 메모리(lib/auth/session-store.ts)에만 있다. Mock 에서도 같은 헤더를 실어 refresh 흐름을 MSW 로 검증한다
+  const token = getAccessToken();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
   return { ...init, headers };
 }
 
@@ -55,14 +58,19 @@ function errorMessageFromBody(body: unknown, status: number): string {
 }
 
 async function authorizedFetch(url: string, init?: RequestInit): Promise<Response> {
-  await ensureBackendSession();
-  let res = await fetch(url, withProxyHeader(init));
-  if (res.status === 401 && !isApiMockingEnabled()) {
-    setAccessToken(null);
+  if (getAuthMode() === 'dev-login') {
     await ensureBackendSession();
-    res = await fetch(url, withProxyHeader(init));
+    let res = await fetch(url, withProxyHeader(init));
+    if (res.status === 401) {
+      setAccessToken(null);
+      await ensureBackendSession();
+      res = await fetch(url, withProxyHeader(init));
+    }
+    return res;
   }
-  return res;
+
+  // 'session' 모드 — 401 이면 refresh → /auth/me 로 같은 계정임을 확인한 뒤에만 원 요청을 다시 보낸다(최대 1회)
+  return fetchWithSessionRecovery(() => fetch(url, withProxyHeader(init)));
 }
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
@@ -153,6 +161,15 @@ export async function deleteSourceImage(jobId: string, sourceImageId: number): P
   if (!res.ok) throw new ApiRequestError(res.status, await res.json().catch(() => null));
 }
 
+/**
+ * 작업 취소 (API-JOB-04, DELETE /jobs/{jobId} · 204 본문 없음). 서버가 status=archived로 바꾸고 종속 리소스를
+ * 정리한다. 진입점은 S0 ✕(F-JOB-07)이며 N1 draft · N2~N6 에서 같은 흐름으로 쓴다.
+ */
+export async function cancelJob(jobId: string): Promise<void> {
+  const res = await authorizedFetch(`/jobs/${jobId}`, { method: 'DELETE' });
+  if (!res.ok) throw new ApiRequestError(res.status, await res.json().catch(() => null));
+}
+
 /** 원본 순서 재정렬 (API-SRC-03). order는 sourceImageId 배열이다. */
 export function reorderSourceImages(jobId: string, order: number[]): Promise<ApiSourceImage[]> {
   return apiFetch<ApiSourceImage[]>(`/jobs/${jobId}/source-images/reorder`, {
@@ -189,8 +206,13 @@ export function getSections(jobId: string): Promise<ApiSectionList> {
   return apiFetch<ApiSectionList>(`/jobs/${jobId}/sections`);
 }
 
+/** 섹션 상세(판정 근거 전체, API-SEC-02). 목록은 포함 섹션의 verdicts를 빈 배열로 준다. */
+export function getSectionDetail(jobId: string, sectionId: number): Promise<ApiSection> {
+  return apiFetch<ApiSection>(`/jobs/${jobId}/sections/${sectionId}`);
+}
+
 /**
- * N3(드래그)·N5(휴지통) 공용 PATCH. body는 실제 계약대로 { action }이다 —
+ * N3(버튼)·N5(휴지통) 공용 PATCH. body는 실제 계약대로 { action }이다 —
  * bucket 값을 그대로 보내지 않는다. exclude→include 이동은 action='restore',
  * include→exclude 이동은 action='exclude'. excludedStage는 서버가 현재
  * currentStep 기준으로 기록하므로 FE가 보내지 않는다. 응답은 갱신된 전체
@@ -208,9 +230,15 @@ export function updateSectionBucket(
   });
 }
 
-/** 이대로 진행 = N3 → N4 (API-SEC-04). 전 섹션 제외면 409 ALL_SECTIONS_EXCLUDED. */
-export function proceedSections(jobId: string): Promise<ApiAcceptedTask> {
-  return apiFetch<ApiAcceptedTask>(`/jobs/${jobId}/sections/proceed`, { method: 'POST' });
+/**
+ * 이대로 진행 = N3 → N4 (API-SEC-04). 전 섹션 제외면 409 ALL_SECTIONS_EXCLUDED —
+ * N3가 error.code로 분기하도록 confirmN5와 같이 raw body를 보존하는 ApiRequestError를 던진다.
+ */
+export async function proceedSections(jobId: string): Promise<ApiAcceptedTask> {
+  const res = await authorizedFetch(`/jobs/${jobId}/sections/proceed`, { method: 'POST' });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) throw new ApiRequestError(res.status, body);
+  return body as ApiAcceptedTask;
 }
 
 /**
@@ -255,15 +283,20 @@ export function getN5Preview(jobId: string): Promise<ApiReviewPreview> {
 /**
  * 번역문 수정 (API-CFM-02, v3.4.2). revision 낙관적 잠금 — 불일치 시 409
  * REVISION_CONFLICT(ApiRequestError로 던짐, body에 원본 Error 응답 보존).
+ * idempotencyKey(선택) — blockPatch 「저장 공통」의 Idempotency-Key. 사용자 조작마다 새 키이고,
+ * 같은 키는 같은 조작의 같은 본문 재전송에만 쓴다(lib/api/idempotency.ts). 없으면 헤더를 싣지 않는다.
  */
 export async function patchN5Block(
   jobId: string,
   blockId: number,
   payload: ApiBlockPatch,
+  options: { idempotencyKey?: string | null } = {},
 ): Promise<ApiBlockPatchResponse> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (options.idempotencyKey) headers['Idempotency-Key'] = options.idempotencyKey;
   const res = await authorizedFetch(`/jobs/${jobId}/blocks/${blockId}`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify(payload),
   });
   const body = await res.json().catch(() => null);
@@ -277,8 +310,21 @@ export async function patchN5Block(
  * (currentStep/userFacingStatus)이 이 하나의 엔드포인트를 공유한다 — 오늘(N1→N6
  * happy path) 작업에서 job 전체 공용으로 승격했다.
  */
-export function getJobTasks(jobId: string): Promise<ApiJobTaskStatus> {
-  return apiFetch<ApiJobTaskStatus>(`/jobs/${jobId}/tasks`);
+export async function getJobTasks(jobId: string): Promise<ApiJobTaskStatus> {
+  // HTTP status 를 보존한다 — 미소유·없는 작업의 404 는 query 재시도·polling 을 멈추는 근거다(lib/queries/pixlate.ts). 문구는 기존과 같다
+  const res = await authorizedFetch(`/jobs/${jobId}/tasks`);
+  const body: unknown = await res.json().catch(() => null);
+  if (!res.ok) {
+    const error = new ApiRequestError(res.status, body);
+    error.message = errorMessageFromBody(body, res.status);
+    throw error;
+  }
+  return body as ApiJobTaskStatus;
+}
+
+/** 작업이 없거나 이 계정이 접근할 수 없음(계약: 미소유도 404 NOT_FOUND — 둘을 구분하지 않는다) */
+export function isJobNotFoundError(error: unknown): boolean {
+  return error instanceof ApiRequestError && error.status === 404;
 }
 
 /**
@@ -380,4 +426,54 @@ export function getMasterCountries(): Promise<ApiCountry[]> {
 
 export function getMasterLanguages(): Promise<ApiLanguage[]> {
   return apiFetch<ApiLanguage[]>('/master/languages');
+}
+
+/** N1 카테고리 트리 (API-MST-04). 평면 노드 배열 — 트리 구성은 app/jobs/new/_lib/category-tree.ts */
+export function getMasterCategories(): Promise<ApiCategory[]> {
+  return apiFetch<ApiCategory[]>('/master/categories');
+}
+
+// ─────────────────────────────────────────────
+// M2 — 브랜드 정보·로고 (brandList/brandGet/brandUpdate/brandLogoList/brandLogoCreate/brandLogoDelete).
+// 404(미소유 포함)를 화면에서 구분해야 해서 실패 시 status·body 를 보존하는 ApiRequestError 를 던진다.
+// ─────────────────────────────────────────────
+
+async function brandFetch<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await authorizedFetch(url, init);
+  if (!res.ok) throw new ApiRequestError(res.status, await res.json().catch(() => null));
+  return res.json() as Promise<T>;
+}
+
+export function getBrands(): Promise<ApiBrand[]> {
+  return brandFetch<ApiBrand[]>('/brands');
+}
+
+export function getBrand(brandId: number): Promise<ApiBrand> {
+  return brandFetch<ApiBrand>(`/brands/${brandId}`);
+}
+
+/** 부분 수정 — 바뀐 항목만 보낸다. 응답 Brand 가 화면 정본이다 */
+export function updateBrand(brandId: number, payload: ApiBrandUpdate): Promise<ApiBrand> {
+  return brandFetch<ApiBrand>(`/brands/${brandId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+/** order_no ASC 그대로 온다 */
+export function getBrandLogos(brandId: number): Promise<ApiBrandLogo[]> {
+  return brandFetch<ApiBrandLogo[]>(`/brands/${brandId}/logos`);
+}
+
+/** 로고 1개 multipart(field `file`). 포맷 검증·SVG sanitize 는 서버 책임(415) — Content-Type 은 브라우저가 boundary 와 함께 정한다 */
+export function uploadBrandLogo(brandId: number, file: File): Promise<ApiBrandLogo> {
+  const formData = new FormData();
+  formData.append('file', file);
+  return brandFetch<ApiBrandLogo>(`/brands/${brandId}/logos`, { method: 'POST', body: formData });
+}
+
+export async function deleteBrandLogo(brandId: number, logoId: number): Promise<void> {
+  const res = await authorizedFetch(`/brands/${brandId}/logos/${logoId}`, { method: 'DELETE' });
+  if (!res.ok) throw new ApiRequestError(res.status, await res.json().catch(() => null));
 }

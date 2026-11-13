@@ -47,6 +47,27 @@ cp .env.example .env.local
 |---|---|---|
 | `NEXT_PUBLIC_API_MOCKING` | `enabled` / 미설정(또는 그 외 값) | `enabled`면 MSW(Mock Service Worker)를 사용합니다. 미설정 또는 그 외 값이면 실제 backend를 사용합니다(`NODE_ENV`와는 무관합니다). |
 | `NEXT_PUBLIC_DEV_SELLER_EMAIL` | 이메일 문자열 | 실백엔드 개발 세션 로그인용 이메일입니다. 미설정 시 코드 기본값을 사용합니다. |
+| `NEXT_PUBLIC_AUTH_MODE` | `session` / 미설정 | 실백엔드 세션 인증 opt-in 스위치입니다. `session`이면 Mock을 끈 실백엔드에서도 세션 인증·소셜 로그인·로그아웃 재시도를 켭니다. `next dev`와 production build 모두 적용됩니다. 미설정(또는 `session`이 아닌 값)이면 실백엔드는 기존 개발용 간이 로그인(dev-login)을 씁니다. client 번들에 들어가는 build 시점 값이라 production에서는 runtime env만 바꿔서 전환할 수 없고 다시 빌드해야 합니다. |
+
+인증 모드(`lib/auth/capability.ts`):
+
+| 조합 | 인증 방식 | 소셜 로그인 | 로그아웃 재시도 | M1 정식 `로그아웃` 버튼 | M1 임시 로그아웃 시험 버튼 |
+|---|---|---|---|---|---|
+| Mock(`NEXT_PUBLIC_API_MOCKING=enabled`) | session | 켜짐 | 켜짐 | 보임 | 숨김 |
+| 실백엔드 + `NEXT_PUBLIC_AUTH_MODE` 미설정(기본) | dev-login | 꺼짐(버튼 비활성, 요청 없음) | 꺼짐 | 숨김 | 숨김 |
+| 실백엔드 + `NEXT_PUBLIC_AUTH_MODE=session` + `next dev` | session | 켜짐 | 켜짐 | 숨김 | **보임**(`isLocalAuthTestMode()`) |
+| 실백엔드 + `NEXT_PUBLIC_AUTH_MODE=session` + production build | session | 켜짐 | 켜짐 | **보임** | 숨김 |
+
+M1 정식 `로그아웃` 버튼(`isAccountLogoutEnabled()` = session 모드이고 로컬 인증 시험 모드가 아님)은 Figma 확정 전 임시 위치(M1 우측 상단)이며 기존 `lib/auth/logout.ts` `logout()`만 부릅니다. 정식·임시 버튼은 동시에 보이지 않습니다.
+
+Mock에서는 소셜 로그인(G1 → `/login/callback/{provider}` → M1)과 세션 복구(401 → refresh → `/auth/me` → 원 요청 1회 재시도)를 MSW로 확인할 수 있습니다. 실백엔드 기본값은 위 개발용 간이 로그인이며 소셜 버튼은 요청을 보내지 않습니다. 실백엔드에서 session/social 인증을 쓰려면 `NEXT_PUBLIC_AUTH_MODE=session`을 명시해 실행·빌드합니다. BE와 실제 브라우저로 소셜 로그인을 시험할 때는 `BACKEND_ORIGIN=http://127.0.0.1:8000 NEXT_PUBLIC_API_MOCKING=disabled NEXT_PUBLIC_AUTH_MODE=session npx next dev -p 3000`으로 실행하고 `http://localhost:3000`으로 접속합니다(BE의 Origin·callback·쿠키가 `localhost:3000` 기준). 이 로컬 실서버 인증 시험 모드(`next dev` + `NEXT_PUBLIC_AUTH_MODE=session` + Mock 꺼짐, `isLocalAuthTestMode()`)에서만 M1 우측 상단에 **임시 로그아웃 진입점**(`로그아웃(인증 시험)`)이 보입니다. BE 로그아웃 계약 시험용이며 정식 로그아웃 UX 위치는 별도 디자인 확정 대상입니다. 일반 Mock 개발 환경과 production build에서는 보이지 않습니다 — production build에서 `NEXT_PUBLIC_AUTH_MODE=session`으로 session을 켜도 임시 시험 버튼은 숨겨집니다. 어느 쪽이든 access token은 메모리에만 두고 브라우저 저장소에 쓰지 않습니다. Mock 인증 시험 시나리오는 `lib/mock-api/auth-fixtures.ts`의 `pixlate:mock-auth-scenario`(sessionStorage) 설명을 참고합니다.
+
+Mock(`NEXT_PUBLIC_API_MOCKING=enabled`)에서만 동작하는 확인용 주소입니다. Mock이 꺼져 있으면 무시됩니다.
+
+| 주소 | 용도 |
+| --- | --- |
+| `/jobs/1?qaTypeset=1` | N5 Mock 조판 미리보기. 렌더 이미지 대신 글자 없는 면 위에 조판 규칙으로 번역문을 그려 줄바꿈·Auto Height·글자 크기를 눈으로 확인합니다. |
+| `/jobs/1?scenario=n2-error` · `/jobs/1?scenario=n4-error` | N2·N4 전체 오류 화면 고정 |
 
 Secret(JWT, access token, password 등)은 절대 Git에 커밋하지 않습니다 (`.env`, `.env.local`은 `.gitignore` 처리됨).
 
@@ -60,10 +81,36 @@ Secret(JWT, access token, password 등)은 절대 Git에 커밋하지 않습니�
 | `npm run typecheck` | 타입 검사 (`tsc --noEmit`) |
 | `npm run verify:coords` | **좌표 변환 자동 검증** (브라우저 불필요) |
 | `npm run verify:n5-adapter` | N5 Adapter(OpenAPI DTO → ViewModel) 자동 검증 (브라우저 불필요) |
+| `npm run verify:n5-preview-state` | N5 `/preview` 입력 상태·렌더 상태(시도·결과·최신)·지문 A/B·표시 규칙·서버 style 8키 변환 자동 검증 (브라우저 불필요) |
+| `npm run verify:n5-layout-adjust` | N5 블록 배치 저장(layoutAdjust — 계약 확정·서버 구현 대기) 요청 조립(바꾼 필드만·소수 유지·빈 객체 금지)·서버값 읽기(키 없음 ≠ null)·편집 기준·렌더 대상·쓰기 허용(Mock 만)·Mock 서버 정규화 자동 검증 (브라우저 불필요) |
+| `npx playwright test e2e/n5-layout-adjust.spec.ts --project=chromium` | N5 배치 저장 흐름(손 놓을 때·[+][−] 1회 저장, revision·409·500, rerenderTaskId, Undo/Redo 재저장, 혼합 이력, 초안 보호, 실서버 쓰기 차단, Mock 계약) 검증 — MSW Mock 기준이며 실서버 검증이 아니다 (Chromium, dev 서버 필요) |
+| `npm run verify:n5-layout-edit` | N5 배치 영역 편집 순수 계산(이동·크기 조절·[+][-]·가운데선 snap, 섹션 경계) 자동 검증 (브라우저 불필요) |
+| `npm run verify:n5-history` | N5 실행 취소·다시 실행 이력 엔진(저장 성공 뒤 commit, 실패 시 불변) 자동 검증 (브라우저 불필요) |
+| `npm run verify:n5-failed-drafts` | N5 번역문 미저장 초안(편집·저장 성공/실패 전이, 실패 칸 집계) 자동 검증 (브라우저 불필요) |
+| `npm run verify:n5-review-issues` | N5 저장 전 확인 항목 집계(F-CFM-09)·겹침 진단 계산 자동 검증 (브라우저 불필요) |
+| `npm run verify:n5-typeset` | N5 HTML/CSS 조판 확정 규칙(역할별 기준 style·원본 폭 배율·사용자 글자 배율·박스 선택·ink overflow 경계와 방향·최종 이미지 경계 이탈 감지·CSS 계약) 순수 함수 자동 검증 (브라우저 불필요) |
+| `npm run verify:n5-final-output` | 조판 최종 출력 좌표(include 섹션만 `sectionOrder` 순서로 누적)·최종 이미지 경계 평가·블록 넘침과의 분리·렌더 모델 변환 순수 함수 자동 검증 (브라우저 불필요) |
+| `npx playwright test e2e/n5-typeset-measurement.spec.ts --project=chromium` | N5 조판 브라우저 측정 엔진(`lib/n5/typeset-measurement.ts`) 검증 — dev 전용 harness `/spike/typeset-measure`에서 실제 줄바꿈·DOM baseline·Canvas ink·Pretendard 로딩을 확인하고 픽셀·clean 문서와 대조 (Chromium, dev 서버·Pretendard CDN 필요) |
+| `npx playwright test e2e/n5-typeset-qa-harness.spec.ts --project=chromium` | 조판 QA 화면(`/spike/typeset-measure`, dev 전용) 검증 — `TypesetBlock` 표시와 측정의 일치, 섹션 제외에 따른 `finalOutputOffset` 변화, 블록 넘침·이미지 이탈, 폰트 미준비·글리프 대체 실패 (Chromium, dev 서버 필요) |
+| `npx playwright test e2e/s0-rail.spec.ts --project=chromium` | S0 전역 프로세스 바(N1~N6) 검증 — 위치, 단계 상태, 단계 이동 안내 툴팁, ✕ 나가기·작업 취소 확인창과 실패 처리 (Chromium, dev 서버 필요) |
+| `npx playwright test e2e/processing-error.spec.ts --project=chromium` | N2·N4 전체 실패 화면 검증 — 표시 조건, 부분 실패 구분, 진행률 정지, 미연결 [다시 시도]·[중단], S0 취소 (Chromium, dev 서버 필요) |
 | `npm run verify:library-adapter` | M1 보관함 Adapter(LibraryCard → 카드 ViewModel) 자동 검증 (브라우저 불필요) |
 | `npm run verify:library-view` | M1 보관함 화면 로직(검색·국가 필터·최신순·선택·날짜 포맷) 자동 검증 (브라우저 불필요) |
+| `npm run verify:m2-form` | M2 브랜드 정보 화면 로직(dirty 판정·필수값·변경 항목 열거·로고 파일 형식)과 Brand API Adapter(DTO→ViewModel·바뀐 항목만 PATCH·로고 추가/삭제 계획·저장 뒤 정합·brandId 결정) 자동 검증 (브라우저 불필요) |
+| `npx playwright test e2e/m2-brand.spec.ts --project=chromium` | M2 브랜드 정보 화면(`/brand`) 화면·view/edit·dirty·이탈 확인 검증 (MSW Mock, Chromium, dev 서버 필요) |
+| `npx playwright test e2e/m2-brand-api.spec.ts --project=chromium` | M2 Brand API 연결(조회·바뀐 항목만 PATCH·로고 POST/DELETE·저장 실패 시 입력 유지·중복 저장 방지·404/없음/여러 브랜드) 검증 — MSW Mock이 실제 계약 모양으로 응답하며 실서버 검증이 아니다 (Chromium, dev 서버 필요) |
 | `npm run verify:msw-flag` | `isApiMockingEnabled()`(MSW on/off SSOT)가 `NEXT_PUBLIC_API_MOCKING` 값 조합에서 `NODE_ENV`와 무관하게 정확히 동작하는지 자동 검증 (브라우저 불필요) |
 | `npm run verify:displayed-progress` | N2·N4 처리 화면 표시 %(관측 단계는 상한만 염·점프·감소 없음·처리 중 100 없음·실패 시 멈춤·완료 응답 뒤 100 표시) 순수 계산 자동 검증 (브라우저 불필요) |
+| `npm run verify:n1-category` | N1 카테고리 트리(GET /master/categories → 트리, 하위 없는 항목만 leaf)와 [다음] 진행 조건 순수 함수 자동 검증 (브라우저 불필요) |
+| `npm run verify:login-form` | G1 로그인 보조 문구 GIF 대비 판별(주황 판별·글자 전환 기준·cover 좌표), 개발용 자동 로그인 제외 경로 순수 함수 자동 검증 (브라우저 불필요) |
+| `npm run verify:auth-session` | 인증 세션 FE 로직 자동 검증 — refresh single-flight·`/auth/me` 계정 확인·`refresh_rotated` 복구 상한·503과 세션 종료 구분·탭 사이 알림(토큰 미포함)·소셜 시작/콜백 중복 방어·로그아웃 전용 처리와 logout pending (브라우저 불필요) |
+| `npm run verify:auth-n5-switch` | N5 섹션 제외/복원 저장 중 계정 전환 검증 — 이전 계정의 늦은 응답·rollback·invalidate 가 새 계정 캐시에 반영되지 않음, 401 뒤 계정이 바뀌면 원 요청을 새 토큰으로 다시 보내지 않음, 같은 계정으로 다시 들어오면 서버 정본을 조회 (실제 QueryClient·인증 실행부, 서버는 fetch 대역, 브라우저 불필요) |
+| `npx playwright test e2e/g1-login.spec.ts --project=chromium` | G1 로그인 화면(`/login`) 검증 — Figma 835:6511 위치, GIF 로드, 동의 고지, 키보드, 화면 진입 시 인증 요청 0건 (Chromium, dev 서버 필요) |
+| `npx playwright test e2e/g1-social-auth.spec.ts --project=chromium` | Mock 소셜 로그인·세션 흐름 검증 — start→콜백→M1, 콜백 완료 1회(Strict Mode·새로고침), 시작/완료 오류, 401→refresh→`/auth/me`, 여러 탭 logout·계정 전환, logoutPending 앱 진입(refresh·보호 API 0회)·G1 미완료 안내와 [다시 시도], 임시 로그아웃 진입점 미노출 (Chromium, Mock dev 서버 필요) |
+| `E2E_LOCAL_AUTH_LOGOUT=visible npx playwright test e2e/auth-local-test-logout.spec.ts --project=chromium` | 로컬 실서버 인증 시험 모드 dev 서버(`NEXT_PUBLIC_API_MOCKING=disabled NEXT_PUBLIC_AUTH_MODE=session npx next dev -p 3000`)에서 임시 로그아웃 진입점 노출과 로그아웃 계약(204·`invalid_token` 쿠키만 1회·`refresh_invalid`·503 pending·중복 클릭·여러 탭) 검증. 백엔드는 route 로 대신한다. `E2E_LOCAL_AUTH_LOGOUT=hidden` + 같은 env 의 production build(`next build && next start`)에서는 미노출 검증 |
+| `E2E_PROD_AUTH=session npx playwright test e2e/auth-production-logout.spec.ts --project=chromium` | `NEXT_PUBLIC_AUTH_MODE=session` production 서버에서 M1 정식 `로그아웃` 버튼 노출(임시 버튼 미노출)과 로그아웃 계약(204·`invalid_token` 쿠키만 1회·`refresh_invalid`·503 pending과 [다시 시도]·진행 중 잠금·여러 탭) 검증. `E2E_PROD_AUTH=unset` + 기본 production build에서는 정식·임시 버튼 모두 미노출 검증. 백엔드는 route 로 대신한다 |
+| `E2E_PROD_AUTH=unset npx playwright test e2e/auth-production-mode.spec.ts --project=chromium` | 기본 production build(`NEXT_PUBLIC_API_MOCKING=disabled npx next build && npx next start -p 3000`)에서 dev-login 유지·소셜 버튼 비활성(요청 없음)·임시 로그아웃 버튼 미노출 검증. `E2E_PROD_AUTH=session` + `NEXT_PUBLIC_AUTH_MODE=session`으로 빌드한 production 서버에서는 소셜 버튼 활성·`POST /auth/social/{provider}/start` 요청 발생·임시 로그아웃 버튼 미노출 검증. 백엔드는 route 로 대신하며 실제 OAuth 완료는 검증하지 않는다 |
+| `E2E_REAL_BACKEND_MODE=1 npx playwright test e2e/g1-login-backend-mode.spec.ts --project=chromium` | Mock을 끈 dev 서버(`NEXT_PUBLIC_API_MOCKING=disabled npm run dev`)에서 `/login`은 인증 요청 0건, 다른 화면은 개발용 자동 로그인 유지·access 메모리 보관(브라우저 저장소 미사용)인지 검증 |
 | `npm run generate:openapi-types` | 최신 OpenAPI 계약(`ai-pixlate.github.io/server/openapi.yaml`)에서 타입 재생성 → `lib/api/generated/openapi.d.ts` (직접 수정 금지, 재실행으로만 갱신) |
 | `npm run make:ruler` | 스파이크용 눈금 테스트 이미지 재생성 |
 | `npm run make:n5-section-fixtures` | N5 실제 계약(v3.4.2, 섹션별 원문/렌더 이미지) mock fixture 이미지 재생성 |
@@ -88,6 +135,29 @@ npm run dev
 
 ```
 http://localhost:3000/spike/crop-viewer
+```
+
+### Docker production build
+
+`Dockerfile`의 `BACKEND_ORIGIN`·`NEXT_PUBLIC_API_MOCKING`·`NEXT_PUBLIC_AUTH_MODE`는 모두 **build 시점** 값입니다(`--build-arg`). 컨테이너 실행 때 env만 바꿔서 dev-login과 session을 전환할 수 없으니 인증 방식을 바꾸려면 다시 빌드합니다. 세 값 모두 공개 설정값이며 비밀값은 넣지 않습니다.
+
+기본 production build(실백엔드 + dev-login, 소셜 버튼 비활성):
+
+```bash
+docker build \
+  --build-arg BACKEND_ORIGIN=http://pixlate-api:8000 \
+  --build-arg NEXT_PUBLIC_API_MOCKING=disabled \
+  -t pixlate-fe .
+```
+
+session/social 인증 production build(명시적 opt-in, M1 정식 `로그아웃` 버튼 보임·임시 로그아웃 시험 버튼은 숨김):
+
+```bash
+docker build \
+  --build-arg BACKEND_ORIGIN=http://pixlate-api:8000 \
+  --build-arg NEXT_PUBLIC_API_MOCKING=disabled \
+  --build-arg NEXT_PUBLIC_AUTH_MODE=session \
+  -t pixlate-fe .
 ```
 
 ## 사용법

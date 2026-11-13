@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import Link from 'next/link';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import {
+  selectN6RenderTask,
   useJobTasksQuery,
   useN6RenderMutation,
   useDeliverablesQuery,
@@ -19,9 +19,10 @@ import {
   getDirectoryPicker,
   isDirectoryPickerAbort,
   resolveSaveFileName,
+  startBrowserDownload,
   writeFileToDirectory,
 } from '@/lib/n6/directory-save';
-import { StepNav } from './step-nav';
+import { useModalDialog } from '@/app/_components/use-modal-dialog';
 import { ZoomControls } from './n5/n5-toolbar';
 
 // ─────────────────────────────────────────────────────────────────
@@ -56,39 +57,106 @@ import { ZoomControls } from './n5/n5-toolbar';
 // 렌더 진행 상태 — POST /render(자동 등록·수동 재렌더 공용) → GET /tasks
 // polling(taskType=render·unitType='job'). deliverables/validation은 이
 // 상태가 done이어야 조회한다.
+//
+// 진행 중은 Figma 1262:7603 「N6 최종 렌더중」이다 — N6 화면 구조(비활성 내보내기 패널)는 그대로 두고 dim과
+// 진행 모달을 얹는다. 닫아도 렌더는 계속되고 폴링도 멈추지 않으며, 끝나면 완료 화면으로 바뀐다.
 // ─────────────────────────────────────────────────────────────────
 
-function RenderProgress({
-  status,
-  onRetry,
-  retryPending,
-}: {
-  status: 'running' | 'failed';
-  onRetry: () => void;
-  retryPending: boolean;
-}) {
-  if (status === 'failed') {
-    return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
-        <p className="text-[14px] text-red-500" data-testid="n6-render-error">
-          최종 이미지 렌더링에 실패했습니다.
-        </p>
-        <button
-          type="button"
-          onClick={onRetry}
-          disabled={retryPending}
-          className="rounded-[6px] bg-[#171717] px-8 py-3.5 text-[14px] font-medium tracking-[-0.03em] text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          {retryPending ? '재시도 중...' : '다시 렌더링'}
-        </button>
-      </div>
-    );
-  }
-
+function RenderFailed({ onRetry, retryPending }: { onRetry: () => void; retryPending: boolean }) {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6" data-testid="n6-render-progress">
-      <div className="h-10 w-10 animate-spin rounded-full border-4 border-[#eaeaea] border-t-[#ff6a38]" />
-      <p className="text-[14px] text-[#707070]">최종 이미지를 렌더링하고 있습니다...</p>
+    <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
+      <p className="text-[14px] text-red-500" data-testid="n6-render-error">
+        최종 이미지 렌더링에 실패했습니다.
+      </p>
+      <button
+        type="button"
+        onClick={onRetry}
+        disabled={retryPending}
+        className="rounded-[6px] bg-[#171717] px-8 py-3.5 text-[14px] font-medium tracking-[-0.03em] text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        {retryPending ? '재시도 중...' : '다시 렌더링'}
+      </button>
+    </div>
+  );
+}
+
+/** GET /tasks 의 progress(0~1)를 표시 %로. 값이 없으면 null — 숫자를 지어내지 않고 진행 중으로만 보인다 */
+function toRenderPercent(progress: number | undefined): number | null {
+  if (typeof progress !== 'number' || !Number.isFinite(progress)) return null;
+  return Math.round(Math.min(1, Math.max(0, progress)) * 100);
+}
+
+/** Figma 1271:8267 「최종렌더중」. 동작은 useModalDialog(배경 inert, focus trap, Escape=닫기, 닫으면 제목으로 포커스 복귀) */
+function RenderProgressDialog({
+  percent,
+  onClose,
+  returnFocusRef,
+}: {
+  percent: number | null;
+  onClose: () => void;
+  returnFocusRef: React.RefObject<HTMLElement | null>;
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useModalDialog(dialogRef, { onClose, returnFocusRef });
+  return (
+    <div data-testid="n6-render-dim" className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(23,23,23,0.4)]">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="n6-render-title"
+        tabIndex={-1}
+        data-testid="n6-render-progress"
+        className="flex w-[460px] max-w-[calc(100vw-32px)] flex-col gap-9 rounded-[6px] bg-white p-8 shadow-[2px_2px_12px_rgba(0,0,0,0.06)] outline-none"
+      >
+        <div className="flex w-full flex-col gap-3">
+          <button
+            type="button"
+            data-testid="n6-render-close"
+            aria-label="닫기"
+            onClick={onClose}
+            className="flex size-8 items-center justify-center rounded-[6px] border border-[#eaeaea] bg-white text-[#171717] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ff6a38]"
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M4 4L12 12M12 4L4 12" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
+            </svg>
+          </button>
+          <div className="flex w-full items-center justify-between">
+            <div className="flex flex-col gap-1.5">
+              {percent != null && (
+                <p className="flex items-baseline">
+                  <span data-testid="n6-render-percent" className="text-[58px] leading-[64px] font-semibold text-[#171717]">
+                    {percent}
+                  </span>
+                  <span className="ml-1 text-[18px] leading-[normal] font-medium tracking-[-0.03em] text-[#999]">%</span>
+                </p>
+              )}
+              <p id="n6-render-title" className="text-[12px] leading-[normal] font-light tracking-[-0.04em] text-[#999]">
+                최종 렌더 중
+              </p>
+            </div>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/mock/n6/render-hourglass.gif" alt="" aria-hidden="true" className="h-[84px] w-[71px] shrink-0 object-cover" />
+          </div>
+        </div>
+        <div className="flex w-full flex-col gap-6">
+          <div
+            role="progressbar"
+            aria-labelledby="n6-render-title"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={percent ?? undefined}
+            className="h-[3px] w-full overflow-hidden rounded-[2px] bg-[rgba(112,112,112,0.16)]"
+          >
+            <div
+              data-testid="n6-render-bar"
+              className={`h-full rounded-[2px] bg-[#ff6a38] ${percent == null ? 'w-1/3 animate-pulse motion-reduce:animate-none' : 'transition-[width] duration-500 ease-out'}`}
+              style={percent == null ? undefined : { width: `${percent}%` }}
+            />
+          </div>
+          <p className="text-[12px] leading-[normal] font-light tracking-[-0.04em] text-[#999]">창을 닫아도 렌더는 계속 됩니다</p>
+        </div>
+      </div>
     </div>
   );
 }
@@ -145,6 +213,31 @@ function CompletionBanner() {
         </div>
       </div>
       <div className="absolute right-5 top-5">
+        <PixMark />
+      </div>
+    </div>
+  );
+}
+
+/** 렌더 중 배너 — Figma 1262:7624. 위치·크기는 완료 배너와 같고 색과 문구만 다르다 */
+function PreparingBanner() {
+  return (
+    <div data-testid="n6-preparing-banner" className="relative h-[150px] w-full shrink-0 overflow-hidden rounded-[8px] bg-[#999]">
+      <div className="absolute top-[36px] left-[-36px] size-[170px]">
+        <div className="absolute inset-[-21.18%]">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/mock/n6/orange-glow.svg" alt="" className="block size-full max-w-none" />
+        </div>
+      </div>
+      <div className="absolute top-5 left-6 flex w-[300px] flex-col gap-6">
+        <p className="text-[12px] leading-[14px] font-light tracking-[-0.04em] text-[#eee]">PREPARING TO EXPORT</p>
+        <p className="text-[20px] leading-[24px] font-semibold tracking-[-0.02em] text-white">최종 결과물을 만들고 있습니다.</p>
+        <div className="text-[12px] leading-[14px] font-light tracking-[-0.04em] text-[#eee]">
+          <p>검수한 내용을 최종 이미지에 반영하고 있습니다.</p>
+          <p>완료되면 저장하거나 내려받을 수 있습니다.</p>
+        </div>
+      </div>
+      <div className="absolute top-5 right-5">
         <PixMark />
       </div>
     </div>
@@ -374,6 +467,19 @@ function ArtifactCheckbox({
   );
 }
 
+/** 행 오른쪽 동작 칸(Figma Button XS 폭 97). 다운로드·안내 문구가 모두 같은 가운데 축에 놓인다 */
+function ArtifactActionSlot({ type, children }: { type: string; children: React.ReactNode }) {
+  return (
+    <div data-testid={`n6-action-slot-${type}`} className="flex w-[97px] shrink-0 items-center justify-center">
+      {children}
+    </div>
+  );
+}
+
+function ComingSoonLabel() {
+  return <span className="text-center text-[12px] font-light tracking-[-0.04em] whitespace-nowrap text-[#999]">12월 제공 예정</span>;
+}
+
 /**
  * 행별 개별 다운로드 — POST /jobs/{jobId}/export {components:[type]} 로 그 구성요소를
  * 만든 뒤 응답 artifactId 로 GET /jobs/{jobId}/exports/{artifactId}/download 를 부른다
@@ -430,30 +536,32 @@ function ArtifactRow({
             </span>
           </label>
 
-          {isComingSoon ? (
-            <span className="w-[94px] shrink-0 text-[12px] font-light tracking-[-0.04em] text-[#999]">12월 제공 예정</span>
-          ) : downloadMutation.data ? (
-            <a
-              href={downloadMutation.data.url}
-              download={downloadMutation.data.fileName}
-              target="_blank"
-              rel="noreferrer"
-              data-testid={`n6-download-row-${type}`}
-              className="w-[97px] shrink-0 rounded-[4px] bg-white px-2.5 py-[5px] text-center text-[12px] text-[#ff6a38] hover:underline"
-            >
-              다운로드
-            </a>
-          ) : (
-            <button
-              type="button"
-              data-testid={`n6-download-row-${type}`}
-              onClick={startDownload}
-              disabled={disabled || downloadMutation.isPending}
-              className="w-[97px] shrink-0 rounded-[4px] bg-white px-2.5 py-[5px] text-[12px] text-[#171717] hover:bg-[#f5f5f5] disabled:cursor-not-allowed disabled:text-[#b8b8b8]"
-            >
-              {downloadMutation.isPending ? '준비 중...' : '개별 다운로드'}
-            </button>
-          )}
+          <ArtifactActionSlot type={type}>
+            {isComingSoon ? (
+              <ComingSoonLabel />
+            ) : downloadMutation.data ? (
+              <a
+                href={downloadMutation.data.url}
+                download={downloadMutation.data.fileName}
+                target="_blank"
+                rel="noreferrer"
+                data-testid={`n6-download-row-${type}`}
+                className="w-full rounded-[4px] bg-white px-2.5 py-[5px] text-center text-[12px] text-[#ff6a38] hover:underline"
+              >
+                다운로드
+              </a>
+            ) : (
+              <button
+                type="button"
+                data-testid={`n6-download-row-${type}`}
+                onClick={startDownload}
+                disabled={disabled || downloadMutation.isPending}
+                className="w-full rounded-[4px] bg-white px-2.5 py-[5px] text-[12px] text-[#171717] hover:bg-[#f5f5f5] disabled:cursor-not-allowed disabled:text-[#b8b8b8]"
+              >
+                {downloadMutation.isPending ? '준비 중...' : '개별 다운로드'}
+              </button>
+            )}
+          </ArtifactActionSlot>
         </div>
       </div>
 
@@ -473,7 +581,7 @@ function ArtifactRow({
  * - saving   : 폴더를 골랐고 POST /export → GET download → 파일 쓰기 진행 중
  * - saved    : 고른 폴더에 파일을 썼다(전체 경로는 브라우저가 주지 않아 폴더 이름만 안다)
  * - fallback : 산출물은 만들어졌지만 직접 저장을 못 했다(presigned fetch CORS/네트워크 실패 등)
- *              → 기존 다운로드 링크를 보여 준다
+ *              → 브라우저 기본 다운로드를 바로 시작한다(두 번째 다운로드 버튼을 보이지 않는다)
  */
 type DirectSaveState =
   | { phase: 'idle' }
@@ -482,6 +590,87 @@ type DirectSaveState =
   | { phase: 'fallback' };
 
 const DIRECT_SAVE_IDLE: DirectSaveState = { phase: 'idle' };
+
+const EXPORT_PANEL_CLASS =
+  'flex h-full w-[456px] shrink-0 flex-col gap-8 overflow-x-hidden overflow-y-auto [scrollbar-width:thin] [scrollbar-color:transparent_transparent] hover:[scrollbar-color:#eaeaea_transparent] [&::-webkit-scrollbar]:w-[3px] [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-[2px] [&::-webkit-scrollbar-thumb]:bg-transparent hover:[&::-webkit-scrollbar-thumb]:bg-[#eaeaea]';
+
+/**
+ * 렌더 중 패널 — Figma 1262:7603. 렌더가 끝나기 전에는 산출물 데이터가 없어 고정된 행 구조만 보이고 모든 조작을 막는다.
+ * 요청을 만드는 코드가 없다. 행 이름은 완료 화면과 같은 화면 문구이고 서버 값이 아니다.
+ */
+function PendingExportPanel() {
+  return (
+    <div data-testid="n6-export-panel-pending" className={EXPORT_PANEL_CLASS}>
+      <PreparingBanner />
+      <div className="flex w-full flex-col gap-8 px-5">
+        <div className="mt-3 flex w-full flex-col gap-5">
+          <div className="flex flex-col gap-2">
+            <p className="text-[18px] font-medium tracking-[-0.03em] text-[#171717]">산출물 내보내기</p>
+            <p className="text-[12px] font-light tracking-[-0.04em] text-[#707070]">
+              필요한 항목을 선택해 개별로 받거나 한 번에 내려받을 수 있습니다.
+            </p>
+          </div>
+          <div className="flex w-full flex-col gap-7">
+            <div className="h-px w-full bg-[#eaeaea]" />
+            {ARTIFACT_DISPLAY_ORDER.map((type) => (
+              <div key={type} className="flex w-full flex-col gap-4">
+                <div className="flex w-full items-center gap-4">
+                  <ArtifactCheckbox id={`artifact-pending-${type}`} checked={false} disabled onChange={() => {}} />
+                  <div className="flex min-w-0 flex-1 items-center gap-2">
+                    <label htmlFor={`artifact-pending-${type}`} className="flex min-w-0 flex-1 flex-col gap-2">
+                      <span className="text-[14px] tracking-[-0.01em] text-[#171717]">{ARTIFACT_LABEL[type]}</span>
+                      <span className="text-[12px] font-light tracking-[-0.04em] text-[#707070]">{ARTIFACT_DESC[type]}</span>
+                    </label>
+                    <ArtifactActionSlot type={type}>
+                      {COMING_SOON_TYPES.has(type) ? (
+                        <ComingSoonLabel />
+                      ) : (
+                        <button
+                          type="button"
+                          disabled
+                          data-testid={`n6-pending-download-${type}`}
+                          className="w-full cursor-not-allowed rounded-[4px] bg-white px-2.5 py-[5px] text-[12px] tracking-[-0.02em] text-[#999]"
+                        >
+                          개별 다운로드
+                        </button>
+                      )}
+                    </ArtifactActionSlot>
+                  </div>
+                </div>
+                <div className="h-px w-full bg-[#eaeaea]" />
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="flex w-full flex-col gap-1">
+          <div className="flex w-full flex-col gap-2 rounded-[4px] bg-[#f5f5f5] p-5">
+            <p className="text-[14px] font-medium tracking-[-0.03em] text-[#171717]">선택된 산출물</p>
+            <p className="text-[12px] font-light tracking-[-0.04em] text-[#707070]">선택된 산출물은 zip으로 묶어 다운로드합니다.</p>
+          </div>
+          <p className="text-[12px] tracking-[-0.02em] text-[#707070]">일부 산출물 생성에 실패해도 성공한 항목은 내려받을 수 있습니다.</p>
+        </div>
+        <div className="flex w-full flex-col gap-2">
+          <button
+            type="button"
+            disabled
+            data-testid="n6-pending-export"
+            className="w-full cursor-not-allowed rounded-[6px] bg-[#f5f5f5] px-8 py-3.5 text-[14px] font-medium tracking-[-0.03em] text-[#999]"
+          >
+            저장하고 선택 항목 내보내기
+          </button>
+          <button
+            type="button"
+            disabled
+            data-testid="n6-pending-save"
+            className="w-full cursor-not-allowed rounded-[6px] border border-[#eaeaea] bg-white px-8 py-3.5 text-[14px] font-medium tracking-[-0.03em] text-[#999]"
+          >
+            보관함에 저장하기
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeliverableComponent[] }) {
   // 표시 순서만 ARTIFACT_DISPLAY_ORDER로 정렬한다 — component 객체 자체(type
@@ -517,14 +706,19 @@ function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeli
   const [directSave, setDirectSave] = useState<DirectSaveState>(DIRECT_SAVE_IDLE);
   const isDirectSaving = directSave.phase === 'saving';
 
-  // 기존 흐름(지원하지 않는 환경의 fallback): POST /export → artifactId → GET download →
-  // 다운로드 링크. 계약 순서와 오류 처리는 PR #37 그대로다.
-  const exportWithDownloadLink = () => {
+  // 폴더 직접 저장을 쓸 수 없는 환경: POST /export → artifactId → GET download → 브라우저 다운로드 시작.
+  // [선택 항목 내보내기] 한 번으로 끝난다 — Figma 에 없는 두 번째 [다운로드] 버튼을 띄우지 않는다. 계약 순서와 오류 표시는 그대로다.
+  const exportAndDownload = () => {
     exportMutation.mutate(
       { components: [...selected] },
       {
         onSuccess: (response) => {
-          if (response.artifactId != null) downloadMutation.mutate(response.artifactId);
+          if (response.artifactId == null) return;
+          downloadMutation.mutate(response.artifactId, {
+            onSuccess: (download) => {
+              if (download.url) startBrowserDownload(download.url, download.fileName);
+            },
+          });
         },
       },
     );
@@ -553,7 +747,7 @@ function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeli
     }
 
     if (!download.url) {
-      setDirectSave({ phase: 'fallback' });
+      setDirectSave(DIRECT_SAVE_IDLE); // 내려받을 주소가 없다 — 저장·다운로드 어느 쪽도 시작하지 않는다
       return;
     }
     const fileName = resolveSaveFileName(download, `pixlate_export_${artifactId}.zip`);
@@ -562,6 +756,8 @@ function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeli
       await writeFileToDirectory(directory, fileName, file);
       setDirectSave({ phase: 'saved', directoryName: directory.name, fileName });
     } catch {
+      // presigned fetch(CORS·네트워크)나 파일 쓰기 실패 — 같은 URL 로 브라우저 기본 다운로드를 시작한다
+      startBrowserDownload(download.url, download.fileName ?? fileName);
       setDirectSave({ phase: 'fallback' });
     }
   };
@@ -570,7 +766,7 @@ function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeli
     if (exportMutation.isPending || isDirectSaving) return;
     const pickDirectory = getDirectoryPicker();
     if (!pickDirectory) {
-      exportWithDownloadLink();
+      exportAndDownload();
       return;
     }
 
@@ -581,13 +777,11 @@ function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeli
       directory = await pickDirectory({ id: 'pixlate-export', mode: 'readwrite' });
     } catch (error) {
       if (isDirectoryPickerAbort(error)) return; // 취소 — 아무 요청도 보내지 않고 화면을 그대로 둔다
-      exportWithDownloadLink(); // 그 밖의 picker 오류는 기존 다운로드 링크 흐름으로 진행한다
+      exportAndDownload(); // 그 밖의 picker 오류는 브라우저 기본 다운로드로 진행한다
       return;
     }
     await exportToDirectory(directory);
   };
-
-  const showDownloadLink = downloadMutation.data && (directSave.phase === 'idle' || directSave.phase === 'fallback');
 
   return (
     <div
@@ -605,7 +799,7 @@ function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeli
       // 넘어도 컬럼 맨 아래에 원치 않는 가로 스크롤바가 생길 수 있었다 —
       // 구조적으로 아예 그 가능성을 없앤다(pr-1의 좁은 여유 대신 실측 여유가
       // 있는 px-5 wrapper, 아래 참고).
-      className="flex h-full w-[456px] shrink-0 flex-col gap-8 overflow-x-hidden overflow-y-auto [scrollbar-width:thin] [scrollbar-color:transparent_transparent] hover:[scrollbar-color:#eaeaea_transparent] [&::-webkit-scrollbar]:w-[3px] [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-[2px] [&::-webkit-scrollbar-thumb]:bg-transparent hover:[&::-webkit-scrollbar-thumb]:bg-[#eaeaea]"
+      className={EXPORT_PANEL_CLASS}
     >
       <CompletionBanner />
 
@@ -667,7 +861,7 @@ function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeli
             </p>
           )}
           {downloadMutation.isPending && !isDirectSaving && (
-            <p className="text-[12px] text-[#999]">다운로드 링크 준비 중...</p>
+            <p className="text-[12px] text-[#999]">다운로드 준비 중...</p>
           )}
           {isDirectSaving && (
             <p className="text-[12px] text-[#999]" data-testid="n6-direct-save-progress">
@@ -688,20 +882,8 @@ function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeli
           )}
           {directSave.phase === 'fallback' && downloadMutation.data && (
             <p className="text-[12px] text-[#707070]" data-testid="n6-direct-save-fallback">
-              직접 저장을 사용할 수 없어 다운로드 링크를 준비했습니다.
+              선택한 폴더에 저장하지 못해 브라우저 다운로드로 내려받았습니다.
             </p>
-          )}
-          {showDownloadLink && downloadMutation.data && (
-            <a
-              href={downloadMutation.data.url}
-              download={downloadMutation.data.fileName}
-              target="_blank"
-              rel="noreferrer"
-              data-testid="n6-download-link"
-              className="w-full rounded-[6px] border border-[#eaeaea] bg-white px-8 py-3 text-center text-[14px] font-medium tracking-[-0.03em] text-[#ff6a38] hover:bg-[#faf3ed]"
-            >
-              {downloadMutation.data.fileName} 다운로드
-            </a>
           )}
           {downloadMutation.isError && (
             <p className="text-[12px] text-red-500" data-testid="n6-download-error">
@@ -751,11 +933,15 @@ export function N6ResultView({ jobId }: { jobId: string }) {
   const tasksQuery = useJobTasksQuery(jobId, { polling: true });
   const renderMutation = useN6RenderMutation(jobId);
 
-  const renderItem = tasksQuery.data?.items?.find(
-    (item) => item.taskType === 'render' && item.unitType !== 'text_block',
-  );
+  // 여러 렌더 시도가 함께 오면 진행 중 시도 > 가장 최근 시도(lib/queries/pixlate.ts selectN6RenderTask)
+  const renderItem = selectN6RenderTask(tasksQuery.data?.items);
   const renderFailed = renderItem?.status === 'failed';
   const renderDone = renderItem?.status === 'done';
+  const isRenderRunning = !tasksQuery.isLoading && !tasksQuery.isError && !renderDone && !renderFailed;
+  // 모달을 닫아도 렌더는 계속된다. 다시 렌더링을 누르면 새 진행이라 다시 보인다
+  const [isRenderDialogClosed, setIsRenderDialogClosed] = useState(false);
+  const closeRenderDialog = useCallback(() => setIsRenderDialogClosed(true), []);
+  const headingRef = useRef<HTMLHeadingElement>(null);
 
   useEffect(() => {
     if (!tasksQuery.data) return; // 첫 응답 대기 중
@@ -785,13 +971,23 @@ export function N6ResultView({ jobId }: { jobId: string }) {
         </p>
       </div>
     );
-  } else if (!renderDone) {
+  } else if (renderFailed) {
     body = (
-      <RenderProgress
-        status={renderFailed ? 'failed' : 'running'}
-        onRetry={() => renderMutation.mutate()}
+      <RenderFailed
+        onRetry={() => {
+          setIsRenderDialogClosed(false);
+          renderMutation.mutate();
+        }}
         retryPending={renderMutation.isPending}
       />
+    );
+  } else if (!renderDone) {
+    // 렌더 전에는 최종 이미지가 없어 미리보기 영역은 비어 있다(샘플 이미지를 넣지 않는다)
+    body = (
+      <div className="flex min-h-0 flex-1 gap-[clamp(24px,3.594vw,69px)]">
+        <div data-testid="n6-render-preview" aria-hidden="true" className="min-w-0 flex-1 rounded-[8px] bg-[#f5f5f5]" />
+        <PendingExportPanel />
+      </div>
     );
   } else if (deliverablesQuery.isLoading || validationQuery.isLoading) {
     body = (
@@ -830,28 +1026,6 @@ export function N6ResultView({ jobId }: { jobId: string }) {
 
   return (
     <div className="flex h-full w-full bg-white">
-      {/* 좌측 rail — 나가기 버튼 + StepNav. 9/23 Figma 정렬: node 849:7259(나가기)는
-          x≈39,y≈39,40×40로 StepNav(585:3392)와 별개의 떠 있는 요소이고, N5(n5-view.tsx)가
-          이미 쓰는 rail 패턴(ml-9 + 44px 컬럼 + 버튼 절대 중앙 배치)과 정확히 같은 값이다 —
-          같은 패턴을 그대로 재사용한다. 이전 구조는 나가기 버튼을 헤더 줄 위에 mb-6로
-          쌓아, 헤더 텍스트가 Figma보다 아래로(버튼 높이+여백만큼) 밀려 보였다. */}
-      <div className="relative ml-9 h-full w-[44px] shrink-0">
-        <Link
-          href="/"
-          aria-label="보관함으로 나가기"
-          className="absolute top-10 left-1/2 z-20 flex size-10 -translate-x-1/2 shrink-0 items-center justify-center rounded-md border border-[#eaeaea] bg-white text-[#171717] transition-colors hover:bg-gray-50"
-        >
-          {/* n5-view.tsx와 같은 실측 asset 좌표(가운데 8×8, strokeWidth 1.25) —
-              화면마다 다른 X 아이콘을 새로 그리지 않고 그대로 재사용한다. */}
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path d="M4 4L12 12M12 4L4 12" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </Link>
-        <div className="absolute inset-0 pt-[100px] pb-6">
-          <StepNav currentStep="N6" />
-        </div>
-      </div>
-
       {/* 본문 — 헤더 텍스트(655:6107)와 Final Preview(643:5526)가 Figma에서 같은
           x(=140)에서 시작한다. 9/23 재확인 — 이전엔 이 pl에 N5(n5-view.tsx)의
           calc(6.25vw-80px) 공식을 그대로 재사용했는데, N5와 N6는 Figma 좌측
@@ -864,7 +1038,9 @@ export function N6ResultView({ jobId }: { jobId: string }) {
           gap(3.594vw, 69px 상한) 쪽은 원래도 N6 자체 실측값이라 그대로 둔다. */}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 pt-10 pr-[clamp(45px,3.125vw,60px)] pb-8 pl-[clamp(0px,calc(7.2917vw_-_80px),60px)]">
         <div className="flex shrink-0 items-center gap-4">
-          <h1 className="text-[20px] font-semibold tracking-[-0.02em] text-[#171717]">저장 및 내보내기</h1>
+          <h1 ref={headingRef} tabIndex={-1} className="text-[20px] font-semibold tracking-[-0.02em] text-[#171717] outline-none">
+            저장 및 내보내기
+          </h1>
           <p className="text-[14px] tracking-[-0.01em] text-[#707070]">
             최종 결과물을 확인하고 내려받거나 보관함에 저장합니다.
           </p>
@@ -872,6 +1048,13 @@ export function N6ResultView({ jobId }: { jobId: string }) {
 
         {body}
       </div>
+      {isRenderRunning && !isRenderDialogClosed && (
+        <RenderProgressDialog
+          percent={renderItem ? toRenderPercent(tasksQuery.data?.progress) : null}
+          onClose={closeRenderDialog}
+          returnFocusRef={headingRef}
+        />
+      )}
     </div>
   );
 }

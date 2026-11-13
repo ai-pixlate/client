@@ -47,7 +47,7 @@ const downloads = (rs: Req[]) =>
   rs.filter((r) => r.method === 'GET' && new RegExp(`^/jobs/${MOCK_JOB_ID}/exports?/`).test(r.path) && r.path.includes('download'));
 
 // "선택 항목 내보내기"는 지원 환경(Chromium localhost = secure context)에서 폴더 선택 창을 연다.
-// 이 파일은 기존 다운로드 링크 흐름을 검증하므로 picker 를 없앤 미지원 환경으로 고정한다
+// 이 파일은 미지원 환경의 브라우저 다운로드 흐름을 검증하므로 picker 를 없앤 환경으로 고정한다
 // (폴더 저장 흐름은 e2e/n6-folder-save.spec.ts).
 test.beforeEach(async ({ page }) => {
   await disableDirectoryPicker(page);
@@ -227,16 +227,18 @@ test('기본 선택(images/ + content.csv)으로 묶음 내보내기하면 zip �
   const exported = page.waitForResponse(
     (r) => r.request().method() === 'POST' && new URL(r.url()).pathname === `/jobs/${MOCK_JOB_ID}/export`,
   );
+  const browserDownload = page.waitForEvent('download', { timeout: 10_000 });
   await page.getByTestId('n6-export-button').click();
   const res = await exported;
   const body = await res.json();
-  await expect(page.getByTestId('n6-download-link')).toBeVisible({ timeout: 10_000 });
+  const started = await browserDownload; // 클릭 한 번으로 다운로드까지(두 번째 버튼 없음)
+  await expect(page.getByTestId('n6-download-link')).toHaveCount(0);
 
   expect(res.status()).toBe(201);
   expect(new Set(JSON.parse(exportPosts(requests)[0].body ?? '{}').components)).toEqual(new Set(['images', 'csv']));
   expect(body.artifactType).toBe('zip');
   expect(downloads(requests).map((r) => r.path)).toEqual([`/jobs/${MOCK_JOB_ID}/exports/${body.artifactId}/download`]);
-  await expect(page.getByTestId('n6-download-link')).toHaveAttribute('href', /export\.zip/);
+  expect(started.url()).toMatch(/export\.zip/);
 });
 
 test('기본 선택에서 content.csv 를 해제하면 images/ 단일 내보내기가 성공한다', async ({ page }) => {
@@ -249,14 +251,16 @@ test('기본 선택에서 content.csv 를 해제하면 images/ 단일 내보내�
   const exported = page.waitForResponse(
     (r) => r.request().method() === 'POST' && new URL(r.url()).pathname === `/jobs/${MOCK_JOB_ID}/export`,
   );
+  const browserDownload = page.waitForEvent('download', { timeout: 10_000 });
   await page.getByTestId('n6-export-button').click();
   const res = await exported;
   const body = await res.json();
-  await expect(page.getByTestId('n6-download-link')).toBeVisible({ timeout: 10_000 });
+  const started = await browserDownload; // 클릭 한 번으로 다운로드까지(두 번째 버튼 없음)
+  await expect(page.getByTestId('n6-download-link')).toHaveCount(0);
 
   expect(res.status()).toBe(201);
   expect(JSON.parse(exportPosts(requests)[0].body ?? '{}')).toEqual({ components: ['images'] });
   expect(body).toMatchObject({ artifactType: 'images', components: ['images'] });
   expect(downloads(requests).map((r) => r.path)).toEqual([`/jobs/${MOCK_JOB_ID}/exports/${body.artifactId}/download`]);
-  await expect(page.getByTestId('n6-download-link')).toHaveAttribute('href', /export\.zip/);
+  expect(started.url()).toMatch(/export\.zip/);
 });

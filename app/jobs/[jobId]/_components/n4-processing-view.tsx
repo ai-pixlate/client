@@ -189,6 +189,9 @@ function resolveN4Presentation(
   return { rows: FIVE_STEP_STATES_BY_N4_STAGE[stage], activeStages: [stage] };
 }
 
+// 전체 실패 안내(Figma 795:4820). 서버 응답에 사용자용 문구가 없어(errorCode 뿐) 실패 단계를 추측하지 않고 이 문구를 쓴다
+const N4_ERROR = { sectionLabel: 'TRANSLATION STATUS', title: '번역을 완료하지 못했습니다', description: '번역 처리 중 오류가 발생했습니다.' };
+
 function buildFiveSteps(states: ProcessingStep['state'][]): ProcessingStep[] {
   return FIVE_STEP_META.map((step, i) => ({ ...step, state: states[i] }));
 }
@@ -197,9 +200,12 @@ export function N4ProcessingView({
   jobId,
   status,
   isCompleted = false,
+  isFailed = false,
 }: {
   jobId: string;
   status: ApiJobTaskStatus;
+  /** N4 전체 실패(currentStep=N4 && jobStatus=failed) — page.tsx 가 그 조건으로만 넘긴다. 일부 항목 실패만으로는 true 가 아니다 */
+  isFailed?: boolean;
   /**
    * 서버가 이미 N4 를 끝냈다(currentStep=N5 응답) — page.tsx 가 N5 로 넘어가기 직전 완료 표시를 하는
    * 동안만 true 로 넘긴다. 그때 status 는 그 N5 응답이다.
@@ -209,7 +215,6 @@ export function N4ProcessingView({
   // 행·caption·표시 % 상한은 이번 poll 의 서버 관측(진행 중으로 그린 단계)으로만 정한다. status.progress 는
   // stages 가 비어 있을 때의 coarse fallback 에만 쓴다 — 숫자는 hook 이 그 상한 안에서 따로 올린다.
   const { rows, activeStages } = resolveN4Presentation(status.stages, status.progress);
-  const failedItems = (status.items ?? []).filter((i) => i.status === 'failed');
   const displayedProgress = useDisplayedProgress({
     persistKey: n4DisplayedProgressKey(jobId),
     ceiling: Math.max(...activeStages.map((stage) => DISPLAY_CEILING_BY_N4_STAGE[stage])),
@@ -225,7 +230,6 @@ export function N4ProcessingView({
 
   return (
     <ProcessingStageLayout
-      currentStep="N4"
       header={{
         title: '번역 중',
         description: '확정한 섹션을 번역하고 이미지에 적용하고 있습니다.',
@@ -251,7 +255,10 @@ export function N4ProcessingView({
       progressPercent={displayedProgress}
       progressHint={isCompleted ? N4_COMPLETION_COPY.progressHint : N4_AUTO_ADVANCE_NOTICE}
       pauseButtonTitle={N4_PAUSE_BUTTON_TITLE}
-      failedItems={failedItems}
+      // 부분 실패 항목(unitType·unitId·errorCode)은 내부 진단 정보라 N4 화면에 내지 않는다 — 블록·섹션 오류는 N5 에서 확인한다.
+      // 진행 멈춤(hasProcessingFailure)·전체 실패(jobStatus=failed) 판정은 그대로다
+      failedItems={[]}
+      error={isFailed ? N4_ERROR : undefined}
     />
   );
 }
