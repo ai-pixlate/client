@@ -254,6 +254,53 @@ export function useN5EditSession({
     [fitForText, fontScaleDrafts, sections, translationDrafts],
   );
 
+  // ── 초기 Auto Height ─ 아무것도 편집하지 않은 block 도 진입 직후부터 번역문을 감싸는 높이로 보인다(화면 표시 정상화).
+  // 측정은 편집 때와 같은 fitForText(measureTextHeight → fitBoxToTextHeight)이고, 기준 박스는 서버 박스(getTranslatedBaseBox)다.
+  // 사용자 편집이 아니므로 실행 취소 이력·commitBoxEdit·layout PATCH·revision·pendingEdits 를 만들지 않고 bboxDrafts 만 채운다.
+  // 이 effect 가 넣은 박스는 객체 참조로 기억한다 — bboxDrafts 의 값이 그 참조가 아니면 사용자가 만든 박스(resize·move·
+  // 글자 배율·번역 저장·실행 취소)로 보고 다시는 건드리지 않는다. 측정기·서버 글꼴이 아직 준비되지 않았으면(fitForText null)
+  // 서버 박스를 그대로 두고, 준비 뒤(measurer·isFontReady 변경) 다시 계산한다. 결과가 지금 박스와 같으면 state 를 바꾸지 않는다.
+  const autoFitBoxesRef = useRef<Map<number, BoundingBox>>(new Map());
+  useEffect(() => {
+    if (viewMode !== 'translated' || !measurer) return;
+    const owned = autoFitBoxesRef.current;
+    const changes: { blockId: number; expected: BoundingBox | undefined; next: BoundingBox | null }[] = [];
+    for (const block of blocks) {
+      const current = bboxDrafts.get(block.id);
+      if (current === undefined) owned.delete(block.id);
+      else if (current !== owned.get(block.id)) continue; // 사용자 박스
+      if (fontScaleDrafts.has(block.id)) continue; // 사용자 글자 배율
+      const translationDraft = translationDrafts.get(block.id)?.draft;
+      if (translationDraft !== undefined && translationDraft !== block.translatedText) continue; // 편집 중인 글
+      const section = sections.find((candidate) => candidate.id === block.sectionId);
+      if (!section || section.bucket === 'exclude' || !block.editable) continue;
+      const base = getTranslatedBaseBox(block);
+      if (!base || block.translatedText.trim() === '') continue;
+      // 역할·측정기·서버 글꼴 준비 판정은 fitForText 가 한다. 못 재면 지금 박스를 그대로 둔다
+      const fitted = fitForText(block, block.translatedText, base, getBaseFontScale(block), section);
+      if (!fitted) continue;
+      const next = fitted.box === base ? null : fitted.box;
+      if (next === null ? current === undefined : current !== undefined && isSameBox(current, next)) continue;
+      changes.push({ blockId: block.id, expected: current, next });
+    }
+    if (changes.length === 0) return;
+    setBboxDrafts((drafts) => {
+      let next: Map<number, BoundingBox> | null = null;
+      for (const change of changes) {
+        if (drafts.get(change.blockId) !== change.expected) continue; // 그사이 사용자가 바꿨다
+        next ??= new Map(drafts);
+        if (change.next) {
+          next.set(change.blockId, change.next);
+          owned.set(change.blockId, change.next);
+        } else {
+          next.delete(change.blockId);
+          owned.delete(change.blockId);
+        }
+      }
+      return next ?? drafts;
+    });
+  }, [viewMode, measurer, blocks, sections, bboxDrafts, fontScaleDrafts, translationDrafts, fitForText]);
+
   // ── 번역문 ─ 초안·재렌더 task·충돌을 여기 두어 패널의 저장과 실행 취소가 같은 값을 본다
   const updateTranslationDraft = useCallback(
     (blockId: number, update: (prev: TranslationDraft | undefined) => TranslationDraft | undefined) => {
