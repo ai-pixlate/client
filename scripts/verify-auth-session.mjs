@@ -7,7 +7,9 @@
  * 실행: npm run verify:auth-session
  */
 
-import { fetchWithSessionRecovery, AuthSessionChangedError } from '../lib/auth/authorized-request.ts';
+import { fetchWithSessionRecovery, AuthRecoveryError, AuthSessionChangedError } from '../lib/auth/authorized-request.ts';
+import { shouldRetryQuery } from '../lib/auth/query-retry.ts';
+import { QueryClient } from '@tanstack/query-core';
 import { AUTH_REFRESH_MAX_ATTEMPTS, AUTH_ORIGINAL_REQUEST_MAX_RETRIES, AUTH_REFRESH_EVENT_WAIT_MS, AUTH_REFRESH_LOCK_WAIT_MS } from '../lib/auth/constants.ts';
 import { createAuthChannel, toWireEvent } from '../lib/auth/cross-tab.ts';
 import { logout, resumePendingLogout, retryPendingLogout } from '../lib/auth/logout.ts';
@@ -282,13 +284,13 @@ console.log('\n[refresh — single-flight·계정 확인]');
   setAuthenticated('t1', SELLER_1);
   const server = createServer({ 'POST /auth/refresh': [async () => authError(503, 'SERVICE_UNAVAILABLE', null)] });
   const r = originalRequest(5);
-  const res = await fetchWithSessionRecovery(r.send).catch((error) => ({ status: `thrown ${error.name}` }));
+  const res = await fetchWithSessionRecovery(r.send).catch((error) => ({ status: `thrown ${error.name}`, error }));
   const snap = getAuthSnapshot();
   check('refresh 503 → 세션 상태 유지', snap.status === 'authenticated' && snap.seller?.id === 1, `${snap.status}`);
   check('refresh 503 → 자동 반복 없음(refresh 1회·원 요청 1회)', server.count('POST /auth/refresh') === 1 && r.sends === 1);
   check('refresh 503 → G1 이동·로그아웃 알림 없음', tab.navigations.length === 0 && !wireLog.at(-1)?.includes('logout'));
   check('refresh 503 → 일시 오류 안내', snap.notice === 'auth-unavailable');
-  check('refresh 503 → 원 응답 401 그대로 돌려줌', res.status === 401);
+  check('refresh 503 → 401 응답 대신 AuthRecoveryError(unavailable) — 쿼리 재시도가 새 refresh 를 만들지 않게', res.error instanceof AuthRecoveryError && res.error.failure === 'unavailable');
 }
 for (const reason of ['refresh_invalid', 'refresh_reused']) {
   const tab = setupTab();
@@ -306,6 +308,160 @@ for (const reason of ['refresh_invalid', 'refresh_reused']) {
   check(`${reason} → access·계정 제거`, getAccessToken() === null && snap.seller === null && snap.status === 'signed-out');
   check(`${reason} → 다른 탭 logout 알림`, wireLog.at(-1) === JSON.stringify({ type: 'logout' }));
   check(`${reason} → refresh 1회·재시도 없음`, server.count('POST /auth/refresh') === 1 && r.sends === 1 && thrown instanceof AuthSessionChangedError);
+}
+
+console.log('\n[F1 — 이전 인증 세대의 늦은 401 은 새 세션을 복구하지 않는다]');
+{
+  // F1-A: A 세대 요청 전송 → 응답 전에 B 세대로 전환 → A 요청 401
+  setupTab();
+  setAuthenticated('tA', SELLER_1);
+  const server = createServer({ 'POST /auth/refresh': [okRefresh('tX')], 'GET /auth/me': [meReturns(SELLER_2)] });
+  let sends = 0;
+  const send = async () => {
+    sends += 1;
+    if (sends === 1) setAuthenticated('tB', SELLER_2); // 응답 전에 다른 탭 계정 전환(세대 증가)
+    return authError(401, 'TOKEN_EXPIRED', null);
+  };
+  const thrown = await fetchWithSessionRecovery(send).then(() => null, (error) => error);
+  check('F1-A 이전 세대 401 → refresh 0회', server.count('POST /auth/refresh') === 0, `refresh=${server.count('POST /auth/refresh')}`);
+  check('F1-A 이전 세대 401 → /auth/me 0회', server.count('GET /auth/me') === 0);
+  check('F1-A 이전 세대 401 → 원 요청 재전송 0회', sends === 1);
+  check('F1-A 이전 세대 401 → AuthSessionChangedError', thrown instanceof AuthSessionChangedError);
+  check('F1-A B 세대 상태 유지(access·계정)', getAccessToken() === 'tB' && getAuthSnapshot().seller?.id === 2);
+}
+{
+  // F1-B: A 세대 복구가 탭 잠금을 기다리는 사이 B 세대로 전환 → 잠금을 얻어도 refresh 를 보내지 않는다
+  let releaseLock;
+  const lockGate = new Promise((resolve) => (releaseLock = resolve));
+  setupTab({ lock: async (task) => { await lockGate; return task(); } });
+  setAuthenticated('tA', SELLER_1);
+  const server = createServer({ 'POST /auth/refresh': [okRefresh('tX')], 'GET /auth/me': [meReturns(SELLER_1)] });
+  const r = originalRequest(1);
+  const pending = fetchWithSessionRecovery(r.send).then(() => null, (error) => error);
+  await sleep(10);
+  setAuthenticated('tB', SELLER_2); // 잠금 대기 중 전환
+  releaseLock();
+  const thrown = await pending;
+  check('F1-B 잠금 대기 중 세대 변경 → 잠금 획득 뒤 refresh 0회', server.count('POST /auth/refresh') === 0, `refresh=${server.count('POST /auth/refresh')}`);
+  check('F1-B 원 요청 재전송 0회·AuthSessionChangedError', r.sends === 1 && thrown instanceof AuthSessionChangedError);
+  check('F1-B B 세대 access 유지', getAccessToken() === 'tB');
+}
+{
+  // F1-C: A 세대 refresh 전송 → 응답 전 B 세대로 전환 → refresh 200
+  setupTab();
+  setAuthenticated('tA', SELLER_1);
+  const before = wireLog.length;
+  const server = createServer({
+    'POST /auth/refresh': [
+      async () => {
+        setAuthenticated('tB', SELLER_2); // 응답 도착 전 전환
+        return json(200, { accessToken: 'tA-new' });
+      },
+    ],
+    'GET /auth/me': [meReturns(SELLER_1)],
+  });
+  const r = originalRequest(1);
+  const thrown = await fetchWithSessionRecovery(r.send).then(() => null, (error) => error);
+  check('F1-C refresh 도중 세대 변경 → 새 access 저장 안 함(B access 유지)', getAccessToken() === 'tB', `access=${getAccessToken()}`);
+  check('F1-C /auth/me 로 이전 복구를 이어가지 않음', server.count('GET /auth/me') === 0);
+  check('F1-C refresh-complete 알림 없음', !wireLog.slice(before).some((m) => m.includes('refresh-complete')));
+  check('F1-C B 계정 유지·원 요청 재전송 없음', getAuthSnapshot().seller?.id === 2 && r.sends === 1 && thrown instanceof AuthSessionChangedError);
+}
+{
+  // F1-B′: A 세대 복구가 진행 중일 때 B 세대 요청의 401 은 그 Promise 를 공유하지 않는다
+  let releaseRefresh;
+  const refreshGate = new Promise((resolve) => (releaseRefresh = resolve));
+  setupTab();
+  setAuthenticated('tA', SELLER_1);
+  const server = createServer({
+    'POST /auth/refresh': [
+      async () => {
+        await refreshGate;
+        return json(200, { accessToken: 'tA-new' });
+      },
+      okRefresh('tB-new'),
+    ],
+    'GET /auth/me': [meReturns(SELLER_2)],
+  });
+  const a = originalRequest(1);
+  const pendingA = fetchWithSessionRecovery(a.send).then(() => null, (error) => error);
+  await sleep(10); // A 복구가 refresh 를 기다리는 중
+  setAuthenticated('tB', SELLER_2);
+  const b = originalRequest(1);
+  const resB = await fetchWithSessionRecovery(b.send);
+  releaseRefresh();
+  const thrownA = await pendingA;
+  check('F1-B′ B 세대 요청은 A 세대 복구에 합류하지 않고 자기 refresh 로 복구(refresh 2회 · B 200)', server.count('POST /auth/refresh') === 2 && resB.status === 200 && b.auth[1] === 'tB-new');
+  check('F1-B′ 늦게 끝난 A 복구는 B 세션에 쓰지 않음', getAccessToken() === 'tB-new' && getAuthSnapshot().seller?.id === 2 && thrownA instanceof AuthSessionChangedError);
+}
+{
+  // F1-D: 현재 세대의 정상 401 동시 3건 — 기존 single-flight 유지
+  setupTab();
+  setAuthenticated('t1', SELLER_1);
+  const server = createServer({ 'POST /auth/refresh': [okRefresh('t2', 20)], 'GET /auth/me': [meReturns(SELLER_1)] });
+  const requests = [originalRequest(1), originalRequest(1), originalRequest(1)];
+  const responses = await Promise.all(requests.map((r) => fetchWithSessionRecovery(r.send)));
+  check('F1-D 현재 세대 동시 401 3건 → refresh 1회·/auth/me 1회', server.count('POST /auth/refresh') === 1 && server.count('GET /auth/me') === 1);
+  check('F1-D 각 원 요청 1회 재전송 → 200', requests.every((r) => r.sends === 2) && responses.every((res) => res.status === 200));
+}
+
+console.log('\n[F3 — QueryClient 통합: 인증 복구 최종 실패는 query 전체를 자동 재실행하지 않는다]');
+{
+  check('retry 정책: AuthRecoveryError → 0회', shouldRetryQuery(0, new AuthRecoveryError('failed')) === false);
+  check('retry 정책: AuthSessionChangedError → 0회', shouldRetryQuery(0, new AuthSessionChangedError()) === false);
+  check('retry 정책: 일반 오류 → 1회까지', shouldRetryQuery(0, new Error('x')) === true && shouldRetryQuery(1, new Error('x')) === false);
+
+  /** 실제 QueryClient(전역 retry = shouldRetryQuery, 지연 0) 로 보호 API 1개를 조회한다 */
+  async function runQuery(refreshResponses, { me = [meReturns(SELLER_1)], eventWaitMs = 10 } = {}) {
+    setupTab({ eventWaitMs });
+    setAuthenticated('t1', SELLER_1);
+    const server = createServer({ 'POST /auth/refresh': refreshResponses, 'GET /auth/me': me });
+    const r = originalRequest(1);
+    let queryRuns = 0;
+    const client = new QueryClient({ defaultOptions: { queries: { retry: shouldRetryQuery, retryDelay: 0 } } });
+    const result = await client
+      .fetchQuery({
+        queryKey: ['protected'],
+        queryFn: async () => {
+          queryRuns += 1;
+          const res = await fetchWithSessionRecovery(r.send);
+          if (!res.ok) throw new Error(`API error: ${res.status}`);
+          return res.json();
+        },
+      })
+      .then((data) => ({ ok: true, data }), (error) => ({ ok: false, error }));
+    client.clear();
+    return { server, r, queryRuns, result, refresh: server.count('POST /auth/refresh') };
+  }
+  const MATRIX = [
+    ['origin_not_allowed', [async () => authError(401, 'UNAUTHORIZED', 'origin_not_allowed')], 1, AuthRecoveryError],
+    ['422', [async () => authError(422, 'VALIDATION_ERROR', null)], 1, AuthRecoveryError],
+    ['503', [async () => authError(503, 'SERVICE_UNAVAILABLE', null)], 1, AuthRecoveryError],
+    ['network failure', [async () => { throw new TypeError('Failed to fetch'); }], 1, AuthRecoveryError],
+    ['refresh_invalid', [async () => authError(401, 'UNAUTHORIZED', 'refresh_invalid')], 1, AuthSessionChangedError],
+    ['refresh_reused', [async () => authError(401, 'UNAUTHORIZED', 'refresh_reused')], 1, AuthSessionChangedError],
+    ['rotated-exhausted', [async () => authError(401, 'UNAUTHORIZED', 'refresh_rotated')], AUTH_REFRESH_MAX_ATTEMPTS, AuthRecoveryError],
+  ];
+  for (const [label, responses, expectedRefresh, errorType] of MATRIX) {
+    const run = await runQuery(responses);
+    check(`F3 ${label} → refresh ${expectedRefresh}회 · 보호 API 1회 · query 재실행 0회`, run.refresh === expectedRefresh && run.r.sends === 1 && run.queryRuns === 1, `refresh=${run.refresh} sends=${run.r.sends} queryRuns=${run.queryRuns}`);
+    check(`F3 ${label} → ${errorType.name}`, !run.result.ok && run.result.error instanceof errorType, run.result.error?.name);
+  }
+  {
+    const run = await runQuery([okRefresh('t2')]);
+    check('F3 정상 만료 → refresh 1회 · /auth/me 1회 · 원 요청 2회 · query 재실행 0회 · 성공', run.refresh === 1 && run.server.count('GET /auth/me') === 1 && run.r.sends === 2 && run.queryRuns === 1 && run.result.ok);
+  }
+  {
+    // 일반 서버 오류는 기존 정책대로 query 1회 재시도
+    setupTab();
+    setAuthenticated('t1', SELLER_1);
+    createServer({});
+    let queryRuns = 0;
+    const client = new QueryClient({ defaultOptions: { queries: { retry: shouldRetryQuery, retryDelay: 0 } } });
+    await client.fetchQuery({ queryKey: ['plain'], queryFn: async () => { queryRuns += 1; throw new Error('API error: 500'); } }).catch(() => null);
+    client.clear();
+    check('F3 일반 query 오류 → 기존 정책대로 최대 1회 재시도(총 2회 실행)', queryRuns === 2, `runs=${queryRuns}`);
+  }
 }
 
 console.log('\n[refresh — refresh_rotated 복구]');
@@ -353,20 +509,20 @@ console.log('\n[refresh — refresh_rotated 복구]');
   const server = createServer({ 'POST /auth/refresh': [async () => authError(401, 'UNAUTHORIZED', 'refresh_rotated')] });
   const before = wireLog.length;
   const r = originalRequest(5);
-  const res = await fetchWithSessionRecovery(r.send);
+  const thrown = await fetchWithSessionRecovery(r.send).then(() => null, (error) => error);
   const snap = getAuthSnapshot();
   check('계속 rotated → 사건당 refresh 최대 2회', server.count('POST /auth/refresh') === 2);
   check('계속 rotated → 자동 복구 중단 상태(recovery-stopped)', snap.status === 'recovery-stopped' && snap.notice === 'recovery-stopped');
   check('계속 rotated → 서버 세션 폐기로 단정하지 않음(logout 알림·G1 강제 이동 없음)', !wireLog.slice(before).some((m) => m.includes('logout')) && tab.navigations.length === 0);
-  check('계속 rotated → 원 요청 재시도 없음', r.sends === 1 && res.status === 401);
+  check('계속 rotated → 원 요청 재시도 없음·AuthRecoveryError(rotated-exhausted)', r.sends === 1 && thrown instanceof AuthRecoveryError && thrown.failure === 'rotated-exhausted');
 }
 {
   setupTab();
   setAuthenticated('t1', SELLER_1);
   const server = createServer({ 'POST /auth/refresh': [okRefresh('t2')], 'GET /auth/me': [meReturns(SELLER_1)] });
   const r = originalRequest(10);
-  const res = await fetchWithSessionRecovery(r.send);
-  check('재시도도 401 → 원 요청 재시도 최대 1회(무한 반복 없음)', r.sends === 2 && server.count('POST /auth/refresh') === 1 && res.status === 401);
+  const thrown = await fetchWithSessionRecovery(r.send).then(() => null, (error) => error);
+  check('재시도도 401 → 원 요청 재시도 최대 1회(무한 반복 없음)·AuthRecoveryError(retry-exhausted)', r.sends === 2 && server.count('POST /auth/refresh') === 1 && thrown instanceof AuthRecoveryError && thrown.failure === 'retry-exhausted');
 }
 {
   const tab = setupTab();
