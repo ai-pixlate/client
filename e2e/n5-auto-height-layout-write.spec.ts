@@ -160,3 +160,26 @@ test('I. resize 는 사용자 폭 + 그 폭의 Auto Height, 글자 배율은 배
   const fontBox = font.body.layoutAdjust!.box!;
   expect(Math.abs(fontBox.h - (afterFont.height * fontBox.w) / afterFont.width)).toBeLessThan(0.05);
 });
+
+test('세로 손잡이 — 사용자가 정한 높이는 사용자 배치라 기존 layout 저장을 탄다(진입 보정과 구분)', async ({ page }) => {
+  const patches = trackPatches(page);
+  await open(page);
+  await expectWrapsText(page, 9112);
+  await page.getByTestId('n5-block-pin-9112').click();
+  const shown = await boxOf(page, 9112);
+  const h = (await page.getByTestId('n5-block-handle-s').boundingBox())!;
+  await page.mouse.move(h.x + h.width / 2, h.y + h.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(h.x + h.width / 2, h.y + h.height / 2 + 30, { steps: 6 });
+  await page.mouse.up();
+  await settled(page);
+  expect(patches).toHaveLength(1);
+  const box = patches[0].body.layoutAdjust!.box!;
+  const after = await boxOf(page, 9112);
+  expect(after.height).toBeGreaterThan(shown.height + 20);
+  expect(Math.abs(box.h - (after.height * ORIGINAL_9112.w) / after.width)).toBeLessThan(0.05);
+  // 저장·재조회 뒤에도 Auto Height 가 사용자 높이를 덮지 않는다
+  await expect(page.getByTestId('n5-block-selection')).toHaveAttribute('data-manual-height', 'true');
+  await page.waitForTimeout(1_000);
+  expect(Math.abs((await boxOf(page, 9112)).height - after.height)).toBeLessThan(0.05);
+});

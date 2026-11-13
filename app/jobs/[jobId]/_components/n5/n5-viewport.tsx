@@ -431,6 +431,7 @@ function BlockSelectionChrome({
   fontScale,
   onFontScaleChange,
   fitAutoHeight,
+  isManualHeight,
   autoHeightOverflow,
   rect,
   zoom,
@@ -444,8 +445,8 @@ function BlockSelectionChrome({
   /** preview scale */
   scale: number;
   onResize: (next: BoundingBox) => void;
-  /** 손을 놓았을 때 한 번 — 실행 취소 한 단계 */
-  onResizeCommit: (before: BoundingBox, after: BoundingBox) => void;
+  /** 손을 놓았을 때 한 번 — 실행 취소 한 단계. manualHeight = 이 조작이 세로 높이를 직접 정했다 */
+  onResizeCommit: (before: BoundingBox, after: BoundingBox, manualHeight: boolean) => void;
   /** 서버 실행 취소·다시 실행 진행 중 — 새 조작을 시작하지 않는다 */
   isEditLocked: boolean;
   /** 끄는 동안 실행 취소·다시 실행이 끼어들지 않게 알린다 */
@@ -454,10 +455,13 @@ function BlockSelectionChrome({
   fontScale: number;
   onFontScaleChange: (direction: 'increase' | 'decrease') => void;
   /**
-   * Auto Height(Figma Text) — 조판이 요구하는 높이로 맞춘 박스. 이 값이 있으면 폭만 사용자가 정한다: 모서리의 세로 이동은
-   * 쓰지 않고, 세로 전용 n·s 손잡이는 끌리지 않는다. 잴 수 없는 block은 null이고 8방향 자유 조절을 그대로 쓴다.
+   * Auto Height(Figma Text) — 조판이 요구하는 높이로 맞춘 박스. 잴 수 없는 block은 null이고 8방향 자유 조절을 그대로 쓴다.
+   * 가로만 바꾸는 조작(e·w, 세로로 움직이지 않은 모서리)은 폭만 사용자가 정하고 높이는 줄바꿈 결과로 다시 맞춘다.
+   * n·s 손잡이나 세로로 끈 모서리는 사용자가 높이를 직접 정한다(manual height) — 그 뒤로는 Auto Height 가 높이를 덮지 않는다.
    */
   fitAutoHeight: ((box: BoundingBox) => BoundingBox | null) | null;
+  /** 사용자가 이미 높이를 정한 block — 가로 조절에도 높이를 다시 맞추지 않는다 */
+  isManualHeight: boolean;
   /** 줄바꿈 결과가 section 아래를 넘어 박스에 다 들어가지 않는다(글자를 줄이거나 자르지 않는다) */
   autoHeightOverflow: boolean;
   /** canvas 기준 block 위치 */
@@ -478,6 +482,8 @@ function BlockSelectionChrome({
     startBbox: BoundingBox;
     startZoom: number;
     lastBbox: BoundingBox;
+    /** 이번 끌기에서 세로로 움직였다(n·s·모서리) — 사용자가 높이를 정한 조작이다 */
+    verticalTouched: boolean;
   } | null>(null);
   // 끌기 중 선택 UI가 사라지면 pointerup을 받지 못한다 — 잠금이 남지 않게 함께 푼다
   useEffect(() => () => onDragActiveChange(false), [onDragActiveChange]);
@@ -486,7 +492,7 @@ function BlockSelectionChrome({
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
-    if (isEditLocked || (fitAutoHeight && (handle === 'n' || handle === 's'))) return;
+    if (isEditLocked) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     onDragActiveChange(true);
     setActiveDragMode(isCompact ? 'compact' : 'normal');
@@ -497,6 +503,7 @@ function BlockSelectionChrome({
       startBbox: bbox,
       startZoom: zoom,
       lastBbox: bbox,
+      verticalTouched: false,
     };
   }
 
@@ -509,10 +516,13 @@ function BlockSelectionChrome({
       scale,
       drag.startZoom,
     );
+    // 세로 성분이 있는 손잡이를 세로로 1px 이상 움직이면 그 순간부터 사용자가 높이를 정한다(손을 놓을 때까지 유지)
+    if (drag.handle !== 'e' && drag.handle !== 'w' && Math.abs(e.clientY - drag.startClient.y) >= 1) drag.verticalTouched = true;
+    const autoHeight = fitAutoHeight && !isManualHeight && !drag.verticalTouched ? fitAutoHeight : null;
     // null이면 폭·높이가 0 이하가 되는 위치다 — 직전 유효한 박스를 그대로 둔다
-    const next = resizeBoxWithinSection(drag.startBbox, drag.handle, fitAutoHeight ? { x: delta.x, y: 0 } : delta, section);
+    const next = resizeBoxWithinSection(drag.startBbox, drag.handle, autoHeight ? { x: delta.x, y: 0 } : delta, section);
     if (next) {
-      const fitted = fitAutoHeight?.(next) ?? next;
+      const fitted = autoHeight?.(next) ?? next;
       drag.lastBbox = fitted;
       onResize(fitted);
     }
@@ -528,7 +538,7 @@ function BlockSelectionChrome({
     if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
     // 시스템이 끌기를 취소하면 시작 전 상태로 돌리고 이력에 남기지 않는다
     if (e.type === 'pointercancel') onResize(drag.startBbox);
-    else onResizeCommit(drag.startBbox, drag.lastBbox);
+    else onResizeCommit(drag.startBbox, drag.lastBbox, drag.verticalTouched);
   }
 
   const inverseScale = `scale(${1 / zoom})`;
@@ -553,7 +563,8 @@ function BlockSelectionChrome({
   return (
     <div
       data-testid="n5-block-selection"
-      data-auto-height={fitAutoHeight ? 'true' : 'false'}
+      data-auto-height={fitAutoHeight && !isManualHeight ? 'true' : 'false'}
+      data-manual-height={isManualHeight ? 'true' : 'false'}
       data-auto-height-overflow={autoHeightOverflow}
       data-resize-mode={isCompact ? 'compact' : 'normal'}
       className="pointer-events-none absolute inset-0"
@@ -573,7 +584,7 @@ function BlockSelectionChrome({
             left: rect.left + rect.width * x,
             top: rect.top + rect.height * y,
             transform: `translate(-50%, -50%) ${inverseScale}`,
-            cursor: fitAutoHeight && (key === 'n' || key === 's') ? 'default' : cursor,
+            cursor,
           }}
           onPointerDown={(e) => handleResizePointerDown(e, key)}
           onPointerMove={handleResizePointerMove}
@@ -1937,7 +1948,7 @@ export function N5Viewport({
                 section={selectedSection}
                 scale={preview.scale}
                 onResize={(next) => setBboxDraft(selectedBlockId, next)}
-                onResizeCommit={(before, after) => commitBoxEdit('box-resize', selectedBlockId, before, after)}
+                onResizeCommit={(before, after, manualHeight) => commitBoxEdit('box-resize', selectedBlockId, before, after, manualHeight)}
                 isEditLocked={isEditLocked}
                 onDragActiveChange={setLayoutDragging}
                 fontScale={baseFontScaleById(selectedBlockId)}
@@ -1946,6 +1957,7 @@ export function N5Viewport({
                     ? (box) => fitAutoHeight(selectedBlockForOverlap, box)?.box ?? null
                     : null
                 }
+                isManualHeight={editSession.manualHeightIds.has(selectedBlockId)}
                 autoHeightOverflow={selectedAutoFit?.overflow ?? false}
                 onFontScaleChange={(direction) => {
                   const block = serverBlocks.find((candidate) => candidate.id === selectedBlockId);

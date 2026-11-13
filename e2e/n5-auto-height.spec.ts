@@ -149,27 +149,85 @@ test.describe('Auto Height', () => {
     near(now.height, await textHeight(page), 'height', 1);
   });
 
-  test('모서리 — 세로로 끌어도 높이는 줄바꿈 결과가 정본이고 위쪽은 그대로다', async ({ page }) => {
-    await openQa(page);
-    await dragHandle(page, 'e', -100, 0);
-    const base = await boxOf(page);
-    for (const key of ['se', 'ne', 'nw', 'sw']) {
-      await dragHandle(page, key, key.includes('e') ? -10 : 10, key.includes('n') ? -40 : 40);
-      const now = await boxOf(page);
-      near(now.top, base.top, `${key} top`);
-      near(now.height, await textHeight(page), `${key} height`, 1);
-    }
-  });
-
-  test('세로 손잡이 — 보이지만 끌리지 않고 이력도 남지 않는다', async ({ page }) => {
+  test('모서리 — 세로로 끌면 폭과 높이를 함께 정하고(manual height), 세로로 움직이지 않으면 Auto Height 를 유지한다', async ({ page }) => {
     await openQa(page);
     const start = await boxOf(page);
-    for (const key of ['n', 's']) {
-      await expect(page.getByTestId(`n5-block-handle-${key}`)).toBeVisible();
-      await dragHandle(page, key, 0, key === 'n' ? -30 : 30);
-      sameBox(await boxOf(page), start);
+    const selection = page.getByTestId('n5-block-selection');
+
+    // 왼쪽 모서리를 쓴다 — 낮은 Auto Height block 의 오른쪽 손잡이는 compact(가로 전용)라 모서리로 잡히지 않는다
+    // 세로 0 — 폭만 바뀌고 높이는 줄바꿈 결과
+    await dragHandle(page, 'sw', 120, 0);
+    const widthOnly = await boxOf(page);
+    expect(widthOnly.width).toBeLessThan(start.width);
+    near(widthOnly.height, await textHeight(page), 'auto height', 1);
+    await expect(selection).toHaveAttribute('data-auto-height', 'true');
+
+    // 세로로 끈 모서리 — 폭과 높이 둘 다 사용자가 정한다
+    await dragHandle(page, 'sw', 40, 50);
+    const corner = await boxOf(page);
+    near(corner.width, widthOnly.width - 40, 'corner width', 1);
+    near(corner.left, widthOnly.left + 40, 'corner left', 1);
+    near(corner.height, widthOnly.height + 50, 'corner height', 1);
+    near(corner.top, start.top, 'top');
+    await expect(selection).toHaveAttribute('data-manual-height', 'true');
+    await expect(selection).toHaveAttribute('data-auto-height', 'false');
+  });
+
+  test('세로 손잡이 — 높이를 직접 정하고, 이동·가로 조절에도 그 높이를 유지하며, Undo 는 Auto Height 로·Redo 는 그 높이로 돌아간다', async ({ page }) => {
+    const writes = recordWrites(page);
+    await openQa(page);
+    const start = await boxOf(page);
+    const selection = page.getByTestId('n5-block-selection');
+    const undo = page.getByTestId('n5-undo');
+    const redo = page.getByTestId('n5-redo');
+    await expect(page.getByTestId('n5-block-handle-s')).toHaveCSS('cursor', 'ns-resize');
+
+    // s — 아래 변만 내려간다
+    await dragHandle(page, 's', 0, 40);
+    const tall = await boxOf(page);
+    near(tall.height, start.height + 40, 's height', 1);
+    near(tall.top, start.top, 's top');
+    near(tall.width, start.width, 's width');
+    await expect(selection).toHaveAttribute('data-manual-height', 'true');
+
+    // n — 위 변이 올라가고 높이가 늘어난다
+    await dragHandle(page, 'n', 0, -20);
+    const taller = await boxOf(page);
+    near(taller.top, tall.top - 20, 'n top', 1);
+    near(taller.height, tall.height + 20, 'n height', 1);
+
+    // 이동 — 높이 유지
+    const b = (await page.getByTestId(`n5-block-overlay-${BLOCK}`).boundingBox())!;
+    await page.mouse.move(b.x + b.width * 0.4, b.y + b.height * 0.6);
+    await page.mouse.down();
+    await page.mouse.move(b.x + b.width * 0.4 + 30, b.y + b.height * 0.6 + 10, { steps: 6 });
+    await page.mouse.up();
+    const moved = await boxOf(page);
+    expect(moved.left).toBeGreaterThan(taller.left);
+    near(moved.height, taller.height, 'moved height');
+
+    // 가로 조절 — 폭만 바뀌고 사용자 높이 유지(줄바꿈이 늘어도 다시 맞추지 않는다)
+    await dragHandle(page, 'e', -200, 0);
+    const narrow = await boxOf(page);
+    expect(narrow.width).toBeLessThan(moved.width);
+    near(narrow.height, moved.height, 'narrow keeps manual height');
+    await expect(selection).toHaveAttribute('data-manual-height', 'true');
+
+    // Undo 네 번(가로·이동·n·s) → 처음 Auto Height 상태
+    for (let i = 0; i < 4; i += 1) {
+      await expect(undo).toBeEnabled();
+      await undo.click();
     }
-    await expect(page.getByTestId('n5-undo')).toBeDisabled();
+    await expect(undo).toBeDisabled();
+    sameBox(await boxOf(page), start);
+    await expect(selection).toHaveAttribute('data-auto-height', 'true');
+    await expect(selection).toHaveAttribute('data-manual-height', 'false');
+
+    // Redo 한 번(s) → 사용자 높이와 manual height 복귀
+    await redo.click();
+    sameBox(await boxOf(page), tall);
+    await expect(selection).toHaveAttribute('data-manual-height', 'true');
+    expect(writes).toEqual([]); // 이 화면은 배치 쓰기 꺼짐(local 편집) — 서버 요청 없음
   });
 
   test('글자 크기 — 같은 폭에서 다시 줄바꿈한 높이가 되고, Undo 로 박스와 배율이 함께 돌아간다', async ({ page }) => {

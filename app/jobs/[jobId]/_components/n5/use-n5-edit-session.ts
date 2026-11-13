@@ -102,7 +102,10 @@ export interface N5EditSessionApi {
   layoutBoxes: ReadonlyMap<number, BoundingBox>;
   /** 끄는 동안의 화면 박스. 서버 박스·Auto Height 표시 박스와 같으면 사용자 초안으로 남기지 않는다 */
   setBboxDraft: (blockId: number, next: BoundingBox) => void;
-  commitBoxEdit: (kind: 'box-move' | 'box-resize', blockId: number, before: BoundingBox, after: BoundingBox) => void;
+  /** manualHeight = 이 조작에서 사용자가 세로 높이를 직접 정했다(n·s 손잡이·세로로 끈 모서리) — 그 block 은 Auto Height 를 끈다 */
+  commitBoxEdit: (kind: 'box-move' | 'box-resize', blockId: number, before: BoundingBox, after: BoundingBox, manualHeight?: boolean) => void;
+  /** 사용자가 높이를 직접 정한 block — Auto Height 가 그 높이를 덮지 않는다(이동·가로 조절·재조회·글꼴 로딩·번역 저장 모두) */
+  manualHeightIds: ReadonlySet<number>;
   /** 이 박스·배율에서 조판이 요구하는 높이로 맞춘 결과. 잴 수 없으면 null — 그 블록은 자유 크기 조절을 쓴다 */
   fitAutoHeight: (block: BlockViewModel, box: BoundingBox) => { box: BoundingBox; overflow: boolean } | null;
   /** blockId → 절대 글자 배율 초안. 항목이 없으면 저장 입력의 fontScale(getBaseFontScale) 이다 — 저장하지 않는다 */
@@ -191,14 +194,24 @@ export function useN5EditSession({
     setPendingEdits(pendingEditsRef.current);
   }, []);
 
-  const layoutDraggingRef = useRef(false);
-  const setLayoutDragging = useCallback((dragging: boolean) => {
-    layoutDraggingRef.current = dragging;
-  }, []);
 
   // ── 박스·글자 배율 local 초안 ─ 재조회·보기 전환으로 지우지 않는다. 서버에서 블록·섹션이 사라지면 그 초안만 정리한다
   const [bboxDrafts, setBboxDrafts] = useState<ReadonlyMap<number, BoundingBox>>(() => new Map());
   const [fontScaleDrafts, setFontScaleDrafts] = useState<ReadonlyMap<number, number>>(() => new Map());
+  // 사용자가 세로 높이를 직접 정한 block(세션 local). 이동·가로 조절은 이 상태를 바꾸지 않는다
+  const [manualHeightIds, setManualHeightIds] = useState<ReadonlySet<number>>(() => new Set());
+  const manualHeightRef = useRef<ReadonlySet<number>>(manualHeightIds);
+  const setManualHeight = useCallback((blockId: number, manual: boolean) => {
+    const current = manualHeightRef.current;
+    if (current.has(blockId) === manual) return;
+    const next = new Set(current);
+    if (manual) next.add(blockId);
+    else next.delete(blockId);
+    manualHeightRef.current = next;
+    setManualHeightIds(next);
+  }, []);
+  /** 박스 조작 이력마다 조작 전·후의 manual height 여부 — 실행 취소·다시 실행이 숫자 박스와 함께 이 상태도 되돌린다 */
+  const manualHeightByCommandRef = useRef(new WeakMap<N5EditCommand, { before: boolean; after: boolean }>());
   if (bboxDrafts.size > 0 || fontScaleDrafts.size > 0) {
     const sectionIds = new Set(sections.map((section) => section.id));
     const validBlockIds = new Set(blocks.filter((block) => sectionIds.has(block.sectionId)).map((block) => block.id));
@@ -224,6 +237,14 @@ export function useN5EditSession({
   useEffect(() => {
     latestRef.current = { blocks, sections, translationDrafts, bboxDrafts, fontScaleDrafts, onSelectBlock, onSelectSection };
   });
+
+  const layoutDraggingRef = useRef(false);
+  /** 끌기 시작 순간의 사용자 초안·높이 모드 — 손을 놓을 때 이력의 「조작 전」(논리 박스·모드)으로 쓴다(끄는 동안 초안이 바뀐다) */
+  const dragStartRef = useRef<{ drafts: ReadonlyMap<number, BoundingBox>; manual: ReadonlySet<number> } | null>(null);
+  const setLayoutDragging = useCallback((dragging: boolean) => {
+    if (dragging && !layoutDraggingRef.current) dragStartRef.current = { drafts: latestRef.current.bboxDrafts, manual: manualHeightRef.current };
+    layoutDraggingRef.current = dragging;
+  }, []);
 
   // 측정기는 세션 동안 하나만 연다(폰트 확인·DOM 생성은 한 번). 폰트가 늦게 오면 로딩이 끝날 때 다시 시도한다
   const [measurer, setMeasurer] = useState<TypesetMeasurer | null>(null);
@@ -282,35 +303,36 @@ export function useN5EditSession({
     [fitForText, fontScaleDrafts, sections, translationDrafts],
   );
 
-  // ── Auto Height 표시 박스 ─ 사용자 초안과 따로 둔다(화면 표시 정상화이지 사용자 배치가 아니다).
-  // 사용자 초안이 없는 block 을 서버 박스(getTranslatedBaseBox) 기준으로 fitForText(measureTextHeight → fitBoxToTextHeight)로 맞춘다 —
-  // x·y·폭은 그대로, 높이만 실제 줄바꿈 결과. 글 = 편집 중인 초안 > 서버 번역문, 배율 = 초안 > 서버 배율.
-  // 이 값은 이력·commitBoxEdit·layout PATCH·revision·pendingEdits 를 만들지 않는다. layoutAdjust 쓰기 여부와 관계없이 적용한다.
-  // 측정기·서버 글꼴이 준비되지 않았으면(fitForText null) 서버 박스를 그대로 두고, 준비 뒤 다시 잰다. 입력이 그대로면 다시 재지 않는다.
+  // ── Auto Height · 높이 모드 ─ block 마다 개념상 세 박스가 있다:
+  //   ① 서버 기준 박스 getTranslatedBaseBox(renderInput 적용 > 저장 layoutAdjust > 원본) — FE 가 바꾸지 않는다
+  //   ② 사용자 배치 초안 bboxDrafts — 사용자가 실제로 박스를 조작했을 때만 있다(이동·가로·세로·글자 배율)
+  //   ③ Auto Height 표시 박스 autoFitBoxes — 논리 박스(② ?? ①)의 x·y·폭에서 지금 글·배율·서버 style 로 잰 높이(파생값)
+  // 높이 모드는 manualHeightIds 로 따로 둔다(없으면 auto). 사용자 배치가 있어도 auto 면 Auto Height 를 계속 적용하고,
+  // 세로를 직접 정한 block(manual)만 논리 박스를 그대로 그린다. ③ 은 이력·commitBoxEdit·PATCH·revision 을 만들지 않는다.
   // 측정은 편집 중 선택 block 의 fitAutoHeight 와 같이 렌더 중에 한다(측정기는 이미 열린 숨은 DOM 이라 화면을 바꾸지 않는다).
-  // 입력(block·섹션·사용자 초안·글·배율·측정기·글꼴 준비)이 바뀔 때만 다시 잰다.
+  // 측정기·서버 글꼴이 준비되지 않았으면(fitForText null) 논리 박스를 그대로 두고, 준비 뒤 다시 잰다.
   const autoFitBoxes = useMemo(() => {
     const boxes = new Map<number, BoundingBox>();
     if (viewMode !== 'translated' || !measurer) return boxes;
     for (const block of blocks) {
-      // 사용자 박스가 있어도 계산해 둔다(화면은 사용자 박스가 우선) — 조작 시작 박스가 이 표시 박스였는지 알아야
-      // 이력의 「조작 전」을 서버 박스로 기록할 수 있다
+      if (manualHeightIds.has(block.id)) continue; // 사용자가 높이를 정했다
       const section = sections.find((candidate) => candidate.id === block.sectionId);
       if (!section || section.bucket === 'exclude' || !block.editable) continue;
-      const base = getTranslatedBaseBox(block);
+      const logical = bboxDrafts.get(block.id) ?? getTranslatedBaseBox(block);
       const text = translationDrafts.get(block.id)?.draft ?? block.translatedText;
-      if (!base || text.trim() === '') continue;
-      // 역할·측정기·서버 글꼴 준비 판정은 fitForText 가 한다. 못 재면 서버 박스를 그대로 둔다
-      const fitted = fitForText(block, text, base, fontScaleDrafts.get(block.id) ?? getBaseFontScale(block), section);
-      if (fitted && fitted.box !== base) boxes.set(block.id, fitted.box);
+      if (!logical || text.trim() === '') continue;
+      // 역할·측정기·서버 글꼴 준비 판정은 fitForText 가 한다. 못 재면 논리 박스를 그대로 둔다
+      const fitted = fitForText(block, text, logical, fontScaleDrafts.get(block.id) ?? getBaseFontScale(block), section);
+      if (fitted && fitted.box !== logical) boxes.set(block.id, fitted.box);
     }
     return boxes;
-  }, [viewMode, measurer, blocks, sections, fontScaleDrafts, translationDrafts, fitForText]);
+  }, [viewMode, measurer, blocks, sections, bboxDrafts, manualHeightIds, fontScaleDrafts, translationDrafts, fitForText]);
 
+  /** 「번역 후」 화면 박스 = manual ? 논리 박스 : Auto Height(논리 박스). 항목이 없으면 서버 기준 박스다 */
   const layoutBoxes = useMemo(() => {
     if (bboxDrafts.size === 0) return autoFitBoxes;
-    const merged = new Map(autoFitBoxes);
-    for (const [id, box] of bboxDrafts) merged.set(id, box);
+    const merged = new Map(bboxDrafts);
+    for (const [id, box] of autoFitBoxes) merged.set(id, box);
     return merged;
   }, [autoFitBoxes, bboxDrafts]);
   const autoFitBoxesRef = useRef(autoFitBoxes);
@@ -452,10 +474,11 @@ export function useN5EditSession({
 
   /** 새 배치 조작 저장 — 화면은 이미 after 다. 성공하면 이력 1단계, 실패하면 before 로 되돌리고 안내 */
   const persistLayoutEdit = useCallback(
-    (command: N5EditCommand, change: N5LayoutChange, rollback: { bbox: BoundingBox; fontScale?: number }) => {
+    (command: N5EditCommand, change: N5LayoutChange, rollback: { bbox: BoundingBox; fontScale?: number }, onRollback?: () => void) => {
       const blockId = command.target.id;
       if (!beginServerEdit()) {
         applyLayoutDraft(blockId, rollback);
+        onRollback?.();
         return;
       }
       const generation = layoutGenerationRef.current.get(blockId) ?? 0;
@@ -469,6 +492,7 @@ export function useN5EditSession({
           } else {
             layoutGenerationRef.current.set(blockId, generation + 1);
             applyLayoutDraft(blockId, rollback);
+            onRollback?.();
             dispatch({ type: 'edit-failed', kind: command.kind });
           }
         } finally {
@@ -482,23 +506,28 @@ export function useN5EditSession({
   );
 
   const commitBoxEdit = useCallback(
-    (kind: 'box-move' | 'box-resize', blockId: number, before: BoundingBox, after: BoundingBox) => {
+    (kind: 'box-move' | 'box-resize', blockId: number, before: BoundingBox, after: BoundingBox, manualHeight = false) => {
       if (isSameBox(before, after)) return;
-      // 이력의 이전 값은 화면 박스가 아니라 논리 배치다 — 조작 전에 사용자 초안이 없었으면(화면은 Auto Height 표시) 서버 박스.
-      // 그래야 실행 취소가 「조작 전」으로 돌아가고, 서버도 원본과 같으면 layoutAdjust null 로 정규화할 수 있다
-      const auto = autoFitBoxesRef.current.get(blockId);
+      // 높이 모드 — 세로를 직접 정한 조작이면 manual 로, 이미 manual 이면 이동·가로 조절에도 유지한다(이동·가로는 auto 를 유지)
+      const start = dragStartRef.current;
+      const wasManual = (start?.manual ?? manualHeightRef.current).has(blockId);
+      const isManual = wasManual || manualHeight;
+      // 이력의 이전 값은 화면 박스가 아니라 끌기 시작 때의 논리 박스(사용자 초안 ?? 서버 박스)다 — 실행 취소가 「조작 전」으로
+      // 돌아가고(그 위에 Auto Height 가 다시 적용된다), 서버도 원본과 같으면 layoutAdjust null 로 정규화할 수 있다
       const block = latestRef.current.blocks.find((candidate) => candidate.id === blockId);
       const base = block ? getTranslatedBaseBox(block) : null;
-      const logicalBefore = auto && base && isSameBox(auto, before) ? base : before;
+      const logicalBefore = (start?.drafts ?? latestRef.current.bboxDrafts).get(blockId) ?? base ?? before;
       const command: N5EditCommand = { kind, target: { type: 'block', id: blockId }, before: logicalBefore, after };
+      manualHeightByCommandRef.current.set(command, { before: wasManual, after: isManual });
+      setManualHeight(blockId, isManual);
       if (!canPersistLayout(blockId)) {
         dispatch({ type: 'edit-succeeded', command });
         return;
       }
-      // 끌기·손잡이 = box 만(배율은 그대로 — 안쪽 생략)
-      persistLayoutEdit(command, { kind: 'box', box: after }, { bbox: logicalBefore });
+      // 끌기·손잡이 = box 만(배율은 그대로 — 안쪽 생략). 저장에 실패해 되돌리면 manual height 도 조작 전으로
+      persistLayoutEdit(command, { kind: 'box', box: after }, { bbox: logicalBefore }, () => setManualHeight(blockId, wasManual));
     },
-    [canPersistLayout, dispatch, persistLayoutEdit],
+    [canPersistLayout, dispatch, persistLayoutEdit, setManualHeight],
   );
 
   const changeFontScale = useCallback(
@@ -514,8 +543,14 @@ export function useN5EditSession({
       if (!stepped) return;
       // 폭·기준점은 배율 규칙을 따르고, 높이는 새 글자 크기로 다시 줄바꿈한 결과가 정본이다. 윗변은 그대로 둔다
       const text = translationDrafts.get(block.id)?.draft ?? block.translatedText;
-      const fitted = fitForText(block, text, { ...stepped.bbox, y: bbox.y }, stepped.fontScale, section);
-      const after: N5FontScaleValue = fitted ? { bbox: fitted.box, fontScale: stepped.fontScale } : stepped;
+      // 사용자가 높이를 정한 block 은 폭·기준점만 배율 규칙을 따르고 높이는 그대로 둔다(Auto Height 로 다시 정하지 않는다)
+      const isManual = manualHeightRef.current.has(block.id);
+      const fitted = isManual ? null : fitForText(block, text, { ...stepped.bbox, y: bbox.y }, stepped.fontScale, section);
+      const after: N5FontScaleValue = isManual
+        ? { bbox: { ...stepped.bbox, y: bbox.y, height: bbox.height }, fontScale: stepped.fontScale }
+        : fitted
+          ? { bbox: fitted.box, fontScale: stepped.fontScale }
+          : stepped;
       applyLayoutDraft(block.id, after);
       const command: N5EditCommand = { kind: 'font-scale', target: { type: 'block', id: block.id }, before, after };
       if (!canPersistLayout(block.id)) {
@@ -536,8 +571,9 @@ export function useN5EditSession({
       const { blocks: latestBlocks, sections: latestSections, bboxDrafts: boxes, fontScaleDrafts: scales } = latestRef.current;
       const block = latestBlocks.find((candidate) => candidate.id === blockId);
       const beforeBox = boxes.get(blockId) ?? null;
+      // 사용자가 높이를 정한 block 은 글이 바뀌어도 그 높이를 다시 덮지 않는다
       const fitted =
-        block && beforeBox
+        block && beforeBox && !manualHeightRef.current.has(blockId)
           ? fitForText(block, afterText, beforeBox, scales.get(blockId) ?? getBaseFontScale(block), latestSections.find((s) => s.id === block.sectionId))
           : null;
       const afterBox = fitted && beforeBox && !isSameBox(fitted.box, beforeBox) ? fitted.box : beforeBox;
@@ -695,6 +731,15 @@ export function useN5EditSession({
     [dispatch, patchSectionBucket, settle],
   );
 
+  /** 박스 이력의 manual height 여부를 그 방향(실행 취소 = 조작 전, 다시 실행 = 조작 후)으로 되돌린다 */
+  const applyManualHeightFor = useCallback(
+    (command: N5EditCommand, direction: HistoryDirection) => {
+      const manual = manualHeightByCommandRef.current.get(command);
+      if (manual) setManualHeight(command.target.id, direction === 'undo' ? manual.before : manual.after);
+    },
+    [setManualHeight],
+  );
+
   /** 배치 실행 취소·다시 실행 — 과거 값을 현재 revision 으로 다시 저장한다(전용 API 없음). 성공한 뒤에만 pointer 를 옮긴다 */
   const runLayoutCommand = useCallback(
     async (direction: HistoryDirection, command: N5EditCommand, change: N5LayoutChange) => {
@@ -707,9 +752,10 @@ export function useN5EditSession({
       if (result.ok && !result.applied) {
         applyLayoutDraft(blockId, change.kind === 'box' ? { bbox: change.box } : { bbox: change.box, fontScale: change.fontScale });
       }
+      if (result.ok) applyManualHeightFor(command, direction);
       settle(direction, result.ok ? command : null);
     },
-    [applyLayoutDraft, clearHistoryConflict, dispatch, revealBlock, saveLayout, settle],
+    [applyLayoutDraft, applyManualHeightFor, clearHistoryConflict, dispatch, revealBlock, saveLayout, settle],
   );
 
   // 「번역 전」에는 조정 UI가 없고 원본 bbox를 보이므로 되돌려도 보이지 않는다 — 「번역 후」에서만 동작한다
@@ -738,6 +784,7 @@ export function useN5EditSession({
             return;
           }
           applyLayoutDraft(command.target.id, { bbox: value as BoundingBox });
+          applyManualHeightFor(command, direction);
           revealBlock(command.target.id);
           settle(direction, command);
           return;
@@ -754,7 +801,7 @@ export function useN5EditSession({
         }
       }
     },
-    [applyLayoutDraft, canPersistLayout, isHistoryAvailable, revealBlock, runLayoutCommand, runSectionCommand, runTranslationCommand, settle],
+    [applyLayoutDraft, applyManualHeightFor, canPersistLayout, isHistoryAvailable, revealBlock, runLayoutCommand, runSectionCommand, runTranslationCommand, settle],
   );
 
   const undo = useCallback(() => runHistory('undo'), [runHistory]);
@@ -788,6 +835,7 @@ export function useN5EditSession({
     layoutBoxes,
     setBboxDraft: setDragBox,
     commitBoxEdit,
+    manualHeightIds,
     fitAutoHeight,
     fontScaleDrafts,
     changeFontScale,
