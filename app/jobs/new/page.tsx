@@ -1371,7 +1371,7 @@ function NewJobPageInner() {
                     id="n1-next-tooltip"
                     role="tooltip"
                     data-testid="n1-next-tooltip"
-                    className="invisible absolute bottom-[calc(100%-3px)] left-1/2 z-10 flex w-[193px] -translate-x-1/2 flex-col gap-1 rounded-[8px] break-keep border border-[#ff6a38] bg-white p-2.5 text-[12px] leading-[normal] font-light tracking-[-0.04em] text-[#ff6a38] group-focus-within:visible group-hover:visible"
+                    className="invisible absolute bottom-[calc(100%-3px)] left-1/2 z-10 flex w-[193px] -translate-x-1/2 flex-col items-center gap-1 rounded-[8px] break-keep border border-[#ff6a38] bg-white px-4 py-2.5 text-center text-[12px] leading-[normal] font-light tracking-[-0.04em] text-[#ff6a38] group-focus-within:visible group-hover:visible"
                   >
                     {submitBlockMessages.map((message) => (
                       <p key={message}>{message}</p>
