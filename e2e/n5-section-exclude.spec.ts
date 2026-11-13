@@ -224,10 +224,14 @@ test.describe('N5 섹션 제외·되돌리기 — 서버 저장', () => {
       return confirms;
     }
 
-    /** 확인창이 뜨면 [확인하고 저장]으로 넘긴다 — 확인 항목 유무는 Mock 블록 상태에 따른다 */
-    async function confirmAndContinue(page: Page) {
+    /**
+     * 확인창이 뜨면 [확인하고 저장]으로 넘긴다 — 확인 항목 유무는 Mock 블록 상태에 따른다.
+     * [저장하러 가기]는 서버 상태를 맞춘 뒤(재조회) 확인창 또는 확정으로 이어지므로 둘 중 하나를 기다린다
+     */
+    async function confirmAndContinue(page: Page, confirms: string[]) {
       await page.getByTestId('n5-confirm-button').click();
       const dialog = page.getByTestId('n5-review-dialog');
+      await expect.poll(async () => confirms.length > 0 || (await dialog.isVisible().catch(() => false)), { timeout: 15_000 }).toBe(true);
       if (await dialog.isVisible().catch(() => false)) await page.getByTestId('n5-review-continue').click();
     }
 
@@ -255,7 +259,7 @@ test.describe('N5 섹션 제외·되돌리기 — 서버 저장', () => {
         await expect(confirmButton).toBeEnabled();
         expect(confirms).toEqual([]);
 
-        await confirmAndContinue(page);
+        await confirmAndContinue(page, confirms);
         await expect.poll(() => confirms.length).toBe(1);
         await expect(page.getByText('번역이 완료되었습니다.')).toBeVisible({ timeout: 10_000 });
       });

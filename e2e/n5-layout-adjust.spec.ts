@@ -91,8 +91,10 @@ test('move — 손을 놓을 때 1회, box 만 · 서버 trans1 · 최신 revisi
   expect(body.trans1).toBe('Instant effect guaranteed');
   expect(Object.keys(body.layoutAdjust!)).toEqual(['box']);
   const box = body.layoutAdjust!.box!;
-  // 옮기기 = 위치만. 크기는 원본 그대로, 좌표는 섹션 로컬 원본 px
-  expect([box.w, box.h]).toEqual([ORIGINAL_9112.w, ORIGINAL_9112.h]);
+  // 옮기기 = 위치만. 폭은 원본 그대로, 높이는 조작 직전 화면에 보이던 Auto Height 높이(서버 h=80 이 아니다), 좌표는 섹션 로컬 원본 px
+  expect(box.w).toBe(ORIGINAL_9112.w);
+  expect(Math.abs(box.h - (before.height * ORIGINAL_9112.w) / before.width)).toBeLessThan(0.01);
+  expect(box.h).not.toBe(ORIGINAL_9112.h);
   expect(box.x).toBeGreaterThan(ORIGINAL_9112.x);
   expect(box.y).toBeGreaterThan(ORIGINAL_9112.y);
   const after = await localBox(page, 9112);
@@ -433,12 +435,14 @@ test.describe('PR #116 대비 — legacy 적용 box', () => {
       },
       { taskId, jobId: MOCK_JOB_ID },
     );
-  /** 화면 박스 비율이 그 원본 px box 와 같은지(표시 배율과 무관하게) */
+  /**
+   * 화면 박스의 위치·폭 비율이 그 원본 px box 와 같은지(표시 배율과 무관하게). 높이는 Auto Height 표시값(글 높이)이라 서버 h 와 다를 수 있다
+   */
   async function expectScreenBox(page: Page, box: Box) {
     await expect
       .poll(async () => {
         const shown = await localBox(page, 9112);
-        return Math.abs(shown.left / shown.width - box.x / box.w) < 0.001 && Math.abs(shown.height / shown.width - box.h / box.w) < 0.001;
+        return Math.abs(shown.left / shown.width - box.x / box.w) < 0.001 && Math.abs(shown.top / shown.width - box.y / box.w) < 0.001;
       })
       .toBe(true);
   }
@@ -457,12 +461,14 @@ test.describe('PR #116 대비 — legacy 적용 box', () => {
     await expectScreenBox(page, LEGACY_9112);
 
     await select(page, 9112);
+    const shownBefore = await localBox(page, 9112);
     await dragBody(page, 9112, 30, 20);
     await settled(page);
     const [move] = layoutPatches(patches);
     const moved = move.body.layoutAdjust!.box!;
-    // 옮기기는 legacy box 크기 그대로 — 시작값이 원본 bbox 였다면 w=500 이 나간다
-    expect([moved.w, moved.h]).toEqual([LEGACY_9112.w, LEGACY_9112.h]);
+    // 옮기기는 legacy box 폭 그대로(시작값이 원본 bbox 였다면 w=500 이 나간다) · 높이는 화면의 Auto Height 높이
+    expect(moved.w).toBe(LEGACY_9112.w);
+    expect(Math.abs(moved.h - (shownBefore.height * LEGACY_9112.w) / shownBefore.width)).toBeLessThan(0.01);
     expect(moved.x).toBeGreaterThan(LEGACY_9112.x);
     expect(move.body.revision).toBe(initial.revision);
     const moveRes = await responseOf(move);

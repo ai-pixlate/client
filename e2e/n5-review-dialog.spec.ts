@@ -127,7 +127,8 @@ test('겹침 진단 — 어떤 block이 어디서 겹치는지 보이고 실제 
   await page.getByTestId('n5-block-pin-9102').click();
   const label = page.getByTestId('n5-overlap-label-9111');
   await expect(label).toContainText('Block 2 ↔ Block 3');
-  await expect(label).toContainText('겹침 300 × 80 px');
+  // 겹침은 화면 박스(Auto Height 표시 포함) 기준이다 — 폭은 fixture 그대로 300, 높이는 아래 area 검증이 화면 박스로 확인한다
+  await expect(label).toContainText(/겹침 300 × \d+(\.\d+)? px/);
   await expect(page.getByTestId('n5-overlap-block-9111')).toHaveCSS('border-top-style', 'dashed');
   await expect(page.getByTestId('n5-overlap-block-9111')).toHaveCSS('pointer-events', 'none');
 

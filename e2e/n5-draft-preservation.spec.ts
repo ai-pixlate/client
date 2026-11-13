@@ -65,13 +65,23 @@ async function roundTripViewMode(page: Page) {
   await expect(editorOf(page, BLOCK_A)).toBeVisible();
 }
 
-async function failedCountInDialog(page: Page): Promise<string | null> {
+/**
+ * [저장하러 가기] = N5 최종 저장. 미저장 초안을 먼저 같은 PATCH 로 저장하고, 하나라도 실패하면 확정하지 않는다(초안 유지).
+ * 결과: 'refused' = confirm 0건·N5 유지·저장 실패 안내 / 'confirmed' = confirm 요청 1건(확정 응답 성공 여부와 무관)
+ */
+async function confirmOutcome(page: Page): Promise<'refused' | 'confirmed'> {
+  const before = (await calls(page)).confirm;
   await page.getByTestId('n5-confirm-button').click();
-  const dialog = page.getByTestId('n5-review-dialog');
-  if ((await dialog.count()) === 0) return null;
-  const title = await page.getByTestId('n5-review-count-unsaved-translation').textContent();
-  await page.getByTestId('n5-review-cancel').click();
-  return title;
+  let outcome: 'refused' | 'confirmed' | null = null;
+  await expect
+    .poll(async () => {
+      if ((await calls(page)).confirm > before) outcome = 'confirmed';
+      else if (await page.getByTestId('n5-confirm-error').filter({ hasText: '저장하지 못한 번역문' }).count()) outcome = 'refused';
+      return outcome;
+    }, { timeout: 20_000 })
+    .not.toBeNull();
+  await expect(page.getByTestId('n5-review-dialog')).toHaveCount(0); // 저장 실패 칸을 확인창으로 넘기지 않는다
+  return outcome!;
 }
 
 test.beforeEach(async ({ page }) => {
@@ -86,19 +96,22 @@ test('A. 저장 실패 → 원문 보기 왕복 → 초안·실패 상태·N 그
 
   await expect(editorOf(page, BLOCK_A)).toHaveValue('Failed draft A');
   await expect(saveOf(page, BLOCK_A)).toBeEnabled(); // 편집 중(미저장) 상태 그대로 — 다시 저장 가능
-  expect(await failedCountInDialog(page)).toBe('1건');
+  expect(await confirmOutcome(page)).toBe('refused');
   expect((await calls(page)).confirm).toBe(0);
+  await expect(editorOf(page, BLOCK_A)).toHaveValue('Failed draft A');
 });
 
-test('저장 시도 전 편집 중 초안도 왕복 후 남고, 실패 칸으로 세지 않는다', async ({ page }) => {
+test('저장 시도 전 편집 중 초안도 왕복 후 남고, [저장하러 가기]가 먼저 저장한 뒤 확정한다', async ({ page }) => {
   await intercept(page, { failBlocks: false, failConfirm: true });
   await editorOf(page, BLOCK_A).fill('Typing, not saved yet');
 
   await roundTripViewMode(page);
 
   await expect(editorOf(page, BLOCK_A)).toHaveValue('Typing, not saved yet');
-  expect(await failedCountInDialog(page)).toBeNull(); // 확인창 없이 바로 확정 요청
-  await expect.poll(async () => (await calls(page)).confirm).toBe(1);
+  const patchesBefore = (await calls(page)).blockPatch;
+  expect(await confirmOutcome(page)).toBe('confirmed');
+  expect((await calls(page)).blockPatch).toBe(patchesBefore + 1); // 초안 저장 → 그 뒤 확정
+  expect((await calls(page)).confirm).toBe(1);
 });
 
 test('B. 저장 성공 → 왕복 → 서버 저장값 · 실패 칸 없음', async ({ page }) => {
@@ -118,7 +131,7 @@ test('B. 저장 성공 → 왕복 → 서버 저장값 · 실패 칸 없음', as
     return blocks.find((b) => b.id === 9101)?.trans1;
   }, MOCK_JOB_ID);
   expect(serverText).toBe('Saved text A');
-  expect(await failedCountInDialog(page)).toBeNull();
+  expect(await confirmOutcome(page)).toBe('confirmed');
 });
 
 test('C. 실패 초안을 서버값으로 직접 되돌림 → 실패 칸 제거 → 왕복 후에도 서버값', async ({ page }) => {
@@ -133,10 +146,10 @@ test('C. 실패 초안을 서버값으로 직접 되돌림 → 실패 칸 제거
   await roundTripViewMode(page);
 
   await expect(editorOf(page, BLOCK_A)).toHaveValue(original);
-  expect(await failedCountInDialog(page)).toBeNull();
+  expect(await confirmOutcome(page)).toBe('confirmed'); // 서버값과 같아 저장할 초안이 없다
 });
 
-test('D. 두 칸 실패 → 왕복 → 둘 다 초안 유지 · N=2', async ({ page }) => {
+test('D. 두 칸 실패 → 왕복 → 둘 다 초안 유지 · 확정하지 않는다', async ({ page }) => {
   await intercept(page, { failBlocks: true, failConfirm: false });
   await failSave(page, BLOCK_A, 'Failed draft A');
   await failSave(page, BLOCK_B, 'Failed draft B');
@@ -145,26 +158,27 @@ test('D. 두 칸 실패 → 왕복 → 둘 다 초안 유지 · N=2', async ({ p
 
   await expect(editorOf(page, BLOCK_A)).toHaveValue('Failed draft A');
   await expect(editorOf(page, BLOCK_B)).toHaveValue('Failed draft B');
-  expect(await failedCountInDialog(page)).toBe('2건');
+  expect(await confirmOutcome(page)).toBe('refused');
+  await expect(editorOf(page, BLOCK_A)).toHaveValue('Failed draft A');
+  await expect(editorOf(page, BLOCK_B)).toHaveValue('Failed draft B');
 });
 
-test('E. 실패 초안 → 계속 → 확정 실패 → N5 유지 · 왕복해도 초안 그대로', async ({ page }) => {
+test('E. 실패 초안 → [저장하러 가기]가 다시 저장 시도 → 또 실패 → 확정 0건 · N5 유지 · 왕복해도 초안 그대로', async ({ page }) => {
   await intercept(page, { failBlocks: true, failConfirm: true });
   await failSave(page, BLOCK_A, 'Failed draft A');
   const patchesBefore = (await calls(page)).blockPatch;
 
-  await page.getByTestId('n5-confirm-button').click();
-  await page.getByTestId('n5-review-continue').click();
-  await expect(page.getByTestId('n5-confirm-error')).toBeVisible();
+  expect(await confirmOutcome(page)).toBe('refused');
+  expect((await calls(page)).blockPatch).toBe(patchesBefore + 1); // 같은 PATCH 경로로 한 번 더 저장을 시도했다
+  expect((await calls(page)).confirm).toBe(0);
   await expect(editorOf(page, BLOCK_A)).toHaveValue('Failed draft A');
 
   await roundTripViewMode(page);
   await expect(editorOf(page, BLOCK_A)).toHaveValue('Failed draft A');
-  expect((await calls(page)).blockPatch).toBe(patchesBefore); // 실패 초안을 다시 저장하지 않았다
-  expect(await failedCountInDialog(page)).toBe('1건');
 });
 
 test('F. 409 → 초안 유지 · 왕복해도 유지 · [최신 값 불러오기]를 고를 때만 서버값으로', async ({ page }) => {
+  await intercept(page, { failBlocks: false, failConfirm: true }); // 확정 요청 수만 센다(확정 응답은 실패로 두어 N5 에 남는다)
   const editor = editorOf(page, 9103);
   await page.getByTestId('n5-block-row-9103').click();
   await editor.fill('$99.99 (내 초안)');
@@ -185,7 +199,8 @@ test('F. 409 → 초안 유지 · 왕복해도 유지 · [최신 값 불러오�
 
   await roundTripViewMode(page);
   await expect(editor).toHaveValue('$99.99 (내 초안)'); // 409 뒤에도 초안은 자동으로 사라지지 않는다
-  expect(await failedCountInDialog(page)).toBe('1건');
+  expect(await confirmOutcome(page)).toBe('refused'); // 미저장 초안 저장이 409 → 확정하지 않는다
+  await expect(editor).toHaveValue('$99.99 (내 초안)');
 
   // 충돌 안내는 편집기 표시 상태라 왕복 뒤 다시 저장하면 다시 뜬다 → 사용자가 최신 값을 고른다
   await saveOf(page, 9103).click();
@@ -193,5 +208,5 @@ test('F. 409 → 초안 유지 · 왕복해도 유지 · [최신 값 불러오�
   await expect(editor).toHaveValue('$50.00 (다른 클라이언트)');
   await roundTripViewMode(page);
   await expect(editor).toHaveValue('$50.00 (다른 클라이언트)');
-  expect(await failedCountInDialog(page)).toBeNull();
+  expect(await confirmOutcome(page)).toBe('confirmed');
 });

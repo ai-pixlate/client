@@ -194,7 +194,13 @@ test('section 오른쪽 끝 block — 툴바가 section 밖 오른쪽에 그대�
 });
 
 test('높은 block의 action handle은 Figma 1512:23496대로 block 위에서 18이다', async ({ page }) => {
-  await page.getByTestId('n5-block-pin-9102').click();
+  // 진입부터 Auto Height 라 박스 높이 = 글 높이다 — 여러 줄 글로 높은 block 을 만든다(편집 중 글로 다시 잰다)
+  const editor = page.getByTestId('n5-block-editor-9102');
+  const sentence = (await editor.inputValue()).slice(0, 60);
+  await editor.fill(Array.from({ length: 6 }, () => sentence).join(' '));
+  // 입력칸을 고르면 그 block 이 선택된다
+  await expect(page.getByTestId('n5-block-overlay-9102')).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(async () => (await box(page, 'n5-block-overlay-9102')).height).toBeGreaterThanOrEqual(68);
   const overlay = await box(page, 'n5-block-overlay-9102');
   const handle = await box(page, 'n5-font-scale-handle');
   expect(overlay.height).toBeGreaterThanOrEqual(68);
