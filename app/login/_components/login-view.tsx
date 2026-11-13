@@ -80,8 +80,9 @@ function BrandLayer() {
 const FOCUS_RING = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ff6a38]';
 
 /**
- * 소셜 로그인 버튼 동작. 소셜 OAuth 서버가 없는 실서버 모드에서는 눌러도 아무 요청도 보내지 않는다(lib/auth/capability.ts).
- * Mock 에서는 POST /auth/social/{provider}/start → authorizeUrl 이동까지 실제 흐름을 탄다. 진행 중에는 두 버튼 모두 다시 시작하지 않는다.
+ * 소셜 로그인 버튼 동작. 켜짐 여부는 lib/auth/capability.ts isSocialLoginEnabled() 가 정한다 — Mock 과 NEXT_PUBLIC_AUTH_MODE=session 으로
+ * 실행·빌드한 실서버(next dev·production 모두)에서 켜지고, 스위치가 없는 기본 실서버(dev-login)에서는 눌러도 아무 요청도 보내지 않는다.
+ * 켜진 모드에서는 POST /auth/social/{provider}/start → authorizeUrl 이동까지 실제 흐름을 탄다. 진행 중에는 두 버튼 모두 다시 시작하지 않는다.
  */
 const subscribeNothing = () => () => {};
 
@@ -174,7 +175,7 @@ function ConsentNotice() {
 
 /**
  * G1 로그인(Figma 835:6511) — 카카오·Google 소셜 로그인 전용 화면이다. 이메일 로그인·회원가입·자동 로그인은 제품 범위에서 제외되었다.
- * 소셜 버튼은 Mock 에서만 실제 시작 요청을 보낸다. 소셜 OAuth 서버가 없는 실서버 모드에서는 어떤 요청도 보내지 않는다(lib/auth/capability.ts).
+ * 소셜 버튼은 Mock 과 NEXT_PUBLIC_AUTH_MODE=session 실서버에서 실제 시작 요청을 보낸다. 기본 실서버(dev-login)에서는 어떤 요청도 보내지 않는다(lib/auth/capability.ts).
  * 세로 배치: 로고 아래 남은 공간을 Figma 비율(위 242 : 아래 233)로 나눠 제목·소셜·고지 묶음을 놓는다.
  */
 export function LoginView() {
