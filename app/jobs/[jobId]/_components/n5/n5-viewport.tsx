@@ -47,6 +47,7 @@ import {
   computeFitHeightScale,
   computeCenteredPan,
   computeScrollThumb,
+  computeMinimalRevealPan,
   clampPan,
   type N5ViewMode,
   type Point,
@@ -123,8 +124,8 @@ import { isTypingTarget, type N5EditSessionApi } from './use-n5-edit-session';
 // 구현돼 있고 반대 방향이 미완성이었다(정확한 원인은 아래 selectionAutoMove
 // effect 주석 참고). 이제 selectedBlockId(우선)/selectedSectionId가 가리키는
 // block/section의 canvas-space rect를 계산해 이미 화면에 충분히 보이면
-// 그대로 두고, 화면 밖이면 그 rect가 보이는 위치로 pan만 옮긴다(zoom은
-// 그대로). 텍스트 입력 중이나 PATCH/rerender로 blocks가 재조회될 때는
+// 그대로 두고, 실제로 화면 밖이면 그 rect가 보일 만큼만 최소로 pan을 옮긴다
+// (정중앙으로 보내지 않는다, zoom은 그대로). 텍스트 입력 중이나 PATCH/rerender로 blocks가 재조회될 때는
 // 재계산하지 않지만, 이미 선택된 같은 block/section을 사용자가 다시
 // 클릭했을 때는(값 자체는 안 바뀌어도) 다시 계산한다 — revealRequestSeq
 // (n5-view.tsx 소유, 아래 selectionAutoMove effect 주석 참고)가 그 구분을
@@ -1389,35 +1390,15 @@ export function N5Viewport({
     const usable = computeUsableViewportSize(el.clientWidth, el.clientHeight, readPadding(el));
     const { zoom, pan } = transformRef.current;
 
-    // canvas-space rect를 현재 pan/zoom으로 화면(뷰포트) 좌표로 변환한다.
-    const screenLeft = pan.x + targetRect.left * zoom;
-    const screenTop = pan.y + targetRect.top * zoom;
-    const screenRight = screenLeft + targetRect.width * zoom;
-    const screenBottom = screenTop + targetRect.height * zoom;
+    // 최소 reveal(computeMinimalRevealPan, lib/n5/viewport.ts) — 정중앙으로 보내지 않는다.
+    //  - 충분히 보이거나 조금만 잘림(축마다 기준 길이의 25% 이하) → pan 불변. 사용자가 wheel·drag·zoom·fit
+    //    으로 맞춘 작업 화면을 선택이 덮어쓰지 않는다(같은 block 재클릭도 같다)
+    //  - 실제로 벗어남 → 벗어난 축만, 벗어난 쪽 가장자리가 margin(16px) 안쪽에 오도록 최소 이동
+    //  - viewport 보다 큰 section·block → 가까운 가장자리만 맞춘다(전체를 가운데로 보내지 않는다)
+    // zoom 은 바꾸지 않는다.
+    const nextPan = computeMinimalRevealPan(pan, zoom, targetRect, usable);
+    if (nextPan === pan) return;
 
-    // 이미 충분히 보이면 이동하지 않는다(요청 4) — margin 없이 usable
-    // 영역에 완전히 들어가 있는지만 본다(부동소수 오차만 허용). fit-height
-    // 등으로 이미 전체 canvas가 화면에 들어와 있는 상태에서 block/section을
-    // 눌러도 pan/zoom이 그대로 유지돼야 하는 기존 계약(e2e "zoom/pan
-    // 불변")을 그대로 지킨다 — margin을 주면 "화면 안인데도 이동"하는
-    // 경우가 생겨 그 계약을 깬다.
-    const EPSILON = 0.5;
-    const alreadyVisible =
-      screenLeft >= -EPSILON &&
-      screenTop >= -EPSILON &&
-      screenRight <= usable.width + EPSILON &&
-      screenBottom <= usable.height + EPSILON;
-    if (alreadyVisible) return;
-
-    // 화면 밖이면 뷰포트 중앙으로 옮긴다("완전 정중앙 강제"가 아니라 화면
-    // 밖일 때만의 fallback이다, 요청 4) — zoom은 건드리지 않고 pan만 다시
-    // 계산한다.
-    const targetCenterX = targetRect.left + targetRect.width / 2;
-    const targetCenterY = targetRect.top + targetRect.height / 2;
-    const nextPan: Point = {
-      x: usable.width / 2 - targetCenterX * zoom,
-      y: usable.height / 2 - targetCenterY * zoom,
-    };
     // 이 이동 자체를 "사용자가 pan을 직접 조작한 것"과 동일하게 취급한다 —
     // 그러지 않으면 이후 창 리사이즈에서 초기 가로 중앙 정렬(위 effect)이
     // 지금 막 옮긴 선택 위치를 되돌려버린다.
