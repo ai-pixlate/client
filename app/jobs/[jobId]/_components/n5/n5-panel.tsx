@@ -671,13 +671,18 @@ export function N5Panel({
   // 로드된 sections로 미리 계산한다 — 실패가 확실한 요청을 막을 뿐, FE가
   // 새 조건을 지어내는 게 아니다(lib/n5/adapter.ts의 areAllSectionsExcluded 참고).
   const allSectionsExcluded = areAllSectionsExcluded(sections);
-  // [저장하러 가기] = N5 최종 저장. 확정(POST /confirm)은 모든 N5 변경이 서버 정본에 반영된 뒤에만 보낸다 — N6 최종 렌더는 confirm
-  // 시점의 서버 block 상태(trans1·revision)로 만들어진다. 확정 전 장벽:
+  // [저장하러 가기] = N5 최종 저장. 확정(POST /confirm)은 모든 N5 변경이 서버 정본에 반영된 뒤에만 보낸다 — BE 계약(release 44e7164):
+  // confirm 은 「confirm 시점에 DB 에 저장 완료된 값」(revision·번역문·layout/bbox·fontScale·style·배경 입력)으로 최종 렌더 입력을 고정한다.
+  // PATCH 를 먼저 보냈다는 것만으로 먼저 처리된다는 보장이 없고(job row lock 을 confirm 이 먼저 잡으면 이전 값으로 확정되고 늦은 PATCH 는
+  // 409 job_not_editable), 여러 block PATCH 는 한 transaction 이 아니다. 그래서 FE 가 저장 순서를 책임진다 — 서버 409 에 기대지 않는다. 확정 전 장벽:
   //   ① 진행 중인 서버 저장(번역문·섹션·배치 PATCH·서버 실행 취소/다시 실행)이 있으면 시작하지 않는다(버튼 비활성 + 핸들러 재확인)
-  //   ② 서버값과 다른 번역문 초안을 같은 PATCH 경로(saveTranslation)로 하나씩 저장 — 하나라도 실패(409·4xx·5xx·네트워크)하면 확정하지 않고
-  //      N5 에 남는다(초안 유지·기존 충돌/실패 표시)
-  //   ③ 이 저장과 앞선 저장의 재렌더 task 가 끝날 때까지 기다린다(2초 polling). 실패·취소로 끝나면 확정하지 않고 기존 실패 표시로 남긴다
+  //   ② 서버값과 다른 번역문 초안을 같은 PATCH 경로(saveTranslation)로 하나씩 저장하고 각각의 성공 응답을 기다린다 — 하나라도 실패
+  //      (409·4xx·5xx·네트워크)하면 나머지를 보내지 않고 확정하지 않으며 N5 에 남는다(초안 유지·기존 충돌/실패 표시)
+  //   ③ 이 저장과 앞선 저장의 재렌더 task 가 끝날 때까지 기다린다(2초 polling). 실패·취소로 끝나면 확정하지 않고 기존 실패 표시로 남긴다.
+  //      이것은 N6 반영을 위한 서버 필수 조건이 아니다(confirm 은 진행 중 preview 재렌더를 취소하고 저장된 값으로 최종 렌더를 따로 만든다).
+  //      사용자가 최신 저장 결과의 미리보기를 확인하게 하는 UX 장벽이며, 재렌더 실패 시 진행 여부는 PM/UX 정책 확인 전까지 현재대로 막는다
   //   ④ /blocks·/preview·/tasks 를 다시 읽고, 그 최신 서버 정본으로 확인 항목과 acknowledgedWarnings 를 만든다
+  // confirm 에 기대 block revision 집합을 보내는 필드는 아직 계약이 없다 — 임의 필드를 만들지 않는다.
   // 저장하지 못한 번역문을 확인창에서 그대로 넘기던 정책(10/29)은 이번 요구(N5 수정값이 N6 에서 사라지면 안 된다)로 바뀌었다.
   const isServerSaving = editSession.hasPendingServerEdits || editSession.pendingSectionIds.size > 0;
   const [isFinalizing, setIsFinalizing] = useState(false);

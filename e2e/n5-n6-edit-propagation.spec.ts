@@ -10,6 +10,8 @@ import { reachN5 } from './helpers/reach-n5';
 // n5BlockState(trans1·revision)를 snapshot 하고, 산출물 이미지(SVG data URL)를 그 snapshot 으로 만든다(lib/msw/handlers.ts).
 // 그래서 N6 이미지에 새 문장이 보이면 「저장 완료 → confirm → final render」 순서가 지켜졌다는 뜻이다(N5 화면 state 를 넘기지 않는다).
 // 실서버 렌더 품질·manifest 검증이 아니다.
+// 아래 「재렌더 done → confirm」 순서 확인은 현재 FE 의 UX 장벽(사용자가 최신 저장 결과의 미리보기를 본 뒤 확정)을 지키는지 보는 것이다.
+// N6 반영의 서버 필수 조건은 아니다 — BE(44e7164) confirm 은 진행 중 preview 재렌더를 취소하고 저장 완료된 값으로 최종 렌더를 따로 만든다.
 // ─────────────────────────────────────────────────────────────────
 
 test.skip(({ browserName }) => browserName !== 'chromium', 'N5→N6 전파 검증은 Chromium 기준이다');
