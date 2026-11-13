@@ -254,6 +254,7 @@ function resetJobState() {
   n4PollIndex = 0;
   n6LatestRenderTaskId = null;
   n6RenderTaskState.clear();
+  n6RenderSnapshots.clear();
   n6ExportArtifactState.clear();
   mockJobSavedAt = null;
   n5PreviewSectionState = mockN5PreviewSections.map((s) => ({ ...s }));
@@ -507,8 +508,59 @@ function registerOrReuseN6RenderTask(): number {
   }
   const taskId = n6RenderTaskIdCounter++;
   n6RenderTaskState.set(taskId, { pollCount: 0 });
+  n6RenderSnapshots.set(taskId, snapshotN5BlocksForFinalRender());
   n6LatestRenderTaskId = taskId;
   return taskId;
+}
+
+/**
+ * 최종 렌더 입력 snapshot — 새 최종 렌더를 등록하는 순간(confirm·POST render)의 서버 block 상태(trans1·revision).
+ * 실서버 final render 가 confirm 시점의 block revision/trans1 을 manifest 에 담는 것과 같은 의미다. N6 결과 이미지는 이 값으로 만든다
+ * (FE 화면 상태가 아니라 Mock 서버 상태를 snapshot 한다).
+ */
+interface N6RenderSnapshotBlock {
+  blockId: number;
+  sectionId: number;
+  revision: number | null;
+  trans1: string;
+}
+const n6RenderSnapshots = new Map<number, N6RenderSnapshotBlock[]>();
+
+function snapshotN5BlocksForFinalRender(): N6RenderSnapshotBlock[] {
+  const included = new Set(n5PreviewSectionState.filter((section) => section.bucket === 'include').map((section) => section.id));
+  return [...n5BlockState.values()]
+    .filter((block) => block.sectionId != null && included.has(block.sectionId) && block.isExcluded !== true && (block.trans1 ?? '') !== '')
+    .map((block) => ({ blockId: block.id as number, sectionId: block.sectionId as number, revision: block.revision ?? null, trans1: block.trans1 as string }));
+}
+
+/** Mock 산출물 순서 ↔ 섹션(mockN6Deliverables 의 501·502 번역 이미지) */
+const MOCK_N6_DELIVERABLE_SECTION_IDS = [501, 502];
+
+const escapeXml = (text: string) => text.replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' })[c] as string);
+
+/**
+ * snapshot 으로 만든 결정적 Mock 결과 이미지(SVG data URL). 이미지 품질이 아니라 「confirm 시점 서버 번역문이 결과에 들어갔는지」를
+ * 확인하기 위한 것이다 — 각 block 의 trans1 을 글자로 그리고, 같은 값을 <desc> JSON(renderTaskId·blocks)으로도 싣는다.
+ */
+function buildMockFinalRenderImage(renderTaskId: number, sectionId: number, snapshot: N6RenderSnapshotBlock[]): string {
+  const blocks = snapshot.filter((block) => block.sectionId === sectionId);
+  const height = 120 + blocks.length * 48;
+  const lines = blocks
+    .map((block, index) => `<text x="40" y="${100 + index * 48}" font-family="Pretendard, sans-serif" font-size="24" fill="#171717" data-block-id="${block.blockId}">${escapeXml(block.trans1)}</text>`)
+    .join('');
+  const meta = escapeXml(JSON.stringify({ renderTaskId, sectionId, blocks }));
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="${height}" viewBox="0 0 1000 ${height}"><desc>${meta}</desc><rect width="1000" height="${height}" fill="#f7f1e8"/><text x="40" y="52" font-family="Pretendard, sans-serif" font-size="18" fill="#707070">Section ${sectionId} · render ${renderTaskId}</text>${lines}</svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+function mockN6DeliverablesFromSnapshot(): ApiDeliverableList['deliverables'] {
+  const taskId = n6LatestRenderTaskId;
+  const snapshot = taskId != null ? n6RenderSnapshots.get(taskId) : undefined;
+  if (taskId == null || !snapshot) return mockN6Deliverables;
+  return mockN6Deliverables.map((deliverable, index) => {
+    const sectionId = MOCK_N6_DELIVERABLE_SECTION_IDS[index];
+    return sectionId == null ? deliverable : { ...deliverable, imageUrl: buildMockFinalRenderImage(taskId, sectionId, snapshot) };
+  });
 }
 
 function isN6RenderDone(): boolean {
@@ -1649,7 +1701,8 @@ export const handlers = [
 
     const renderDone = isN6RenderDone();
     const response: ApiDeliverableList = {
-      deliverables: renderDone ? mockN6Deliverables : [],
+      // 결과 이미지는 그 최종 렌더를 등록한 순간의 서버 block snapshot 으로 만든다(고정 fixture 가 아니다)
+      deliverables: renderDone ? mockN6DeliverablesFromSnapshot() : [],
       components: renderDone
         ? mockN6Components
         : mockN6Components.map((c) => ({ ...c, status: 'pending', isGenerated: false, isActive: false })),
