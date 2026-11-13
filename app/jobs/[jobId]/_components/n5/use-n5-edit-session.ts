@@ -17,7 +17,7 @@ import {
   type BlockViewModel,
   type PreviewSectionViewModel,
 } from '@/lib/n5/adapter';
-import { updateTranslationDrafts, type TranslationDraft } from '@/lib/n5/failed-drafts';
+import { resolveTranslationSaveFailed, resolveTranslationSaveSucceeded, updateTranslationDrafts, type TranslationDraft } from '@/lib/n5/failed-drafts';
 import {
   canRedo,
   canStartSave,
@@ -130,7 +130,22 @@ export interface N5EditSessionApi {
   beginServerEdit: () => boolean;
   endServerEdit: () => void;
   commitTranslation: (blockId: number, before: string, after: string) => void;
+  /** 서버 저장(번역문·섹션·배치)이나 서버 실행 취소·다시 실행이 진행 중 — N5 확정(confirm) 전에 모두 끝나야 한다 */
+  hasPendingServerEdits: boolean;
+  /** 같은 값을 ref 로 바로 읽는다(같은 tick 의 연속 클릭·강제 이벤트 방어용) */
+  isServerEditPending: () => boolean;
+  /**
+   * 번역문 한 칸 저장 — PATCH { trans1, revision(실행 시점 최신) }. 칸의 [확인]과 [저장하러 가기]의 미저장 초안 저장이 같은 경로를 쓴다.
+   * 성공하면 초안 정리·재렌더 task 기록·이력 1단계, 실패하면 초안을 남기고 실패 표시(409 는 충돌 최신값).
+   * 다른 서버 저장이 진행 중이면 시작하지 않는다(started=false).
+   */
+  saveTranslation: (blockId: number, text: string) => Promise<TranslationSaveResult>;
 }
+
+export type TranslationSaveResult =
+  | { started: false }
+  | { started: true; ok: true; revision: number | null; rerenderTaskId: number | null }
+  | { started: true; ok: false; conflict: ApiTextBlock | null; error: unknown };
 
 export function useN5EditSession({
   jobId,
@@ -534,6 +549,36 @@ export function useN5EditSession({
     [dispatch, fitForText],
   );
 
+  const saveTranslation = useCallback(
+    async (blockId: number, text: string): Promise<TranslationSaveResult> => {
+      const latest = queryClient.getQueryData<ApiTextBlock[]>(pixlateKeys.n5Blocks(jobId))?.find((b) => b.id === blockId);
+      if (latest?.revision == null || !beginServerEdit()) return { started: false };
+      clearHistoryConflict(blockId);
+      const textBeforeSave = latest.trans1 ?? '';
+      try {
+        const response = await patchBlock({ blockId, payload: { trans1: text, revision: latest.revision } });
+        const rerenderTaskId = getRerenderTaskId(response);
+        setRerenderTask(blockId, rerenderTaskId);
+        updateTranslationDraft(blockId, (prev) => resolveTranslationSaveSucceeded(prev, text));
+        commitTranslation(blockId, textBeforeSave, response.block?.trans1 ?? text);
+        return { started: true, ok: true, revision: response.block?.revision ?? null, rerenderTaskId };
+      } catch (err) {
+        // 초안은 그대로 두고 실패 표시만 켠다(번역문 저장 실패는 입력 유지) — 409 는 기존 충돌 표시로 넘긴다
+        updateTranslationDraft(blockId, resolveTranslationSaveFailed);
+        let conflict: ApiTextBlock | null = null;
+        if (err instanceof ApiRequestError && err.status === 409) {
+          const parsed = parseApiError(err.body);
+          conflict = parsed && isRevisionConflict(parsed) ? getRevisionConflictLatestBlock(parsed) : null;
+          if (conflict) setHistoryConflicts((conflicts) => new Map(conflicts).set(blockId, conflict!));
+        }
+        return { started: true, ok: false, conflict, error: err };
+      } finally {
+        endServerEdit();
+      }
+    },
+    [beginServerEdit, clearHistoryConflict, commitTranslation, endServerEdit, jobId, patchBlock, queryClient, setRerenderTask, updateTranslationDraft],
+  );
+
   // ── 섹션 제외·되돌리기(SEC-03) ─ 저장이 끝난 뒤에 반영한다. 제외 여부의 정본은 프리뷰의 bucket/excludedStage 다
   const [pendingSectionIds, setPendingSectionIds] = useState<ReadonlySet<number>>(() => new Set());
   // 같은 tick 의 연속 클릭은 state 갱신 전에 들어오므로 ref 로 한 번 더 막는다
@@ -729,6 +774,8 @@ export function useN5EditSession({
   }, [redo, undo]);
 
   const isIdle = session.inFlight === null && pendingEdits === 0;
+  const hasPendingServerEdits = !isIdle;
+  const isServerEditPending = useCallback(() => sessionRef.current.inFlight !== null || pendingEditsRef.current > 0, []);
 
   return {
     canUndo: isHistoryAvailable && isIdle && canUndo(session.history),
@@ -757,5 +804,8 @@ export function useN5EditSession({
     beginServerEdit,
     endServerEdit,
     commitTranslation,
+    hasPendingServerEdits,
+    isServerEditPending,
+    saveTranslation,
   };
 }

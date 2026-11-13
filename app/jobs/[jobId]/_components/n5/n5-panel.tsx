@@ -3,13 +3,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
-import { ApiRequestError } from '@/lib/api/pixlate';
+import { ApiRequestError, getJobTasks } from '@/lib/api/pixlate';
 import type { ApiTextBlock } from '@/lib/api/n5-schema';
 import {
   areAllSectionsExcluded,
   buildAcknowledgedWarnings,
-  getRerenderTaskId,
-  getRevisionConflictLatestBlock,
   getSectionStatusRowCount,
   getSignalRows,
   getTranslationFailure,
@@ -17,29 +15,29 @@ import {
   hasWidthOverflowSignal,
   isAllSectionsExcludedError,
   isInvalidStateError,
-  isRevisionConflict,
   parseApiError,
+  toBlockViewModel,
 } from '@/lib/n5/adapter';
 import type { BlockTaskFailures, BlockViewModel, PreviewSectionViewModel, RetryTarget, SectionStatusViewModel } from '@/lib/n5/adapter';
 import { PanelSectionStatus, RetryButton, SignalRows } from './n5-section-status';
 import { buildN5ReviewIssues, formatN5ReviewIssueLocation, groupN5ReviewIssues, type N5ReviewIssue } from '@/lib/n5/review-issues';
 import type { N5ViewMode } from '@/lib/n5/viewport';
 import {
-  isFailedDraft,
   editTranslationDraft,
-  resolveTranslationSaveFailed,
-  resolveTranslationSaveSucceeded,
   type TranslationDraft,
 } from '@/lib/n5/failed-drafts';
 import { useModalDialog } from '@/app/_components/use-modal-dialog';
 import {
   pixlateKeys,
-  usePatchN5BlockMutation,
   useN5TaskStatusQuery,
   useConfirmN5Mutation,
 } from '@/lib/queries/pixlate';
 import { ViewModeToggle } from './n5-toolbar';
 import type { N5EditSessionApi } from './use-n5-edit-session';
+
+/** [저장하러 가기]가 재렌더 완료를 기다리는 polling 주기(계약 기본 2초)와 상한(약 3분) */
+const N5_CONFIRM_RERENDER_POLL_MS = 2_000;
+const N5_CONFIRM_RERENDER_MAX_POLLS = 90;
 
 // ─────────────────────────────────────────────────────────────────
 // N5 — 우측 검수 panel (Figma node 544:3168 "N5 검수" 기준)
@@ -276,7 +274,7 @@ function TranslationEditor({
   ) => void;
 }) {
   const queryClient = useQueryClient();
-  const patchMutation = usePatchN5BlockMutation(jobId);
+  const [isSaving, setIsSaving] = useState(false);
 
   // 초안의 정본은 N5Panel 의 draftEntry 다(원문 보기 전환으로 이 컴포넌트가 unmount 돼도 남아야 한다).
   // 여기는 마지막으로 맞춘 서버값(syncedText/revision)과 409·오류 표시만 들고, 초안이 없으면 서버값을 보인다.
@@ -351,37 +349,27 @@ function TranslationEditor({
   const hasFailureMessage = translationFailure != null || taskFailures.verifyFailed || previewFailure != null || showOverflow;
 
   async function handleSave() {
-    if (patchMutation.isPending || !editSession.beginServerEdit()) return; // 저장 중 중복 PATCH 방지
+    if (isSaving) return; // 저장 중 중복 PATCH 방지(다른 서버 저장 중이면 saveTranslation 이 시작하지 않는다)
     setSaveError(null);
     setSaveConflict(null);
-    editSession.clearHistoryConflict(block.id);
     handledTaskIdRef.current = null; // 새 저장 사이클이므로 이전 task 완료 처리 기록을 리셋
     const sentText = draft;
-    const textBeforeSave = block.translatedText;
-    try {
-      const response = await patchMutation.mutateAsync({
-        blockId: block.id,
-        payload: { trans1: sentText, revision: block.revision },
-      });
+    setIsSaving(true);
+    // 저장 경로는 [저장하러 가기]의 미저장 초안 저장과 같다(use-n5-edit-session.ts saveTranslation)
+    const result = await editSession.saveTranslation(block.id, sentText);
+    setIsSaving(false);
+    if (!result.started) return;
+    if (result.ok) {
       setSyncedText(sentText);
-      setSyncedRevision(response.block?.revision ?? block.revision);
-      editSession.setRerenderTask(block.id, getRerenderTaskId(response));
-      onDraftUpdate(block.id, (prev) => resolveTranslationSaveSucceeded(prev, sentText));
-      editSession.commitTranslation(block.id, textBeforeSave, response.block?.trans1 ?? sentText);
-    } catch (err) {
-      // 초안은 그대로 두고 실패 표시만 켠다(PM: 번역문 저장 실패는 입력 유지) — 409 포함
-      onDraftUpdate(block.id, resolveTranslationSaveFailed);
-      if (err instanceof ApiRequestError && err.status === 409) {
-        const parsed = parseApiError(err.body);
-        if (parsed && isRevisionConflict(parsed)) {
-          setSaveConflict(getRevisionConflictLatestBlock(parsed));
-          return;
-        }
-      }
-      setSaveError(err instanceof Error ? err.message : '저장에 실패했습니다.');
-    } finally {
-      editSession.endServerEdit();
+      setSyncedRevision(result.revision ?? block.revision);
+      return;
     }
+    // 초안은 그대로 두고 실패 표시만 켠다(PM: 번역문 저장 실패는 입력 유지) — 409 포함
+    if (result.conflict) {
+      setSaveConflict(result.conflict);
+      return;
+    }
+    setSaveError(result.error instanceof Error ? result.error.message : '저장에 실패했습니다.');
   }
 
   function handleLoadServerValue() {
@@ -446,10 +434,10 @@ function TranslationEditor({
               e.stopPropagation();
               handleSave();
             }}
-            disabled={!isDirty || patchMutation.isPending || editSession.isEditLocked}
+            disabled={!isDirty || isSaving || editSession.isEditLocked}
             className="flex h-6 items-center justify-center rounded-[4px] bg-white px-2.5 text-[12px] leading-[normal] tracking-[-0.02em] text-[#171717] disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {patchMutation.isPending ? '저장 중…' : '확인'}
+            {isSaving ? '저장 중…' : '확인'}
           </button>
         </div>
 
@@ -683,45 +671,127 @@ export function N5Panel({
   // 로드된 sections로 미리 계산한다 — 실패가 확실한 요청을 막을 뿐, FE가
   // 새 조건을 지어내는 게 아니다(lib/n5/adapter.ts의 areAllSectionsExcluded 참고).
   const allSectionsExcluded = areAllSectionsExcluded(sections);
-  // 섹션 제외·되돌리기 PATCH 가 끝나기 전에 확정하면 서버가 이전 섹션 상태로 N6 를 확정할 수 있다 — 저장 중에는 확정하지 않는다.
-  // 제외·되돌리기 모두 같은 pendingSectionIds 를 쓴다(use-n5-edit-session.ts saveSectionBucket). 다른 편집 저장은 여기서 막지 않는다
-  const isSectionSaving = editSession.pendingSectionIds.size > 0;
+  // [저장하러 가기] = N5 최종 저장. 확정(POST /confirm)은 모든 N5 변경이 서버 정본에 반영된 뒤에만 보낸다 — N6 최종 렌더는 confirm
+  // 시점의 서버 block 상태(trans1·revision)로 만들어진다. 확정 전 장벽:
+  //   ① 진행 중인 서버 저장(번역문·섹션·배치 PATCH·서버 실행 취소/다시 실행)이 있으면 시작하지 않는다(버튼 비활성 + 핸들러 재확인)
+  //   ② 서버값과 다른 번역문 초안을 같은 PATCH 경로(saveTranslation)로 하나씩 저장 — 하나라도 실패(409·4xx·5xx·네트워크)하면 확정하지 않고
+  //      N5 에 남는다(초안 유지·기존 충돌/실패 표시)
+  //   ③ 이 저장과 앞선 저장의 재렌더 task 가 끝날 때까지 기다린다(2초 polling). 실패·취소로 끝나면 확정하지 않고 기존 실패 표시로 남긴다
+  //   ④ /blocks·/preview·/tasks 를 다시 읽고, 그 최신 서버 정본으로 확인 항목과 acknowledgedWarnings 를 만든다
+  // 저장하지 못한 번역문을 확인창에서 그대로 넘기던 정책(10/29)은 이번 요구(N5 수정값이 N6 에서 사라지면 안 된다)로 바뀌었다.
+  const isServerSaving = editSession.hasPendingServerEdits || editSession.pendingSectionIds.size > 0;
+  const [isFinalizing, setIsFinalizing] = useState(false);
+  const finalizingRef = useRef(false);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
-  // 번역문 미저장 초안 — blockId → { draft, lastSaveFailed }. 원문 보기 전환으로 편집기가 사라져도 초안이 남고 실행 취소도
-  // 같은 초안을 보도록 N5 편집 세션(use-n5-edit-session.ts)이 들고 있다. 서버·브라우저 저장소에는 두지 않는다.
-  // 저장하지 못한 칸 수도 이 Map 에서 바로 센다(PM 확정 10/29: 그런 칸이 있어도 [저장하러 가기]를 막지 않고
-  // 확인창). 확정이 성공해 N5 를 떠날 때 세션과 함께 정리된다 — [계속]을 눌렀다고 지우지 않는다
-  // (확정 요청이 실패하면 초안이 그대로 남아야 한다).
   const { translationDrafts, updateTranslationDraft: handleDraftUpdate } = editSession;
   // [저장하러 가기] 때 확인받을 항목(F-CFM-09). 항목이 없으면 확인창 없이 바로 확정한다. 항목은 열리는 순간의 값으로 고정한다.
   const [reviewIssues, setReviewIssues] = useState<N5ReviewIssue[] | null>(null);
   const confirmButtonRef = useRef<HTMLButtonElement>(null);
   const closeReviewDialog = useCallback(() => setReviewIssues(null), []);
+  const isConfirmBlocked = allSectionsExcluded || confirmMutation.isPending || isFinalizing || isServerSaving;
 
-  function handleConfirmClick() {
-    if (confirmMutation.isPending || isSectionSaving) return;
-    const failedDraftBlockIds = new Set<number>();
-    for (const [blockId, entry] of translationDrafts) if (isFailedDraft(entry)) failedDraftBlockIds.add(blockId);
-    const issues = buildN5ReviewIssues({ sections, blocks, sectionStatusById, blockTaskFailuresById, failedDraftBlockIds });
-    if (issues.length > 0) {
-      setReviewIssues(issues);
-      return;
-    }
-    void handleConfirm();
+  /** 최신 /blocks 캐시(서버 정본) — 클릭 시점 closure 의 blocks 가 아니라 재조회 뒤의 값을 쓴다 */
+  function readLatestBlocks(): BlockViewModel[] {
+    const latest = queryClient.getQueryData<ApiTextBlock[]>(pixlateKeys.n5Blocks(jobId));
+    return latest ? latest.map(toBlockViewModel) : blocks;
   }
 
-  // [확인하고 저장] — 기존 확정만 실행한다. 실패한 초안을 다시 저장하지 않고, 이 선택을 서버에 따로 남기지 않는다.
+  /** ②·③·④ — 성공하면 true. 실패하면 안내를 남기고 false */
+  async function settleServerState(): Promise<boolean> {
+    // ② 미저장 초안 저장(서버값과 다른 초안만)
+    const serverText = new Map(readLatestBlocks().map((block) => [block.id, block.translatedText]));
+    const newTaskIds = new Set<number>();
+    for (const [blockId, entry] of translationDrafts) {
+      if (!serverText.has(blockId) || entry.draft === serverText.get(blockId)) continue;
+      const result = await editSession.saveTranslation(blockId, entry.draft);
+      if (!mountedRef.current) return false;
+      if (!result.started || !result.ok) {
+        const block = blocks.find((candidate) => candidate.id === blockId);
+        if (block) onSelectBlock(block);
+        setConfirmError('저장하지 못한 번역문이 있어 다음 단계로 넘어가지 않았습니다. 표시된 칸을 확인한 뒤 다시 시도해 주세요.');
+        return false;
+      }
+      if (result.rerenderTaskId != null) newTaskIds.add(result.rerenderTaskId);
+    }
+
+    // ③ 재렌더 task 완료 대기 — 이번 저장의 task 와, 클릭 때 아직 끝나지 않은 앞선 저장의 task
+    const knownTaskIds = [...editSession.rerenderTaskByBlock.values()].filter((id): id is number => id != null);
+    const watched = new Set<number>(newTaskIds);
+    for (let attempt = 0; ; attempt += 1) {
+      const list = await queryClient.fetchQuery({ queryKey: pixlateKeys.tasks(jobId), queryFn: () => getJobTasks(jobId), staleTime: 0 });
+      if (!mountedRef.current) return false;
+      const statusOf = (taskId: number) => list.items?.find((item) => item.taskId === taskId)?.status;
+      if (attempt === 0) {
+        for (const taskId of knownTaskIds) {
+          const status = statusOf(taskId);
+          if (status === 'pending' || status === 'running') watched.add(taskId);
+        }
+      }
+      const statuses = [...watched].map(statusOf);
+      if (statuses.some((status) => status === 'failed' || status === 'cancelled')) {
+        setConfirmError('미리보기를 다시 만들지 못한 칸이 있어 다음 단계로 넘어가지 않았습니다. 해당 칸에서 다시 시도해 주세요.');
+        return false;
+      }
+      // 목록에 아직 없는 새 task 도 끝난 것으로 보지 않는다
+      if (statuses.every((status) => status === 'done')) break;
+      if (attempt >= N5_CONFIRM_RERENDER_MAX_POLLS) {
+        setConfirmError('미리보기 재렌더가 끝나지 않아 다음 단계로 넘어가지 않았습니다. 잠시 뒤 다시 시도해 주세요.');
+        return false;
+      }
+      await new Promise((resolve) => setTimeout(resolve, N5_CONFIRM_RERENDER_POLL_MS));
+      if (!mountedRef.current) return false;
+    }
+
+    // ④ 최신 서버 정본 재조회
+    await Promise.all([
+      queryClient.refetchQueries({ queryKey: pixlateKeys.n5Blocks(jobId), exact: true }),
+      queryClient.refetchQueries({ queryKey: pixlateKeys.n5Preview(jobId), exact: true }),
+    ]);
+    return mountedRef.current;
+  }
+
+  async function handleConfirmClick() {
+    // ① 같은 tick 의 연속 클릭·강제 이벤트도 막도록 ref 로 다시 확인한다
+    if (finalizingRef.current || confirmMutation.isPending || allSectionsExcluded || editSession.isServerEditPending()) return;
+    finalizingRef.current = true;
+    setIsFinalizing(true);
+    setConfirmError(null);
+    try {
+      if (!(await settleServerState())) return;
+      // 미저장 초안은 모두 저장됐다 — 저장하지 못한 번역문 항목은 남지 않는다
+      const issues = buildN5ReviewIssues({ sections, blocks: readLatestBlocks(), sectionStatusById, blockTaskFailuresById, failedDraftBlockIds: new Set() });
+      if (issues.length > 0) {
+        setReviewIssues(issues);
+        return;
+      }
+      await handleConfirm();
+    } finally {
+      finalizingRef.current = false;
+      if (mountedRef.current) setIsFinalizing(false);
+    }
+  }
+
+  // [확인하고 저장] — 확정만 실행한다. 이 선택을 서버에 따로 남기지 않는다.
   function handleReviewContinue() {
     setReviewIssues(null);
     void handleConfirm();
   }
 
   async function handleConfirm() {
-    if (confirmMutation.isPending || isSectionSaving) return; // 중복 confirm·섹션 저장 중 confirm 방지
+    // 확정 직전 재확인 — 진행 중인 서버 저장이 있으면 보내지 않는다(확인창이 열린 사이에 생긴 경우 포함)
+    if (confirmMutation.isPending || editSession.isServerEditPending()) return;
     setConfirmError(null);
     try {
       const response = await confirmMutation.mutateAsync({
-        acknowledgedWarnings: buildAcknowledgedWarnings(blocks),
+        // 최신 서버 정본의 경고 집합(클릭 시점 closure 가 아니다)
+        acknowledgedWarnings: buildAcknowledgedWarnings(readLatestBlocks()),
       });
       // 성공(200)이어도 응답이 실제로 N6를 가리킬 때만 성공으로 다룬다 —
       // 200이라는 이유만으로 N6 이동을 낙관적으로 가정하지 않는다.
@@ -891,12 +961,12 @@ export function N5Panel({
           ref={confirmButtonRef}
           type="button"
           data-testid="n5-confirm-button"
-          disabled={allSectionsExcluded || confirmMutation.isPending || isSectionSaving}
+          disabled={isConfirmBlocked}
           title={allSectionsExcluded ? '모든 섹션이 제외되어 있어 확정할 수 없습니다.' : undefined}
-          onClick={handleConfirmClick}
+          onClick={() => void handleConfirmClick()}
           className="flex h-[45px] w-full items-center justify-center rounded-md bg-[#171717] px-8 text-[14px] font-medium tracking-[-0.42px] text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
         >
-          {confirmMutation.isPending ? '저장하는 중…' : '저장하러 가기'}
+          {confirmMutation.isPending || isFinalizing ? '저장하는 중…' : '저장하러 가기'}
         </button>
       </div>
       {reviewIssues && (

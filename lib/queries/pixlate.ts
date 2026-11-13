@@ -161,15 +161,21 @@ export function useAnalyzeJobMutation() {
 // 서버 응답 그대로 쓴다).
 // ─────────────────────────────────────────────
 
+/**
+ * N6 최종 렌더 task — taskType=render 중 N5 블록 재렌더(text_block)·섹션 렌더(section)가 아닌 항목.
+ * 계약(JOB-05 items)에 「현재/최신」 표시가 없어 여러 시도가 함께 오면: 진행 중(pending·running) 시도가 있으면 그것(새 렌더가 끝나기 전에
+ * 이전 done 을 완료로 보지 않는다), 없으면 taskId(시도 id)가 가장 큰 시도. taskId 증가 순서는 BE 확인 대상이다.
+ */
+export function selectN6RenderTask(items: ApiJobTaskStatus['items']): NonNullable<ApiJobTaskStatus['items']>[number] | undefined {
+  const candidates = (items ?? []).filter((item) => item.taskType === 'render' && item.unitType !== 'text_block' && item.unitType !== 'section');
+  const active = candidates.find((item) => item.status === 'pending' || item.status === 'running');
+  if (active) return active;
+  return candidates.reduce<(typeof candidates)[number] | undefined>((latest, item) => (latest == null || (item.taskId ?? -1) > (latest.taskId ?? -1) ? item : latest), undefined);
+}
+
 function hasActiveN6RenderTask(data: ApiJobTaskStatus): boolean {
-  return (
-    data.items?.some(
-      (item) =>
-        item.taskType === 'render' &&
-        item.unitType !== 'text_block' &&
-        (item.status === 'pending' || item.status === 'running'),
-    ) ?? false
-  );
+  const item = selectN6RenderTask(data.items);
+  return item?.status === 'pending' || item?.status === 'running';
 }
 
 export function useJobTasksQuery(jobId: string, options: { polling?: boolean } = {}) {
@@ -399,8 +405,12 @@ export function useConfirmN5Mutation(jobId: string) {
   return useMutation({
     mutationFn: (payload: ApiConfirmRequest) => confirmN5(jobId, payload),
     onSuccess: (job) => {
+      // 새 최종 렌더가 시작됐다 — 이전 렌더의 산출물·검증 결과를 완료 결과처럼 다시 쓰지 않도록 버리고 tasks 를 새로 읽는다
+      queryClient.removeQueries({ queryKey: pixlateKeys.deliverables(jobId) });
+      queryClient.removeQueries({ queryKey: pixlateKeys.validation(jobId) });
       queryClient.setQueryData(pixlateKeys.job(jobId), job);
-      queryClient.invalidateQueries({ queryKey: pixlateKeys.tasks(jobId) });
+      // 이전 tasks 응답(이전 최종 렌더 done 포함)을 잠깐이라도 N6 완료로 보지 않게 비우고 다시 읽는다
+      void queryClient.resetQueries({ queryKey: pixlateKeys.tasks(jobId) });
     },
   });
 }

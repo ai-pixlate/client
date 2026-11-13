@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import {
+  selectN6RenderTask,
   useJobTasksQuery,
   useN6RenderMutation,
   useDeliverablesQuery,
@@ -938,9 +939,8 @@ export function N6ResultView({ jobId }: { jobId: string }) {
   const tasksQuery = useJobTasksQuery(jobId, { polling: true });
   const renderMutation = useN6RenderMutation(jobId);
 
-  const renderItem = tasksQuery.data?.items?.find(
-    (item) => item.taskType === 'render' && item.unitType !== 'text_block',
-  );
+  // 여러 렌더 시도가 함께 오면 진행 중 시도 > 가장 최근 시도(lib/queries/pixlate.ts selectN6RenderTask)
+  const renderItem = selectN6RenderTask(tasksQuery.data?.items);
   const renderFailed = renderItem?.status === 'failed';
   const renderDone = renderItem?.status === 'done';
   const isRenderRunning = !tasksQuery.isLoading && !tasksQuery.isError && !renderDone && !renderFailed;
