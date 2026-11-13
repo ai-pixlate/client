@@ -21,6 +21,7 @@ import {
 } from '@/lib/library/view';
 import { useLibraryQuery, useMasterCountriesQuery, useMasterLanguagesQuery } from '@/lib/queries/pixlate';
 
+import { AccountLogoutButton } from '../auth/account-logout-button';
 import { LocalAuthTestLogout } from '../auth/local-auth-test-logout';
 
 import { LibraryAddCard, LibraryCard } from './library-card';
@@ -122,6 +123,9 @@ export default function LibraryView() {
     <main className="relative flex min-h-screen flex-col bg-white pb-[60px]">
       {/* 로컬 실서버 인증 연동 시험용 임시 로그아웃 진입점(정식 UX 아님·위치 미확정). 시험 모드에서만 렌더된다 */}
       <LocalAuthTestLogout />
+      {/* 세션 사용자용 정식 로그아웃(Figma 확정 전 임시 위치 — 우측 상단 absolute 라 콘텐츠를 밀지 않는다).
+          노출 조건이 임시 버튼과 겹치지 않아 같은 자리에 둘 중 하나만 렌더된다 */}
+      <AccountLogoutButton />
 
       <div className="ml-[120px] w-[calc(100%-239px)] max-w-[1681px] pt-20">
         <header className="flex flex-col items-start gap-3 leading-[normal]">

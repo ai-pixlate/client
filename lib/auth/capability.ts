@@ -55,3 +55,13 @@ export function isLogoutPendingRetryEnabled(): boolean {
 export function isLocalAuthTestMode(): boolean {
   return process.env.NODE_ENV === 'development' && isSessionAuthConfigured() && !isApiMockingEnabled();
 }
+
+/**
+ * 사용자용(정식) 로그아웃 버튼 노출 기준 — 서버 세션 방식('session')이고 로컬 인증 시험 모드가 아닐 때.
+ * production + NEXT_PUBLIC_AUTH_MODE=session 과 Mock 에서 보이고, 기본 production(dev-login)에서는 숨긴다.
+ * 로컬 인증 시험 모드에서는 임시 버튼(isLocalAuthTestMode)만 보이므로 두 버튼이 함께 보이지 않는다.
+ * 위치(M1 우측 상단)는 Figma 확정 전 임시다.
+ */
+export function isAccountLogoutEnabled(): boolean {
+  return getAuthMode() === 'session' && !isLocalAuthTestMode();
+}
