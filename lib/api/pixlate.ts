@@ -310,8 +310,21 @@ export async function patchN5Block(
  * (currentStep/userFacingStatus)이 이 하나의 엔드포인트를 공유한다 — 오늘(N1→N6
  * happy path) 작업에서 job 전체 공용으로 승격했다.
  */
-export function getJobTasks(jobId: string): Promise<ApiJobTaskStatus> {
-  return apiFetch<ApiJobTaskStatus>(`/jobs/${jobId}/tasks`);
+export async function getJobTasks(jobId: string): Promise<ApiJobTaskStatus> {
+  // HTTP status 를 보존한다 — 미소유·없는 작업의 404 는 query 재시도·polling 을 멈추는 근거다(lib/queries/pixlate.ts). 문구는 기존과 같다
+  const res = await authorizedFetch(`/jobs/${jobId}/tasks`);
+  const body: unknown = await res.json().catch(() => null);
+  if (!res.ok) {
+    const error = new ApiRequestError(res.status, body);
+    error.message = errorMessageFromBody(body, res.status);
+    throw error;
+  }
+  return body as ApiJobTaskStatus;
+}
+
+/** 작업이 없거나 이 계정이 접근할 수 없음(계약: 미소유도 404 NOT_FOUND — 둘을 구분하지 않는다) */
+export function isJobNotFoundError(error: unknown): boolean {
+  return error instanceof ApiRequestError && error.status === 404;
 }
 
 /**

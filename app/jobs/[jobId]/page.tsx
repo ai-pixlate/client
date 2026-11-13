@@ -5,6 +5,7 @@ import Link from 'next/link';
 
 import { S0Rail } from '@/app/jobs/_components/s0-rail';
 import type { StepNavStep } from '@/app/jobs/_components/step-nav';
+import { isJobNotFoundError } from '@/lib/api/pixlate';
 import { useJobTasksQuery } from '@/lib/queries/pixlate';
 import type { ApiJobTaskStatus } from '@/lib/api/job-schema';
 import { COMPLETION_PRESENTATION_MS } from '@/lib/processing/displayed-progress';
@@ -132,15 +133,28 @@ export default function Page({
             </div>
           )}
 
-          {tasksQuery.isError && (
-            <div className="flex flex-1 items-center justify-center">
-              <p className="text-sm text-red-500">
-                {tasksQuery.error instanceof Error
-                  ? tasksQuery.error.message
-                  : '오류가 발생했습니다.'}
-              </p>
-            </div>
-          )}
+          {tasksQuery.isError &&
+            (isJobNotFoundError(tasksQuery.error) ? (
+              // 없는 작업과 다른 계정의 작업을 서버가 같은 404 로 돌려준다 — 화면도 둘을 구분하지 않는다(소유 여부를 추정하지 않음)
+              <div data-testid="job-not-found" role="alert" className="flex flex-1 flex-col items-center justify-center gap-4">
+                <p className="text-sm text-[#171717]">작업을 찾을 수 없거나 접근할 수 없습니다.</p>
+                <Link
+                  href="/"
+                  data-testid="job-not-found-library"
+                  className="rounded-[6px] border border-[#eaeaea] bg-white px-4 py-2 text-[14px] leading-[17px] text-[#171717] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ff6a38]"
+                >
+                  보관함으로 돌아가기
+                </Link>
+              </div>
+            ) : (
+              <div className="flex flex-1 items-center justify-center">
+                <p className="text-sm text-red-500">
+                  {tasksQuery.error instanceof Error
+                    ? tasksQuery.error.message
+                    : '오류가 발생했습니다.'}
+                </p>
+              </div>
+            ))}
 
           {tasksQuery.data && (
             <>

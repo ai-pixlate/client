@@ -21,6 +21,7 @@ import {
   getN5Preview,
   patchN5Block,
   getJobTasks,
+  isJobNotFoundError,
   confirmN5,
   renderStart,
   getDeliverables,
@@ -46,6 +47,13 @@ import {
 import type { ApiBlockPatch, ApiConfirmRequest, ApiJobTaskStatus, ApiTextBlock } from '@/lib/api/n5-schema';
 import type { ApiExportRequest, ApiExportArtifactType } from '@/lib/api/n6-schema';
 import { sectionBucketMutationOptions } from '@/lib/queries/section-bucket-mutation';
+import { shouldRetryQuery } from '@/lib/auth/query-retry';
+
+/** GET /tasks 재시도 — 404(없는 작업·미소유 작업)는 0회, 그 밖은 전역 정책(인증 최종 실패 0회 · 일반 오류 1회) */
+function retryTasksQuery(failureCount: number, error: unknown): boolean {
+  if (isJobNotFoundError(error)) return false;
+  return shouldRetryQuery(failureCount, error);
+}
 import type { ApiSection } from '@/lib/api/n3-schema';
 
 // ─────────────────────────────────────────────
@@ -185,8 +193,11 @@ export function useJobTasksQuery(jobId: string, options: { polling?: boolean } =
     queryKey: pixlateKeys.tasks(jobId),
     queryFn: () => getJobTasks(jobId),
     enabled: !!jobId,
+    retry: retryTasksQuery,
     refetchInterval: polling
       ? (query) => {
+          // 작업이 없거나 접근할 수 없음(404) — 종료 상태다. 같은 404 를 2초마다 다시 묻지 않는다
+          if (isJobNotFoundError(query.state.error)) return false;
           const data = query.state.data;
           if (!data) return 2_000; // 첫 응답 대기 중
           // N2·N4 전체 실패(jobStatus=failed)는 종료 상태라 폴링을 멈춘다
@@ -315,8 +326,10 @@ export function n5TaskStatusQueryOptions(jobId: string, taskId: number | null) {
     queryKey: pixlateKeys.n5Task(jobId, taskId),
     queryFn: () => getJobTasks(jobId),
     enabled: taskId != null,
-    refetchInterval: (query: { state: { data?: Awaited<ReturnType<typeof getJobTasks>> } }) => {
+    retry: retryTasksQuery,
+    refetchInterval: (query: { state: { data?: Awaited<ReturnType<typeof getJobTasks>>; error?: unknown } }) => {
       if (taskId == null) return false;
+      if (isJobNotFoundError(query.state.error)) return false;
       const item = query.state.data?.items?.find((i) => i.taskId === taskId);
       if (!item) return 2000; // 아직 목록에 반영 전 — 계속 polling
       return item.status === 'done' || item.status === 'failed' || item.status === 'cancelled'
@@ -346,6 +359,7 @@ export function useN5ReviewTasksQuery(jobId: string) {
     queryKey: pixlateKeys.tasks(jobId),
     queryFn: () => getJobTasks(jobId),
     enabled: !!jobId,
+    retry: retryTasksQuery,
     refetchOnMount: 'always',
   });
 }
