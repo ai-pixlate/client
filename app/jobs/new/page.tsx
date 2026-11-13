@@ -1311,7 +1311,7 @@ function NewJobPageInner() {
                   type="checkbox"
                   checked={hasAcceptedResponsibility}
                   onChange={(e) => setHasAcceptedResponsibility(e.target.checked)}
-                  className="peer size-[18px] cursor-pointer appearance-none rounded-[4px] border border-[#eaeaea] bg-white outline-offset-2 checked:border-[#ff6a38] focus-visible:outline-2 focus-visible:outline-[#ff6a38]"
+                  className="peer size-[18px] cursor-pointer appearance-none rounded-[4px] border border-[#707070] bg-white outline-offset-2 checked:border-[#ff6a38] focus-visible:outline-2 focus-visible:outline-[#ff6a38]"
                 />
                 <span className="pointer-events-none absolute hidden peer-checked:block">
                   <CheckIcon />
