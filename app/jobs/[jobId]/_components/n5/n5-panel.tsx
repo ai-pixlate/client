@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { ApiRequestError, getJobTasks } from '@/lib/api/pixlate';
@@ -981,8 +981,13 @@ export function N5Panel({
   );
 }
 
+/** 확인 항목이 이 개수 이상이면 목록을 5건 높이로 제한하고 목록만 스크롤한다 */
+const N5_REVIEW_SCROLL_FROM = 6;
+/** 묶음(section) 아래 여백 py-4 */
+const N5_REVIEW_ROW_BOTTOM_GAP = 16;
+
 /**
- * 저장 전 확인창(Figma 1313:12384, F-CFM-09). 폭 518, 높이는 내용에 맞추고(HUG) 최대 710(낮은 화면은 화면 높이 − 32)을 넘으면 목록만 스크롤한다. 동작은 useModalDialog(배경 inert, focus trap, Escape=돌아가기, 닫히면
+ * 저장 전 확인창(Figma 1313:12384, F-CFM-09). 폭 518, 최대 높이 710(낮은 화면은 화면 높이 − 32). 항목 1~5건은 내용에 맞추고(HUG), 6건 이상은 목록을 5건 높이로 제한해 목록만 스크롤한다. 동작은 useModalDialog(배경 inert, focus trap, Escape=돌아가기, 닫히면
  * [저장하러 가기]로 포커스 복귀)를 쓴다. 항목이 많으면 목록만 스크롤하고 버튼은 남는다. 저장하지 못한 번역문은 Figma에 없는
  * 묶음이라 같은 형식으로 더했다.
  */
@@ -1000,6 +1005,24 @@ function ReviewIssuesDialog({
   const dialogRef = useRef<HTMLDivElement>(null);
   useModalDialog(dialogRef, { onClose: onCancel, returnFocusRef });
   const groups = groupN5ReviewIssues(issues);
+
+  // 스크롤 기준은 높이가 아니라 전체 항목 수(issues.length)다 — 1~5건은 내용에 맞추고(HUG), 6건 이상이면 목록을 5번째 항목까지
+  // 보이는 높이로 제한하고 목록만 스크롤한다. 묶음(group) 머리말 수에 따라 5건의 높이가 달라 실제로 그려진 5번째 항목의 아래 끝을 잰다.
+  // 화면 값만 바꾸는 측정이라 state 로 두지 않고 목록 요소에 바로 쓴다.
+  const listRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    if (issues.length < N5_REVIEW_SCROLL_FROM) {
+      list.style.maxHeight = '';
+      return;
+    }
+    const fifth = list.querySelectorAll<HTMLElement>('[data-review-issue]')[N5_REVIEW_SCROLL_FROM - 2];
+    if (!fifth) return;
+    // 5번째 항목 아래 끝 + 묶음 아래 여백(py-4) — 6번째 항목이 목록 아래에서 시작한다
+    const height = fifth.getBoundingClientRect().bottom - list.getBoundingClientRect().top + list.scrollTop + N5_REVIEW_ROW_BOTTOM_GAP;
+    list.style.maxHeight = `${Math.ceil(height)}px`;
+  }, [issues]);
 
   return (
     <div data-testid="n5-review-dim" className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(23,23,23,0.4)]">
@@ -1030,7 +1053,7 @@ function ReviewIssuesDialog({
                 {issues.length}건
               </span>
             </p>
-            <div data-testid="n5-review-list" className="pix-hover-scroll min-h-0 flex-1 border-t border-[#eaeaea]">
+            <div ref={listRef} data-testid="n5-review-list" className="pix-hover-scroll min-h-0 flex-1 border-t border-[#eaeaea]">
               {groups.map((group) => (
                 <section
                   key={group.kind}
@@ -1042,7 +1065,7 @@ function ReviewIssuesDialog({
                       {group.title}
                     </h3>
                     {group.issues.map((issue, i) => (
-                      <div key={`${issue.sectionId}-${issue.blockId ?? issue.stageLabel}-${i}`} className="flex items-center gap-3">
+                      <div key={`${issue.sectionId}-${issue.blockId ?? issue.stageLabel}-${i}`} data-review-issue className="flex items-center gap-3">
                         <span aria-hidden="true" className={`size-[5px] shrink-0 rounded-full ${group.isWarning ? 'bg-[#ff6a38]' : 'bg-[#707070]'}`} />
                         <div className="flex min-w-0 flex-col gap-0.5 leading-[normal] text-[#707070]">
                           <p className="text-[14px] tracking-[-0.01em]">{formatN5ReviewIssueLocation(issue)}</p>
