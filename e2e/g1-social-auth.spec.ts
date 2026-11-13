@@ -463,4 +463,11 @@ test.describe('로컬 실서버 인증 시험용 임시 로그아웃 진입점',
     await expect(page.getByRole('heading', { name: '보관함' })).toBeVisible();
     await expect(page.getByTestId('local-auth-test-logout')).toHaveCount(0);
   });
+
+  test('Mock 에서는 세션 사용자용 정식 로그아웃 버튼만 보인다', async ({ page }) => {
+    await loginWith(page, 'kakao');
+    await expect(page.getByRole('heading', { name: '보관함' })).toBeVisible();
+    await expect(page.getByTestId('account-logout')).toBeVisible();
+    await expect(page.getByTestId('local-auth-test-logout')).toHaveCount(0);
+  });
 });

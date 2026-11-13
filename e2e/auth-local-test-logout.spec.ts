@@ -89,6 +89,8 @@ test.describe('visible — 로컬 실서버 인증 시험 모드', () => {
     await stubBackend(page);
     await loginToM1(page);
     await expect(entry(page)).toBeVisible();
+    // 로컬 시험 모드에서는 임시 버튼만 — 세션 사용자용 정식 버튼은 숨긴다
+    await expect(page.getByTestId('account-logout')).toHaveCount(0);
     await entry(page).focus();
     await expect(entry(page)).toBeFocused();
   });

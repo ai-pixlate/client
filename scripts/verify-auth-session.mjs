@@ -17,7 +17,7 @@ import { getAccessToken, getAuthSnapshot, resetAuthStoreForTest, setAuthenticate
 import { completeSocialLogin, resetSocialLoginForTest, startSocialLogin } from '../lib/auth/social-login.ts';
 import { AuthLockTimeoutError, createAuthLock } from '../lib/auth/tab-lock.ts';
 import { isSessionRestoreSuppressed, readCallbackState, setCallbackStateStorageForTest } from '../lib/auth/callback-state.ts';
-import { getAuthMode, isLocalAuthTestMode, isLogoutPendingRetryEnabled, isSocialLoginEnabled } from '../lib/auth/capability.ts';
+import { getAuthMode, isAccountLogoutEnabled, isLocalAuthTestMode, isLogoutPendingRetryEnabled, isSocialLoginEnabled } from '../lib/auth/capability.ts';
 
 let pass = 0;
 let fail = 0;
@@ -204,6 +204,24 @@ console.log('\n[capability — 실서버 session 인증 opt-in 스위치]');
   check('임시 로그아웃 진입점: test + session → 숨김', testMode({ NODE_ENV: 'test', NEXT_PUBLIC_AUTH_MODE: 'session' }) === false);
   check('임시 로그아웃 진입점: production + 스위치 없음 → 숨김', testMode({ NODE_ENV: 'production', NEXT_PUBLIC_API_MOCKING: 'disabled' }) === false);
   check('임시 로그아웃 진입점: production + Mock → 숨김', testMode({ NODE_ENV: 'production', NEXT_PUBLIC_API_MOCKING: 'enabled', NEXT_PUBLIC_AUTH_MODE: 'session' }) === false);
+
+  // 세션 사용자용 정식 로그아웃 버튼 노출 기준 — session 모드이고 로컬 시험 모드가 아닐 때. 임시 버튼과 동시에 보이지 않는다
+  const accountLogout = (env) => withEnv(env, isAccountLogoutEnabled);
+  const bothShown = (env) => withEnv(env, () => isAccountLogoutEnabled() && isLocalAuthTestMode());
+  const LOGOUT_ENVS = [
+    ['production + session + Mock 꺼짐 → 보임', { NODE_ENV: 'production', NEXT_PUBLIC_API_MOCKING: 'disabled', NEXT_PUBLIC_AUTH_MODE: 'session' }, true],
+    ['production + 스위치 없음(dev-login) → 숨김', { NODE_ENV: 'production', NEXT_PUBLIC_API_MOCKING: 'disabled' }, false],
+    ['production + 스위치 값이 Session → 숨김', { NODE_ENV: 'production', NEXT_PUBLIC_AUTH_MODE: 'Session' }, false],
+    ['next dev + session + Mock 꺼짐(로컬 시험 모드) → 숨김', { NODE_ENV: 'development', NEXT_PUBLIC_AUTH_MODE: 'session' }, false],
+    ['스위치 없는 실서버 dev → 숨김', { NODE_ENV: 'development' }, false],
+    ['일반 Mock 개발 → 보임', { NODE_ENV: 'development', NEXT_PUBLIC_API_MOCKING: 'enabled' }, true],
+    ['next dev + session + Mock → 보임', { NODE_ENV: 'development', NEXT_PUBLIC_AUTH_MODE: 'session', NEXT_PUBLIC_API_MOCKING: 'enabled' }, true],
+    ['production + Mock → 보임', { NODE_ENV: 'production', NEXT_PUBLIC_API_MOCKING: 'enabled' }, true],
+  ];
+  for (const [label, env, expected] of LOGOUT_ENVS) {
+    check(`정식 로그아웃: ${label}`, accountLogout(env) === expected);
+    check(`정식·임시 로그아웃 동시 노출 없음: ${label}`, bothShown(env) === false);
+  }
 }
 
 // ── refresh ───────────────────────────────────

@@ -66,6 +66,7 @@ test.describe('unset — 기본 production(dev-login)', () => {
     await expect.poll(() => calls.includes('POST /auth/login')).toBe(true);
     await page.waitForTimeout(300);
     await expect(tempLogout(page)).toHaveCount(0);
+    await expect(page.getByTestId('account-logout')).toHaveCount(0);
   });
 });
 
