@@ -16,18 +16,25 @@ export class AuthSessionChangedError extends Error {
 
 /**
  * 'session' 모드의 일반 API 요청. 401 이면 인증 복구(refresh → /auth/me)를 기다리고,
- * 같은 계정으로 확인됐을 때만 원 요청을 다시 보낸다(최대 AUTH_ORIGINAL_REQUEST_MAX_RETRIES 회).
- * 다른 계정·세션 종료·일시 오류면 다시 보내지 않는다. send 는 부를 때마다 최신 access 로 헤더를 만든다.
+ * 같은 계정으로 확인됐을 때만 원 요청을 다시 보낸다(최대 AUTH_ORIGINAL_REQUEST_MAX_RETRIES 회). send 는 부를 때마다 최신 access 로 헤더를 만든다.
+ *
+ * 인증 세대(epoch) — 요청을 보낼 때의 세대에 묶는다:
+ *   401 을 받았을 때 이미 세대가 바뀌었으면 refresh 를 시작하지 않는다(이전 세대의 늦은 401 이 새 세션의 refresh 쿠키를 회전시키지 않게)
+ *   복구는 그 세대에 묶여(recover(epoch)) 다른 세대의 진행 중 복구와 합치지 않는다
+ *   세대가 바뀌면 응답을 버리고 AuthSessionChangedError
  */
 export async function fetchWithSessionRecovery(
   send: () => Promise<Response>,
-  recover: () => Promise<RecoveryOutcome> = recoverSession,
+  recover: (expectedEpoch: number) => Promise<RecoveryOutcome> = recoverSession,
 ): Promise<Response> {
   const epoch = getAuthEpoch();
   let res = await send();
   for (let retry = 0; res.status === 401 && retry < AUTH_ORIGINAL_REQUEST_MAX_RETRIES; retry += 1) {
-    const outcome = await recover();
-    if (outcome.kind !== 'same-account' || getAuthEpoch() !== epoch) break;
+    if (getAuthEpoch() !== epoch) throw new AuthSessionChangedError();
+    const outcome = await recover(epoch);
+    // 계정 전환·세션 종료·로그아웃은 세대를 올린다(account-changed·session-ended·restore-suppressed·stale)
+    if (getAuthEpoch() !== epoch || outcome.kind === 'stale') throw new AuthSessionChangedError();
+    if (outcome.kind !== 'same-account') break;
     res = await send();
   }
   if (getAuthEpoch() !== epoch) throw new AuthSessionChangedError();

@@ -74,10 +74,13 @@ function defaultRecoveryDeps(): RecoveryDeps {
   };
 }
 
-/** 401 을 받은 요청이 부른다. 같은 탭의 동시 호출은 결과 하나를 공유한다 */
-export function recoverSession(): Promise<RecoveryOutcome> {
+/**
+ * 401 을 받은 요청이 부른다. expectedEpoch = 그 요청을 보낼 때의 인증 세대. 같은 탭·같은 세대의 동시 호출은 결과 하나를 공유하고,
+ * 세대가 바뀐 뒤의 호출은 이전 세대의 진행 중 복구에 합류하지 않는다(lib/auth/refresh.ts).
+ */
+export function recoverSession(expectedEpoch?: number): Promise<RecoveryOutcome> {
   recovery ??= createSessionRecovery(defaultRecoveryDeps());
-  return recovery.recover();
+  return recovery.recover(expectedEpoch);
 }
 
 /** 사건당 한 번 실행된다(refresh.ts onOutcome) */
@@ -110,6 +113,9 @@ export function applyRecoveryOutcome(outcome: RecoveryOutcome): void {
       return;
     case 'failed':
       setAuthNotice('auth-failed');
+      return;
+    case 'stale':
+      // 이전 세대의 복구 — 현재 세션(새 계정·로그아웃 상태)에 아무것도 하지 않는다
       return;
   }
 }
