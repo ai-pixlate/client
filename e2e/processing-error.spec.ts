@@ -178,7 +178,13 @@ for (const c of CASES) {
       failedCount: 1,
       items: [{ taskId: 1, taskType: 'section', unitType: 'section', unitId: 7, status: 'failed', errorCode: 'SOME_FAILURE' }],
     });
-    await expect(page.getByText('일부 항목을 처리하지 못했습니다')).toBeVisible();
+    // N2 는 부분 실패 목록을 보이고, N4 는 내부 진단 정보(unitType·errorCode)를 화면에 내지 않는다
+    if (c.step === 'N2') await expect(page.getByText('일부 항목을 처리하지 못했습니다')).toBeVisible();
+    else {
+      await expect(page.getByRole('heading', { name: c.heading, level: 1 })).toBeVisible();
+      await expect(page.getByText('일부 항목을 처리하지 못했습니다')).toHaveCount(0);
+      await expect(page.getByText('SOME_FAILURE')).toHaveCount(0);
+    }
     await expect(errorPanel(page)).toHaveCount(0);
     await expect(page.getByText('ERROR!')).toHaveCount(0);
     await expect(page.getByRole('heading', { name: c.heading, level: 1 })).toBeVisible();

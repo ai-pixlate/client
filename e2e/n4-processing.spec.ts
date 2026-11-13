@@ -155,7 +155,9 @@ test('N4 — stage 실패를 받으면 기존 실패 안내가 뜨고 표시 pro
   await page.evaluate(() => {
     (globalThis as Record<string, unknown>).__pixlateMockN4Fail = true;
   });
-  await expect(page.getByText('일부 항목을 처리하지 못했습니다')).toBeVisible({ timeout: 10_000 });
+  // 부분 실패의 내부 진단 박스(unitType·errorCode)는 N4 에 내지 않는다 — 진행 표시가 멈추는 것으로 확인한다
+  await page.clock.fastForward('00:10');
+  await expect(page.getByText('일부 항목을 처리하지 못했습니다')).toHaveCount(0);
   const atFailure = await readProgress(page);
 
   await page.clock.fastForward('05:00');

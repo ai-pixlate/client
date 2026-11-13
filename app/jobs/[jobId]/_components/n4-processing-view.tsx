@@ -215,7 +215,6 @@ export function N4ProcessingView({
   // 행·caption·표시 % 상한은 이번 poll 의 서버 관측(진행 중으로 그린 단계)으로만 정한다. status.progress 는
   // stages 가 비어 있을 때의 coarse fallback 에만 쓴다 — 숫자는 hook 이 그 상한 안에서 따로 올린다.
   const { rows, activeStages } = resolveN4Presentation(status.stages, status.progress);
-  const failedItems = (status.items ?? []).filter((i) => i.status === 'failed');
   const displayedProgress = useDisplayedProgress({
     persistKey: n4DisplayedProgressKey(jobId),
     ceiling: Math.max(...activeStages.map((stage) => DISPLAY_CEILING_BY_N4_STAGE[stage])),
@@ -256,7 +255,9 @@ export function N4ProcessingView({
       progressPercent={displayedProgress}
       progressHint={isCompleted ? N4_COMPLETION_COPY.progressHint : N4_AUTO_ADVANCE_NOTICE}
       pauseButtonTitle={N4_PAUSE_BUTTON_TITLE}
-      failedItems={failedItems}
+      // 부분 실패 항목(unitType·unitId·errorCode)은 내부 진단 정보라 N4 화면에 내지 않는다 — 블록·섹션 오류는 N5 에서 확인한다.
+      // 진행 멈춤(hasProcessingFailure)·전체 실패(jobStatus=failed) 판정은 그대로다
+      failedItems={[]}
       error={isFailed ? N4_ERROR : undefined}
     />
   );
