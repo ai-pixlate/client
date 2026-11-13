@@ -1191,17 +1191,17 @@ export function N5Viewport({
 
   // 손잡이·본체 끌기로 바꾼 bbox(위치·크기 전부) — 세션 local 초안이다(use-n5-edit-session.ts). 저장 계약이 없어 서버로
   // 보내지 않고, 새로고침하면 사라진다. F-CFM-15 조정은 「번역 후」 화면의 것이라 「번역 전」에는 원본 bbox를 보인다.
-  const { bboxDrafts, setBboxDraft, commitBoxEdit, setLayoutDragging, isEditLocked, fitAutoHeight } = editSession;
-  // 「번역 후」 박스 = 세션 초안 > 저장 입력(renderInput 적용 박스) > 원본 bbox
+  const { layoutBoxes, setBboxDraft, commitBoxEdit, setLayoutDragging, isEditLocked, fitAutoHeight } = editSession;
+  // 「번역 후」 박스 = 사용자 초안 > Auto Height 표시 박스(layoutBoxes) > 저장 입력(renderInput 적용 박스) > 원본 bbox
   const blocks = useMemo(
     () =>
       viewMode !== 'translated'
         ? serverBlocks
         : serverBlocks.map((block) => {
-            const box = bboxDrafts.get(block.id) ?? getTranslatedBaseBox(block);
+            const box = layoutBoxes.get(block.id) ?? getTranslatedBaseBox(block);
             return box === block.bbox ? block : { ...block, bbox: box };
           }),
-    [serverBlocks, bboxDrafts, viewMode],
+    [serverBlocks, layoutBoxes, viewMode],
   );
 
   const blocksBySection = useMemo(() => {
@@ -1622,7 +1622,7 @@ export function N5Viewport({
                 // 서버 style 이 있으면 역할은 그리기에 쓰이지 않는다
                 role: block && isTypesetRole(block.role) ? block.role : 'body',
                 originalBBox: renderBlock.box,
-                adjustedBBox: bboxDrafts.get(renderBlock.blockId) ?? null,
+                adjustedBBox: layoutBoxes.get(renderBlock.blockId) ?? null,
                 sourceImageWidth: section.width,
                 userFontScale: fontScaleDrafts.get(renderBlock.blockId) ?? renderBlock.style.fontScale,
                 textAlign: renderBlock.style.align,
@@ -1647,7 +1647,7 @@ export function N5Viewport({
                   text: translationDrafts.get(block.id)?.draft ?? block.translatedText,
                   role: block.role,
                   originalBBox: block.bbox,
-                  adjustedBBox: bboxDrafts.get(block.id) ?? null,
+                  adjustedBBox: layoutBoxes.get(block.id) ?? null,
                   sourceImageWidth: section.width,
                   userFontScale: fontScaleDrafts.get(block.id) ?? 1,
                   textAlign: block.textAlign,
@@ -1659,7 +1659,7 @@ export function N5Viewport({
       );
     }
     return bySection;
-  }, [slices, isTypesetQa, serverBlocks, preview.sections, bboxDrafts, translationDrafts, fontScaleDrafts]);
+  }, [slices, isTypesetQa, serverBlocks, preview.sections, layoutBoxes, translationDrafts, fontScaleDrafts]);
 
   const selectedBlockForOverlap = blocks.find((b) => b.id === selectedBlockId);
   // 선택 block의 Auto Height 가능 여부와 지금 박스의 넘침. 잴 수 없으면 null이고 자유 크기 조절을 쓴다
