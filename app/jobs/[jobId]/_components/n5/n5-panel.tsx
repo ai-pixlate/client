@@ -51,7 +51,9 @@ const N5_CONFIRM_RERENDER_MAX_POLLS = 90;
 // 그룹마다 "SectionN" 태그(Tag/Selectable)를 헤더로 둔다 — 좌측 캔버스와 같은
 // 그룹 단위다. selection 정본은 N5View가 소유하고, 이 컴포넌트는
 // selectedBlockId/selectedSectionId를 prop으로만 받아 좌→우 자동 스크롤만
-// 담당한다(ref + scrollIntoView, 전체 목록 재렌더나 강제 상단 이동 없음).
+// 담당한다. 자동 스크롤 단위는 section이다 — 선택된 section이 바뀔 때만 그 section
+// 시작점으로 한 번 이동하고, 같은 section 안에서 block만 바뀌면 움직이지 않는다.
+// 현재 section은 SectionTag가 스크롤 영역 위에 sticky로 붙어 보여 준다.
 //
 // block 선택 표시는 Figma가 실제 보여준 값(번호 원형 배지: 기본
 // border-[#eaeaea] size-5, 선택 bg-[#ff6a38])을 쓴다 — 이전(3단계)에 썼던
@@ -635,7 +637,6 @@ export function N5Panel({
   blocks,
   sectionStatusById,
   blockTaskFailuresById,
-  revealRequestSeq,
   viewMode,
   onViewModeChange,
   selectedBlockId,
@@ -650,7 +651,6 @@ export function N5Panel({
   sectionStatusById: ReadonlyMap<number, SectionStatusViewModel>;
   blockTaskFailuresById: ReadonlyMap<number, BlockTaskFailures>;
   /** 같은 대상을 다시 골라도 그 위치를 다시 보여 달라는 요청 횟수(n5-view.tsx) */
-  revealRequestSeq: number;
   viewMode: N5ViewMode;
   onViewModeChange: (mode: N5ViewMode) => void;
   selectedBlockId: number | null;
@@ -719,7 +719,7 @@ export function N5Panel({
       if (!mountedRef.current) return false;
       if (!result.started || !result.ok) {
         const block = blocks.find((candidate) => candidate.id === blockId);
-        if (block) onSelectBlock(block);
+        if (block) selectBlockFromPanel(block, { reveal: true });
         setConfirmError('저장하지 못한 번역문이 있어 다음 단계로 넘어가지 않았습니다. 표시된 칸을 확인한 뒤 다시 시도해 주세요.');
         return false;
       }
@@ -832,21 +832,31 @@ export function N5Panel({
   }
 
   const blockRowRefs = useRef(new Map<number, HTMLLIElement>());
-  const sectionHeaderRefs = useRef(new Map<number, HTMLDivElement>());
+  const sectionGroupRefs = useRef(new Map<number, HTMLDivElement>());
+  // 마지막으로 자동 스크롤 판단에 쓴 section. 선택된 section이 실제로 바뀔 때만 이동한다
+  const revealedSectionRef = useRef(selectedSectionId);
 
-  // F-CFM-13 좌→우 자동 스크롤 — 선택된 block(없으면 선택된 section 헤더)을
-  // panel 자신의 overflow 컨테이너 안에서 scrollIntoView한다. 전체 목록을
-  // 다시 그리거나 상단으로 강제 이동시키지 않는다 — 'nearest'라 이미 보이는
-  // 위치면 스크롤 자체가 일어나지 않는다.
+  // 좌→우 자동 스크롤(F-CFM-13) — 선택된 section이 바뀌면 그 section 시작점으로 한 번 이동한다.
+  // 같은 section 안에서 block만 바뀌면 움직이지 않는다(사용자가 직접 스크롤한 위치를 지킨다).
+  // revealRequestSeq(같은 대상을 다시 보여 달라는 신호)는 canvas pan 전용이라 이 패널은 쓰지 않는다.
   useEffect(() => {
-    if (selectedBlockId != null) {
-      blockRowRefs.current.get(selectedBlockId)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    } else if (selectedSectionId != null) {
-      sectionHeaderRefs.current
-        .get(selectedSectionId)
-        ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    }
-  }, [selectedBlockId, selectedSectionId, revealRequestSeq]);
+    if (selectedSectionId === revealedSectionRef.current) return;
+    revealedSectionRef.current = selectedSectionId;
+    if (selectedSectionId == null) return;
+    sectionGroupRefs.current.get(selectedSectionId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [selectedSectionId]);
+
+  /** 패널 안에서 고른 선택 — 사용자가 이미 보고 있는 자리라 section 자동 이동을 하지 않는다. reveal은 그 행을 보이게 한다 */
+  function selectBlockFromPanel(block: BlockViewModel, options: { reveal?: boolean } = {}) {
+    revealedSectionRef.current = block.sectionId;
+    onSelectBlock(block);
+    if (options.reveal) blockRowRefs.current.get(block.id)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  function selectSectionFromPanel(sectionId: number) {
+    revealedSectionRef.current = sectionId;
+    onSelectSection(sectionId);
+  }
 
   return (
     // width: Figma(544:3168) 실측 433px(1920 기준 22.56vw에서 상한에 닿는다)를 상한으로
@@ -887,33 +897,39 @@ export function N5Panel({
           </p>
         ) : (
           groups.map((group) => (
-            <div key={group.sectionId} className="flex flex-col gap-7">
-              <div
-                className="flex flex-col items-start gap-4"
-                ref={(el) => {
-                  if (el) sectionHeaderRefs.current.set(group.sectionId, el);
-                  else sectionHeaderRefs.current.delete(group.sectionId);
-                }}
-              >
+            <div
+              key={group.sectionId}
+              data-testid={`n5-panel-section-${group.sectionOrder}`}
+              className="flex flex-col"
+              ref={(el) => {
+                if (el) sectionGroupRefs.current.set(group.sectionId, el);
+                else sectionGroupRefs.current.delete(group.sectionId);
+              }}
+            >
+              {/* 현재 section 표시 — 스크롤 영역 위에 붙고, 다음 section 그룹이 올라오면 자연스럽게 밀려난다(CSS sticky).
+                  흰 바탕 pb-4는 붙어 있을 때 아래 내용과 떼어 두는 몫이며 펼친 상태의 간격(태그→상태 16, 태그→목록 28)은 그대로다 */}
+              <div data-testid={`n5-section-tag-sticky-${group.sectionOrder}`} className="sticky top-0 z-10 flex bg-white pb-4">
                 <SectionTag
                   sectionOrder={group.sectionOrder}
                   isSelected={group.sectionId === selectedSectionId}
-                  onSelect={() => onSelectSection(group.sectionId)}
+                  onSelect={() => selectSectionFromPanel(group.sectionId)}
                 />
-                {hasSectionStatus(sectionStatusById.get(group.sectionId)) && (
-                  <PanelSectionStatus
-                    sectionOrder={group.sectionOrder}
-                    status={sectionStatusById.get(group.sectionId) as SectionStatusViewModel}
-                  />
-                )}
               </div>
+              {hasSectionStatus(sectionStatusById.get(group.sectionId)) && (
+                <PanelSectionStatus
+                  sectionOrder={group.sectionOrder}
+                  status={sectionStatusById.get(group.sectionId) as SectionStatusViewModel}
+                />
+              )}
               {/* 9/23 디테일 보정 — block 카드 사이 간격을 이전 gap-4(16px)에서
                   8px 늘려 gap-6(24px)으로 뒀다. block 내부(번호~번역근거)
                   간격을 줄인 것과 대비해, block과 block 사이는 더 뚜렷하게
                   분리되도록 한다(위 TranslationEditor/EvidenceSection
                   mt-3 참고). border/divider를 새로 넣지 않고 spacing만으로
                   구분한다. */}
-              <ul className="flex flex-col gap-6">
+              <ul
+                className={`flex flex-col gap-6 ${hasSectionStatus(sectionStatusById.get(group.sectionId)) ? 'mt-7' : 'mt-3'}`}
+              >
                 {/* 번호는 section-local index다(blockIndex + 1) — section마다
                     1부터 다시 시작한다. job 전체를 관통하는 전역 index나
                     DB id를 화면 번호로 쓰지 않는다(좌측 캔버스와 동일 규칙,
@@ -926,7 +942,7 @@ export function N5Panel({
                     index={blockIndex + 1}
                     viewMode={viewMode}
                     isSelected={block.id === selectedBlockId}
-                    onSelect={() => onSelectBlock(block)}
+                    onSelect={() => selectBlockFromPanel(block)}
                     rowRef={(el) => {
                       if (el) blockRowRefs.current.set(block.id, el);
                       else blockRowRefs.current.delete(block.id);

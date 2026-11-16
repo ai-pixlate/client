@@ -52,8 +52,8 @@ import { useTypesetFontGate } from './use-typeset-font-gate';
 //
 // F-CFM-13(이번 반영): selectedBlockId/selectedSectionId는 이 컴포넌트(N5Loaded)
 // 하나가 정본으로 소유하고, N5Viewport(좌)와 N5Panel(우) 둘 다 이 값을 prop으로만
-// 받는다 — 각자 별도 selection state를 두지 않는다. 좌→우 방향(선택 시 우측
-// 자동 스크롤)은 N5Panel 내부에서 ref+scrollIntoView로 처리하고, 우→좌 방향은
+// 받는다 — 각자 별도 selection state를 두지 않는다. 좌→우 방향(선택된 section이
+// 바뀔 때만 우측을 그 section 시작점으로 자동 스크롤)은 N5Panel 내부에서 처리하고, 우→좌 방향은
 // N5Viewport의 selectionAutoMove effect가 pan을 옮겨 해당 block/section을
 // 화면 안으로 들어오게 한다.
 //
@@ -176,7 +176,6 @@ function N5Loaded({
           blocks={blocks}
           sectionStatusById={sectionStatusById}
           blockTaskFailuresById={blockTaskFailuresById}
-          revealRequestSeq={revealRequestSeq}
           viewMode={viewMode}
           onViewModeChange={setViewMode}
           selectedBlockId={selectedBlockId}
