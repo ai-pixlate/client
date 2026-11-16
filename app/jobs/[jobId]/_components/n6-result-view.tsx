@@ -4,6 +4,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 
 import {
   selectN6RenderTask,
+  isN6RenderStatusUnknown,
+  resetN6RenderStatusTracking,
   useJobTasksQuery,
   useN6RenderMutation,
   useDeliverablesQuery,
@@ -75,6 +77,28 @@ function RenderFailed({ onRetry, retryPending }: { onRetry: () => void; retryPen
         className="rounded-[6px] bg-[#171717] px-8 py-3.5 text-[14px] font-medium tracking-[-0.03em] text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
       >
         {retryPending ? '재시도 중...' : '다시 렌더링'}
+      </button>
+    </div>
+  );
+}
+
+/** 현재 최종 렌더를 오래 확인하지 못한 상태 — RenderFailed 와 같은 모양. 버튼은 /tasks 재조회만 한다 */
+function RenderStatusUnknown({ onRecheck, recheckPending }: { onRecheck: () => void; recheckPending: boolean }) {
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center" data-testid="n6-render-status-unknown">
+      <p className="text-[14px] text-red-500">
+        최종 렌더 상태를 확인하지 못했습니다.
+        <br />
+        잠시 후 다시 확인해 주세요.
+      </p>
+      <button
+        type="button"
+        data-testid="n6-render-recheck"
+        onClick={onRecheck}
+        disabled={recheckPending}
+        className="rounded-[6px] border border-[#eaeaea] bg-white px-8 py-3.5 text-[14px] font-medium tracking-[-0.03em] text-[#171717] transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        {recheckPending ? '확인하는 중...' : '다시 확인'}
       </button>
     </div>
   );
@@ -923,10 +947,11 @@ function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeli
 // ─────────────────────────────────────────────────────────────────
 // N6ResultView — 진입점 (Figma node 643:5523 "N6 저장")
 //
-// happy path: (confirm이 자동 등록한) render task를 tasks polling으로 확인
+// happy path: (confirm이 등록한) 최종 render task를 tasks polling으로 확인
 // → done이면 deliverables/validation 조회 → export 선택·실행 → download URL
-// 조회 → save. render task가 없거나(도달 불가 상태) failed일 때만 수동으로
-// POST /render를 호출한다 — 있으면 다시 호출하지 않는다.
+// 조회 → save. 최초 최종 렌더는 confirm 이 N6 전환과 함께 등록한다(BE release 44e7164).
+// FE 는 N6 진입·새로고침·task 0건·여러 건·failed 관측 어느 경우에도 POST /render 를
+// 자동으로 보내지 않는다. POST /render 는 사용자가 [다시 렌더링]을 눌렀을 때만 보낸다.
 // ─────────────────────────────────────────────────────────────────
 
 export function N6ResultView({ jobId }: { jobId: string }) {
@@ -940,19 +965,18 @@ export function N6ResultView({ jobId }: { jobId: string }) {
   const renderAmbiguous = renderSelection.kind === 'ambiguous';
   const renderFailed = renderItem?.status === 'failed';
   const renderDone = renderItem?.status === 'done';
-  const isRenderRunning = !tasksQuery.isLoading && !tasksQuery.isError && !renderAmbiguous && !renderDone && !renderFailed;
+
+  // 0건(관측 전)·여러 건(invariant 위반)이 상한을 넘게 이어지면 무한 로딩으로 숨기지 않고 상태 확인 불가로 바꾼다.
+  // polling 중단도 같은 기준이다(useJobTasksQuery) — page.tsx 와 같은 /tasks query 를 쓰므로 판단을 query 계층에 둔다
+  const statusUnknown = isN6RenderStatusUnknown(jobId, tasksQuery.data, tasksQuery.dataUpdatedAt);
+  useEffect(() => () => resetN6RenderStatusTracking(jobId), [jobId]);
+
+  const isRenderRunning =
+    !tasksQuery.isLoading && !tasksQuery.isError && !renderAmbiguous && !statusUnknown && !renderDone && !renderFailed;
   // 모달을 닫아도 렌더는 계속된다. 다시 렌더링을 누르면 새 진행이라 다시 보인다
   const [isRenderDialogClosed, setIsRenderDialogClosed] = useState(false);
   const closeRenderDialog = useCallback(() => setIsRenderDialogClosed(true), []);
   const headingRef = useRef<HTMLHeadingElement>(null);
-
-  useEffect(() => {
-    if (!tasksQuery.data) return; // 첫 응답 대기 중
-    if (renderSelection.kind === 'not-n6' || renderAmbiguous) return; // 최종 렌더를 확정할 수 없는 응답 — render 를 새로 요청하지 않는다
-    if (renderItem && !renderFailed) return; // 이미 진행 중이거나 완료 — 재호출하지 않는다
-    if (renderMutation.isPending || renderMutation.isSuccess) return; // 중복 트리거 방지
-    renderMutation.mutate();
-  }, [tasksQuery.data, renderSelection.kind, renderAmbiguous, renderItem, renderFailed, renderMutation]);
 
   // render가 끝나야만 의미 있는 조회다(렌더 전 deliverables는 항상 빈 목록) —
   // validation은 계약대로 계속 불러오지만(아래 body 참고), 화면에는 쓰지 않는다.
@@ -974,6 +998,11 @@ export function N6ResultView({ jobId }: { jobId: string }) {
           {tasksQuery.error instanceof Error ? tasksQuery.error.message : '오류가 발생했습니다.'}
         </p>
       </div>
+    );
+  } else if (statusUnknown) {
+    // [다시 확인]은 /tasks 재조회만 한다 — 렌더를 새로 요청하지 않는다
+    body = (
+      <RenderStatusUnknown onRecheck={() => void tasksQuery.refetch()} recheckPending={tasksQuery.isFetching} />
     );
   } else if (renderAmbiguous) {
     body = (

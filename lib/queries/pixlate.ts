@@ -55,7 +55,7 @@ function retryTasksQuery(failureCount: number, error: unknown): boolean {
   return shouldRetryQuery(failureCount, error);
 }
 import type { ApiSection } from '@/lib/api/n3-schema';
-import { selectN6RenderTask } from './n6-render-task';
+import { isN6RenderStatusUnknown, selectN6RenderTask } from './n6-render-task';
 
 // ─────────────────────────────────────────────
 // Query Keys
@@ -164,13 +164,19 @@ export function useAnalyzeJobMutation() {
 // polling한다 — N1/N3/N5는 사용자 조작을 기다리는 정적 단계라 계속 찔러볼
 // 필요가 없다. N6은 그 자체는 정적 단계지만, confirm이 자동 등록한 현재 최종
 // render task(n6-render-task.ts selectN6RenderTask)가 진행 중이거나 아직 1건으로
-// 관측되지 않았을 때만 계속 polling한다. currentStep이
+// 관측되지 않았을 때만 계속 polling한다(관측 못 한 상태는 상한까지만). currentStep이
 // 바뀌면(N2→N3, N4→N5) page.tsx가 그 값을 보고 다음 화면을 그대로 렌더한다 —
 // FE가 별도로 "다음 단계 진입"을 계산하지 않는다(userFacingStatus/currentStep은
 // 서버 응답 그대로 쓴다).
 // ─────────────────────────────────────────────
 
-export { selectN6RenderTask, type N6RenderTaskSelection } from './n6-render-task';
+export {
+  selectN6RenderTask,
+  isN6RenderStatusUnknown,
+  resetN6RenderStatusTracking,
+  N6_TASK_UNRESOLVED_LIMIT_MS,
+  type N6RenderTaskSelection,
+} from './n6-render-task';
 
 /** N6 에서 /tasks 를 계속 다시 물어야 하는가 — 현재 최종 렌더가 진행 중이거나, 아직 1건으로 관측되지 않았을 때 */
 function shouldPollN6Tasks(data: ApiJobTaskStatus, jobId: string): boolean {
@@ -197,7 +203,11 @@ export function useJobTasksQuery(jobId: string, options: { polling?: boolean } =
           // N2·N4 전체 실패(jobStatus=failed)는 종료 상태라 폴링을 멈춘다
           if ((data.currentStep === 'N2' || data.currentStep === 'N4') && data.jobStatus === 'failed') return false;
           if (data.currentStep === 'N2' || data.currentStep === 'N4') return 2_000;
-          if (data.currentStep === 'N6') return shouldPollN6Tasks(data, jobId) ? 2_000 : false;
+          if (data.currentStep === 'N6') {
+            // 0건·여러 건이 상한을 넘게 이어지면 멈춘다(n6-render-task.ts N6_TASK_UNRESOLVED_LIMIT_MS) — 이후는 [다시 확인]으로만 재조회
+            if (isN6RenderStatusUnknown(jobId, data, query.state.dataUpdatedAt)) return false;
+            return shouldPollN6Tasks(data, jobId) ? 2_000 : false;
+          }
           return false;
         }
       : false,

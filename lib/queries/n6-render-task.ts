@@ -31,3 +31,37 @@ export function selectN6RenderTask(data: ApiJobTaskStatus | undefined, jobId: st
   if (candidates.length === 0) return { kind: 'none' };
   return { kind: 'ambiguous', count: candidates.length };
 }
+
+/**
+ * N6 에서 현재 최종 렌더가 1건으로 관측되지 않는 상태(none·ambiguous)를 계속 기다리는 상한.
+ * 프로젝트에 공통 polling 종료 정책은 없다. 가장 가까운 선례인 N5 [저장하러 가기]의 재렌더 대기
+ * (2초 × 90회 ≈ 3분, n5-panel.tsx)를 그대로 따른 FE 제안값이며 서버 timeout 계약이 아니다.
+ * 넘으면 polling 을 멈추고 「상태 확인 불가」 + [다시 확인](/tasks 재조회만)을 보인다.
+ */
+export const N6_TASK_UNRESOLVED_LIMIT_MS = 2_000 * 90;
+
+/** jobId → none·ambiguous 가 처음 관측된 응답 시각(dataUpdatedAt). 같은 /tasks query 를 구독하는 page.tsx·N6 화면이 함께 쓴다 */
+const unresolvedSince = new Map<string, number>();
+
+/**
+ * 현재 최종 렌더를 N6_TASK_UNRESOLVED_LIMIT_MS 넘게 1건으로 확인하지 못했는가.
+ * 1건(또는 N6 가 아닌 응답)이 오면 기준을 지운다. 같은 응답에 몇 번 불러도 결과가 같다.
+ */
+export function isN6RenderStatusUnknown(jobId: string, data: ApiJobTaskStatus | undefined, dataUpdatedAt: number): boolean {
+  const kind = selectN6RenderTask(data, jobId).kind;
+  if ((kind !== 'none' && kind !== 'ambiguous') || dataUpdatedAt <= 0) {
+    unresolvedSince.delete(jobId);
+    return false;
+  }
+  let since = unresolvedSince.get(jobId);
+  if (since == null || since > dataUpdatedAt) {
+    since = dataUpdatedAt;
+    unresolvedSince.set(jobId, since);
+  }
+  return dataUpdatedAt - since >= N6_TASK_UNRESOLVED_LIMIT_MS;
+}
+
+/** N6 화면을 떠나면 기준을 지운다 — 다시 들어오면 새로 센다 */
+export function resetN6RenderStatusTracking(jobId: string): void {
+  unresolvedSince.delete(jobId);
+}
