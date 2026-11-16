@@ -1285,8 +1285,8 @@ function NewJobPageInner() {
 
             {/* 책임 동의 — PRD F-ACC-04, Figma Checkbox(1170:6002): 패널 아래 30 · [다음] 바로 위.
                 Checkbox / Compact(1063:5156) 18px 박스, Checked는 orange border + check. */}
-            <label className="mt-[30px] flex shrink-0 cursor-pointer items-center gap-2" data-testid="n1-consent">
-              {/* 필수 * — Figma(525:3023): Checkbox x1344·y913, * x1363·y909(8×19). 체크박스 바로 오른쪽 위의 별도 표시다.
+            <label className="mt-[30px] flex shrink-0 cursor-pointer items-center gap-3" data-testid="n1-consent">
+              {/* 필수 * — Figma(525:3023): Checkbox x1344·y913, * x1363·y909(8×19, Pretendard Regular 16 · -3%). checkbox ↔ 문구 gap 12. 체크박스 바로 오른쪽 위의 별도 표시다.
                   별표는 시각 보조라 aria-hidden이고, 필수 여부는 input의 aria-required와 sr-only 문구로 전달한다. */}
               <span className="relative flex size-5 shrink-0 items-center justify-center">
                 <input
@@ -1302,7 +1302,7 @@ function NewJobPageInner() {
                 <span
                   aria-hidden="true"
                   data-testid="n1-consent-required-mark"
-                  className="pointer-events-none absolute top-[-4px] left-[19px] h-[19px] w-2 text-[14px] leading-[19px] text-[#ff6a38]"
+                  className="pointer-events-none absolute top-[-4px] left-[19px] h-[19px] w-2 text-[16px] leading-[normal] font-normal tracking-[-0.03em] text-[#ff6a38]"
                 >
                   *
                 </span>
