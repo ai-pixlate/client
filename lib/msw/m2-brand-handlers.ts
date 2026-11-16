@@ -10,6 +10,9 @@ import { M2_MOCK_BRAND, M2_MOCK_BRAND_ID, M2_MOCK_LOGOS } from '@/lib/mock-api/m
 // ?mockScenario=m2-<name> (요청 referrer 로 판별):
 //   not-found · no-brand · multi-brand · save-fail · save-slow · logo-upload-fail · logo-delete-fail
 //   create-fail(500) · create-conflict(409) · create-slow · create-logo-fail-once(등록 뒤 첫 로고 POST 만 실패)
+//   create-response-lost(서버는 만들었지만 응답 유실) · create-lost-not-created(서버에 닿기 전 유실 — 만들지 않음)
+//   create-lost-list-fail(응답 유실 + 그 뒤 첫 목록 조회 실패) · create-other-tab(입력하는 사이 다른 탭이 등록) · list-fail(목록 조회 500)
+//   create-* 는 브랜드 0개 계정에서 시작한다(신규 등록 흐름).
 // ─────────────────────────────────────────────────────────────────
 
 type M2Scenario =
@@ -23,7 +26,12 @@ type M2Scenario =
   | 'create-fail'
   | 'create-conflict'
   | 'create-slow'
-  | 'create-logo-fail-once';
+  | 'create-logo-fail-once'
+  | 'create-response-lost'
+  | 'create-lost-not-created'
+  | 'create-lost-list-fail'
+  | 'create-other-tab'
+  | 'list-fail';
 
 function scenarioOf(referrer: string): M2Scenario | null {
   try {
@@ -46,6 +54,15 @@ let createdBrands: ApiBrand[] = [];
 const createdLogos = new Map<number, ApiBrandLogo[]>();
 let nextBrandId = 200;
 let createLogoFailUsed = false;
+/** GET /brands 호출 수(create-other-tab · create-lost-list-fail 의 시점 구분용) */
+let brandListCalls = 0;
+/** create-lost-list-fail: 응답 유실 뒤 첫 목록 조회만 실패시킨다 */
+let failNextBrandList = false;
+/**
+ * 브랜드 0개 계정 — no-brand·create-* 시나리오로 한 번 들어온 페이지는 그 뒤 시나리오가 URL 에 없는 화면(M1→M2 이동 등)에서도
+ * 기본 fixture 브랜드(101)를 보이지 않는다. 실서버에서 계정의 브랜드 목록이 화면 이동으로 바뀌지 않는 것과 같은 의미다.
+ */
+let noBaseBrandAccount = false;
 
 const FORMAT_BY_EXTENSION: Record<string, ApiBrandLogoFormat> = { svg: 'svg', png: 'png', jpg: 'jpg', jpeg: 'jpg' };
 const MIME_BY_FORMAT: Record<ApiBrandLogoFormat, string> = { svg: 'image/svg+xml', png: 'image/png', jpg: 'image/jpeg' };
@@ -77,7 +94,21 @@ async function toDataUrl(file: File, format: ApiBrandLogoFormat): Promise<string
 export const m2BrandHandlers = [
   http.get('/brands', ({ request }) => {
     const scenario = scenarioOf(request.referrer);
-    if (scenario === 'no-brand') return HttpResponse.json(createdBrands);
+    if (scenario === 'no-brand' || scenario?.startsWith('create-')) noBaseBrandAccount = true;
+    brandListCalls += 1;
+    if (scenario === 'list-fail') return errorJson(500, 'INTERNAL_ERROR', 'mock brand list failure', true);
+    if (failNextBrandList) {
+      failNextBrandList = false;
+      return errorJson(503, 'SERVICE_UNAVAILABLE', 'mock brand list unavailable', true);
+    }
+    // 다른 탭이 등록한 상황 — 첫 조회(화면 진입) 뒤에 브랜드가 하나 생긴다
+    if (scenario === 'create-other-tab' && brandListCalls > 1 && createdBrands.length === 0) {
+      nextBrandId += 1;
+      const now = new Date().toISOString();
+      createdBrands = [{ id: nextBrandId, nameKo: '다른 탭 브랜드', nameEn: 'Other Tab', overview: null, targetCustomer: null, createdAt: now, updatedAt: now }];
+      createdLogos.set(nextBrandId, []);
+    }
+    if (scenario === 'no-brand' || scenario?.startsWith('create-') || (scenario == null && noBaseBrandAccount)) return HttpResponse.json(createdBrands);
     if (scenario === 'multi-brand')
       return HttpResponse.json([brand, { ...brand, id: M2_MOCK_BRAND_ID + 1, nameKo: '두 번째 브랜드', nameEn: 'Second' }, ...createdBrands]);
     return HttpResponse.json([brand, ...createdBrands]);
@@ -88,6 +119,8 @@ export const m2BrandHandlers = [
     if (scenario === 'create-slow') await delay(1500);
     if (scenario === 'create-fail') return errorJson(500, 'INTERNAL_ERROR', 'mock brand create failure', true);
     if (scenario === 'create-conflict') return errorJson(409, 'CONFLICT', 'brand already exists');
+    // 서버에 닿기 전 유실 — 아무것도 만들지 않고 네트워크 오류
+    if (scenario === 'create-lost-not-created') return HttpResponse.error();
     const body = (await request.json().catch(() => null)) as Partial<ApiBrandCreate> | null;
     const nameKo = typeof body?.nameKo === 'string' ? body.nameKo.trim() : '';
     const nameEn = typeof body?.nameEn === 'string' ? body.nameEn.trim() : '';
@@ -106,6 +139,12 @@ export const m2BrandHandlers = [
     };
     createdBrands = [...createdBrands, created];
     createdLogos.set(created.id!, []);
+    // 서버는 만들었지만 응답이 FE 에 닿지 않는다(네트워크 오류로 보인다)
+    if (scenario === 'create-response-lost') return HttpResponse.error();
+    if (scenario === 'create-lost-list-fail') {
+      failNextBrandList = true;
+      return HttpResponse.error();
+    }
     return HttpResponse.json(created, { status: 201 });
   }),
 

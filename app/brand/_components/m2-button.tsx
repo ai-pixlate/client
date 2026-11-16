@@ -35,6 +35,7 @@ export function M2Button({
   buttonRef,
   box,
   future = false,
+  tooltip = FUTURE_TOOLTIP,
   className = '',
 }: {
   variant: keyof typeof VARIANT;
@@ -47,6 +48,8 @@ export function M2Button({
   /** Figma 인스턴스가 variant 기본 크기를 덮어쓸 때 넘긴다 */
   box?: string;
   future?: boolean;
+  /** future 툴팁 문구(기본: 3차 구현 예정) */
+  tooltip?: string;
   /** 배치 보정만 넘긴다 */
   className?: string;
 }) {
@@ -86,7 +89,7 @@ export function M2Button({
         role="tooltip"
         className="pointer-events-none invisible absolute bottom-full left-1/2 z-10 mb-1.5 -translate-x-1/2 rounded-[4px] bg-[#171717] px-2 py-1 text-[12px] leading-[14px] tracking-[-0.24px] whitespace-nowrap text-white peer-hover:visible peer-focus-visible:visible"
       >
-        {FUTURE_TOOLTIP}
+        {tooltip}
       </span>
     </span>
   );

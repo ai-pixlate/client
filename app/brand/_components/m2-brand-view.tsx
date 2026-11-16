@@ -68,21 +68,33 @@ export default function M2BrandView() {
   const queryBrandId = searchParams.get('brandId');
   const isCreateRoute = searchParams.get('mode') === 'create';
   const next: M2CreateNext = searchParams.get('next') === 'n1' ? 'n1' : null;
-  const brandsQuery = useBrandsQuery(!isCreateRoute && (queryBrandId == null || queryBrandId === ''));
-  const target = resolveM2BrandTarget(queryBrandId, brandsQuery.data ?? null);
-  const brandId = target?.kind === 'id' ? target.brandId : null;
+  // 등록 경로(mode=create)도 먼저 GET /brands 를 본다 — 목록을 받기 전·실패하면 등록 화면을 열지 않는다(실패를 0개로 보지 않는다)
+  const brandsQuery = useBrandsQuery(isCreateRoute || queryBrandId == null || queryBrandId === '');
+  const target = resolveM2BrandTarget(isCreateRoute ? null : queryBrandId, brandsQuery.data ?? null);
+  // 등록 화면은 진입 때의 목록(0개)으로 한 번 정하고 고정한다 — 등록 뒤 목록이 다시 오더라도(로고 저장 실패로 남은 경우 등)
+  // 화면을 갈아치우지 않는다
+  const [createEntered, setCreateEntered] = useState(false);
+  if (!createEntered && target?.kind === 'none' && brandsQuery.isSuccess) setCreateEntered(true);
+  // 등록을 마치고 특정 브랜드(?brandId=)로 옮겨 가면 등록 화면 고정을 푼다
+  if (createEntered && !isCreateRoute && queryBrandId) setCreateEntered(false);
+  const brandId = !isCreateRoute && target?.kind === 'id' ? target.brandId : null;
   const brandQuery = useBrandQuery(brandId);
   const logosQuery = useBrandLogosQuery(brandId);
 
-  if (isCreateRoute) return <M2BrandEditor key="create" create={{ next, cancelHref: next === 'n1' ? '/' : '/brand' }} />;
-  // 브랜드가 하나도 없으면 안내에서 멈추지 않고 바로 등록 화면을 보인다(신규 계정이 막히지 않게)
-  if (!brandsQuery.isError && target?.kind === 'none') return <M2BrandEditor key="create-empty" create={{ next, cancelHref: '/' }} />;
+  if (createEntered) {
+    return <M2BrandEditor key="create" create={{ next, cancelHref: isCreateRoute && next !== 'n1' ? '/brand' : '/' }} />;
+  }
+  // 등록 경로인데 브랜드가 이미 1개 — 등록 화면을 열지 않고 그 브랜드로 연결한다(POST 없음)
+  if (isCreateRoute && target?.kind === 'id') {
+    return <M2Redirect href={next === 'n1' ? `/jobs/new?brandId=${target.brandId}` : `/brand?brandId=${target.brandId}`} />;
+  }
 
   const isNotFound = (error: unknown) => error instanceof ApiRequestError && error.status === 404;
   let message: { state: string; text: string } | null = null;
   if (brandsQuery.isError) message = { state: 'error', text: '브랜드 정보를 불러오지 못했습니다.' };
   else if (target?.kind === 'none') message = { state: 'none', text: '등록된 브랜드가 없습니다.' };
-  else if (target?.kind === 'ambiguous') message = { state: 'ambiguous', text: '표시할 브랜드를 하나로 정할 수 없습니다.' };
+  // 여러 브랜드 — 고르지 않고, 지우거나 새로 만들지도 않는다. 문의 경로는 제품에 없어 안내만 둔다
+  else if (target?.kind === 'ambiguous') message = { state: 'ambiguous', text: '현재 여러 브랜드가 등록되어 있어 작업을 시작할 수 없습니다.' };
   else if (target?.kind === 'invalid-query' || isNotFound(brandQuery.error) || isNotFound(logosQuery.error))
     message = { state: 'not-found', text: '브랜드를 찾을 수 없습니다.' };
   else if (brandQuery.isError || logosQuery.isError) message = { state: 'error', text: '브랜드 정보를 불러오지 못했습니다.' };
@@ -91,6 +103,15 @@ export default function M2BrandView() {
     return <M2LoadState state={message?.state ?? 'loading'} text={message?.text ?? '브랜드 정보를 불러오는 중입니다.'} />;
   }
   return <M2BrandEditor key={brandId} existing={{ brandId, brand: brandQuery.data, logos: logosQuery.data }} />;
+}
+
+/** 이미 있는 브랜드로 연결한다(이력에 등록 화면을 남기지 않는다) */
+function M2Redirect({ href }: { href: string }) {
+  const router = useRouter();
+  useEffect(() => {
+    router.replace(href);
+  }, [href, router]);
+  return <M2LoadState state="redirect" text="등록된 브랜드로 이동하는 중입니다." />;
 }
 
 /** 조회 중·실패 — Figma 표본이 없어 헤더 자리에 안내 한 줄만 둔다(새 레이아웃을 만들지 않는다) */
@@ -125,8 +146,13 @@ function saveErrorText(state: M2SaveState, afterCreate: boolean): string | null 
   return '일부 로고를 저장하지 못했습니다. 남은 변경을 확인하고 다시 저장해주세요.';
 }
 
-/** 등록 실패 안내 — 자동 재시도하지 않고, 입력은 그대로 남는다 */
+/** 등록 안내 — 자동 재시도하지 않고, 입력은 그대로 남는다 */
 function createErrorText(state: M2CreateState): string | null {
+  if (state.kind === 'verifying') return '등록 결과를 확인하는 중입니다.';
+  if (state.kind === 'verify-failed') return '등록 결과를 확인하지 못했습니다. 다시 등록하지 말고 먼저 결과를 확인해 주세요.';
+  if (state.kind === 'verified-empty') return '등록된 브랜드를 확인하지 못했습니다. 입력한 내용으로 다시 등록할 수 있습니다.';
+  if (state.kind === 'multiple') return '현재 여러 브랜드가 등록되어 있어 작업을 시작할 수 없습니다.';
+  if (state.kind === 'precheck-failed') return '브랜드 정보를 확인하지 못해 등록하지 않았습니다. 잠시 뒤 다시 시도해 주세요.';
   if (state.kind !== 'error') return null;
   if (state.reason === 'conflict') return '이미 등록된 브랜드와 겹쳐 등록하지 못했습니다. 입력한 내용은 그대로 있으니 확인 후 다시 시도해주세요.';
   if (state.reason === 'validation') return '브랜드 정보를 확인해주세요. 한글명과 영문명은 필수입니다.';
@@ -165,7 +191,9 @@ function M2BrandEditor({ existing, create }: M2EditorProps) {
   const saver = useM2BrandSave(saveTarget);
   const creator = useM2BrandCreate();
   const submittingRef = useRef(false);
-  const isSaving = saver.state.kind === 'saving' || creator.state.kind === 'creating';
+  const isSaving = saver.state.kind === 'saving' || creator.state.kind === 'creating' || creator.state.kind === 'verifying';
+  // 결과 불명 — 확인 전에는 등록 버튼 대신 [다시 확인](목록 재조회만)을 보인다
+  const needsVerification = creator.state.kind === 'verify-failed' || creator.state.kind === 'verifying';
   const [invalidFiles, setInvalidFiles] = useState(false);
   const [pendingNavigation, setPendingNavigation] = useState<BlockedNavigation | null>(null);
   // 등록 화면은 빈 칸에서 시작한다 — 손대기 전에는 필수 오류를 빨갛게 보이지 않는다(검증 규칙은 같다)
@@ -179,7 +207,10 @@ function M2BrandEditor({ existing, create }: M2EditorProps) {
   const nameErrors = editable
     ? { nameKo: touchedNames.nameKo ? draftNameErrors.nameKo : null, nameEn: touchedNames.nameEn ? draftNameErrors.nameEn : null }
     : { nameKo: null, nameEn: null };
-  const canSubmit = isCreate && !created ? !draftNameErrors.nameKo && !draftNameErrors.nameEn : canSaveM2(baseline, draft);
+  const canSubmit =
+    isCreate && !created
+      ? !draftNameErrors.nameKo && !draftNameErrors.nameEn && creator.state.kind !== 'multiple'
+      : canSaveM2(baseline, draft);
   const leaveHref = created ? `/brand?brandId=${created.brandId}` : (create?.cancelHref ?? '/');
 
   const closeDialog = useCallback(() => setPendingNavigation(null), []);
@@ -281,10 +312,15 @@ function M2BrandEditor({ existing, create }: M2EditorProps) {
       let base = baseline;
       if (!target) {
         const result = await creator.create(draft);
-        if (!result) return; // 실패 — 입력 그대로, 등록 화면 유지
-        target = result;
+        if (!result) return; // 실패·결과 불명 — 입력 그대로, 등록 화면 유지
+        if (result.source === 'existing') {
+          // POST 직전 확인에서 이미 브랜드가 있었다 — 이번 입력을 덮어쓰지 않고 그 브랜드로 연결만 한다
+          leaveTo(result.brandId);
+          return;
+        }
+        target = { brandId: result.brandId, brand: result.brand };
         base = toM2BrandFormValue(result.brand, []);
-        setCreated(result);
+        setCreated(target);
         setCreatedBaseline(base);
       }
       const outcome = await saver.save(base, draft, target);
@@ -292,8 +328,35 @@ function M2BrandEditor({ existing, create }: M2EditorProps) {
       setCreatedBaseline(outcome.baseline);
       setDraft(outcome.draft);
       if (!outcome.complete) return; // 로고 일부 실패 — 남은 로고 draft 를 두고 같은 화면에 남는다
-      guard.release();
-      router.replace(create?.next === 'n1' ? `/jobs/new?brandId=${target.brandId}` : `/brand?brandId=${target.brandId}`);
+      leaveTo(target.brandId);
+    } finally {
+      submittingRef.current = false;
+    }
+  };
+
+  /** 등록이 끝난(또는 이미 있던) 브랜드로 — next=n1 이면 N1, 아니면 M2 보기 */
+  const leaveTo = (id: number) => {
+    guard.release();
+    router.replace(create?.next === 'n1' ? `/jobs/new?brandId=${id}` : `/brand?brandId=${id}`);
+  };
+
+  /** [다시 확인] — 목록 재조회만 한다. POST /brands 를 보내지 않는다 */
+  const handleVerify = async () => {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
+    try {
+      const result = await creator.verify();
+      if (!result) return;
+      // 결과 불명 뒤 확인된 브랜드 1개 — 이번 등록이 만든 것으로 보고 남은 로고를 이어서 저장한다
+      const target = { brandId: result.brandId, brand: result.brand };
+      const base = toM2BrandFormValue(result.brand, []);
+      setCreated(target);
+      setCreatedBaseline(base);
+      const outcome = await saver.save(base, draft, target);
+      if (!outcome) return;
+      setCreatedBaseline(outcome.baseline);
+      setDraft(outcome.draft);
+      if (outcome.complete) leaveTo(target.brandId);
     } finally {
       submittingRef.current = false;
     }
@@ -363,7 +426,9 @@ function M2BrandEditor({ existing, create }: M2EditorProps) {
               leadingPlus
               testId="m2-new-brand"
               box="h-9 w-[120px]"
-              onClick={() => requestLeave('/brand?mode=create')}
+              // 보기·수정 화면이면 브랜드가 이미 있다 — 현재 서비스에서는 추가 등록으로 가지 않는다(지금 화면 정책일 뿐, 개수 규칙은 서버 몫)
+              future
+              tooltip="현재 서비스에서는 브랜드를 추가로 등록할 수 없습니다"
               className={isCreate ? 'invisible' : ''}
             />
             {/* 수정·등록 모드에서는 숨기되 자리는 남겨 옆 버튼이 움직이지 않게 한다 */}
@@ -484,16 +549,30 @@ function M2BrandEditor({ existing, create }: M2EditorProps) {
               취소
             </button>
             {/* 등록 화면의 주 버튼은 [변경사항 저장]과 같은 자리·모습이다(별도 Figma 없음). 등록 뒤 로고만 남으면 [다시 저장] */}
-            <button
-              type="button"
-              onClick={() => void (isCreate ? handleCreate() : handleSave())}
-              disabled={isSaving || !canSubmit}
-              aria-busy={isSaving || undefined}
-              data-testid={isCreate ? 'm2-create' : 'm2-save'}
-              className="flex h-[37px] items-center justify-center rounded-[6px] bg-[#171717] px-7 text-[14px] leading-[17px] font-medium tracking-[-0.42px] whitespace-nowrap text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              {isCreate ? (created ? '다시 저장' : '브랜드 등록') : '변경사항 저장'}
-            </button>
+            {isCreate && needsVerification ? (
+              // 결과 불명 — 같은 자리·모습의 [다시 확인]. 목록 재조회만 한다(POST /brands 없음)
+              <button
+                type="button"
+                onClick={() => void handleVerify()}
+                disabled={isSaving}
+                aria-busy={isSaving || undefined}
+                data-testid="m2-create-verify"
+                className="flex h-[37px] items-center justify-center rounded-[6px] bg-[#171717] px-7 text-[14px] leading-[17px] font-medium tracking-[-0.42px] whitespace-nowrap text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                다시 확인
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void (isCreate ? handleCreate() : handleSave())}
+                disabled={isSaving || !canSubmit}
+                aria-busy={isSaving || undefined}
+                data-testid={isCreate ? 'm2-create' : 'm2-save'}
+                className="flex h-[37px] items-center justify-center rounded-[6px] bg-[#171717] px-7 text-[14px] leading-[17px] font-medium tracking-[-0.42px] whitespace-nowrap text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {isCreate ? (created ? '다시 저장' : '브랜드 등록') : '변경사항 저장'}
+              </button>
+            )}
           </div>
         )}
       </footer>
