@@ -201,6 +201,9 @@ for (const step of JOB_STEPS) {
   test(`${step} ✕ — 바로 나가지 않고 같은 작업 취소 확인창을 연다`, async ({ page }) => {
     const writes = recordWrites(page);
     await openStep(page, step);
+    // N6 직접 진입에서도 FE 는 POST /render 하지 않는다 — fixture 가 준 완료된 현재 렌더 task 로 결과 화면까지 간 뒤에 본다
+    // (예전 자동 렌더 요청은 N6 가 열리자마자 나갔다 — 화면이 자리 잡은 뒤라 다시 생기면 아래 검사가 잡는다)
+    if (step === 'N6') await expect(page.getByTestId('n6-export-panel')).toBeVisible({ timeout: 15_000 });
     const url = page.url();
     await expect(exit(page)).toHaveAccessibleName('작업 취소');
     await expect(exit(page).locator('xpath=self::button')).toHaveCount(1);
@@ -211,12 +214,15 @@ for (const step of JOB_STEPS) {
       await expect(dialog(page)).toContainText(target);
     }
     await expect(dialog(page).getByRole('button')).toHaveText(['계속하기', '작업 취소']);
-    // N6 직접 진입의 자동 렌더 요청은 ✕와 무관하다
-    expect(writes.filter((w) => !w.endsWith('/render'))).toEqual([]);
+    // 취소 전 — 쓰기 요청 0(POST /render 0 · DELETE 0). N6 도 예외 없이 같은 검사다
+    expect(writes.filter((w) => w.endsWith('/render'))).toEqual([]);
+    expect(writes).toEqual([]);
 
     await dialog(page).getByRole('button', { name: '작업 취소' }).click();
     await expect(page).toHaveURL(/\/$/);
-    expect(writes.filter((w) => w.startsWith('DELETE'))).toEqual([`DELETE /jobs/${MOCK_JOB_ID}`]);
+    // 취소 확정 후 — DELETE /jobs/{jobId} 1회뿐, POST /render 는 여전히 0
+    expect(writes).toEqual([`DELETE /jobs/${MOCK_JOB_ID}`]);
+    expect(writes.filter((w) => w.endsWith('/render'))).toEqual([]);
   });
 }
 
