@@ -6,8 +6,9 @@ import { getFontScaleToolbarLeft } from '@/lib/n5/coordinates';
 
 // ─────────────────────────────────────────────────────────────────
 // N5 선택 UI(Figma 1512:23496 「Selection」)와 우측 패널 section 단위 스크롤(544:3168). Chromium Mock.
-// - 선택 테두리·손잡이는 글자(bbox)에서 화면 16px 바깥. bbox 자체는 바뀌지 않는다
-// - 선택된 번호 배지는 테두리 왼쪽 16·위 24, 글자크기 툴바(117×34)는 테두리 왼쪽 8·위 42 — 선택 즉시 보이고 서로 겹치지 않는다
+// - 선택 테두리·손잡이 중심은 글자(bbox)에서 화면 12px 바깥(Figma Selected Crop Fragment). bbox 자체는 바뀌지 않는다
+// - 글자 기준으로 선택된 번호 배지는 왼쪽 32·위 40, 글자크기 툴바(117×34)는 왼쪽 8·위 58(테두리 기준 +4, -46) — 선택 즉시 보이고 서로 겹치지 않는다
+// - 선택 안 된 번호 배지는 글자 왼쪽 위 바깥(왼쪽 20·위 20) — 글자를 가리지 않는다
 // - 패널은 같은 section 안 block 선택으로 움직이지 않고, section이 바뀔 때만 그 section 시작점으로 이동한다. SectionTag는 sticky
 // ─────────────────────────────────────────────────────────────────
 
@@ -26,11 +27,11 @@ const selectOnCanvas = (page: Page, blockId: number) => page.getByTestId(`n5-blo
 async function expectChromeGeometry(page: Page, blockId: number) {
   const text = await box(page, `n5-block-overlay-${blockId}`);
   const frame = await box(page, 'n5-block-selection-frame');
-  // 글자 ↔ 테두리 16(화면 px)
-  near(frame.x, text.x - 16);
-  near(frame.y, text.y - 16);
-  near(frame.width, text.width + 32);
-  near(frame.height, text.height + 32);
+  // 글자 ↔ 테두리 12(화면 px)
+  near(frame.x, text.x - 12);
+  near(frame.y, text.y - 12);
+  near(frame.width, text.width + 24);
+  near(frame.height, text.height + 24);
   // 손잡이 8개는 넓힌 테두리 위에 있다
   const center = (r: Rect) => ({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
   const nw = center(await box(page, 'n5-block-handle-nw'));
@@ -41,18 +42,18 @@ async function expectChromeGeometry(page: Page, blockId: number) {
   near(se.x, frame.x + frame.width);
   near(se.y, frame.y + frame.height);
   near(e.y, frame.y + frame.height / 2);
-  // 번호 배지 — 테두리 왼쪽 16·위 24, 20×20
+  // 번호 배지 — 글자 왼쪽 32·위 40(테두리 왼쪽 20·위 28), 20×20
   const badge = (await page.getByTestId(`n5-block-pin-${blockId}`).locator('span').boundingBox())!;
   near(badge.width, 20);
   near(badge.height, 20);
-  near(badge.x, frame.x - 16);
-  near(badge.y, frame.y - 24);
-  // 글자크기 툴바 — 테두리 왼쪽 8·위 42, 117×34
+  near(badge.x, text.x - 32);
+  near(badge.y, text.y - 40);
+  // 글자크기 툴바 — 글자 왼쪽 8·위 58(테두리 +4·-46), 117×34
   const toolbar = await box(page, 'n5-font-scale-toolbar');
   near(toolbar.width, 117);
   near(toolbar.height, 34);
-  near(toolbar.x, frame.x + 8);
-  near(toolbar.y, frame.y - 42);
+  near(toolbar.x, text.x - 8);
+  near(toolbar.y, text.y - 58);
   // 셋은 서로 겹치지 않고, 배지는 글자를 가리지 않는다
   expect(overlaps(badge, toolbar)).toBe(false);
   expect(overlaps(badge, frame)).toBe(false);
@@ -60,11 +61,11 @@ async function expectChromeGeometry(page: Page, blockId: number) {
   expect(overlaps(badge, text)).toBe(false);
 }
 
-test('툴바 가로 위치 — 평소 테두리 왼쪽 +8, workspace 오른쪽 끝을 넘는 만큼만 밀고 테두리 왼쪽보다 더 밀지 않는다', () => {
-  const at = (frameLeft: number) => getFontScaleToolbarLeft({ preferredLeft: frameLeft + 8, blockLeft: frameLeft, toolbarWidth: 117, maxRight: 1000 });
-  expect(at(300)).toBe(308);
-  expect(at(875)).toBe(883); // 오른쪽 끝 1000 에 딱 닿는다
-  expect(at(900)).toBe(883); // 넘는 17만큼만 민다
+test('툴바 가로 위치 — 평소 테두리 왼쪽 +4, workspace 오른쪽 끝을 넘는 만큼만 밀고 테두리 왼쪽보다 더 밀지 않는다', () => {
+  const at = (frameLeft: number) => getFontScaleToolbarLeft({ preferredLeft: frameLeft + 4, blockLeft: frameLeft, toolbarWidth: 117, maxRight: 1000 });
+  expect(at(300)).toBe(304);
+  expect(at(879)).toBe(883); // 오른쪽 끝 1000 에 딱 닿는다
+  expect(at(900)).toBe(883); // 넘는 21만큼만 민다
   expect(at(1100)).toBe(983); // 테두리가 workspace 밖으로 나가면 함께 나간다(테두리 왼쪽 - 117)
 });
 
@@ -75,7 +76,17 @@ test.describe('선택 UI', () => {
     await expect(page.getByTestId('n5-viewport')).toBeVisible();
   });
 
-  test('글자↔테두리 16px · 배지·툴바 위치 · 선택 즉시 툴바 · zoom 을 바꿔도 화면 px 그대로', async ({ page }) => {
+  test('선택 안 된 번호 배지는 글자 왼쪽 위 바깥(20, 20)이라 글자를 가리지 않는다', async ({ page }) => {
+    for (const id of [9101, 9102, 9112]) {
+      const text = await box(page, `n5-block-overlay-${id}`);
+      const badge = (await page.getByTestId(`n5-block-pin-${id}`).locator('span').boundingBox())!;
+      near(badge.x, text.x - 20);
+      near(badge.y, text.y - 20);
+      expect(overlaps(badge, text)).toBe(false);
+    }
+  });
+
+  test('글자↔테두리 12px · 배지·툴바 위치 · 선택 즉시 툴바 · zoom 을 바꿔도 화면 px 그대로', async ({ page }) => {
     const before = await box(page, 'n5-block-overlay-9112');
     await page.getByTestId('n5-block-pin-9112').click();
     // bbox(글자 영역)는 선택만으로 바뀌지 않는다
@@ -114,7 +125,7 @@ test.describe('선택 UI', () => {
     const from = { x: handle.x + handle.width / 2, y: handle.y + handle.height / 2 };
     await page.mouse.move(from.x, from.y);
     await page.mouse.down();
-    // 손잡이는 bbox 바깥 16에 있지만 끈 거리(안쪽 20)가 그대로 bbox 왼쪽 변 이동이다(섹션 경계에 막히지 않게 줄이는 방향)
+    // 손잡이는 bbox 바깥 12에 있지만 끈 거리(안쪽 20)가 그대로 bbox 왼쪽 변 이동이다(섹션 경계에 막히지 않게 줄이는 방향)
     await page.mouse.move(from.x + 10, from.y, { steps: 5 });
     await page.mouse.move(from.x + 20, from.y, { steps: 5 });
     await page.mouse.up();

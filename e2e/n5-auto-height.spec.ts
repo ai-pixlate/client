@@ -489,7 +489,7 @@ test.describe('낮은 block의 오른쪽 손잡이', () => {
   const hitAt = (page: Page, x: number, y: number) =>
     page.evaluate(([px, py]) => document.elementFromPoint(px, py)?.closest('[data-testid]')?.getAttribute('data-testid') ?? null, [x, y]);
 
-  test('어떤 높이에서도 오른쪽 손잡이는 선택 테두리(글자 바깥 16) 오른쪽 변 가운데이고, 끌어 폭을 바꾼다', async ({ page }) => {
+  test('어떤 높이에서도 오른쪽 손잡이는 선택 테두리(글자 바깥 12) 오른쪽 변 가운데이고, 끌어 폭을 바꾼다', async ({ page }) => {
     await page.goto(QA_URL);
     await expect(page.getByTestId('n5-qa-badge')).toBeVisible({ timeout: 20_000 });
     // 글이 비면 세로 조절이 되어 원하는 높이를 만들 수 있다
@@ -499,7 +499,7 @@ test.describe('낮은 block의 오른쪽 손잡이', () => {
       await dragHandle(page, 's', 0, target - before.height);
       const overlay = (await page.getByTestId(`n5-block-overlay-${BLOCK}`).boundingBox())!;
       near(overlay.height, target, `height ${target}`, 1);
-      const right = overlay.x + overlay.width + 16;
+      const right = overlay.x + overlay.width + 12;
 
       const e = await center(page, 'n5-block-handle-e');
       near(e.x, right, 'e x', 0.6);

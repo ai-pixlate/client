@@ -157,16 +157,16 @@ test('move — 위치만 바뀌고, section 밖으로 못 나가며, 다른 bloc
   near(moved.width, start.width);
   near(moved.height, start.height);
 
-  // 번호·선택 테두리(글자 바깥 16)·손잡이·툴바가 따라온다. 선택은 유지된다
+  // 번호·선택 테두리(글자 바깥 12)·손잡이·툴바가 따라온다. 선택은 유지된다
   const pin = await box(page, `n5-block-pin-${BLOCK_ID}`);
-  near(pin.x, moved.x - 16 - 16, 2);
-  near(pin.y, moved.y - 16 - 24, 2);
+  near(pin.x, moved.x - 32, 2);
+  near(pin.y, moved.y - 40, 2);
   const se = await box(page, 'n5-block-handle-se');
-  near(se.x + se.width / 2, moved.x + moved.width + 16);
-  near(se.y + se.height / 2, moved.y + moved.height + 16);
+  near(se.x + se.width / 2, moved.x + moved.width + 12);
+  near(se.y + se.height / 2, moved.y + moved.height + 12);
   const toolbar = await box(page, 'n5-font-scale-toolbar');
-  near(toolbar.x, moved.x - 16 + 8);
-  near(toolbar.y, moved.y - 16 - 42);
+  near(toolbar.x, moved.x - 8);
+  near(toolbar.y, moved.y - 58);
   await expect(page.getByTestId(`n5-block-row-${BLOCK_ID}`)).toHaveAttribute('aria-pressed', 'true');
 
   // 다른 block(9101, 바로 위) 위로 옮겨도 그대로 겹친다

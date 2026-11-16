@@ -6,7 +6,7 @@ import { useLocalLayoutEditing } from './helpers/layout-write';
 // ─────────────────────────────────────────────────────────────────
 // N5 낮은 Auto Height block의 compact resize.
 // 보이는 높이(preview scale × zoom)가 48 미만이면 오른쪽 손잡이(ne·e·se)는 보이기만 하고, 오른쪽 변 전체가 가로 resize(e) 하나를
-// 받는다. 손잡이는 선택 테두리(글자 바깥 화면 16px, Figma 1512:23496) 위에 있고 위치는 어떤 높이에서도 움직이지 않는다.
+// 받는다. 손잡이는 선택 테두리(글자 바깥 화면 12px, Figma 1512:23496) 위에 있고 위치는 어떤 높이에서도 움직이지 않는다.
 // 높이는 zoom 입력으로 맞춘다 — 같은 block이라도 사용자가 보는 크기로 판정하는지 함께 본다.
 // ─────────────────────────────────────────────────────────────────
 
@@ -27,7 +27,7 @@ type Rect = { x: number; y: number; width: number; height: number };
 const box = async (page: Page, testId: string): Promise<Rect> => (await page.getByTestId(testId).boundingBox())!;
 const near = (a: number, b: number, label = '', tolerance = 0.6) => expect(Math.abs(a - b), `${label} ${a} ≈ ${b}`).toBeLessThanOrEqual(tolerance);
 const centerOf = (r: Rect) => ({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
-/** 선택 테두리 — 손잡이와 오른쪽 resize 영역의 기준(글자 bbox 바깥 16) */
+/** 선택 테두리 — 손잡이와 오른쪽 resize 영역의 기준(글자 bbox 바깥 12) */
 const frameOf = (page: Page) => box(page, 'n5-block-selection-frame');
 /** 선택 테두리 오른쪽 변 위의 한 점(compact 오른쪽 resize 영역 안) */
 const rightEdgeAt = async (page: Page, dy = 18) => {
@@ -95,8 +95,8 @@ test.describe('compact resize', () => {
 
       // 보이는 위치 — 높이와 무관하게 선택 테두리 위
       const frame = await frameOf(page);
-      near(frame.x, overlay.x - 16, 'frame x');
-      near(frame.height, overlay.height + 32, 'frame height');
+      near(frame.x, overlay.x - 12, 'frame x');
+      near(frame.height, overlay.height + 24, 'frame height');
       const right = frame.x + frame.width;
       for (const [key, fy] of [['ne', 0], ['e', 0.5], ['se', 1]] as const) {
         const c = centerOf(await box(page, `n5-block-handle-${key}`));

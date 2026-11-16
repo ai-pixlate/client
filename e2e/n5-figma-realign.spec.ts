@@ -73,7 +73,7 @@ test('상단 정보는 실제 Job 값이고 Figma 위치에 있다', async ({ pa
   expect([rect.x, rect.y]).toEqual([152, 46]);
 });
 
-test('선택 block은 글자 바깥 16px 테두리·번호·핸들 8개·글자크기 툴바를 보이고, 다른 block을 고르면 옮겨 간다', async ({ page }) => {
+test('선택 block은 글자 바깥 12px 테두리·번호·핸들 8개·글자크기 툴바를 보이고, 다른 block을 고르면 옮겨 간다', async ({ page }) => {
   await expect(page.getByTestId('n5-block-selection')).toHaveCount(0);
   await page.getByTestId('n5-block-pin-9112').click();
 
@@ -83,8 +83,8 @@ test('선택 block은 글자 바깥 16px 테두리·번호·핸들 8개·글자�
   await expect(handles).toHaveCount(8);
   const overlay = await box(page, 'n5-block-overlay-9112');
   const frame = await box(page, 'n5-block-selection-frame');
-  near(frame.x, overlay.x - 16, 1);
-  near(frame.y + frame.height, overlay.y + overlay.height + 16, 1);
+  near(frame.x, overlay.x - 12, 1);
+  near(frame.y + frame.height, overlay.y + overlay.height + 12, 1);
   const nw = await box(page, 'n5-block-handle-nw');
   const se = await box(page, 'n5-block-handle-se');
   near(nw.x + nw.width / 2, frame.x, 1);
@@ -150,7 +150,7 @@ test('글자크기 툴바 — 선택 즉시 보이고(117×34, 버튼 28×28 간
   await page.getByTestId('n5-block-pin-9103').click();
   await expect(toolbar).toHaveCount(1);
   const frame = await box(page, 'n5-block-selection-frame');
-  near((await box(page, 'n5-font-scale-toolbar')).x, frame.x + 8, 1);
+  near((await box(page, 'n5-font-scale-toolbar')).x, frame.x + 4, 1);
 });
 
 test('툴바를 눌러도 선택이 바뀌지 않고 section이 선택되지 않는다', async ({ page }) => {
@@ -163,12 +163,12 @@ test('툴바를 눌러도 선택이 바뀌지 않고 section이 선택되지 않
   await expect(page.getByTestId('n5-section-selected-tag')).toHaveText(before!);
 });
 
-test('넓은 block — 툴바가 테두리 위 왼쪽(8, -42)에 뜨고 그 자리에서 눌린다', async ({ page }) => {
+test('넓은 block — 툴바가 테두리 위 왼쪽(4, -46)에 뜨고 그 자리에서 눌린다', async ({ page }) => {
   await page.getByTestId('n5-block-pin-9102').click();
   const frame = await box(page, 'n5-block-selection-frame');
   const rect = await box(page, 'n5-font-scale-toolbar');
-  near(rect.x, frame.x + 8, 1);
-  near(rect.y, frame.y - 42, 1);
+  near(rect.x, frame.x + 4, 1);
+  near(rect.y, frame.y - 46, 1);
 
   const hit = await page.evaluate(
     ([x, y]) => document.elementFromPoint(x, y)?.closest('[data-testid="n5-font-scale-toolbar"]') !== null,
@@ -178,7 +178,7 @@ test('넓은 block — 툴바가 테두리 위 왼쪽(8, -42)에 뜨고 그 자�
   await page.screenshot({ path: test.info().outputPath('n5-font-toolbar-wide.png') });
 });
 
-test('높은 block도 툴바는 테두리 위 42, 손잡이는 테두리 위에 있다', async ({ page }) => {
+test('높은 block도 툴바는 테두리 위 46, 손잡이는 테두리 위에 있다', async ({ page }) => {
   // 진입부터 Auto Height 라 박스 높이 = 글 높이다 — 여러 줄 글로 높은 block 을 만든다(편집 중 글로 다시 잰다)
   const editor = page.getByTestId('n5-block-editor-9102');
   const sentence = (await editor.inputValue()).slice(0, 60);
@@ -188,7 +188,7 @@ test('높은 block도 툴바는 테두리 위 42, 손잡이는 테두리 위에 
   await expect.poll(async () => (await box(page, 'n5-block-overlay-9102')).height).toBeGreaterThanOrEqual(68);
   const frame = await box(page, 'n5-block-selection-frame');
   const e = await box(page, 'n5-block-handle-e');
-  near((await box(page, 'n5-font-scale-toolbar')).y, frame.y - 42, 1);
+  near((await box(page, 'n5-font-scale-toolbar')).y, frame.y - 46, 1);
   near(e.x + e.width / 2, frame.x + frame.width, 1);
   near(e.y + e.height / 2, frame.y + frame.height / 2, 1);
 });
@@ -207,9 +207,9 @@ test('zoom·pan — 툴바가 테두리와 함께 움직이고 화면 크기·�
   await expect(page.getByTestId('n5-canvas')).not.toHaveAttribute('data-zoom', '1');
   const zoomed = await relative();
   expect(zoomed.overlay.width).toBeGreaterThan(start.overlay.width);
-  near(zoomed.dx, 8, 1);
-  near(zoomed.dy, -42, 1);
-  near(zoomed.pad, 16, 1);
+  near(zoomed.dx, 4, 1);
+  near(zoomed.dy, -46, 1);
+  near(zoomed.pad, 12, 1);
   near(zoomed.rect.width, 117, 1);
   near(zoomed.rect.height, 34, 1);
 
@@ -218,8 +218,8 @@ test('zoom·pan — 툴바가 테두리와 함께 움직이고 화면 크기·�
   await page.mouse.wheel(0, 80);
   await expect.poll(async () => (await relative()).rect.y).not.toBe(zoomed.rect.y);
   const panned = await relative();
-  near(panned.dx, 8, 1);
-  near(panned.dy, -42, 1);
+  near(panned.dx, 4, 1);
+  near(panned.dy, -46, 1);
   near(panned.overlay.y - zoomed.overlay.y, panned.rect.y - zoomed.rect.y, 1);
 });
 

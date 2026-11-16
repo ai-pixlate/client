@@ -76,11 +76,11 @@ test('작은 bbox 중앙 · bbox 바깥 hit 여백 · 번호 배지를 누르면
   // 부모 section 클릭으로 덮어써지지 않는다(section 선택이면 block 선택이 해제된다)
   await expect(page.getByTestId('n5-block-overlay-9101')).toHaveAttribute('aria-pressed', 'false');
 
-  // bbox(visual rect) 크기는 그대로고, 선택 테두리는 그 바깥 16px(화면)에 따로 그린다 — 넓힌 hit 영역에는 테두리가 없다
+  // bbox(visual rect) 크기는 그대로고, 선택 테두리는 그 바깥 12px(화면)에 따로 그린다 — 넓힌 hit 영역에는 테두리가 없다
   expect(await boxOf(page, 'n5-block-overlay-9103')).toEqual(visual);
   const frame = await boxOf(page, 'n5-block-selection-frame');
-  expect(Math.abs(frame.x - (visual.x - 16))).toBeLessThanOrEqual(1);
-  expect(Math.abs(frame.width - (visual.width + 32))).toBeLessThanOrEqual(1);
+  expect(Math.abs(frame.x - (visual.x - 12))).toBeLessThanOrEqual(1);
+  expect(Math.abs(frame.width - (visual.width + 24))).toBeLessThanOrEqual(1);
   await expect(page.getByTestId('n5-block-hit-9103')).not.toHaveClass(/border/);
 
   // 3) 번호 배지 클릭 — 다른 block(9104)의 배지를 눌러 선택이 옮겨지는지 본다
