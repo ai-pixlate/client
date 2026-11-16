@@ -25,8 +25,8 @@ export type M2BrandFormValue = {
   logos: M2BrandLogo[];
 };
 
-export type M2Mode = 'view' | 'edit';
-export type M2Status = 'view' | 'edit-clean' | 'edit-dirty';
+export type M2Mode = 'create' | 'view' | 'edit';
+export type M2Status = 'create' | 'view' | 'edit-clean' | 'edit-dirty';
 
 /** 앞뒤 공백만 다른 값은 같은 값으로 본다 — 비교와 저장이 같은 기준을 쓴다. */
 export function normalizeM2Form(value: M2BrandFormValue): M2BrandFormValue {
@@ -63,7 +63,7 @@ export function isM2Dirty(baseline: M2BrandFormValue, draft: M2BrandFormValue): 
 }
 
 export function getM2Status(mode: M2Mode, dirty: boolean): M2Status {
-  if (mode === 'view') return 'view';
+  if (mode === 'view' || mode === 'create') return mode;
   return dirty ? 'edit-dirty' : 'edit-clean';
 }
 

@@ -3,7 +3,7 @@
  * Mock 과 실제 서버가 같은 변환을 쓴다(분기 없음). React 없이 Node 에서 검증한다(scripts/verify-m2-form.mjs).
  */
 
-import type { ApiBrand, ApiBrandLogo, ApiBrandUpdate } from '../api/brand-schema';
+import type { ApiBrand, ApiBrandCreate, ApiBrandLogo, ApiBrandUpdate } from '../api/brand-schema';
 import { normalizeM2Form, type M2BrandFormValue, type M2BrandLogo } from './m2-form.ts';
 
 /** 서버 로고 표시 이름 — 계약에 이름 필드가 없어 서버 순서(orderNo ASC) 번호로 부른다 */
@@ -43,6 +43,23 @@ export function toM2BrandUpdate(baseline: M2BrandFormValue, draft: M2BrandFormVa
   if (before.overview !== after.overview) patch.overview = after.overview === '' ? null : after.overview;
   if (before.targetCustomer !== after.targetCustomer) patch.targetCustomer = after.targetCustomer === '' ? null : after.targetCustomer;
   return Object.keys(patch).length > 0 ? patch : null;
+}
+
+/** 신규 등록 화면의 빈 초기값 */
+export const M2_EMPTY_FORM: M2BrandFormValue = { nameKo: '', nameEn: '', overview: '', targetCustomer: '', logos: [] };
+
+/**
+ * POST /brands 본문(BrandCreate) — 앞뒤 공백을 뺀 값. 빈 개요·고객층은 null.
+ * 이름 검증(빈 값 금지)은 getM2NameErrors 가 먼저 막는다. 로고는 본문에 없다(등록 뒤 brandId 로 따로 올린다).
+ */
+export function toM2BrandCreate(draft: M2BrandFormValue): ApiBrandCreate {
+  const value = normalizeM2Form(draft);
+  return {
+    nameKo: value.nameKo,
+    nameEn: value.nameEn,
+    overview: value.overview === '' ? null : value.overview,
+    targetCustomer: value.targetCustomer === '' ? null : value.targetCustomer,
+  };
 }
 
 export interface M2LogoPlan {
@@ -98,6 +115,21 @@ export function reconcileM2AfterSave(options: {
  * ?brandId= 가 있으면 그것, 없으면 GET /brands 가 하나일 때만 그 브랜드. 없거나 여러 개면 고르지 않는다(M0 다중 브랜드는 별도 범위).
  */
 export type M2BrandTarget = { kind: 'id'; brandId: number } | { kind: 'none' } | { kind: 'ambiguous'; count: number } | { kind: 'invalid-query' };
+
+/**
+ * M1 「이미지 추가 생성」이 갈 곳 — GET /brands 결과로만 정한다(임의 brandId 금지).
+ * - 0개: 브랜드 등록(/brand?mode=create&next=n1) → 등록 응답 id 로 N1
+ * - 1개: /jobs/new?brandId={id}
+ * - 2개 이상: FE 가 고르지 않는다(M0 브랜드 선택 화면 전) — /brand 의 「하나로 정할 수 없음」 안내로 보낸다
+ */
+export type NewJobEntry = { kind: 'create' | 'n1' | 'choose'; href: string };
+
+export function resolveNewJobEntry(brands: readonly ApiBrand[]): NewJobEntry {
+  const target = resolveM2BrandTarget(null, brands);
+  if (target?.kind === 'id') return { kind: 'n1', href: `/jobs/new?brandId=${target.brandId}` };
+  if (target?.kind === 'ambiguous') return { kind: 'choose', href: '/brand' };
+  return { kind: 'create', href: '/brand?mode=create&next=n1' };
+}
 
 export function resolveM2BrandTarget(queryBrandId: string | null, brands: readonly ApiBrand[] | null): M2BrandTarget | null {
   if (queryBrandId != null && queryBrandId !== '') {

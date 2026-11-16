@@ -35,10 +35,12 @@ import {
   getMasterCategories,
   getBrands,
   getBrand,
+  createBrand,
   getBrandLogos,
   ApiRequestError,
 } from '@/lib/api/pixlate';
 import type { ApiJobPatch } from '@/lib/api/job-schema';
+import type { ApiBrand, ApiBrandCreate } from '@/lib/api/brand-schema';
 import {
   clearDisplayedProgress,
   n2DisplayedProgressKey,
@@ -615,6 +617,34 @@ const retryUnlessNotFound = (failureCount: number, error: unknown) =>
 
 export function useBrandsQuery(enabled: boolean) {
   return useQuery({ queryKey: pixlateKeys.brands(), queryFn: getBrands, enabled });
+}
+
+/**
+ * 브랜드 등록(POST /brands). 재시도하지 않는다 — 중복 생성 방지. 응답 Brand.id 가 이후 흐름의 정본이고, id 가 없으면 실패로 본다.
+ * 성공하면 응답을 brand(id) cache 에 쓰고, 새 브랜드의 로고는 아직 없으므로 빈 목록을 쓴 뒤 brands 목록을 다시 받는다.
+ */
+export function useCreateBrandMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: ApiBrandCreate) => {
+      const created = await createBrand(payload);
+      if (typeof created.id !== 'number') throw new Error('브랜드 등록 응답에 id 가 없습니다.');
+      return created as ApiBrand & { id: number };
+    },
+    retry: false,
+    onSuccess: (created) => {
+      queryClient.setQueryData(pixlateKeys.brand(created.id), created);
+      queryClient.setQueryData(pixlateKeys.brandLogos(created.id), []);
+      void queryClient.invalidateQueries({ queryKey: pixlateKeys.brands(), exact: true });
+    },
+    onError: (error) => {
+      // 409 — 서버 목록을 다시 받아 맞춘다(등록 화면은 목록을 구독하지 않아 invalidate 만으로는 다시 받지 않는다).
+      // 받은 목록의 브랜드를 방금 만든 것으로 단정하지 않는다
+      if (error instanceof ApiRequestError && error.status === 409) {
+        void queryClient.fetchQuery({ queryKey: pixlateKeys.brands(), queryFn: getBrands, staleTime: 0 }).catch(() => undefined);
+      }
+    },
+  });
 }
 
 export function useBrandQuery(brandId: number | null) {

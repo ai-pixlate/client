@@ -17,7 +17,7 @@ import type {
   ApiExportArtifactType,
 } from '@/lib/api/n6-schema';
 import type { ApiCategory, ApiCountry, ApiLanguage } from '@/lib/api/master-schema';
-import type { ApiBrand, ApiBrandLogo, ApiBrandUpdate } from '@/lib/api/brand-schema';
+import type { ApiBrand, ApiBrandCreate, ApiBrandLogo, ApiBrandUpdate } from '@/lib/api/brand-schema';
 
 // ─────────────────────────────────────────────
 // 공통 fetch 헬퍼
@@ -434,7 +434,7 @@ export function getMasterCategories(): Promise<ApiCategory[]> {
 }
 
 // ─────────────────────────────────────────────
-// M2 — 브랜드 정보·로고 (brandList/brandGet/brandUpdate/brandLogoList/brandLogoCreate/brandLogoDelete).
+// M2 — 브랜드 정보·로고 (brandList/brandCreate/brandGet/brandUpdate/brandLogoList/brandLogoCreate/brandLogoDelete).
 // 404(미소유 포함)를 화면에서 구분해야 해서 실패 시 status·body 를 보존하는 ApiRequestError 를 던진다.
 // ─────────────────────────────────────────────
 
@@ -446,6 +446,18 @@ async function brandFetch<T>(url: string, init?: RequestInit): Promise<T> {
 
 export function getBrands(): Promise<ApiBrand[]> {
   return brandFetch<ApiBrand[]>('/brands');
+}
+
+/**
+ * 브랜드 등록(brandCreate) — 201 Brand. 400 VALIDATION_ERROR · 409 CONFLICT 는 ApiRequestError 로 던진다.
+ * 같은 인증 계층(authorizedFetch)을 탄다. 자동 재시도하지 않는다(중복 생성 방지 — 한 사용자 동작에 POST 1회).
+ */
+export function createBrand(payload: ApiBrandCreate): Promise<ApiBrand> {
+  return brandFetch<ApiBrand>('/brands', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
 }
 
 export function getBrand(brandId: number): Promise<ApiBrand> {

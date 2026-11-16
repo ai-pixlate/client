@@ -9,6 +9,9 @@ import type { components } from './generated/openapi';
 /** GET /brands 원소 · GET·PATCH /brands/{brandId} 응답 (ERD brand) */
 export type ApiBrand = components['schemas']['Brand'];
 
+/** POST /brands 본문 — nameKo·nameEn 필수(빈 값 400), overview·targetCustomer 선택(null 허용). 응답 201 Brand */
+export type ApiBrandCreate = components['schemas']['BrandCreate'];
+
 /** PATCH /brands/{brandId} 본문 — 부분 수정. nameEn 을 null·빈값으로 바꾸면 400 */
 export type ApiBrandUpdate = components['schemas']['BrandUpdate'];
 
