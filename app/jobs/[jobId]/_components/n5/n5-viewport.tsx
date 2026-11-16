@@ -1375,13 +1375,15 @@ export function N5Viewport({
   // 건드리지 않으므로, 같은 block을 계속 편집(타이핑)하거나 PATCH/rerender로
   // blocks가 재조회돼도 이 effect는 실행되지만 seq가 같아 즉시 반환한다 —
   // pan을 다시 계산하지 않는다(요청 5·6).
-  const lastHandledRevealSeqRef = useRef<number | null>(null);
+  // 처음 값도 "처리한 것"으로 둔다 — 요청 없이 바뀐 선택(왼쪽 section 배경 클릭: 사용자가 이미 보고 있는 자리)은
+  // pan 하지 않는다. 이동은 seq 가 새로 올 때만이다(n5-view.tsx 출처별 handler).
+  const lastHandledRevealSeqRef = useRef<number>(revealRequestSeq);
 
   useEffect(() => {
     const el = viewportRef.current;
     if (!el) return;
     if (selectedBlockId == null && selectedSectionId == null) {
-      lastHandledRevealSeqRef.current = null;
+      lastHandledRevealSeqRef.current = revealRequestSeq;
       return;
     }
 

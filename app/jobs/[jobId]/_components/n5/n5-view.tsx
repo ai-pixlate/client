@@ -31,7 +31,7 @@ import type {
 } from '@/lib/n5/adapter';
 import type { N5ViewMode } from '@/lib/n5/viewport';
 import { N5Viewport } from './n5-viewport';
-import { N5Panel } from './n5-panel';
+import { N5Panel, type N5PanelRevealRequest } from './n5-panel';
 import { useN5EditSession } from './use-n5-edit-session';
 import { useN5PreviewSync } from './use-n5-preview-sync';
 import { useTypesetFontGate } from './use-typeset-font-gate';
@@ -52,10 +52,14 @@ import { useTypesetFontGate } from './use-typeset-font-gate';
 //
 // F-CFM-13(이번 반영): selectedBlockId/selectedSectionId는 이 컴포넌트(N5Loaded)
 // 하나가 정본으로 소유하고, N5Viewport(좌)와 N5Panel(우) 둘 다 이 값을 prop으로만
-// 받는다 — 각자 별도 selection state를 두지 않는다. 좌→우 방향(선택된 section이
-// 바뀔 때만 우측을 그 section 시작점으로 자동 스크롤)은 N5Panel 내부에서 처리하고, 우→좌 방향은
-// N5Viewport의 selectionAutoMove effect가 pan을 옮겨 해당 block/section을
-// 화면 안으로 들어오게 한다.
+// 받는다 — 각자 별도 selection state를 두지 않는다.
+//
+// 선택 상태와 자동 이동(navigation)은 분리한다(PM 확정). 이동은 selection 값의 변화로 추론하지 않고
+// 선택이 일어난 곳(출처)에서 명시적으로 요청한다. 사용자가 직접 누른 쪽은 다시 움직이지 않는다.
+//   - 왼쪽 section 배경 클릭(번역 후·번역 전 공통): block 선택 해제 + section 선택만. 캔버스·패널 모두 이동 없음
+//   - 왼쪽 block 클릭: 캔버스 최소 reveal + 패널은 그 block row 를 nearest 로 보이게(이미 보이면 그대로)
+//   - 패널 block row·SectionTag 클릭: 캔버스만 reveal. 패널은 사용자가 보고 있는 위치 그대로
+//   - 실행 취소·다시 실행이 고른 대상: 양쪽 모두 reveal(사용자가 직접 보고 있던 대상이 아니다)
 //
 // revealRequestSeq(9/24 edge case 보정): selectedBlockId/selectedSectionId는
 // selection 값 자체의 SSOT일 뿐, "지금 이 위치를 다시 보여달라"는 요청까지는
@@ -66,7 +70,8 @@ import { useTypesetFontGate } from './use-typeset-font-gate';
 // "우측에서 위치 이동을 요구하는 상호작용"(row/editor 클릭, textarea
 // focus)이 일어날 때마다 이 숫자를 무조건 1 증가시킨다 — selection의
 // 정본이 아니라 일회성 navigation 신호일 뿐이라 N5Panel에는 넘기지 않고
-// N5Viewport에만 전달한다.
+// N5Viewport에만 전달한다. 패널 쪽 이동은 별도 토큰(panelReveal)으로 요청한다 — 같은 block 을
+// 다시 눌러도 새 seq 를 받아 그 row 를 다시 보이게 한다.
 // ─────────────────────────────────────────────────────────────────
 
 function N5Loaded({
@@ -107,18 +112,32 @@ function N5Loaded({
   // selection 값과 무관하게 "다시 보여달라"는 요청 자체를 매번 새 값으로
   // 알리기 위한 일회성 navigation 토큰(위 F-CFM-13 주석 참고).
   const [revealRequestSeq, setRevealRequestSeq] = useState(0);
+  // 패널 자동 이동 요청 — selection 값이 아니라 "이 대상을 패널에 보여 달라"는 일회성 이벤트다
+  const [panelReveal, setPanelReveal] = useState<N5PanelRevealRequest | null>(null);
 
-  function handleSelectBlock(block: BlockViewModel) {
+  function selectBlock(block: BlockViewModel, navigation: { canvas: boolean; panel: boolean }) {
     setSelectedBlockId(block.id);
     setSelectedSectionId(block.sectionId);
-    setRevealRequestSeq((seq) => seq + 1);
+    if (navigation.canvas) setRevealRequestSeq((seq) => seq + 1);
+    if (navigation.panel) setPanelReveal((prev) => ({ kind: 'block', id: block.id, seq: (prev?.seq ?? 0) + 1 }));
   }
 
-  function handleSelectSection(sectionId: number) {
+  function selectSection(sectionId: number, navigation: { canvas: boolean; panel: boolean }) {
     setSelectedSectionId(sectionId);
     setSelectedBlockId(null);
-    setRevealRequestSeq((seq) => seq + 1);
+    if (navigation.canvas) setRevealRequestSeq((seq) => seq + 1);
+    if (navigation.panel) setPanelReveal((prev) => ({ kind: 'section', id: sectionId, seq: (prev?.seq ?? 0) + 1 }));
   }
+
+  // 왼쪽(캔버스) 출처 — block 은 패널에서 그 row 를 보여 주고, section 배경은 선택만 바꾼다
+  const handleSelectBlockFromViewport = (block: BlockViewModel) => selectBlock(block, { canvas: true, panel: true });
+  const handleSelectSectionFromViewport = (sectionId: number) => selectSection(sectionId, { canvas: false, panel: false });
+  // 오른쪽(패널) 출처 — 패널은 그대로 두고 캔버스만 그 대상을 보이게 한다
+  const handleSelectBlockFromPanel = (block: BlockViewModel) => selectBlock(block, { canvas: true, panel: false });
+  const handleSelectSectionFromPanel = (sectionId: number) => selectSection(sectionId, { canvas: true, panel: false });
+  // 실행 취소·다시 실행이 고른 대상 — 양쪽 모두 보이게 한다
+  const handleSelectBlockFromHistory = (block: BlockViewModel) => selectBlock(block, { canvas: true, panel: true });
+  const handleSelectSectionFromHistory = (sectionId: number) => selectSection(sectionId, { canvas: true, panel: true });
 
   // 섹션 제외 저장 성공 — 그 섹션 안에 선택(섹션 또는 블록)이 있으면 비운다. 제외된 섹션은
   // 캔버스에 블록 표시·선택 태그를 그리지 않으므로, 선택만 남으면 보이지 않는 선택이 된다.
@@ -138,8 +157,8 @@ function N5Loaded({
     sections: preview.sections,
     viewMode,
     isFontReady,
-    onSelectBlock: handleSelectBlock,
-    onSelectSection: handleSelectSection,
+    onSelectBlock: handleSelectBlockFromHistory,
+    onSelectSection: handleSelectSectionFromHistory,
     onSectionExcluded: handleSectionExcluded,
   });
 
@@ -166,8 +185,8 @@ function N5Loaded({
           selectedBlockId={selectedBlockId}
           selectedSectionId={selectedSectionId}
           revealRequestSeq={revealRequestSeq}
-          onSelectBlock={handleSelectBlock}
-          onSelectSection={handleSelectSection}
+          onSelectBlock={handleSelectBlockFromViewport}
+          onSelectSection={handleSelectSectionFromViewport}
           editSession={editSession}
           syncBySection={syncBySection}
           isFontReady={isFontReady}
@@ -182,8 +201,9 @@ function N5Loaded({
           onViewModeChange={setViewMode}
           selectedBlockId={selectedBlockId}
           selectedSectionId={selectedSectionId}
-          onSelectBlock={handleSelectBlock}
-          onSelectSection={handleSelectSection}
+          revealRequest={panelReveal}
+          onSelectBlock={handleSelectBlockFromPanel}
+          onSelectSection={handleSelectSectionFromPanel}
           editSession={editSession}
         />
       </div>

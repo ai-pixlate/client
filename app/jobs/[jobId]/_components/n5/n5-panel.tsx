@@ -553,7 +553,8 @@ function BlockRow({
 }) {
   const signalRows = getSignalRows(block.badges);
   return (
-    <li ref={rowRef}>
+    // sticky section 태그(위)와 아래 페이드(72) 뒤로 숨지 않게 nearest 이동에 여백을 둔다
+    <li ref={rowRef} className="scroll-mt-12 scroll-mb-[72px]">
       {/*
         button이 아니라 role="button" div를 쓴다 — 내부에 향후(4단계) 실제
         textarea가 들어갈 TranslationEditor가 있어, button 안에 폼 컨트롤을
@@ -652,6 +653,12 @@ function groupBlocksBySection(
 
 const NO_TASK_FAILURES: BlockTaskFailures = { verifyFailed: false, previewFailure: null };
 
+/**
+ * 패널 자동 이동 요청(n5-view.tsx 소유) — selection 값과 별개인 일회성 이벤트다. seq 가 바뀔 때만 한 번 처리한다.
+ * block: 그 row 를 nearest 로 보이게(이미 보이면 움직이지 않는다) · section: 그 section 시작점으로
+ */
+export type N5PanelRevealRequest = { kind: 'block' | 'section'; id: number; seq: number };
+
 export function N5Panel({
   jobId,
   sections,
@@ -662,6 +669,7 @@ export function N5Panel({
   onViewModeChange,
   selectedBlockId,
   selectedSectionId,
+  revealRequest,
   onSelectBlock,
   onSelectSection,
   editSession,
@@ -676,6 +684,9 @@ export function N5Panel({
   onViewModeChange: (mode: N5ViewMode) => void;
   selectedBlockId: number | null;
   selectedSectionId: number | null;
+  /** 패널 자동 이동 요청. selection 이 바뀌었다는 이유만으로는 움직이지 않는다 */
+  revealRequest: N5PanelRevealRequest | null;
+  /** 패널 안에서 고른 선택(패널 출처) — 캔버스만 그 대상을 보이게 하고 패널은 그대로다 */
   onSelectBlock: (block: BlockViewModel) => void;
   onSelectSection: (sectionId: number) => void;
   /** N5 편집 세션(N5Loaded 소유) — 이력·번역문 초안의 정본이다 */
@@ -854,28 +865,30 @@ export function N5Panel({
 
   const blockRowRefs = useRef(new Map<number, HTMLLIElement>());
   const sectionGroupRefs = useRef(new Map<number, HTMLDivElement>());
-  // 마지막으로 자동 스크롤 판단에 쓴 section. 선택된 section이 실제로 바뀔 때만 이동한다
-  const revealedSectionRef = useRef(selectedSectionId);
+  // 마지막으로 처리한 이동 요청 — 같은 요청을 두 번 처리하지 않는다(blocks 재조회 등으로 다시 그려져도)
+  const handledRevealSeqRef = useRef(revealRequest?.seq ?? 0);
 
-  // 좌→우 자동 스크롤(F-CFM-13) — 선택된 section이 바뀌면 그 section 시작점으로 한 번 이동한다.
-  // 같은 section 안에서 block만 바뀌면 움직이지 않는다(사용자가 직접 스크롤한 위치를 지킨다).
-  // revealRequestSeq(같은 대상을 다시 보여 달라는 신호)는 canvas pan 전용이라 이 패널은 쓰지 않는다.
+  // 좌→우 자동 이동(F-CFM-13, PM 확정) — selection 값의 변화가 아니라 명시적인 요청이 있을 때만 움직인다.
+  // 왼쪽 section 배경 클릭은 요청을 보내지 않아 패널(사용자가 스크롤해 둔 위치)이 그대로다.
+  // block 은 그 row 를 nearest 로 — 이미 보이면 그대로, 밖이면 필요한 만큼만(section 맨 위로 올리지 않는다).
+  // 같은 block 을 다시 골라도 seq 가 새로 오므로 수동으로 밀어 둔 row 를 다시 보여 준다.
   useEffect(() => {
-    if (selectedSectionId === revealedSectionRef.current) return;
-    revealedSectionRef.current = selectedSectionId;
-    if (selectedSectionId == null) return;
-    sectionGroupRefs.current.get(selectedSectionId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }, [selectedSectionId]);
+    if (!revealRequest || revealRequest.seq === handledRevealSeqRef.current) return;
+    handledRevealSeqRef.current = revealRequest.seq;
+    if (revealRequest.kind === 'block') {
+      blockRowRefs.current.get(revealRequest.id)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    } else {
+      sectionGroupRefs.current.get(revealRequest.id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [revealRequest]);
 
-  /** 패널 안에서 고른 선택 — 사용자가 이미 보고 있는 자리라 section 자동 이동을 하지 않는다. reveal은 그 행을 보이게 한다 */
+  /** 패널 안에서 고른 선택 — 사용자가 이미 보고 있는 자리라 패널을 움직이지 않는다. reveal은 그 행을 보이게 한다(저장 실패 칸 안내) */
   function selectBlockFromPanel(block: BlockViewModel, options: { reveal?: boolean } = {}) {
-    revealedSectionRef.current = block.sectionId;
     onSelectBlock(block);
     if (options.reveal) blockRowRefs.current.get(block.id)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
 
   function selectSectionFromPanel(sectionId: number) {
-    revealedSectionRef.current = sectionId;
     onSelectSection(sectionId);
   }
 
