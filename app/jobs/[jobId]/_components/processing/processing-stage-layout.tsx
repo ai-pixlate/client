@@ -21,9 +21,12 @@ import { ProcessingErrorContent, type ProcessingErrorState } from './processing-
 export type ProcessingStepState = 'done' | 'active' | 'pending';
 
 export interface ProcessingStep {
+  /** 빈 문자열이면 번호 없이 label 만 보인다(N2 01 묶음의 둘째·셋째 행) */
   no: string;
   label: string;
   state: ProcessingStepState;
+  /** dot 표시 여부(기본 true). false 여도 자리는 남겨 텍스트 정렬을 유지한다 — N2 전용, N4 는 지정하지 않는다 */
+  showDot?: boolean;
 }
 
 export interface ProcessingFailedItem {
@@ -81,7 +84,7 @@ function PauseIcon() {
 // Figma 원본처럼 두 칸 띄어 한 문자열로 쓴다(whitespace-pre로 공백을
 // 보존해야 브라우저가 붕괴시키지 않는다).
 // ─────────────────────────────────────────────────────────────────
-function StageRow({ no, label, state }: ProcessingStep) {
+function StageRow({ no, label, state, showDot = true }: ProcessingStep) {
   const isDone = state === 'done';
   const isActive = state === 'active';
 
@@ -103,9 +106,15 @@ function StageRow({ no, label, state }: ProcessingStep) {
   // 겹치지 않는 최소값이다.
   return (
     <div className="flex h-[clamp(34px,min(4.219cqw,8.8cqh),68px)] w-full items-center gap-3.5">
-      <div className={`size-[10px] shrink-0 rounded-full ${dotClass}`} aria-hidden="true" />
+      <div
+        data-testid="processing-step-dot"
+        className={`size-[10px] shrink-0 rounded-full ${dotClass} ${showDot ? '' : 'opacity-0'}`}
+        aria-hidden="true"
+      />
       <div className="flex flex-col gap-1">
-        <p className={`whitespace-pre ${titleClass}`}>{`${no}  ${label}`}</p>
+        <p data-testid="processing-step-title" className={`whitespace-pre ${titleClass}`}>
+          {no ? `${no}  ${label}` : label}
+        </p>
         <p className={captionClass}>{captionText}</p>
       </div>
     </div>
@@ -313,7 +322,7 @@ export function ProcessingStageLayout({
                       위치(패널 하단부)에 남는다. */}
                   <div className="flex flex-col">
                     {steps.map((step) => (
-                      <StageRow key={step.no} no={step.no} label={step.label} state={step.state} />
+                      <StageRow key={step.label} no={step.no} label={step.label} state={step.state} showDot={step.showDot} />
                     ))}
                   </div>
 

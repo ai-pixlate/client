@@ -51,12 +51,15 @@ const PAUSE_BUTTON_TITLE = '분석 중단 기능은 아직 제공되지 않습�
 // 전체 실패 안내(Figma 793:4890). 서버 응답에 사용자용 문구가 없어(errorCode 뿐) 실패 단계를 추측하지 않고 이 문구를 쓴다
 const N2_ERROR = { sectionLabel: 'ANALYSIS STATUS', title: '분석이 중단되었습니다', description: '이미지 분석 중 오류가 발생했습니다.' };
 
-const FIVE_STEP_META: { no: string; label: string }[] = [
+// Figma 660:4139 — 사용자 단계는 3개다. 첫 세 행은 하나의 01 분석 묶음이라 번호와 dot 는 첫 행에만 보인다.
+// 행 높이(5행)와 dot 자리는 그대로 두고 둘째·셋째 행 dot 만 숨긴다(텍스트 x 정렬 유지).
+// 행별 state 계산(아래)은 기존 서버 계약 해석 그대로다 — split/ocr/merge 를 행에 새로 대응시키지 않는다.
+const FIVE_STEP_META: Omit<ProcessingStep, 'state'>[] = [
   { no: '01', label: '콘텐츠 영역 나누기' },
-  { no: '02', label: '전체 텍스트 인식' },
-  { no: '03', label: '문단별 역할 파악' },
-  { no: '04', label: '제품 라벨 자동 제외' },
-  { no: '05', label: '규제 · 현지 적합성 확인' },
+  { no: '', label: '전체 텍스트 인식', showDot: false },
+  { no: '', label: '문단별 역할 파악', showDot: false },
+  { no: '02', label: '제품 라벨 자동 제외' },
+  { no: '03', label: '규제 · 현지 적합성 확인' },
 ];
 
 // coarse stage(ocr/section/verify) → 5개 항목 각각의 presentation state.
