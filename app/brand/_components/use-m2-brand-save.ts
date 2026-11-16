@@ -15,6 +15,7 @@ import { pixlateKeys } from '@/lib/queries/pixlate';
 // - 브랜드 PATCH 가 실패하면 로고는 건드리지 않고 멈춘다 — draft 는 그대로 남는다.
 // - 로고는 하나씩 보내고, 실패한 것만 draft 에 남긴다(실패한 삭제는 계속 빠진 채, 실패한 추가는 저장 전 로고로).
 // - 저장 중에는 다시 저장하지 않는다(중복 요청 금지).
+// - 신규 등록(use-m2-brand-create.ts)은 POST /brands 성공 뒤 같은 save 를 등록된 brandId 로 불러 로고만 올린다.
 // ─────────────────────────────────────────────────────────────────
 
 export type M2SaveState =
@@ -26,16 +27,26 @@ export type M2SaveState =
 export interface M2SaveOutcome {
   complete: boolean;
   draft: M2BrandFormValue;
+  /** 저장 뒤 서버 값(브랜드 + 로고 목록) — 다음 저장의 비교 기준 */
+  baseline: M2BrandFormValue;
 }
 
-export function useM2BrandSave(brandId: number, brand: ApiBrand) {
+/** 저장 대상 브랜드. 신규 등록 직후처럼 hook 을 만들 때 아직 없던 브랜드는 save 호출 때 넘긴다 */
+export interface M2SaveTarget {
+  brandId: number;
+  brand: ApiBrand;
+}
+
+export function useM2BrandSave(initialTarget: M2SaveTarget | null) {
   const queryClient = useQueryClient();
   const [state, setState] = useState<M2SaveState>({ kind: 'idle' });
   const savingRef = useRef(false);
 
   const save = useCallback(
-    async (baseline: M2BrandFormValue, draft: M2BrandFormValue): Promise<M2SaveOutcome | null> => {
-      if (savingRef.current) return null;
+    async (baseline: M2BrandFormValue, draft: M2BrandFormValue, targetOverride?: M2SaveTarget): Promise<M2SaveOutcome | null> => {
+      const target = targetOverride ?? initialTarget;
+      if (!target || savingRef.current) return null;
+      const { brandId, brand } = target;
       savingRef.current = true;
       setState({ kind: 'saving' });
       try {
@@ -46,7 +57,7 @@ export function useM2BrandSave(brandId: number, brand: ApiBrand) {
             savedBrand = await updateBrand(brandId, patch);
           } catch {
             setState({ kind: 'error', brandFailed: true, failedDeletes: 0, failedUploads: 0 });
-            return { complete: false, draft };
+            return { complete: false, draft, baseline };
           }
           queryClient.setQueryData(pixlateKeys.brand(brandId), savedBrand);
         }
@@ -102,12 +113,12 @@ export function useM2BrandSave(brandId: number, brand: ApiBrand) {
             ? { kind: 'success' }
             : { kind: 'error', brandFailed: false, failedDeletes: failedDeletes.length, failedUploads: failedUploadIds.length },
         );
-        return { complete: result.complete, draft: result.draft };
+        return { complete: result.complete, draft: result.draft, baseline: result.baseline };
       } finally {
         savingRef.current = false;
       }
     },
-    [brandId, brand, queryClient],
+    [initialTarget, queryClient],
   );
 
   const reset = useCallback(() => setState({ kind: 'idle' }), []);

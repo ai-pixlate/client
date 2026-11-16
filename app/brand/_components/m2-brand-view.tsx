@@ -15,13 +15,14 @@ import {
 } from '@/lib/brand/m2-form';
 import type { ApiBrand, ApiBrandLogo } from '@/lib/api/brand-schema';
 import { ApiRequestError } from '@/lib/api/pixlate';
-import { resolveM2BrandTarget, toM2BrandFormValue } from '@/lib/brand/m2-adapter';
+import { M2_EMPTY_FORM, resolveM2BrandTarget, toM2BrandFormValue } from '@/lib/brand/m2-adapter';
 import { useBrandLogosQuery, useBrandQuery, useBrandsQuery } from '@/lib/queries/pixlate';
 
 import { M2Button } from './m2-button';
 import { M2LogoPanel } from './m2-logo-panel';
 import { M2UnsavedDialog } from './m2-unsaved-dialog';
-import { useM2BrandSave, type M2SaveState } from './use-m2-brand-save';
+import { useM2BrandCreate, type M2CreateState } from './use-m2-brand-create';
+import { useM2BrandSave, type M2SaveState, type M2SaveTarget } from './use-m2-brand-save';
 import { useUnsavedNavigationGuard, type BlockedNavigation } from './use-unsaved-navigation-guard';
 
 // ─────────────────────────────────────────────────────────────────
@@ -42,7 +43,13 @@ import { useUnsavedNavigationGuard, type BlockedNavigation } from './use-unsaved
 //   brandId: ?brandId= 가 있으면 그것, 없으면 GET /brands 가 하나일 때만 그 브랜드(m2-adapter resolveM2BrandTarget).
 //
 // Figma에 있지만 넣지 않은 것: 부가 정보(F-BRD-08, PRD v3.5.10 이후 범위), 로고 카드 체크박스(의미 미확정).
-// [새 브랜드 추가]·[브랜드 삭제]·[로고 변경]은 후속 범위라 Figma 모습만 보여 주고 "3차 구현 예정" 툴팁을 단다.
+// [브랜드 삭제]·[로고 변경]은 후속 범위라 Figma 모습만 보여 주고 "3차 구현 예정" 툴팁을 단다.
+//
+// ★ 신규 등록(create mode): 별도 Figma frame 이 없어 같은 M2 레이아웃을 그대로 쓴다(view · edit · create).
+//   진입: /brand?mode=create (헤더 [새 브랜드 추가]) · /brand?mode=create&next=n1 (M1 작업 시작) · GET /brands 가 [] 인 /brand.
+//   [브랜드 등록] = POST /brands 1회(use-m2-brand-create.ts) → 응답 Brand.id 로 로고 POST(use-m2-brand-save.ts).
+//   완료하면 next=n1 은 /jobs/new?brandId={id}, 그 밖은 /brand?brandId={id}. next 는 'n1' 만 받는다(임의 URL 이동 없음).
+//   등록 뒤 로고만 실패하면 같은 화면에 남고, 다시 저장은 그 brandId 의 로고만 보낸다(POST /brands 를 다시 보내지 않는다).
 // 헤더 [삭제]는 현재 범위인 로고 삭제지만 대상을 고르는 체크박스가 없어 미연결이고, 실제 로컬 삭제는 카드의 삭제 버튼이 맡는다.
 // 빈 개요·고객층 placeholder는 Figma에 없어 F-TRN-02b(비면 중립 톤) 근거로 보완했다.
 // ─────────────────────────────────────────────────────────────────
@@ -57,12 +64,19 @@ function borderClass(editable: boolean, hasError: boolean) {
 
 /** 조회 단계 — 어느 브랜드인지 정하고 브랜드·로고를 받은 뒤에만 편집 화면을 그린다 */
 export default function M2BrandView() {
-  const queryBrandId = useSearchParams().get('brandId');
-  const brandsQuery = useBrandsQuery(queryBrandId == null || queryBrandId === '');
+  const searchParams = useSearchParams();
+  const queryBrandId = searchParams.get('brandId');
+  const isCreateRoute = searchParams.get('mode') === 'create';
+  const next: M2CreateNext = searchParams.get('next') === 'n1' ? 'n1' : null;
+  const brandsQuery = useBrandsQuery(!isCreateRoute && (queryBrandId == null || queryBrandId === ''));
   const target = resolveM2BrandTarget(queryBrandId, brandsQuery.data ?? null);
   const brandId = target?.kind === 'id' ? target.brandId : null;
   const brandQuery = useBrandQuery(brandId);
   const logosQuery = useBrandLogosQuery(brandId);
+
+  if (isCreateRoute) return <M2BrandEditor key="create" create={{ next, cancelHref: next === 'n1' ? '/' : '/brand' }} />;
+  // 브랜드가 하나도 없으면 안내에서 멈추지 않고 바로 등록 화면을 보인다(신규 계정이 막히지 않게)
+  if (!brandsQuery.isError && target?.kind === 'none') return <M2BrandEditor key="create-empty" create={{ next, cancelHref: '/' }} />;
 
   const isNotFound = (error: unknown) => error instanceof ApiRequestError && error.status === 404;
   let message: { state: string; text: string } | null = null;
@@ -76,7 +90,7 @@ export default function M2BrandView() {
   if (message || brandId == null || !brandQuery.data || !logosQuery.data) {
     return <M2LoadState state={message?.state ?? 'loading'} text={message?.text ?? '브랜드 정보를 불러오는 중입니다.'} />;
   }
-  return <M2BrandEditor brandId={brandId} brand={brandQuery.data} logos={logosQuery.data} />;
+  return <M2BrandEditor key={brandId} existing={{ brandId, brand: brandQuery.data, logos: logosQuery.data }} />;
 }
 
 /** 조회 중·실패 — Figma 표본이 없어 헤더 자리에 안내 한 줄만 둔다(새 레이아웃을 만들지 않는다) */
@@ -104,29 +118,69 @@ function M2LoadState({ state, text }: { state: string; text: string }) {
 }
 
 /** 저장 실패 안내 — 입력은 그대로 남아 있다는 것을 함께 알린다 */
-function saveErrorText(state: M2SaveState): string | null {
+function saveErrorText(state: M2SaveState, afterCreate: boolean): string | null {
   if (state.kind !== 'error') return null;
   if (state.brandFailed) return '브랜드 정보를 저장하지 못했습니다. 입력한 내용은 그대로 있으니 다시 저장해주세요.';
+  if (afterCreate) return '브랜드는 등록됐지만 일부 로고를 저장하지 못했습니다. 남은 로고를 확인하고 다시 저장해주세요.';
   return '일부 로고를 저장하지 못했습니다. 남은 변경을 확인하고 다시 저장해주세요.';
 }
 
-function M2BrandEditor({ brandId, brand, logos }: { brandId: number; brand: ApiBrand; logos: ApiBrandLogo[] }) {
-  const router = useRouter();
+/** 등록 실패 안내 — 자동 재시도하지 않고, 입력은 그대로 남는다 */
+function createErrorText(state: M2CreateState): string | null {
+  if (state.kind !== 'error') return null;
+  if (state.reason === 'conflict') return '이미 등록된 브랜드와 겹쳐 등록하지 못했습니다. 입력한 내용은 그대로 있으니 확인 후 다시 시도해주세요.';
+  if (state.reason === 'validation') return '브랜드 정보를 확인해주세요. 한글명과 영문명은 필수입니다.';
+  return '브랜드를 등록하지 못했습니다. 입력한 내용은 그대로 있으니 다시 시도해주세요.';
+}
 
-  const [mode, setMode] = useState<M2Mode>('view');
+/** 등록 완료 뒤 갈 곳 — 'n1' 하나만 받는다(쿼리의 임의 URL 로 이동하지 않는다) */
+type M2CreateNext = 'n1' | null;
+
+type M2EditorProps =
+  | { existing: { brandId: number; brand: ApiBrand; logos: ApiBrandLogo[] }; create?: undefined }
+  | { existing?: undefined; create: { next: M2CreateNext; cancelHref: string } };
+
+function M2BrandEditor({ existing, create }: M2EditorProps) {
+  const router = useRouter();
+  const isCreate = create != null;
+
+  const [mode, setMode] = useState<M2Mode>(isCreate ? 'create' : 'view');
   // 화면 정본 = 서버 응답(브랜드 + 로고 목록). 저장도 이 값을 바꾸지 않고 query cache 를 서버 응답으로 바꾼다
-  const baseline = useMemo(() => toM2BrandFormValue(brand, logos), [brand, logos]);
+  const existingBrand = existing?.brand;
+  const existingLogos = existing?.logos;
+  const serverBaseline = useMemo(
+    () => (existingBrand && existingLogos ? toM2BrandFormValue(existingBrand, existingLogos) : M2_EMPTY_FORM),
+    [existingBrand, existingLogos],
+  );
+  // 신규 등록: POST /brands 가 성공하면 그 응답이 대상 브랜드다. 이후 저장은 이 brandId 로만 간다
+  const [created, setCreated] = useState<M2SaveTarget | null>(null);
+  const [createdBaseline, setCreatedBaseline] = useState<M2BrandFormValue | null>(null);
+  const baseline = createdBaseline ?? serverBaseline;
+  const existingBrandId = existing?.brandId;
+  const saveTarget = useMemo<M2SaveTarget | null>(
+    () => (existingBrandId != null && existingBrand ? { brandId: existingBrandId, brand: existingBrand } : created),
+    [existingBrandId, existingBrand, created],
+  );
   const [draft, setDraft] = useState<M2BrandFormValue>(baseline);
-  const saver = useM2BrandSave(brandId, brand);
-  const isSaving = saver.state.kind === 'saving';
+  const saver = useM2BrandSave(saveTarget);
+  const creator = useM2BrandCreate();
+  const submittingRef = useRef(false);
+  const isSaving = saver.state.kind === 'saving' || creator.state.kind === 'creating';
   const [invalidFiles, setInvalidFiles] = useState(false);
   const [pendingNavigation, setPendingNavigation] = useState<BlockedNavigation | null>(null);
+  // 등록 화면은 빈 칸에서 시작한다 — 손대기 전에는 필수 오류를 빨갛게 보이지 않는다(검증 규칙은 같다)
+  const [touchedNames, setTouchedNames] = useState({ nameKo: !isCreate, nameEn: !isCreate });
 
-  const editable = mode === 'edit';
+  const editable = mode === 'edit' || mode === 'create';
   const value = editable ? draft : baseline;
   const changes = editable ? listM2Changes(baseline, draft) : [];
   const dirty = changes.length > 0;
-  const nameErrors = editable ? getM2NameErrors(draft) : { nameKo: null, nameEn: null };
+  const draftNameErrors = getM2NameErrors(draft);
+  const nameErrors = editable
+    ? { nameKo: touchedNames.nameKo ? draftNameErrors.nameKo : null, nameEn: touchedNames.nameEn ? draftNameErrors.nameEn : null }
+    : { nameKo: null, nameEn: null };
+  const canSubmit = isCreate && !created ? !draftNameErrors.nameKo && !draftNameErrors.nameEn : canSaveM2(baseline, draft);
+  const leaveHref = created ? `/brand?brandId=${created.brandId}` : (create?.cancelHref ?? '/');
 
   const closeDialog = useCallback(() => setPendingNavigation(null), []);
   const guard = useUnsavedNavigationGuard(dirty, setPendingNavigation);
@@ -141,6 +195,10 @@ function M2BrandEditor({ brandId, brand, logos }: { brandId: number; brand: ApiB
     previousMode.current = mode;
     (mode === 'edit' ? nameKoRef : editButtonRef).current?.focus();
   }, [mode]);
+  // 등록 화면은 첫 입력칸에서 시작한다
+  useEffect(() => {
+    if (isCreate) nameKoRef.current?.focus();
+  }, [isCreate]);
 
   // ── 고른 파일의 blob: URL 정리 — baseline과 draft 어디에도 없으면 해제한다 ──
   const blobUrls = useRef(new Set<string>());
@@ -165,7 +223,9 @@ function M2BrandEditor({ brandId, brand, logos }: { brandId: number; brand: ApiB
 
   const updateField = (field: 'nameKo' | 'nameEn' | 'overview' | 'targetCustomer', next: string) => {
     setDraft((current) => ({ ...current, [field]: next }));
+    if (field === 'nameKo' || field === 'nameEn') touchName(field);
   };
+  const touchName = (field: 'nameKo' | 'nameEn') => setTouchedNames((current) => (current[field] ? current : { ...current, [field]: true }));
 
   const addLogoFiles = (files: File[]) => {
     if (files.length === 0) return;
@@ -209,16 +269,49 @@ function M2BrandEditor({ brandId, brand, logos }: { brandId: number; brand: ApiB
     }
   };
 
-  const handleBack = () => {
-    if (dirty) setPendingNavigation({ kind: 'href', href: '/' });
-    else router.push('/');
+  /**
+   * 신규 등록 — POST /brands(처음 한 번) → 응답 brandId 로 로고 POST. 화면 전체를 ref 로 한 번만 돌린다(연속 클릭 · state 반영 전 클릭).
+   * 등록이 이미 성공했으면 POST /brands 를 다시 보내지 않고 그 브랜드의 남은 변경(로고)만 저장한다.
+   */
+  const handleCreate = async () => {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
+    try {
+      let target = created;
+      let base = baseline;
+      if (!target) {
+        const result = await creator.create(draft);
+        if (!result) return; // 실패 — 입력 그대로, 등록 화면 유지
+        target = result;
+        base = toM2BrandFormValue(result.brand, []);
+        setCreated(result);
+        setCreatedBaseline(base);
+      }
+      const outcome = await saver.save(base, draft, target);
+      if (!outcome) return;
+      setCreatedBaseline(outcome.baseline);
+      setDraft(outcome.draft);
+      if (!outcome.complete) return; // 로고 일부 실패 — 남은 로고 draft 를 두고 같은 화면에 남는다
+      guard.release();
+      router.replace(create?.next === 'n1' ? `/jobs/new?brandId=${target.brandId}` : `/brand?brandId=${target.brandId}`);
+    } finally {
+      submittingRef.current = false;
+    }
   };
+
+  const requestLeave = (href: string) => {
+    if (isSaving) return; // 서버 요청 중에는 나가지 않는다
+    if (dirty) setPendingNavigation({ kind: 'href', href });
+    else router.push(href);
+  };
+
+  const handleBack = () => requestLeave(isCreate ? leaveHref : '/');
 
   const discardAndLeave = () => {
     const navigation = pendingNavigation;
     guard.release();
     setPendingNavigation(null);
-    resetToBaseline();
+    if (!isCreate) resetToBaseline();
     if (navigation?.kind === 'href') {
       // 쌓아 둔 history 항목을 목적지로 교체한다
       router.replace(navigation.href);
@@ -230,6 +323,8 @@ function M2BrandEditor({ brandId, brand, logos }: { brandId: number; brand: ApiB
       router.replace('/');
     }
   };
+
+  const errorText = createErrorText(creator.state) ?? saveErrorText(saver.state, created != null);
 
   return (
     <main
@@ -243,6 +338,7 @@ function M2BrandEditor({ brandId, brand, logos }: { brandId: number; brand: ApiB
         ref={backButtonRef}
         type="button"
         onClick={handleBack}
+        disabled={isSaving}
         aria-label="뒤로 가기"
         data-testid="m2-back"
         className="absolute top-[39px] left-[39px] flex size-10 items-center justify-center rounded-[6px] border border-[#eaeaea] bg-white hover:bg-[#f5f5f5]"
@@ -259,8 +355,18 @@ function M2BrandEditor({ brandId, brand, logos }: { brandId: number; brand: ApiB
             </p>
           </div>
           <div className="flex items-center gap-[14px]">
-            <M2Button variant="secondary" size="sm" label="새 브랜드 추가" leadingPlus future testId="m2-new-brand" box="h-9 w-[120px]" />
-            {/* 수정 모드에서는 숨기되 자리는 남겨 옆 버튼이 움직이지 않게 한다 */}
+            {/* 등록 화면에서는 숨기되 자리는 남긴다. 수정 중 미저장 변경이 있으면 이탈 확인을 거친다 */}
+            <M2Button
+              variant="secondary"
+              size="sm"
+              label="새 브랜드 추가"
+              leadingPlus
+              testId="m2-new-brand"
+              box="h-9 w-[120px]"
+              onClick={() => requestLeave('/brand?mode=create')}
+              className={isCreate ? 'invisible' : ''}
+            />
+            {/* 수정·등록 모드에서는 숨기되 자리는 남겨 옆 버튼이 움직이지 않게 한다 */}
             <M2Button
               variant="tertiary"
               size="sm"
@@ -297,6 +403,7 @@ function M2BrandEditor({ brandId, brand, logos }: { brandId: number; brand: ApiB
                     editable={editable}
                     error={nameErrors.nameKo}
                     onChange={(next) => updateField('nameKo', next)}
+                    onBlur={() => touchName('nameKo')}
                   />
                   <NameField
                     className="col-start-3"
@@ -306,6 +413,7 @@ function M2BrandEditor({ brandId, brand, logos }: { brandId: number; brand: ApiB
                     editable={editable}
                     error={nameErrors.nameEn}
                     onChange={(next) => updateField('nameEn', next)}
+                    onBlur={() => touchName('nameEn')}
                   />
                 </div>
                 <div className="h-px shrink-0 bg-[#eaeaea]" />
@@ -342,10 +450,12 @@ function M2BrandEditor({ brandId, brand, logos }: { brandId: number; brand: ApiB
         </div>
       </div>
 
-      {/* Figma 브랜드 삭제(x119, bottom 53) */}
-      <div className="absolute bottom-[55px] left-[119px]">
-        <M2Button variant="danger" size="sm" label="브랜드 삭제" future testId="m2-delete-brand" />
-      </div>
+      {/* Figma 브랜드 삭제(x119, bottom 53). 등록 화면에는 두지 않는다 */}
+      {!isCreate && (
+        <div className="absolute bottom-[55px] left-[119px]">
+          <M2Button variant="danger" size="sm" label="브랜드 삭제" future testId="m2-delete-brand" />
+        </div>
+      )}
 
       {/* 보기 모드는 버튼이 없어 안내만 오른쪽 끝에 붙고, 수정 모드는 Figma 688px 묶음(안내 + 버튼)이다 */}
       <footer
@@ -353,9 +463,9 @@ function M2BrandEditor({ brandId, brand, logos }: { brandId: number; brand: ApiB
         className={`mt-6 mr-[121px] mb-[53px] ml-auto flex h-[37px] max-w-[calc(100%-240px)] shrink-0 items-center gap-4 ${editable ? 'w-[688px] justify-between' : 'justify-end'}`}
       >
         {/* 저장 실패 안내는 Figma 표본이 없어 같은 안내 자리에 오류 색으로 바꿔 보인다(새 배치·toast 없음) */}
-        {saveErrorText(saver.state) ? (
+        {errorText ? (
           <p role="alert" data-testid="m2-save-error" className="min-w-0 text-right text-[12px] leading-[normal] tracking-[-0.12px] whitespace-nowrap text-[#e5484d]">
-            {saveErrorText(saver.state)}
+            {errorText}
           </p>
         ) : (
           <p data-testid="m2-apply-notice" className="min-w-0 text-right text-[12px] leading-[normal] font-light tracking-[-0.48px] whitespace-nowrap text-[#ff6a38]">
@@ -366,22 +476,23 @@ function M2BrandEditor({ brandId, brand, logos }: { brandId: number; brand: ApiB
           <div className="flex shrink-0 items-center gap-2">
             <button
               type="button"
-              onClick={resetToBaseline}
+              onClick={isCreate ? () => requestLeave(leaveHref) : resetToBaseline}
               disabled={isSaving}
               data-testid="m2-cancel"
               className="flex h-[37px] items-center justify-center rounded-[6px] border border-[#eaeaea] bg-white px-7 text-[14px] leading-[17px] font-medium tracking-[-0.42px] whitespace-nowrap text-[#171717] hover:bg-[#f5f5f5] disabled:cursor-not-allowed disabled:opacity-40"
             >
               취소
             </button>
+            {/* 등록 화면의 주 버튼은 [변경사항 저장]과 같은 자리·모습이다(별도 Figma 없음). 등록 뒤 로고만 남으면 [다시 저장] */}
             <button
               type="button"
-              onClick={() => void handleSave()}
-              disabled={isSaving || !canSaveM2(baseline, draft)}
+              onClick={() => void (isCreate ? handleCreate() : handleSave())}
+              disabled={isSaving || !canSubmit}
               aria-busy={isSaving || undefined}
-              data-testid="m2-save"
+              data-testid={isCreate ? 'm2-create' : 'm2-save'}
               className="flex h-[37px] items-center justify-center rounded-[6px] bg-[#171717] px-7 text-[14px] leading-[17px] font-medium tracking-[-0.42px] whitespace-nowrap text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              변경사항 저장
+              {isCreate ? (created ? '다시 저장' : '브랜드 등록') : '변경사항 저장'}
             </button>
           </div>
         )}
@@ -402,6 +513,7 @@ function NameField({
   editable,
   error,
   onChange,
+  onBlur,
   inputRef,
 }: {
   className?: string;
@@ -411,6 +523,7 @@ function NameField({
   editable: boolean;
   error: string | null;
   onChange: (value: string) => void;
+  onBlur?: () => void;
   inputRef?: React.RefObject<HTMLInputElement | null>;
 }) {
   const errorId = `${id}-error`;
@@ -429,6 +542,7 @@ function NameField({
         aria-invalid={error ? true : undefined}
         aria-describedby={error ? errorId : undefined}
         onChange={(event) => onChange(event.target.value)}
+        onBlur={onBlur}
         data-testid={id}
         className={`${INPUT_CLASS} ${borderClass(editable, !!error)} h-10 px-4`}
       />
