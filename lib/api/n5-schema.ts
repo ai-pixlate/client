@@ -39,7 +39,7 @@ export type ApiRenderStatus = components['schemas']['RenderStatus'];
 
 export type ApiBlockPatch = components['schemas']['BlockPatch'];
 
-/** BlockPatch.layoutAdjust — 셀러 배치 조정 요청(F-CFM-15). 계약 확정·서버 구현 대기. 안쪽 키 생략 = 유지, null = 그 값만 해제, 빈 객체 금지 */
+/** BlockPatch.layoutAdjust — 셀러 배치 조정 요청(F-CFM-15). BE develop 구현 완료·dev 배포 확인 필요. 안쪽 키 생략 = 유지, null = 그 값만 해제, 빈 객체 금지 */
 export type ApiLayoutAdjustPatch = components['schemas']['LayoutAdjustPatch'];
 
 /** TextBlock.layoutAdjust — 저장된 셀러 조정(정규화 후). 둘 다 없으면 이 객체 대신 null */

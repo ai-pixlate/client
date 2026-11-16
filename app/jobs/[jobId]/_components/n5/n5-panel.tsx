@@ -283,7 +283,11 @@ function TranslationEditor({
   const [syncedText, setSyncedText] = useState(block.translatedText);
   const [syncedRevision, setSyncedRevision] = useState(block.revision);
   // 재렌더 task 와 실행 취소 쪽 충돌은 편집 세션이 들고 있다 — 저장과 실행 취소가 같은 흐름으로 이어진다
-  const rerenderTaskId = editSession.rerenderTaskByBlock.get(block.id) ?? null;
+  // task 는 이유와 상관없이 따라간다(완료 뒤 재조회·실패 표시·넘침 최신성). 「재렌더링 중…」 안내는 번역문 저장이 만든 task 에만 보인다 —
+  // 박스 이동·크기·배율·실행 취소로 생긴 백그라운드 재렌더는 이 칸의 저장·재검사가 아니다
+  const rerenderEntry = editSession.rerenderTaskByBlock.get(block.id);
+  const rerenderTaskId = rerenderEntry?.taskId ?? null;
+  const isTranslationRerender = rerenderEntry?.reason === 'translation';
   const [saveConflict, setSaveConflict] = useState<ApiTextBlock | null>(null);
   const conflictLatest = saveConflict ?? editSession.historyConflicts.get(block.id) ?? null;
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -442,7 +446,7 @@ function TranslationEditor({
           </div>
         )}
         <div className="mt-[60px] flex items-center justify-end gap-2">
-          {isRerendering && <span className="text-[11px] text-[#999]">재렌더링 중…</span>}
+          {isRerendering && isTranslationRerender && <span className="text-[11px] text-[#999]">재렌더링 중…</span>}
           {showUnsaved && (
             <span role="status" data-testid={`n5-block-unsaved-${block.id}`} className="text-[11px] text-[#999]">
               저장하지 않은 수정
@@ -707,10 +711,13 @@ export function N5Panel({
   // confirm 은 「confirm 시점에 DB 에 저장 완료된 값」(revision·번역문·layout/bbox·fontScale·style·배경 입력)으로 최종 렌더 입력을 고정한다.
   // PATCH 를 먼저 보냈다는 것만으로 먼저 처리된다는 보장이 없고(job row lock 을 confirm 이 먼저 잡으면 이전 값으로 확정되고 늦은 PATCH 는
   // 409 job_not_editable), 여러 block PATCH 는 한 transaction 이 아니다. 그래서 FE 가 저장 순서를 책임진다 — 서버 409 에 기대지 않는다. 확정 전 장벽:
-  //   ① 진행 중인 서버 저장(번역문·섹션·배치 PATCH·서버 실행 취소/다시 실행)이 있으면 시작하지 않는다(버튼 비활성 + 핸들러 재확인)
-  //   ② 서버값과 다른 번역문 초안을 같은 PATCH 경로(saveTranslation)로 하나씩 저장하고 각각의 성공 응답을 기다린다 — 하나라도 실패
-  //      (409·4xx·5xx·네트워크)하면 나머지를 보내지 않고 확정하지 않으며 N5 에 남는다(초안 유지·기존 충돌/실패 표시)
-  //   ③ 이 저장과 앞선 저장의 재렌더 task 가 끝날 때까지 기다린다(2초 polling). 실패·취소로 끝나면 확정하지 않고 기존 실패 표시로 남긴다.
+  //   ① 진행 중인 서버 저장(번역문 [확인]·섹션·서버 실행 취소/다시 실행)이 있으면 시작하지 않는다(버튼 비활성 + 핸들러 재확인)
+  //   ② 저장하지 않은 수정을 블록 순서대로 하나씩 저장하고 각각의 성공 응답을 기다린다(saveBlockForConfirm) —
+  //      서버값과 다른 번역 초안, 그리고 박스 위치·크기·글자 배율·높이 초안(배치는 N5 조작 중에는 local 만 바꾸고 여기서 처음 저장한다).
+  //      같은 블록의 번역 초안과 배치는 한 PATCH(최신 revision 1회)로, 이미 [확인]으로 저장한 번역문은 다시 보내지 않는다.
+  //      하나라도 실패(409·4xx·5xx·네트워크)하면 나머지를 보내지 않고 확정하지 않으며 N5 에 남는다(local 초안 유지·기존 충돌/실패 표시).
+  //      N6 데이터 정확성의 기준은 이 PATCH 저장 완료다 — confirm 은 그 뒤에만 나간다
+  //   ③ 이 저장과 앞선 저장(번역문·배치·실행 취소 모두)의 재렌더 task 가 끝날 때까지 기다린다(2초 polling). 실패·취소로 끝나면 확정하지 않고 기존 실패 표시로 남긴다.
   //      이것은 N6 반영을 위한 서버 필수 조건이 아니다(confirm 은 진행 중 preview 재렌더를 취소하고 저장된 값으로 최종 렌더를 따로 만든다).
   //      사용자가 최신 저장 결과의 미리보기를 확인하게 하는 UX 장벽이며, 재렌더 실패 시 진행 여부는 PM/UX 정책 확인 전까지 현재대로 막는다
   //   ④ /blocks·/preview·/tasks 를 다시 읽고, 그 최신 서버 정본으로 확인 항목과 acknowledgedWarnings 를 만든다
@@ -742,24 +749,22 @@ export function N5Panel({
 
   /** ②·③·④ — 성공하면 true. 실패하면 안내를 남기고 false */
   async function settleServerState(): Promise<boolean> {
-    // ② 미저장 초안 저장(서버값과 다른 초안만)
-    const serverText = new Map(readLatestBlocks().map((block) => [block.id, block.translatedText]));
+    // ② 저장하지 않은 수정(번역 초안 · 배치 초안) 저장 — 블록 순서대로 하나씩, 각 응답을 기다린다
     const newTaskIds = new Set<number>();
-    for (const [blockId, entry] of translationDrafts) {
-      if (!serverText.has(blockId) || entry.draft === serverText.get(blockId)) continue;
-      const result = await editSession.saveTranslation(blockId, entry.draft);
+    for (const blockId of editSession.listUnsavedBlockIds()) {
+      const result = await editSession.saveBlockForConfirm(blockId);
       if (!mountedRef.current) return false;
       if (!result.started || !result.ok) {
         const block = blocks.find((candidate) => candidate.id === blockId);
         if (block) selectBlockFromPanel(block, { reveal: true });
-        setConfirmError('저장하지 못한 번역문이 있어 다음 단계로 넘어가지 않았습니다. 표시된 칸을 확인한 뒤 다시 시도해 주세요.');
+        setConfirmError('저장하지 못한 수정이 있어 다음 단계로 넘어가지 않았습니다. 표시된 칸을 확인한 뒤 다시 시도해 주세요.');
         return false;
       }
       if (result.rerenderTaskId != null) newTaskIds.add(result.rerenderTaskId);
     }
 
     // ③ 재렌더 task 완료 대기 — 이번 저장의 task 와, 클릭 때 아직 끝나지 않은 앞선 저장의 task
-    const knownTaskIds = [...editSession.rerenderTaskByBlock.values()].filter((id): id is number => id != null);
+    const knownTaskIds = [...editSession.rerenderTaskByBlock.values()].flatMap((task) => (task.taskId != null ? [task.taskId] : []));
     const watched = new Set<number>(newTaskIds);
     for (let attempt = 0; ; attempt += 1) {
       const list = await queryClient.fetchQuery({ queryKey: pixlateKeys.tasks(jobId), queryFn: () => getJobTasks(jobId), staleTime: 0 });

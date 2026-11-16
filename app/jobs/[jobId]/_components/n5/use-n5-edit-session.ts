@@ -32,14 +32,9 @@ import {
 } from '@/lib/n5/history';
 import { fitBoxToTextHeight, isSameBox, pruneBlockDrafts, stepFontScale, type N5FontScaleValue } from '@/lib/n5/layout-edit';
 import {
-  appliedLayoutFromBlock,
-  readStoredLayout,
-  buildLayoutAdjustPatch,
-  buildLayoutBlockPatch,
   isLayoutRenderTarget,
-  type N5LayoutChange,
+  toLayoutBox,
 } from '@/lib/n5/layout-adjust';
-import { isLayoutAdjustWriteEnabled } from '@/lib/n5/layout-adjust-capability';
 import { createIdempotencyKey } from '@/lib/api/idempotency';
 import { openTypesetMeasurer, type TypesetMeasurer } from '@/lib/n5/typeset-measurement';
 import { isTypesetRole } from '@/lib/n5/typeset-rules';
@@ -55,10 +50,10 @@ import { pixlateKeys, usePatchN5BlockMutation, useUpdateSectionBucketMutation } 
 //
 // 저장 위치
 // - 번역문·섹션 제외·되돌리기: 기존 PATCH. 성공한 뒤에만 이력·pointer 가 움직인다.
-// - 박스 위치·크기·글자 배율(F-CFM-15 layoutAdjust — 계약 확정·서버 구현 대기): 조작 중에는 세션 local 초안에 곧바로 적용하고,
-//   조작을 마쳤을 때(끌기·손잡이는 손을 놓을 때, [+][−] 는 한 번 누를 때) PATCH 1회로 저장한다. 성공한 뒤에만 이력에 넣고,
-//   실패하면 마지막 저장 값으로 되돌린다. 같은 블록의 저장은 순서대로 하나씩 보낸다(실행 시점 최신 revision).
-//   서버 쓰기는 Mock 에서만 켠다(lib/n5/layout-adjust-capability.ts) — 실서버에서는 지금처럼 세션 local 초안만 바꾼다.
+// - 박스 위치·크기·글자 배율·높이(F-CFM-15 layoutAdjust): 조작 중·조작 뒤 모두 세션 local 초안만 바꾼다(PATCH·재렌더 task 없음).
+//   조작한 블록은 「배치 미저장」으로 표시해 두고, [저장하러 가기](N5 최종 저장)에서 saveBlockForConfirm 이 같은 PATCH 경로로 저장한다
+//   — 실 API·Mock 동일. 같은 블록의 번역 초안과 함께 바뀌었으면 한 요청(trans1 + layoutAdjust, revision 1회)으로 보낸다.
+//   실행 취소·다시 실행도 local 초안만 바꾼다. 저장이 실패하면 확정하지 않고 local 초안을 그대로 둔다.
 //   초안이 없으면 renderInput 적용값 > /blocks layoutAdjust > 원본 bbox 가 기준이다(getTranslatedBaseBox·getBaseFontScale).
 //
 // Auto Height — 폭·글자 배율·번역문이 바뀌면 조판 규칙대로 다시 줄바꿈한 높이로 박스를 맞춘다(Figma Text의 Auto height).
@@ -85,6 +80,18 @@ export function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   const tag = target.tagName;
   return tag === 'INPUT' || tag === 'TEXTAREA' || target.isContentEditable;
+}
+
+/**
+ * 미리보기 재렌더 task 를 만든 저장의 이유.
+ * - translation: 번역문 [확인] · [저장하러 가기]의 초안 저장 — 번역문 칸에 「재렌더링 중…」(저장 + 재검사)을 보인다
+ * - layout: 박스 이동·크기·글자 배율 — 미리보기만 백그라운드로 다시 만든다(번역문 칸 안내 없음)
+ * - history: 실행 취소·다시 실행이 다시 저장한 값 — 번역문 칸 안내 없음
+ */
+export type N5RerenderReason = 'translation' | 'layout' | 'history';
+export interface N5RerenderTask {
+  taskId: number | null;
+  reason: N5RerenderReason;
 }
 
 export interface N5EditSessionApi {
@@ -124,8 +131,12 @@ export interface N5EditSessionApi {
     blockId: number,
     update: (prev: TranslationDraft | undefined) => TranslationDraft | undefined,
   ) => void;
-  rerenderTaskByBlock: ReadonlyMap<number, number | null>;
-  setRerenderTask: (blockId: number, taskId: number | null) => void;
+  /**
+   * 블록별 마지막 서버 저장이 만든 미리보기 재렌더 task 와 그 이유. task 는 이유와 상관없이 추적한다(완료 뒤 재조회 · [저장하러 가기]
+   * 최신 미리보기 장벽). 「재렌더링 중…」 안내는 번역문 [확인] 저장(reason 'translation')에만 보인다.
+   */
+  rerenderTaskByBlock: ReadonlyMap<number, N5RerenderTask>;
+  setRerenderTask: (blockId: number, taskId: number | null, reason: N5RerenderReason) => void;
   /** 실행 취소·다시 실행이 409 로 막힌 블록의 서버 최신값. 편집기의 기존 충돌 표시로 보여 준다 */
   historyConflicts: ReadonlyMap<number, ApiTextBlock>;
   clearHistoryConflict: (blockId: number) => void;
@@ -137,6 +148,14 @@ export interface N5EditSessionApi {
   hasPendingServerEdits: boolean;
   /** 같은 값을 ref 로 바로 읽는다(같은 tick 의 연속 클릭·강제 이벤트 방어용) */
   isServerEditPending: () => boolean;
+  /** 저장하지 않은 수정(서버값과 다른 번역 초안 · 배치 미저장)이 있는 블록 — 화면 블록 순서 */
+  listUnsavedBlockIds: () => number[];
+  /**
+   * [저장하러 가기] 한 블록 저장 — 번역 초안만이면 saveTranslation, 배치만이면 PATCH { trans1(서버 현재 값), revision, layoutAdjust },
+   * 둘 다면 PATCH { trans1(초안), revision, layoutAdjust } 한 번. 이미 [확인]으로 저장한 번역문은 다시 보내지 않는다.
+   * 실패하면 local 초안(번역문·배치)을 그대로 둔다.
+   */
+  saveBlockForConfirm: (blockId: number) => Promise<TranslationSaveResult>;
   /**
    * 번역문 한 칸 저장 — PATCH { trans1, revision(실행 시점 최신) }. 칸의 [확인]과 [저장하러 가기]의 미저장 초안 저장이 같은 경로를 쓴다.
    * 성공하면 초안 정리·재렌더 task 기록·이력 1단계, 실패하면 초안을 남기고 실패 표시(409 는 충돌 최신값).
@@ -363,16 +382,6 @@ export function useN5EditSession({
       return new Map(drafts).set(blockId, next);
     });
   }, []);
-  const clearUserLayout = useCallback((blockId: number) => {
-    const drop = <T,>(drafts: ReadonlyMap<number, T>) => {
-      if (!drafts.has(blockId)) return drafts;
-      const next = new Map(drafts);
-      next.delete(blockId);
-      return next;
-    };
-    setBboxDrafts(drop);
-    setFontScaleDrafts(drop);
-  }, []);
   /** 끄는 동안의 화면 박스 — Auto Height 표시 박스와 같으면 사용자 초안을 만들지 않는다 */
   const setDragBox = useCallback(
     (blockId: number, next: BoundingBox) => {
@@ -390,9 +399,10 @@ export function useN5EditSession({
     },
     [],
   );
-  const [rerenderTaskByBlock, setRerenderTaskByBlock] = useState<ReadonlyMap<number, number | null>>(() => new Map());
-  const setRerenderTask = useCallback((blockId: number, taskId: number | null) => {
-    setRerenderTaskByBlock((tasks) => new Map(tasks).set(blockId, taskId));
+  // 사용자 편집(초안) · 서버 저장(PATCH 진행 중 = pendingEdits) · 미리보기 재렌더(이 task)는 서로 다른 상태다
+  const [rerenderTaskByBlock, setRerenderTaskByBlock] = useState<ReadonlyMap<number, N5RerenderTask>>(() => new Map());
+  const setRerenderTask = useCallback((blockId: number, taskId: number | null, reason: N5RerenderReason) => {
+    setRerenderTaskByBlock((tasks) => new Map(tasks).set(blockId, { taskId, reason }));
   }, []);
   const [historyConflicts, setHistoryConflicts] = useState<ReadonlyMap<number, ApiTextBlock>>(() => new Map());
   const clearHistoryConflict = useCallback((blockId: number) => {
@@ -403,22 +413,30 @@ export function useN5EditSession({
       return next;
     });
   }, []);
-  // ── 배치 저장(layoutAdjust) ─────────────────────────────────────
-  const layoutWriteEnabled = isLayoutAdjustWriteEnabled();
-  /** 블록마다 저장을 순서대로 — 앞 저장이 끝난 뒤 최신 revision 으로 보낸다 */
-  const layoutQueueRef = useRef(new Map<number, Promise<void>>());
-  /** 저장 실패로 화면을 되돌리면 올린다 — 그 뒤에 쌓인 조작은 보내지 않는다 */
-  const layoutGenerationRef = useRef(new Map<number, number>());
+  // ── 배치(layoutAdjust) ─ 조작은 local 초안만. 서버 저장은 [저장하러 가기]에서 한 번(saveBlockForConfirm) ──
+  /** 배치를 조작했지만 아직 서버에 저장하지 않은 블록 */
+  const layoutDirtyRef = useRef(new Set<number>());
+  const setLayoutDirty = useCallback((blockId: number, dirty: boolean) => {
+    if (dirty) layoutDirtyRef.current.add(blockId);
+    else layoutDirtyRef.current.delete(blockId);
+  }, []);
 
-  /** 서버에 배치를 저장할 블록인지 — 쓰기 허용(Mock) + 렌더 대상(라벨·로고·빈 원문·빈 번역문 아님) */
-  const canPersistLayout = useCallback(
-    (blockId: number) => {
-      if (!layoutWriteEnabled) return false;
-      const block = latestRef.current.blocks.find((candidate) => candidate.id === blockId);
-      return block != null && isLayoutRenderTarget(block);
-    },
-    [layoutWriteEnabled],
-  );
+  /**
+   * 저장할 배치 — 사용자 박스 초안(box)·배율 초안(fontScale) 중 있는 것만. 초안이 서버 값과 같아 지워졌으면 그 키는 싣지 않는다(서버 값 유지).
+   * 렌더 대상이 아닌 블록(라벨·로고·빈 원문·빈 번역문 — 409 not_render_target)은 보내지 않는다.
+   */
+  const pendingLayoutPatch = useCallback((blockId: number): ApiLayoutAdjustPatch | null => {
+    if (!layoutDirtyRef.current.has(blockId)) return null;
+    const { blocks: latestBlocks, bboxDrafts: boxes, fontScaleDrafts: scales } = latestRef.current;
+    const block = latestBlocks.find((candidate) => candidate.id === blockId);
+    if (!block || !isLayoutRenderTarget(block)) return null;
+    const patch: ApiLayoutAdjustPatch = {};
+    const box = boxes.get(blockId);
+    if (box) patch.box = toLayoutBox(box);
+    const fontScale = scales.get(blockId);
+    if (fontScale !== undefined) patch.fontScale = fontScale;
+    return Object.keys(patch).length > 0 ? patch : null;
+  }, []);
 
   /** 배치 값을 화면에 둔다. 서버 박스·배율과 같으면(조정 없음) 사용자 초안을 지운다 — 그때는 Auto Height 표시 박스가 보인다 */
   const applyLayoutDraft = useCallback(
@@ -440,71 +458,6 @@ export function useN5EditSession({
     [setUserBox],
   );
 
-  /**
-   * PATCH { trans1(서버 현재 값), revision(실행 시점 최신), layoutAdjust }. 응답 block(정규화된 저장값)을 정본으로 화면에 반영한다 —
-   * 요청값을 성공값으로 보지 않는다. applyResponse=false 면(같은 블록 저장이 뒤에 더 쌓임) 화면은 그대로 둔다.
-   * 409 REVISION_CONFLICT 는 기존 충돌 표시(historyConflicts)로 넘긴다.
-   */
-  const saveLayout = useCallback(
-    async (blockId: number, layoutAdjust: ApiLayoutAdjustPatch | null, applyResponse: () => boolean): Promise<{ ok: boolean; applied: boolean }> => {
-      const latest = queryClient.getQueryData<ApiTextBlock[]>(pixlateKeys.n5Blocks(jobId))?.find((b) => b.id === blockId);
-      if (latest?.revision == null) return { ok: false, applied: false };
-      try {
-        // 이 호출 = 사용자 조작 1회(끌기·손잡이 1회 · [+][−] 1회 · 실행 취소·다시 실행 1회) — 조작마다 새 멱등 키
-        const response = await patchBlock({ blockId, payload: buildLayoutBlockPatch(latest, layoutAdjust), idempotencyKey: createIdempotencyKey() });
-        setRerenderTask(blockId, getRerenderTaskId(response));
-        const applied = response.block ? appliedLayoutFromBlock(response.block) : null;
-        if (applied && applyResponse()) {
-          // 저장 조정이 없어졌으면(null 정규화) 사용자 배치도 없다 — 초안을 지워 서버 박스의 Auto Height 표시로 돌아간다
-          if (readStoredLayout(response.block!).kind === 'none') clearUserLayout(blockId);
-          else applyLayoutDraft(blockId, applied);
-        }
-        return { ok: true, applied: applied != null };
-      } catch (err) {
-        if (err instanceof ApiRequestError && err.status === 409) {
-          const parsed = parseApiError(err.body);
-          const conflict = parsed && isRevisionConflict(parsed) ? getRevisionConflictLatestBlock(parsed) : null;
-          if (conflict) setHistoryConflicts((conflicts) => new Map(conflicts).set(blockId, conflict));
-        }
-        return { ok: false, applied: false };
-      }
-    },
-    [applyLayoutDraft, clearUserLayout, jobId, patchBlock, queryClient, setRerenderTask],
-  );
-
-  /** 새 배치 조작 저장 — 화면은 이미 after 다. 성공하면 이력 1단계, 실패하면 before 로 되돌리고 안내 */
-  const persistLayoutEdit = useCallback(
-    (command: N5EditCommand, change: N5LayoutChange, rollback: { bbox: BoundingBox; fontScale?: number }, onRollback?: () => void) => {
-      const blockId = command.target.id;
-      if (!beginServerEdit()) {
-        applyLayoutDraft(blockId, rollback);
-        onRollback?.();
-        return;
-      }
-      const generation = layoutGenerationRef.current.get(blockId) ?? 0;
-      const previous = layoutQueueRef.current.get(blockId) ?? Promise.resolve();
-      const run: Promise<void> = previous.then(async () => {
-        try {
-          if ((layoutGenerationRef.current.get(blockId) ?? 0) !== generation) return;
-          const result = await saveLayout(blockId, buildLayoutAdjustPatch(change), () => layoutQueueRef.current.get(blockId) === run);
-          if (result.ok) {
-            dispatch({ type: 'edit-succeeded', command });
-          } else {
-            layoutGenerationRef.current.set(blockId, generation + 1);
-            applyLayoutDraft(blockId, rollback);
-            onRollback?.();
-            dispatch({ type: 'edit-failed', kind: command.kind });
-          }
-        } finally {
-          if (layoutQueueRef.current.get(blockId) === run) layoutQueueRef.current.delete(blockId);
-          endServerEdit();
-        }
-      });
-      layoutQueueRef.current.set(blockId, run);
-    },
-    [applyLayoutDraft, beginServerEdit, dispatch, endServerEdit, saveLayout],
-  );
-
   const commitBoxEdit = useCallback(
     (kind: 'box-move' | 'box-resize', blockId: number, before: BoundingBox, after: BoundingBox, manualHeight = false) => {
       if (isSameBox(before, after)) return;
@@ -520,14 +473,11 @@ export function useN5EditSession({
       const command: N5EditCommand = { kind, target: { type: 'block', id: blockId }, before: logicalBefore, after };
       manualHeightByCommandRef.current.set(command, { before: wasManual, after: isManual });
       setManualHeight(blockId, isManual);
-      if (!canPersistLayout(blockId)) {
-        dispatch({ type: 'edit-succeeded', command });
-        return;
-      }
-      // 끌기·손잡이 = box 만(배율은 그대로 — 안쪽 생략). 저장에 실패해 되돌리면 manual height 도 조작 전으로
-      persistLayoutEdit(command, { kind: 'box', box: after }, { bbox: logicalBefore }, () => setManualHeight(blockId, wasManual));
+      // 서버에는 보내지 않는다 — [저장하러 가기]에서 저장한다
+      setLayoutDirty(blockId, true);
+      dispatch({ type: 'edit-succeeded', command });
     },
-    [canPersistLayout, dispatch, persistLayoutEdit, setManualHeight],
+    [dispatch, setLayoutDirty, setManualHeight],
   );
 
   const changeFontScale = useCallback(
@@ -553,14 +503,11 @@ export function useN5EditSession({
           : stepped;
       applyLayoutDraft(block.id, after);
       const command: N5EditCommand = { kind: 'font-scale', target: { type: 'block', id: block.id }, before, after };
-      if (!canPersistLayout(block.id)) {
-        dispatch({ type: 'edit-succeeded', command });
-        return;
-      }
-      // [+][−] 한 번 = 저장 1회 — 새 절대 배율과 그 박스를 한 요청으로
-      persistLayoutEdit(command, { kind: 'box-and-scale', box: after.bbox, fontScale: after.fontScale }, before);
+      // 서버에는 보내지 않는다 — [저장하러 가기]에서 저장한다
+      setLayoutDirty(block.id, true);
+      dispatch({ type: 'edit-succeeded', command });
     },
-    [applyLayoutDraft, canPersistLayout, dispatch, fitForText, layoutBoxes, logicalLayoutOf, persistLayoutEdit, sections, translationDrafts],
+    [applyLayoutDraft, dispatch, fitForText, layoutBoxes, logicalLayoutOf, sections, setLayoutDirty, translationDrafts],
   );
 
   const commitTranslation = useCallback(
@@ -594,7 +541,7 @@ export function useN5EditSession({
       try {
         const response = await patchBlock({ blockId, payload: { trans1: text, revision: latest.revision } });
         const rerenderTaskId = getRerenderTaskId(response);
-        setRerenderTask(blockId, rerenderTaskId);
+        setRerenderTask(blockId, rerenderTaskId, 'translation');
         updateTranslationDraft(blockId, (prev) => resolveTranslationSaveSucceeded(prev, text));
         commitTranslation(blockId, textBeforeSave, response.block?.trans1 ?? text);
         return { started: true, ok: true, revision: response.block?.revision ?? null, rerenderTaskId };
@@ -687,7 +634,7 @@ export function useN5EditSession({
       }
       try {
         const response = await patchBlock({ blockId, payload: { trans1: value.text, revision: latest.revision } });
-        setRerenderTask(blockId, getRerenderTaskId(response));
+        setRerenderTask(blockId, getRerenderTaskId(response), 'history');
         // 저장에 성공한 뒤에만 그 글의 박스로 돌아간다. 초안이 없던 때로 돌아가면 서버 박스를 다시 쓴다
         setBboxDrafts((drafts) => {
           const next = new Map(drafts);
@@ -740,24 +687,6 @@ export function useN5EditSession({
     [setManualHeight],
   );
 
-  /** 배치 실행 취소·다시 실행 — 과거 값을 현재 revision 으로 다시 저장한다(전용 API 없음). 성공한 뒤에만 pointer 를 옮긴다 */
-  const runLayoutCommand = useCallback(
-    async (direction: HistoryDirection, command: N5EditCommand, change: N5LayoutChange) => {
-      const blockId = command.target.id;
-      revealBlock(blockId);
-      dispatch({ type: 'save-started', operation: direction });
-      clearHistoryConflict(blockId);
-      const result = await saveLayout(blockId, buildLayoutAdjustPatch(change), () => true);
-      // 응답에 저장 조정 키가 없으면(서버 구현 전 모양) 보낸 값을 화면에 둔다
-      if (result.ok && !result.applied) {
-        applyLayoutDraft(blockId, change.kind === 'box' ? { bbox: change.box } : { bbox: change.box, fontScale: change.fontScale });
-      }
-      if (result.ok) applyManualHeightFor(command, direction);
-      settle(direction, result.ok ? command : null);
-    },
-    [applyLayoutDraft, applyManualHeightFor, clearHistoryConflict, dispatch, revealBlock, saveLayout, settle],
-  );
-
   // 「번역 전」에는 조정 UI가 없고 원본 bbox를 보이므로 되돌려도 보이지 않는다 — 「번역 후」에서만 동작한다
   const isHistoryAvailable = viewMode === 'translated';
 
@@ -777,31 +706,26 @@ export function useN5EditSession({
         case 'section-restore':
           void runSectionCommand(direction, command, value as SectionBucket);
           return;
+        // 배치 실행 취소·다시 실행도 local 초안만 바꾼다 — 서버 저장은 [저장하러 가기]
         case 'box-move':
         case 'box-resize':
-          if (canPersistLayout(command.target.id)) {
-            void runLayoutCommand(direction, command, { kind: 'box', box: value as BoundingBox });
-            return;
-          }
           applyLayoutDraft(command.target.id, { bbox: value as BoundingBox });
+          setLayoutDirty(command.target.id, true);
           applyManualHeightFor(command, direction);
           revealBlock(command.target.id);
           settle(direction, command);
           return;
         case 'font-scale': {
           const { bbox, fontScale } = value as N5FontScaleValue;
-          if (canPersistLayout(command.target.id)) {
-            void runLayoutCommand(direction, command, { kind: 'box-and-scale', box: bbox, fontScale });
-            return;
-          }
           applyLayoutDraft(command.target.id, { bbox, fontScale });
+          setLayoutDirty(command.target.id, true);
           revealBlock(command.target.id);
           settle(direction, command);
           return;
         }
       }
     },
-    [applyLayoutDraft, applyManualHeightFor, canPersistLayout, isHistoryAvailable, revealBlock, runLayoutCommand, runSectionCommand, runTranslationCommand, settle],
+    [applyLayoutDraft, applyManualHeightFor, isHistoryAvailable, revealBlock, runSectionCommand, runTranslationCommand, setLayoutDirty, settle],
   );
 
   const undo = useCallback(() => runHistory('undo'), [runHistory]);
@@ -819,6 +743,62 @@ export function useN5EditSession({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [redo, undo]);
+
+  /** [저장하러 가기] 대상 — 서버값과 다른 번역 초안 · 배치 미저장(보낼 값이 있는 것). 화면 블록 순서 */
+  const listUnsavedBlockIds = useCallback((): number[] => {
+    const { blocks: latestBlocks, translationDrafts: drafts } = latestRef.current;
+    const serverText = new Map((queryClient.getQueryData<ApiTextBlock[]>(pixlateKeys.n5Blocks(jobId)) ?? []).map((b) => [b.id, b.trans1 ?? '']));
+    return latestBlocks
+      .filter((block) => {
+        const draft = drafts.get(block.id);
+        const textChanged = draft != null && serverText.has(block.id) && draft.draft !== serverText.get(block.id);
+        return textChanged || pendingLayoutPatch(block.id) != null;
+      })
+      .map((block) => block.id);
+  }, [jobId, pendingLayoutPatch, queryClient]);
+
+  const saveBlockForConfirm = useCallback(
+    async (blockId: number): Promise<TranslationSaveResult> => {
+      const latest = queryClient.getQueryData<ApiTextBlock[]>(pixlateKeys.n5Blocks(jobId))?.find((b) => b.id === blockId);
+      if (latest?.revision == null) return { started: false };
+      const draft = latestRef.current.translationDrafts.get(blockId);
+      const text = draft != null && draft.draft !== (latest.trans1 ?? '') ? draft.draft : null;
+      const layoutAdjust = pendingLayoutPatch(blockId);
+      if (layoutAdjust == null) {
+        setLayoutDirty(blockId, false); // 보낼 배치가 없다(서버 값과 같거나 렌더 대상 아님)
+        if (text == null) return { started: true, ok: true, revision: latest.revision, rerenderTaskId: null };
+        return saveTranslation(blockId, text);
+      }
+      if (!beginServerEdit()) return { started: false };
+      clearHistoryConflict(blockId);
+      try {
+        // 번역 초안과 배치를 한 요청으로 — revision 은 실행 시점 최신, 저장(revision +1)·재렌더도 한 번
+        const response = await patchBlock({
+          blockId,
+          payload: { trans1: text ?? latest.trans1 ?? '', revision: latest.revision, layoutAdjust },
+          idempotencyKey: createIdempotencyKey(),
+        });
+        const rerenderTaskId = getRerenderTaskId(response);
+        setRerenderTask(blockId, rerenderTaskId, text != null ? 'translation' : 'layout');
+        if (text != null) updateTranslationDraft(blockId, (prev) => resolveTranslationSaveSucceeded(prev, text));
+        setLayoutDirty(blockId, false);
+        return { started: true, ok: true, revision: response.block?.revision ?? null, rerenderTaskId };
+      } catch (err) {
+        // local 초안(번역문·배치)은 그대로 — 확정하지 않고 N5 에 남는다. 409 는 기존 충돌 표시로
+        if (text != null) updateTranslationDraft(blockId, resolveTranslationSaveFailed);
+        let conflict: ApiTextBlock | null = null;
+        if (err instanceof ApiRequestError && err.status === 409) {
+          const parsed = parseApiError(err.body);
+          conflict = parsed && isRevisionConflict(parsed) ? getRevisionConflictLatestBlock(parsed) : null;
+          if (conflict) setHistoryConflicts((conflicts) => new Map(conflicts).set(blockId, conflict!));
+        }
+        return { started: true, ok: false, conflict, error: err };
+      } finally {
+        endServerEdit();
+      }
+    },
+    [beginServerEdit, clearHistoryConflict, endServerEdit, jobId, patchBlock, pendingLayoutPatch, queryClient, saveTranslation, setLayoutDirty, setRerenderTask, updateTranslationDraft],
+  );
 
   const isIdle = session.inFlight === null && pendingEdits === 0;
   const hasPendingServerEdits = !isIdle;
@@ -854,6 +834,8 @@ export function useN5EditSession({
     commitTranslation,
     hasPendingServerEdits,
     isServerEditPending,
+    listUnsavedBlockIds,
+    saveBlockForConfirm,
     saveTranslation,
   };
 }

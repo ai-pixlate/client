@@ -1,7 +1,7 @@
 import { isApiMockingEnabled } from '../api/session.ts';
 
 /**
- * 인증 기능 gate. lib/n5/layout-adjust-capability.ts 와 같은 방식으로 Mock(MSW)에서 새 흐름을 켜고,
+ * 인증 기능 gate. Mock(MSW)에서 새 흐름을 켜고,
  * 실서버(API 모드)는 NEXT_PUBLIC_AUTH_MODE=session 을 명시해 빌드했을 때만 연다(미설정이면 dev-login). 판단은 이 파일 한 곳이다.
  * 기능 여부를 알아내려고 endpoint 를 시험 호출하지 않는다.
  */

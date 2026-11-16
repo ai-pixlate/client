@@ -1,4 +1,4 @@
-// N5 블록 배치 저장(layoutAdjust) 검증 — FE 요청 조립(lib/n5/layout-adjust.ts)·쓰기 허용(layout-adjust-capability.ts)·
+// N5 블록 배치 저장(layoutAdjust) 검증 — FE 요청 조립(lib/n5/layout-adjust.ts)·
 // 서버값 → 편집 기준(adapter getTranslatedBaseBox·getBaseFontScale)·Mock 서버 계약 동작(lib/mock-api/n5-layout-adjust.ts)
 // 실행: npm run verify:n5-layout-adjust
 
@@ -13,7 +13,6 @@ import {
   readStoredLayout,
   toLayoutBox,
 } from '../lib/n5/layout-adjust.ts';
-import { isLayoutAdjustWriteEnabled } from '../lib/n5/layout-adjust-capability.ts';
 import { createIdempotencyKey } from '../lib/api/idempotency.ts';
 import { getBaseFontScale, getTranslatedBaseBox, toBlockViewModel } from '../lib/n5/adapter.ts';
 import {
@@ -98,18 +97,6 @@ console.log('\n[렌더 대상] 라벨·로고·빈 원문·빈 번역문은 배�
   check('다른 INVALID_STATE 는 아님', !isNotRenderTargetError({ code: 'INVALID_STATE', details: { reason: 'job_not_editable' } }));
   check('범위: 경계 안(소수) 허용', isLayoutBoxInSection({ x: 0, y: 0, w: 1000, h: 700 }, { width: 1000, height: 700 }));
   check('범위: x+w 초과 거절(허용 오차 없음)', !isLayoutBoxInSection({ x: 900.5, y: 0, w: 100, h: 10 }, { width: 1000, height: 700 }));
-}
-
-console.log('\n[쓰기 허용] Mock 에서만 · 실서버(API 모드)는 차단');
-{
-  const prev = process.env.NEXT_PUBLIC_API_MOCKING;
-  process.env.NEXT_PUBLIC_API_MOCKING = 'enabled';
-  check('Mock → 허용', isLayoutAdjustWriteEnabled() === true);
-  process.env.NEXT_PUBLIC_API_MOCKING = 'disabled';
-  check('API 모드 → 차단', isLayoutAdjustWriteEnabled() === false);
-  delete process.env.NEXT_PUBLIC_API_MOCKING;
-  check('값 없음 → 차단', isLayoutAdjustWriteEnabled() === false);
-  if (prev !== undefined) process.env.NEXT_PUBLIC_API_MOCKING = prev;
 }
 
 console.log('\n[Mock 서버] 형식 · 병합 · 정규화');

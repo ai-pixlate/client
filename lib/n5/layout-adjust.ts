@@ -1,5 +1,5 @@
 /**
- * N5 블록 배치 저장(F-CFM-15, BlockPatch.layoutAdjust) — 계약 확정·서버 구현 대기.
+ * N5 블록 배치 저장(F-CFM-15, BlockPatch.layoutAdjust) — BE develop 구현 완료·dev 배포 확인 필요. [저장하러 가기]에서 저장한다.
  *
  * - 박스: 섹션 로컬 원본 px(N5 local bbox 와 같은 좌표계). 화면 px 로 바꾸지 않고 반올림·내림하지 않는다.
  * - 배율: 기준 글자 크기 대비 절대 배율(직전 배율에 곱하지 않는다). 1.0 은 서버가 null 로 정규화한다.
