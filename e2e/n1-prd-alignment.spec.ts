@@ -281,15 +281,21 @@ test.describe('N1 입력 전수 interaction', () => {
     await expect(page.getByRole('button', { name: '저자극 삭제' })).toBeVisible();
   });
 
-  test('국가·언어를 고르면 값이 보이고, 추천 언어 태그로도 언어를 고른다', async ({ page }) => {
+  test('국가를 고르면 기본 언어가 바로 선택되고, 언어는 다시 바꿀 수 있다', async ({ page }) => {
     const country = page.getByRole('combobox').nth(0);
     const language = page.getByRole('combobox').nth(1);
     await country.selectOption('US');
     await expect(country).toHaveValue('US');
-    await page.getByRole('button', { name: '영어', exact: true }).click();
     await expect(language).toHaveValue('en');
+    // 별도 추천 언어 버튼은 없다
+    await expect(page.getByRole('button', { name: '영어', exact: true })).toHaveCount(0);
     await language.selectOption('ja');
     await expect(language).toHaveValue('ja');
+    // 국가를 바꾸면 새 국가의 기본 언어로 다시 맞추고, 비우면 언어도 비운다
+    await country.selectOption('FR');
+    await expect(language).toHaveValue('fr');
+    await country.selectOption('');
+    await expect(language).toHaveValue('');
   });
 
   test('필수값을 하나씩 채우는 동안 [다음]은 닫혀 있다가 모두 채우면 열린다', async ({ page }) => {
@@ -397,8 +403,10 @@ test.describe('책임 동의 (F-ACC-04)', () => {
     const checkbox = page.getByRole('checkbox', { name: CONSENT });
     await expect(checkbox).toBeVisible();
     await expect(checkbox).not.toBeChecked();
+    await expect(checkbox).toHaveAttribute('aria-required', 'true');
+    await expect(page.getByTestId('n1-consent-required-mark')).toHaveAttribute('aria-hidden', 'true');
     await expect(page.getByTestId('n1-consent')).toHaveText(
-      '결과물에 쓰는 인증·시험 결과, 광고 문구, 인증 로고의 사용 권한과 그 책임이 사용자에게 있으며,' +
+      '*(필수) 결과물에 쓰는 인증·시험 결과, 광고 문구, 인증 로고의 사용 권한과 그 책임이 사용자에게 있으며,' +
         '규제·현지 검사 결과는 참고용 권고이며, 올린 이미지와 문구가 외부 AI 서비스로 전송됨을 확인했습니다.',
     );
     // 업로드 영역에는 같은 책임 문장을 따로 두지 않는다

@@ -54,17 +54,16 @@ const LANGUAGE_OPTIONS = [
 ];
 
 /**
- * 국가 → 추천 언어. N1 Figma 재정합(3단계) 조사 결과, 이 관계를 일반적으로
- * 정의한 매핑(맵/API)이 백엔드·설계 문서 어디에도 없다 — 오히려
- * docs/reference/pixate-frontend-data-spec.md는 "국가와 언어는 독립 축이며
- * 자유 조합을 허용한다"고 명시한다. 실제 데이터로 뒷받침되는 조합은
- * lib/mock-api/n5-fixtures.ts의 mockN5Job(targetCountry:'US',
- * targetLanguage:'en')과 Figma(525:3023)가 직접 보여준 "미국→영어" 하나뿐이라,
- * 그 조합만 담는다. JP→ja, CN→zh, DE→de, FR→fr 같은 나머지 조합은 실제
- * 데이터 근거가 없어 임의로 추가하지 않았다 — 관계가 정의되면 이 맵에 추가한다.
+ * 국가 → 기본 언어. 국가를 고르면 언어 select의 초기값으로 바로 넣는다(PM 확정, Figma 525:3023).
+ * 언어 선택을 제한하는 규칙이 아니다 — 국가와 언어는 독립 축이라 사용자가 select에서 다른 언어로 바꿀 수 있다.
+ * 국가를 다시 바꾸면 새 국가의 기본 언어로 다시 맞추고, 국가를 비우면 언어도 비운다.
  */
-const COUNTRY_RECOMMENDED_LANGUAGE: Partial<Record<string, string>> = {
+const COUNTRY_DEFAULT_LANGUAGE: Partial<Record<string, string>> = {
   US: 'en',
+  JP: 'ja',
+  CN: 'zh',
+  DE: 'de',
+  FR: 'fr',
 };
 
 // 규제 분류 — 미국 MVP 4종. 값은 OpenAPI RegulatoryClass enum 그대로 보내고, 라벨은 Figma(525:3023
@@ -645,9 +644,11 @@ function NewJobPageInner() {
     setTouched((prev) => (prev.regulatoryClass ? prev : { ...prev, regulatoryClass: true }));
   const regulatoryClassHelper = regulatoryClass ? REGULATORY_CLASS_HELPER[regulatoryClass] : undefined;
 
-  // PRD F-LNG-03 ⑧ — 국가를 바꾸면 규제 분류와 OTC 종류를 다시 고른다
+  // PRD F-LNG-03 ⑧ — 국가를 바꾸면 규제 분류와 OTC 종류를 다시 고른다.
+  // 언어는 새 국가의 기본 언어로 맞춘다(기본값이 없거나 국가를 비우면 빈 값).
   const handleCountryChange = (value: string) => {
     setTargetCountry(value);
+    setTargetLanguage(COUNTRY_DEFAULT_LANGUAGE[value] ?? '');
     setRegulatoryClass('');
     setOtcType(null);
   };
@@ -742,14 +743,6 @@ function NewJobPageInner() {
     if (draftJobId) void retryImage(draftJobId, localId);
   };
 
-  // 추천 태그는 targetLanguage(언어 select의 현재 선택값)가 아니라
-  // targetCountry에서만 파생된다 — 국가를 바꿔도 이미 고른 언어 값은
-  // 건드리지 않는다. 태그를 클릭했을 때만 setTargetLanguage가 호출된다.
-  const recommendedLanguageValue = COUNTRY_RECOMMENDED_LANGUAGE[targetCountry];
-  const recommendedLanguageOption = recommendedLanguageValue
-    ? (LANGUAGE_OPTIONS.find((o) => o.value === recommendedLanguageValue) ?? null)
-    : null;
-
   // ── 렌더링 ──────────────────────────────────────────────────────
 
   return (
@@ -801,20 +794,7 @@ function NewJobPageInner() {
 
             <div className="flex w-[385px] shrink-0 items-center gap-5">
               <p className="shrink-0 text-[12px] tracking-[-0.02em] text-[#707070]">언어선택</p>
-              {/* 추천 태그 — 국가 선택에서 파생되는 별도 표시값이다.
-                  targetLanguage(실제 선택값)를 그대로 되비추던 예전 로직과
-                  분리했다: 국가만 바꿔도 언어 select는 그대로 두고, 이 태그를
-                  "클릭"해야만 select 값이 바뀐다(N1 Figma 재정합 3단계). */}
-              {recommendedLanguageOption && (
-                <button
-                  type="button"
-                  onClick={() => setTargetLanguage(recommendedLanguageOption.value)}
-                  aria-pressed={targetLanguage === recommendedLanguageOption.value}
-                  className="flex h-7 w-[60px] shrink-0 items-center justify-center gap-1 rounded-[6px] border border-[#ff6a38] bg-white px-2 text-[12px] leading-[14px] text-[#ff6a38] transition-colors hover:bg-[#faf3ed]"
-                >
-                  {recommendedLanguageOption.label}
-                </button>
-              )}
+              {/* 국가 select와 같은 구조 — 국가를 고르면 기본 언어가 자동으로 들어가고, 여기서 다른 언어로 바꿀 수 있다 */}
               <div className="relative flex-1">
                 <select
                   value={targetLanguage}
@@ -1306,9 +1286,12 @@ function NewJobPageInner() {
             {/* 책임 동의 — PRD F-ACC-04, Figma Checkbox(1170:6002): 패널 아래 30 · [다음] 바로 위.
                 Checkbox / Compact(1063:5156) 18px 박스, Checked는 orange border + check. */}
             <label className="mt-[30px] flex shrink-0 cursor-pointer items-center gap-2" data-testid="n1-consent">
+              {/* 필수 * — Figma(525:3023): Checkbox x1344·y913, * x1363·y909(8×19). 체크박스 바로 오른쪽 위의 별도 표시다.
+                  별표는 시각 보조라 aria-hidden이고, 필수 여부는 input의 aria-required와 sr-only 문구로 전달한다. */}
               <span className="relative flex size-5 shrink-0 items-center justify-center">
                 <input
                   type="checkbox"
+                  aria-required="true"
                   checked={hasAcceptedResponsibility}
                   onChange={(e) => setHasAcceptedResponsibility(e.target.checked)}
                   className="peer size-[18px] cursor-pointer appearance-none rounded-[4px] border border-[#707070] bg-white outline-offset-2 checked:border-[#ff6a38] focus-visible:outline-2 focus-visible:outline-[#ff6a38]"
@@ -1316,8 +1299,16 @@ function NewJobPageInner() {
                 <span className="pointer-events-none absolute hidden peer-checked:block">
                   <CheckIcon />
                 </span>
+                <span
+                  aria-hidden="true"
+                  data-testid="n1-consent-required-mark"
+                  className="pointer-events-none absolute top-[-4px] left-[19px] h-[19px] w-2 text-[14px] leading-[19px] text-[#ff6a38]"
+                >
+                  *
+                </span>
               </span>
               <span className="text-[12px] leading-[normal] font-light tracking-[-0.04em] text-[#707070]">
+                <span className="sr-only">(필수) </span>
                 {RESPONSIBILITY_CONSENT_LINES[0]}
                 <br />
                 {RESPONSIBILITY_CONSENT_LINES[1]}
