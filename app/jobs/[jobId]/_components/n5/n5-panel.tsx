@@ -287,7 +287,14 @@ function TranslationEditor({
   const [saveConflict, setSaveConflict] = useState<ApiTextBlock | null>(null);
   const conflictLatest = saveConflict ?? editSession.historyConflicts.get(block.id) ?? null;
   const [saveError, setSaveError] = useState<string | null>(null);
+  // 편집 중인지(textarea 또는 이어서 누른 [확인]에 focus). 벗어난 뒤에도 dirty 면 「저장하지 않은 수정」을 보인다
+  const [isEditing, setIsEditing] = useState(false);
+  const saveButtonRef = useRef<HTMLButtonElement>(null);
 
+  // 상태를 셋으로 나눠 둔다(PM 확정):
+  // - draft(clean/dirty): 입력 즉시 바뀐다 — 왼쪽 미리보기도 같은 초안(editSession.translationDrafts)으로 바로 그린다
+  // - 검사 결과(넘침·잘림·금지 표현·verify signal): 마지막 서버 결과를 그대로 둔다. dirty 라고 숨기거나 지우지 않는다
+  // - 저장/재렌더(saving·rerendering·failed): [확인] → PATCH → 재렌더·재검사 → 새 서버 결과가 오면 그때 표시가 바뀐다
   const draft = draftEntry?.draft ?? syncedText;
   const isDirty = draft !== syncedText;
 
@@ -344,10 +351,12 @@ function TranslationEditor({
     : isRerendering
       ? null
       : taskFailures.previewFailure;
-  // 고치는 중이거나 재렌더 전이면 이전 넘침 판정을 새 결과처럼 보이지 않는다
-  // 넘침 정본은 최신 서버 결과(isCurrent=true)의 overflow 다. 최신이 아니면 내지 않는다. 이번 계약 키가 없는 응답만 기존 signal 을 쓴다
+  // 넘침 정본은 최신 서버 결과(isCurrent=true)의 overflow 다. 최신이 아니면 내지 않는다. 이번 계약 키가 없는 응답만 기존 signal 을 쓴다.
+  // 입력 중(dirty)에도 직전 서버 결과를 그대로 보인다 — FE 가 초안으로 넘침을 다시 계산하지 않는다(PM 확정).
   const serverOverflow = block.serverOverflow === 'legacy' ? hasWidthOverflowSignal(block.badges) : block.serverOverflow === true;
-  const showOverflow = serverOverflow && !isDirty && !isRerendering;
+  const showOverflow = serverOverflow && !isRerendering;
+  // 확인 없이 칸을 벗어난 미저장 초안. 저장 중·저장 실패(409/500)는 각자의 표시가 있어 함께 내지 않는다
+  const showUnsaved = isDirty && !isEditing && !isSaving && !saveError && !conflictLatest;
   const hasFailureMessage = translationFailure != null || taskFailures.verifyFailed || previewFailure != null || showOverflow;
 
   async function handleSave() {
@@ -413,7 +422,12 @@ function TranslationEditor({
           data-testid={`n5-block-editor-${block.id}`}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          onFocus={onSelect}
+          onFocus={() => {
+            setIsEditing(true);
+            onSelect();
+          }}
+          // 바로 [확인]을 누르는 경우는 벗어난 것으로 보지 않는다(저장 직전 깜빡임 방지)
+          onBlur={(e) => setIsEditing(e.relatedTarget != null && e.relatedTarget === saveButtonRef.current)}
           rows={3}
           placeholder={translationFailure ? '번역문을 직접 입력하세요' : undefined}
           // Figma 1069:10215 — 글 높이만큼 늘어나고 버튼까지 60을 띄운다. 미지원 브라우저는 rows 높이로 표시된다
@@ -429,9 +443,16 @@ function TranslationEditor({
         )}
         <div className="mt-[60px] flex items-center justify-end gap-2">
           {isRerendering && <span className="text-[11px] text-[#999]">재렌더링 중…</span>}
+          {showUnsaved && (
+            <span role="status" data-testid={`n5-block-unsaved-${block.id}`} className="text-[11px] text-[#999]">
+              저장하지 않은 수정
+            </span>
+          )}
           <button
+            ref={saveButtonRef}
             type="button"
             data-testid={`n5-block-save-${block.id}`}
+            onBlur={() => setIsEditing(false)}
             onClick={(e) => {
               e.stopPropagation();
               handleSave();
