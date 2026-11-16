@@ -473,6 +473,8 @@ const UNCONNECTED_BUTTONS = [
   { testId: 'm2-logo-change', text: '로고 변경', border: 'rgb(234, 234, 234)', color: 'rgb(23, 23, 23)' },
   { testId: 'm2-logo-delete-action', text: '삭제', border: 'rgb(229, 72, 77)', color: 'rgb(229, 72, 77)' },
 ];
+/** 눌러도 아무 일이 없는 버튼 — [새 브랜드 추가]는 신규 등록 화면으로 연결돼 빠진다(e2e/m2-brand-create.spec.ts) */
+const NO_ACTION_BUTTONS = UNCONNECTED_BUTTONS.filter(({ testId }) => testId !== 'm2-new-brand');
 
 test('왼쪽 폼은 스크롤막대가 보이지 않지만 휠과 키보드로 스크롤된다', async ({ page }) => {
   await page.setViewportSize({ width: 1728, height: 700 });
@@ -552,7 +554,7 @@ for (const mode of ['view', 'edit-dirty'] as const) {
       if (!/\/_next\/|\.(png|svg|jpg)$/.test(r.url())) requests.push(`${r.method()} ${r.url()}`);
     });
 
-    for (const { testId } of UNCONNECTED_BUTTONS) {
+    for (const { testId } of NO_ACTION_BUTTONS) {
       const button = page.getByTestId(testId);
       await expect(button).toHaveAttribute('aria-disabled', 'true');
       // aria-disabled 는 Playwright 가 비활성으로 봐서 force 로 실제 클릭을 보낸다
@@ -588,7 +590,7 @@ test('수정 모드로 바꿔도 헤더 버튼 위치가 그대로이고 숨은 
   await expect(page.getByTestId('m2-edit')).not.toBeFocused();
 });
 
-const FUTURE_BUTTONS = ['m2-new-brand', 'm2-delete-brand', 'm2-logo-change'];
+const FUTURE_BUTTONS = ['m2-delete-brand', 'm2-logo-change'];
 const tooltip = (page: Page) => page.getByRole('tooltip');
 
 const VIEWPORTS = [[1920, 1080], [1728, 885], [1512, 860], [1440, 900]] as const;

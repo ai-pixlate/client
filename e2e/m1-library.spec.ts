@@ -239,10 +239,11 @@ test('좌측 상단 뒤로가기 버튼은 보이지 않고 키보드 포커스�
   expect(visited).not.toContain('뒤로 가기');
 });
 
-test('이미지 추가 생성 카드 → N1(/jobs/new)', async ({ page }) => {
-  await expect(page.getByTestId('library-add-card-link')).toHaveAttribute('href', '/jobs/new');
+test('이미지 추가 생성 카드 → 브랜드 1개면 N1(/jobs/new?brandId=)', async ({ page }) => {
+  // brandId 는 GET /brands 로 정한다(Mock 브랜드 101). 0개·2개 이상은 e2e/m2-brand-create.spec.ts
+  await expect(page.getByTestId('library-add-card-link')).toHaveAttribute('href', '/jobs/new?brandId=101');
   await page.getByTestId('library-add-card-link').click();
-  await expect(page).toHaveURL(/\/jobs\/new$/);
+  await expect(page).toHaveURL(/\/jobs\/new\?brandId=101$/);
 });
 
 // ── 2차 정책(PM 확정): 로그인 후 M1 에서 다음 기능으로 진입하는 활성 액션은 "새 작업 → N1" 하나다.
@@ -252,7 +253,7 @@ const MUTATING = /^(POST|PUT|PATCH|DELETE)$/;
 test('2차 범위 — 다른 화면으로 가는 링크는 새 작업(N1) 하나이고, 후속 범위 버튼은 비활성이다', async ({ page }) => {
   const main = page.locator('main');
   await expect(main.locator('a')).toHaveCount(1);
-  await expect(main.locator('a').first()).toHaveAttribute('href', '/jobs/new');
+  await expect(main.locator('a').first()).toHaveAttribute('href', '/jobs/new?brandId=101');
   await expect(main.locator('a[href="#"], [role="link"]:not(a)')).toHaveCount(0);
 
   // 후속 범위 — 삭제·다른 버전 만들기는 native disabled, 뒤로가기는 렌더하지 않는다
@@ -300,10 +301,10 @@ test('2차 범위 — 새 작업은 기존 N1 경로로 가고, 브랜드·작�
     if (MUTATING.test(r.method())) writes.push(`${r.method()} ${new URL(r.url()).pathname}`);
   });
   await page.getByTestId('library-add-card-link').click();
-  await expect(page).toHaveURL(/\/jobs\/new$/);
+  await expect(page).toHaveURL(/\/jobs\/new\?brandId=101$/);
   await expect(page.getByRole('heading', { name: '이미지 입력' })).toBeVisible();
-  // 쿼리 없이 들어오며, FE 가 임의 brandId 를 붙이거나 브랜드·작업을 만들지 않는다
-  expect(new URL(page.url()).search).toBe('');
+  // brandId 는 GET /brands 응답(브랜드 1개)의 id 다 — FE 가 임의 값을 만들지 않고, 브랜드·작업을 자동으로 만들지 않는다
+  expect(new URL(page.url()).searchParams.get('brandId')).toBe('101');
   await page.waitForTimeout(500);
   expect(writes).toEqual([]);
 });

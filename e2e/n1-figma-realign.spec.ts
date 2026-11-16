@@ -376,7 +376,7 @@ test.describe('사이즈 선택 — Figma 1093:10288', () => {
   });
 });
 
-test.describe('[다음] — brandId 쿼리 없는 Mock 진입', () => {
+test.describe('[다음] — 보관함에서 진입(brandId 는 GET /brands 로 정함)', () => {
   test('보관함 → 이미지 생성 → 필수값 입력 → [다음] 활성 → POST /jobs 1회 → N2 이동', async ({ page }) => {
     const posts: string[] = [];
     await page.exposeFunction('__n1Post', (body: string) => {
@@ -394,7 +394,7 @@ test.describe('[다음] — brandId 쿼리 없는 Mock 진입', () => {
     });
     await page.goto('/');
     await page.getByTestId('library-add-card-link').click();
-    await expect(page).toHaveURL(/\/jobs\/new$/);
+    await expect(page).toHaveURL(/\/jobs\/new\?brandId=101$/);
     await expect(page.getByTestId('n1-brand-missing')).toHaveCount(0);
     await expect(nextButton(page)).toBeDisabled();
     await fillRequired(page);
@@ -402,6 +402,7 @@ test.describe('[다음] — brandId 쿼리 없는 Mock 진입', () => {
     await nextButton(page).dblclick();
     await expect(page).toHaveURL(/\/jobs\/1$/, { timeout: 30_000 });
     expect(posts).toHaveLength(1);
+    expect(JSON.parse(posts[0])).toEqual({ brandId: 101 });
   });
 
   for (const [width, height] of [[1920, 1080], [1728, 885], [1440, 900]] as const) {

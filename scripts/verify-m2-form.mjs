@@ -19,7 +19,10 @@ import {
 import {
   planM2LogoChanges,
   reconcileM2AfterSave,
+  M2_EMPTY_FORM,
   resolveM2BrandTarget,
+  resolveNewJobEntry,
+  toM2BrandCreate,
   toM2BrandFormValue,
   toM2BrandUpdate,
   toM2Logos,
@@ -180,6 +183,24 @@ test('브랜드 선택: ?brandId 우선 · 하나면 그것 · 없거나 여럿�
   assert.deepEqual(resolveM2BrandTarget(null, [brandDto]), { kind: 'id', brandId: 7 });
   assert.deepEqual(resolveM2BrandTarget(null, []), { kind: 'none' });
   assert.deepEqual(resolveM2BrandTarget(null, [brandDto, { ...brandDto, id: 8 }]), { kind: 'ambiguous', count: 2 });
+});
+
+test('신규 등록 본문: 앞뒤 공백 제거 · 빈 개요·고객층은 null · 로고는 본문에 없다', () => {
+  assert.deepEqual(toM2BrandCreate({ ...M2_EMPTY_FORM, nameKo: '  새 브랜드 ', nameEn: ' New ', overview: '   ', targetCustomer: '' }), {
+    nameKo: '새 브랜드',
+    nameEn: 'New',
+    overview: null,
+    targetCustomer: null,
+  });
+  const withLogo = toM2BrandCreate({ ...base, overview: ' 톤 ' });
+  assert.equal(withLogo.overview, '톤');
+  assert.equal('logos' in withLogo, false);
+});
+
+test('M1 이미지 추가 생성: 0개 등록 · 1개 N1?brandId · 2개 이상 고르지 않는다', () => {
+  assert.deepEqual(resolveNewJobEntry([]), { kind: 'create', href: '/brand?mode=create&next=n1' });
+  assert.deepEqual(resolveNewJobEntry([brandDto]), { kind: 'n1', href: '/jobs/new?brandId=7' });
+  assert.deepEqual(resolveNewJobEntry([brandDto, { ...brandDto, id: 8 }]), { kind: 'choose', href: '/brand' });
 });
 
 console.log(`\nverify-m2-form: ${pass}건 통과`);

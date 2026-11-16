@@ -64,7 +64,6 @@ test('?brandId 가 있으면 목록을 부르지 않고 그 브랜드를 받는�
 for (const { query, state, text } of [
   { query: '?mockScenario=m2-not-found', state: 'not-found', text: '브랜드를 찾을 수 없습니다.' },
   { query: '?brandId=999', state: 'not-found', text: '브랜드를 찾을 수 없습니다.' },
-  { query: '?mockScenario=m2-no-brand', state: 'none', text: '등록된 브랜드가 없습니다.' },
   { query: '?mockScenario=m2-multi-brand', state: 'ambiguous', text: '표시할 브랜드를 하나로 정할 수 없습니다.' },
 ]) {
   test(`조회 ${query} → ${state}`, async ({ page }) => {
@@ -194,10 +193,17 @@ test('로고 삭제 실패 — 서버 로고는 그대로이고, 취소하면 �
   await expect(page.getByRole('img', { name: '브랜드 로고 2' })).toBeVisible();
 });
 
-test('범위 유지 — 로고 변경·새 브랜드 추가·브랜드 삭제는 요청 없는 후속 버튼이다', async ({ page }) => {
+test('브랜드 0개 — 안내에서 멈추지 않고 등록 화면을 보인다(등록 흐름은 e2e/m2-brand-create.spec.ts)', async ({ page }) => {
+  await open(page, '?mockScenario=m2-no-brand');
+  await expect(status(page)).toHaveAttribute('data-m2-status', 'create');
+  await expect(page.getByTestId('m2-create')).toHaveText('브랜드 등록');
+});
+
+test('범위 유지 — 로고 변경·브랜드 삭제는 요청 없는 후속 버튼이다', async ({ page }) => {
   const requests = recordBrandRequests(page);
   await openLoaded(page);
-  for (const testId of ['m2-logo-change', 'm2-new-brand', 'm2-delete-brand']) {
+  await expect(page.getByTestId('m2-new-brand')).not.toHaveAttribute('aria-disabled', 'true');
+  for (const testId of ['m2-logo-change', 'm2-delete-brand']) {
     await expect(page.getByTestId(testId)).toHaveAttribute('aria-disabled', 'true');
     await page.getByTestId(testId).click({ force: true });
   }
