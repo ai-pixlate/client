@@ -108,7 +108,8 @@ test('오류 종합 — section·signal·번역문 칸 실패가 함께 보이�
   const overlay = (await page.getByTestId('n5-block-overlay-9102').boundingBox())!;
   expect(Math.round(overlay.y - slice.y)).toBe(80); // bbox.y 200 × scale 0.4
   const nw = (await page.getByTestId('n5-block-handle-nw').boundingBox())!;
-  expect(Math.abs(nw.y + nw.height / 2 - overlay.y)).toBeLessThanOrEqual(1);
+  // 선택 테두리·손잡이는 글자 밖 12px(Figma 544:3168)
+  expect(Math.abs(nw.y + nw.height / 2 - (overlay.y - 12))).toBeLessThanOrEqual(1);
   await page.screenshot({ path: test.info().outputPath('n5-errors-canvas.png') });
 
   // 재시도 — N5 호출 계약이 확인되기 전이라 버튼은 비활성이고 요청을 보내지 않는다
@@ -123,9 +124,20 @@ test('오류 종합 — section·signal·번역문 칸 실패가 함께 보이�
   await expect(failed.getByTestId('n5-cell-failure-translate')).toBeVisible();
   expect(posts).toEqual([]);
 
-  // 넘침 안내는 고치는 동안 이전 판정을 보이지 않는다
-  await page.getByTestId('n5-block-editor-9103').fill('Short');
-  await expect(preview.getByTestId('n5-cell-failure-overflow')).toHaveCount(0);
+  // 입력 중에도 넘침 안내는 직전 서버 결과를 유지한다([확인] 뒤 새 결과가 와야 바뀐다 — PM 확정)
+  const editor = page.getByTestId('n5-block-editor-9103');
+  const original = await editor.inputValue();
+  await editor.fill('Short');
+  await expect(preview.getByTestId('n5-cell-failure-overflow')).toBeVisible();
+  // 입력하는 동안은 「저장하지 않은 수정」이 없고, 확인 없이 칸을 벗어나면 보인다(초안은 그대로)
+  await expect(page.getByTestId('n5-block-unsaved-9103')).toHaveCount(0);
+  await editor.blur();
+  await expect(page.getByTestId('n5-block-unsaved-9103')).toHaveText('저장하지 않은 수정');
+  await expect(editor).toHaveValue('Short');
+  // 서버값으로 되돌리면 dirty 가 풀려 사라진다
+  await editor.fill(original);
+  await editor.blur();
+  await expect(page.getByTestId('n5-block-unsaved-9103')).toHaveCount(0);
 });
 
 test('기본 화면 — signal 사유가 바로 읽히고 하단 중앙 도구가 없다', async ({ page }) => {
