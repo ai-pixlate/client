@@ -11,6 +11,7 @@ import type { SectionInputSync } from '@/lib/n5/adapter';
 import { resolvePreviewSectionDisplay, type PreviewSectionDisplaySource } from '@/lib/n5/preview-state';
 import type { TypesetFontGate } from './use-typeset-font-gate';
 import { computeBlockOverlaps, type BlockOverlap } from '@/lib/n5/overlap';
+import { JobMetaTags } from '../job-meta-tags';
 import type { BlockViewModel, JobMetaViewModel, PreviewSectionViewModel, PreviewViewModel, SectionStatusViewModel } from '@/lib/n5/adapter';
 import type { BoundingBox } from '@/lib/api/types';
 import { N5_SAVE_NOTICE_MESSAGES } from '@/lib/n5/messages';
@@ -1092,29 +1093,6 @@ function CanvasScrollIndicator({
   );
 }
 
-/** workspace 좌상단 정보(Figma 「N3 섹션 상단」 1507:21672, x152 y46). 실제 값이 있는 항목만 그린다 */
-function JobMetaTags({ meta }: { meta: JobMetaViewModel }) {
-  const tags = [meta.regulatoryClassLabel, meta.categoryLabel].filter((label): label is string => !!label);
-  if (!meta.countryLabel && tags.length === 0) return null;
-  return (
-    <div data-testid="n5-job-meta" className="pointer-events-none absolute top-[46px] left-8 z-10 flex items-center gap-3">
-      {meta.countryLabel && <p className="text-[12px] leading-[normal] tracking-[-0.02em] whitespace-nowrap text-black">{meta.countryLabel}</p>}
-      {tags.length > 0 && (
-        <div className="flex items-center gap-0.5">
-          {tags.map((label) => (
-            <span
-              key={label}
-              className="flex h-7 items-center justify-center rounded-[6px] border border-[#eaeaea] bg-white px-2 text-[12px] leading-[14px] whitespace-nowrap text-[#171717]"
-            >
-              {label}
-            </span>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function readPadding(el: HTMLElement) {
   const style = getComputedStyle(el);
   return {
@@ -1824,7 +1802,8 @@ export function N5Viewport({
               버튼이 있는 두 컴포넌트 루트에만 pointer-events-auto를 다시
               켜서(n5-toolbar.tsx), 빈 영역은 클릭이 아래 canvas로 그대로
               통과하게 한다. */}
-          <JobMetaTags meta={jobMeta} />
+          {/* workspace 좌상단 정보(Figma 「N3 섹션 상단」 1507:21672, x152 y46) */}
+          <JobMetaTags meta={jobMeta} testId="n5-job-meta" className="pointer-events-none absolute top-[46px] left-8 z-10" />
           {isSnapDebug && <SnapDebugHud values={snapDebug} />}
           {isTypesetQa && viewMode === 'translated' && (
             <div

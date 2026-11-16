@@ -4,8 +4,13 @@ import { useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { ApiRequestError } from '@/lib/api/pixlate';
+import { REGULATORY_CLASS_LABELS } from '@/lib/job/regulatory-class-labels';
+import { toJobMetaViewModel } from '@/lib/n5/adapter';
 import {
   pixlateKeys,
+  useJobQuery,
+  useMasterCategoriesQuery,
+  useMasterCountriesQuery,
   useSectionDetailQuery,
   useSectionsQuery,
   useSourceImagesQuery,
@@ -23,6 +28,7 @@ import {
   N3_WORK_AREA_INSET,
   N3_WORK_AREA_MAX_WIDTH,
 } from '@/lib/n3/layout';
+import { JobMetaTags } from '../job-meta-tags';
 import { DetailPanel } from './detail-panel';
 import { SectionCropThumbnail } from './section-crop-thumbnail';
 import { SectionListCard } from './section-list-card';
@@ -108,6 +114,13 @@ export function N3View({ jobId }: { jobId: string }) {
   const sourceImagesQuery = useSourceImagesQuery(jobId);
   const mutation = useUpdateSectionBucketMutation(jobId);
   const proceedMutation = useSectionProceedMutation(jobId);
+  // 목록 위 작업 조건(Figma 「N3 섹션 상단」) — N5 와 같은 데이터·표시. 받지 못한 항목은 비워 둔다(N3 진행은 막지 않는다)
+  const jobQuery = useJobQuery(jobId);
+  const countriesQuery = useMasterCountriesQuery();
+  const categoriesQuery = useMasterCategoriesQuery();
+  const jobMeta = jobQuery.data
+    ? toJobMetaViewModel(jobQuery.data, countriesQuery.data ?? [], categoriesQuery.data ?? [], REGULATORY_CLASS_LABELS)
+    : null;
 
   const [selectedSectionId, setSelectedSectionId] = useState<number | null>(null);
   const [proceedError, setProceedError] = useState<string | null>(null);
@@ -231,6 +244,8 @@ export function N3View({ jobId }: { jobId: string }) {
                   data-testid="n3-section-list"
                   className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto rounded-[4px] bg-[#f5f5f5] p-7"
                 >
+                  {/* Figma 1759:11536 — 패널 안 28·28, 높이 28, 아래 12 뒤 첫 카드(y68) */}
+                  {jobMeta && <JobMetaTags meta={jobMeta} testId="n3-job-meta" className="h-7 shrink-0" />}
                   {sections.map((section) => (
                     <SectionListCard
                       key={section.id}
