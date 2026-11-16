@@ -55,6 +55,7 @@ function retryTasksQuery(failureCount: number, error: unknown): boolean {
   return shouldRetryQuery(failureCount, error);
 }
 import type { ApiSection } from '@/lib/api/n3-schema';
+import { selectN6RenderTask } from './n6-render-task';
 
 // ─────────────────────────────────────────────
 // Query Keys
@@ -161,29 +162,22 @@ export function useAnalyzeJobMutation() {
 //
 // 폴링 주기 2초(계약 그대로). currentStep이 N2·N4(진행 중 단계)면 무조건
 // polling한다 — N1/N3/N5는 사용자 조작을 기다리는 정적 단계라 계속 찔러볼
-// 필요가 없다. N6은 그 자체는 정적 단계지만, confirm이 자동 등록한 job 단위
-// render task(taskType=render, unitType이 'text_block'이 아닌 것 — N5의 블록별
-// 재렌더 task와 구분)가 아직 진행 중일 때만 계속 polling한다. currentStep이
+// 필요가 없다. N6은 그 자체는 정적 단계지만, confirm이 자동 등록한 현재 최종
+// render task(n6-render-task.ts selectN6RenderTask)가 진행 중이거나 아직 1건으로
+// 관측되지 않았을 때만 계속 polling한다. currentStep이
 // 바뀌면(N2→N3, N4→N5) page.tsx가 그 값을 보고 다음 화면을 그대로 렌더한다 —
 // FE가 별도로 "다음 단계 진입"을 계산하지 않는다(userFacingStatus/currentStep은
 // 서버 응답 그대로 쓴다).
 // ─────────────────────────────────────────────
 
-/**
- * N6 최종 렌더 task — taskType=render 중 N5 블록 재렌더(text_block)·섹션 렌더(section)가 아닌 항목.
- * 계약(JOB-05 items)에 「현재/최신」 표시가 없어 여러 시도가 함께 오면: 진행 중(pending·running) 시도가 있으면 그것(새 렌더가 끝나기 전에
- * 이전 done 을 완료로 보지 않는다), 없으면 taskId(시도 id)가 가장 큰 시도. taskId 증가 순서는 BE 확인 대상이다.
- */
-export function selectN6RenderTask(items: ApiJobTaskStatus['items']): NonNullable<ApiJobTaskStatus['items']>[number] | undefined {
-  const candidates = (items ?? []).filter((item) => item.taskType === 'render' && item.unitType !== 'text_block' && item.unitType !== 'section');
-  const active = candidates.find((item) => item.status === 'pending' || item.status === 'running');
-  if (active) return active;
-  return candidates.reduce<(typeof candidates)[number] | undefined>((latest, item) => (latest == null || (item.taskId ?? -1) > (latest.taskId ?? -1) ? item : latest), undefined);
-}
+export { selectN6RenderTask, type N6RenderTaskSelection } from './n6-render-task';
 
-function hasActiveN6RenderTask(data: ApiJobTaskStatus): boolean {
-  const item = selectN6RenderTask(data.items);
-  return item?.status === 'pending' || item?.status === 'running';
+/** N6 에서 /tasks 를 계속 다시 물어야 하는가 — 현재 최종 렌더가 진행 중이거나, 아직 1건으로 관측되지 않았을 때 */
+function shouldPollN6Tasks(data: ApiJobTaskStatus, jobId: string): boolean {
+  const selection = selectN6RenderTask(data, jobId);
+  if (selection.kind === 'single') return selection.task.status === 'pending' || selection.task.status === 'running';
+  // none(아직 관측 전)·ambiguous(invariant 위반) — 다른 task 로 대신하지 않고 다음 응답을 기다린다
+  return selection.kind === 'none' || selection.kind === 'ambiguous';
 }
 
 export function useJobTasksQuery(jobId: string, options: { polling?: boolean } = {}) {
@@ -203,7 +197,7 @@ export function useJobTasksQuery(jobId: string, options: { polling?: boolean } =
           // N2·N4 전체 실패(jobStatus=failed)는 종료 상태라 폴링을 멈춘다
           if ((data.currentStep === 'N2' || data.currentStep === 'N4') && data.jobStatus === 'failed') return false;
           if (data.currentStep === 'N2' || data.currentStep === 'N4') return 2_000;
-          if (data.currentStep === 'N6') return hasActiveN6RenderTask(data) ? 2_000 : false;
+          if (data.currentStep === 'N6') return shouldPollN6Tasks(data, jobId) ? 2_000 : false;
           return false;
         }
       : false,

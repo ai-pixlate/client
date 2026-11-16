@@ -933,11 +933,14 @@ export function N6ResultView({ jobId }: { jobId: string }) {
   const tasksQuery = useJobTasksQuery(jobId, { polling: true });
   const renderMutation = useN6RenderMutation(jobId);
 
-  // 여러 렌더 시도가 함께 오면 진행 중 시도 > 가장 최근 시도(lib/queries/pixlate.ts selectN6RenderTask)
-  const renderItem = selectN6RenderTask(tasksQuery.data?.items);
+  // 현재 최종 렌더 = N6 · render · job · 현재 jobId 1건(lib/queries/n6-render-task.ts). taskId·status 로 최신을 추정하지 않는다
+  const renderSelection = selectN6RenderTask(tasksQuery.data, jobId);
+  const renderItem = renderSelection.kind === 'single' ? renderSelection.task : undefined;
+  // 후보 2건 이상 — 서버 응답 invariant 위반. 어느 것도 골라 진행하지 않고 다음 응답을 기다린다
+  const renderAmbiguous = renderSelection.kind === 'ambiguous';
   const renderFailed = renderItem?.status === 'failed';
   const renderDone = renderItem?.status === 'done';
-  const isRenderRunning = !tasksQuery.isLoading && !tasksQuery.isError && !renderDone && !renderFailed;
+  const isRenderRunning = !tasksQuery.isLoading && !tasksQuery.isError && !renderAmbiguous && !renderDone && !renderFailed;
   // 모달을 닫아도 렌더는 계속된다. 다시 렌더링을 누르면 새 진행이라 다시 보인다
   const [isRenderDialogClosed, setIsRenderDialogClosed] = useState(false);
   const closeRenderDialog = useCallback(() => setIsRenderDialogClosed(true), []);
@@ -945,10 +948,11 @@ export function N6ResultView({ jobId }: { jobId: string }) {
 
   useEffect(() => {
     if (!tasksQuery.data) return; // 첫 응답 대기 중
+    if (renderSelection.kind === 'not-n6' || renderAmbiguous) return; // 최종 렌더를 확정할 수 없는 응답 — render 를 새로 요청하지 않는다
     if (renderItem && !renderFailed) return; // 이미 진행 중이거나 완료 — 재호출하지 않는다
     if (renderMutation.isPending || renderMutation.isSuccess) return; // 중복 트리거 방지
     renderMutation.mutate();
-  }, [tasksQuery.data, renderItem, renderFailed, renderMutation]);
+  }, [tasksQuery.data, renderSelection.kind, renderAmbiguous, renderItem, renderFailed, renderMutation]);
 
   // render가 끝나야만 의미 있는 조회다(렌더 전 deliverables는 항상 빈 목록) —
   // validation은 계약대로 계속 불러오지만(아래 body 참고), 화면에는 쓰지 않는다.
@@ -969,6 +973,12 @@ export function N6ResultView({ jobId }: { jobId: string }) {
         <p className="text-[14px] text-red-500">
           {tasksQuery.error instanceof Error ? tasksQuery.error.message : '오류가 발생했습니다.'}
         </p>
+      </div>
+    );
+  } else if (renderAmbiguous) {
+    body = (
+      <div className="flex flex-1 items-center justify-center" data-testid="n6-render-ambiguous">
+        <p className="text-[14px] text-red-500">최종 렌더 상태를 확인하지 못했습니다. 잠시 후 다시 확인합니다.</p>
       </div>
     );
   } else if (renderFailed) {
