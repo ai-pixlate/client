@@ -1,7 +1,6 @@
 import { type Page, expect, test } from '@playwright/test';
 
 import { reachN5 } from './helpers/reach-n5';
-import { useLocalLayoutEditing } from './helpers/layout-write';
 import { getFontScaleToolbarLeft } from '@/lib/n5/coordinates';
 
 // ─────────────────────────────────────────────────────────────────
@@ -73,7 +72,6 @@ test('툴바 가로 위치 — 평소 테두리 왼쪽 +4, workspace 오른쪽 �
 
 test.describe('선택 UI', () => {
   test.beforeEach(async ({ page }) => {
-    await useLocalLayoutEditing(page);
     await reachN5(page);
     await expect(page.getByTestId('n5-viewport')).toBeVisible();
   });

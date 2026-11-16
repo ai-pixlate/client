@@ -1,7 +1,6 @@
 import { expect, test } from '@playwright/test';
 
 import { reachN5 } from './helpers/reach-n5';
-import { useLocalLayoutEditing } from './helpers/layout-write';
 
 // ─────────────────────────────────────────────────────────────────
 // N5 오류 표시(Figma 388:3814) — lib/mock-api/n5-error-fixtures.ts 시나리오로 확인한다. 기본 fixture는 그대로다.
@@ -10,10 +9,7 @@ import { useLocalLayoutEditing } from './helpers/layout-write';
 
 test.use({ viewport: { width: 1920, height: 1080 } });
 
-// 박스·배율은 세션 local 편집만 본다 — Mock 에서도 layoutAdjust 쓰기를 끈다(실서버 쓰기 차단과 같은 동작). 저장 흐름은 n5-layout-adjust.spec.ts
-test.beforeEach(async ({ page }) => {
-  await useLocalLayoutEditing(page);
-});
+// 박스·배율 조작은 N5 에서 local 초안만 바꾼다(PATCH 없음) — 이 spec 은 화면 계산만 본다. [저장하러 가기]의 저장 흐름은 n5-layout-adjust.spec.ts
 
 test('오류 종합 — section·signal·번역문 칸 실패가 함께 보이고 패널 구조가 유지된다', async ({ page }) => {
   await reachN5(page, { mockScenario: 'n5-errors' });

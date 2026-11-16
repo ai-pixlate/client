@@ -2,7 +2,6 @@ import { type Page, expect, test } from '@playwright/test';
 
 import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 import { reachN5 } from './helpers/reach-n5';
-import { useLocalLayoutEditing } from './helpers/layout-write';
 
 // ─────────────────────────────────────────────────────────────────
 // N5 Auto Height(Figma Text의 Auto height)와 Mock 조판 미리보기(?qaTypeset=1).
@@ -13,10 +12,7 @@ import { useLocalLayoutEditing } from './helpers/layout-write';
 test.skip(({ browserName }) => browserName !== 'chromium', '조판 검증은 Chromium 기준이다');
 test.use({ viewport: { width: 1920, height: 1080 } });
 
-// 박스·배율은 세션 local 편집만 본다 — Mock 에서도 layoutAdjust 쓰기를 끈다(실서버 쓰기 차단과 같은 동작). 저장 흐름은 n5-layout-adjust.spec.ts
-test.beforeEach(async ({ page }) => {
-  await useLocalLayoutEditing(page);
-});
+// 박스·배율 조작은 N5 에서 local 초안만 바꾼다(PATCH 없음) — 이 spec 은 화면 계산만 본다. [저장하러 가기]의 저장 흐름은 n5-layout-adjust.spec.ts
 
 const QA_URL = `/jobs/${MOCK_JOB_ID}?qaTypeset=1`;
 const BLOCK = 9102; // 501 body, 폭 900 × 높이 200
@@ -225,7 +221,7 @@ test.describe('Auto Height', () => {
     await redo.click();
     sameBox(await boxOf(page), tall);
     await expect(selection).toHaveAttribute('data-manual-height', 'true');
-    expect(writes).toEqual([]); // 이 화면은 배치 쓰기 꺼짐(local 편집) — 서버 요청 없음
+    expect(writes).toEqual([]); // 배치 조작은 local 초안만 바꾼다 — [저장하러 가기] 전에는 서버 요청 없음
   });
 
   test('글자 크기 — 같은 폭에서 다시 줄바꿈한 높이가 되고, Undo 로 박스와 배율이 함께 돌아간다', async ({ page }) => {

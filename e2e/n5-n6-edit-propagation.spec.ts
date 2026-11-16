@@ -211,3 +211,198 @@ test('H. N6 결과는 이번 확정이 등록한 최종 렌더의 산출물이�
   expect(texts).toContain(`"renderTaskId":${finalRender[0].taskId}`);
   expect(texts).not.toContain('/mock/n5/sections/501-translated.png');
 });
+
+// ─────────────────────────────────────────────────────────────────
+// 박스 위치·크기·글자 배율(layoutAdjust) → N6.
+// 배치 조작은 N5 에서 local 초안만 바꾼다(PATCH·재렌더 task 없음). [저장하러 가기]가 배치 미저장 블록을 같은 PATCH 경로로 저장하고
+// (실 API·Mock 동일), 모든 PATCH 성공 응답 뒤에만 confirm 한다. Mock 최종 렌더 snapshot 은 confirm 시점 서버 block 의 layoutAdjust 를
+// 담는다(BE final manifest 의 box·font_scale 과 같은 의미 — server tests/test_block_layout_adjust.py).
+// N6 데이터 정확성의 기준은 「PATCH 응답 완료 → confirm」이다. 「재렌더 done → confirm」은 최신 미리보기를 보고 확정하게 하는
+// 현재 UX 장벽(서버 필수 조건 아님)이라 따로 본다.
+// ─────────────────────────────────────────────────────────────────
+
+type LayoutAdjust = { box: { x: number; y: number; w: number; h: number } | null; fontScale: number | null } | null;
+type SnapshotBlock = { blockId: number; trans1: string; revision: number | null; layoutAdjust: LayoutAdjust };
+
+/** N6 결과 이미지(SVG <desc> JSON)에 담긴 최종 렌더 입력 block */
+async function n6RenderInput(page: Page, blockId: number): Promise<SnapshotBlock> {
+  const texts = await n6ResultTexts(page);
+  const blocks = [...texts.matchAll(/<desc>([\s\S]*?)<\/desc>/g)].flatMap((m) => (JSON.parse(m[1]) as { blocks: SnapshotBlock[] }).blocks);
+  const found = blocks.find((b) => b.blockId === blockId);
+  expect(found, `N6 최종 렌더 입력에 block ${blockId} 가 있다`).toBeTruthy();
+  return found!;
+}
+
+type SavedPatch = { blockId: number; body: { trans1: string; revision: number; layoutAdjust?: LayoutAdjust }; doneAt: number; status: number; responseBlock: { layoutAdjust: LayoutAdjust; revision: number } | null };
+
+/** block PATCH 의 본문·응답 완료 순번, confirm 요청 순번(같은 시계) */
+function recordSaves(page: Page) {
+  const patches: SavedPatch[] = [];
+  const confirms: number[] = [];
+  let clock = 0;
+  page.on('request', (req) => {
+    if (req.method() === 'POST' && new URL(req.url()).pathname === `/jobs/${MOCK_JOB_ID}/confirm`) confirms.push(++clock);
+  });
+  page.on('requestfinished', async (req) => {
+    const match = new URL(req.url()).pathname.match(/\/blocks\/(\d+)$/);
+    if (req.method() !== 'PATCH' || !match) return;
+    const doneAt = ++clock;
+    const res = await req.response();
+    const json = (await res?.json().catch(() => null)) as { block?: { layoutAdjust: LayoutAdjust; revision: number } } | null;
+    patches.push({ blockId: Number(match[1]), body: req.postDataJSON(), doneAt, status: res?.status() ?? 0, responseBlock: json?.block ?? null });
+  });
+  return { patches, confirms };
+}
+
+const overlay = (page: Page, id: number) => page.getByTestId(`n5-block-overlay-${id}`);
+async function dragBy(page: Page, x: number, y: number, dx: number, dy: number) {
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  for (const t of [1 / 3, 2 / 3, 1]) await page.mouse.move(x + dx * t, y + dy * t, { steps: 3 });
+  await page.mouse.up();
+}
+async function selectBlock(page: Page, id: number) {
+  await page.getByTestId(`n5-block-pin-${id}`).click();
+  await expect(page.getByTestId('n5-block-selection')).toBeVisible();
+}
+/** local 조작이 이력에 들어갈 때까지 */
+const layoutSettled = (page: Page) => expect(page.getByTestId('n5-undo')).toBeEnabled();
+async function moveBox(page: Page, id: number) {
+  await selectBlock(page, id);
+  const b = (await overlay(page, id).boundingBox())!;
+  await dragBy(page, b.x + b.width * 0.4, b.y + b.height * 0.6, 30, 20);
+  await layoutSettled(page);
+}
+async function resizeBox(page: Page, id: number) {
+  await selectBlock(page, id);
+  const h = (await page.getByTestId('n5-block-handle-e').boundingBox())!;
+  await dragBy(page, h.x + h.width / 2 + 6.5, h.y + h.height / 2, -80, 0);
+  await layoutSettled(page);
+}
+async function bumpFontScale(page: Page, id: number) {
+  await selectBlock(page, id);
+  await page.getByTestId('n5-font-scale-increase').click();
+  await expect(overlay(page, id)).toHaveAttribute('data-font-scale', '1.05');
+  await layoutSettled(page);
+}
+
+const LAYOUT_BLOCK = 9112;
+const layoutPatchesOf = (list: SavedPatch[]) => list.filter((p) => p.blockId === LAYOUT_BLOCK && p.body.layoutAdjust !== undefined);
+/** 조작 직후 — 서버 저장도, 번역문 칸 「재렌더링 중…」도 없다 */
+async function expectNoSaveYet(page: Page, saves: ReturnType<typeof recordSaves>) {
+  await page.waitForTimeout(500);
+  expect(saves.patches).toEqual([]);
+  await expect(page.getByText('재렌더링 중…')).toHaveCount(0);
+}
+
+test.describe('배치(layoutAdjust) → N6', () => {
+  test('B. 박스 위치만 — 조작 직후 PATCH 0 → [저장하러 가기]에서 layoutAdjust.box PATCH → 응답 뒤 confirm → N6 최종 입력에 이동한 box', async ({ page }) => {
+    const saves = recordSaves(page);
+    await moveBox(page, LAYOUT_BLOCK);
+    await expectNoSaveYet(page, saves);
+
+    await page.getByTestId('n5-confirm-button').click();
+    const input = await n6RenderInput(page, LAYOUT_BLOCK);
+    const sent = layoutPatchesOf(saves.patches);
+    expect(sent).toHaveLength(1);
+    expect(Object.keys(sent[0].body.layoutAdjust!)).toEqual(['box']);
+    expect(sent[0].status).toBe(200);
+    console.log(`[layout-move] PATCH body ${JSON.stringify(sent[0].body)}`);
+    expect(input.layoutAdjust?.box).toEqual(sent[0].responseBlock!.layoutAdjust!.box);
+    expect(input.revision).toBe(sent[0].responseBlock!.revision);
+    expect(saves.confirms).toHaveLength(1);
+    expect(sent[0].doneAt).toBeLessThan(saves.confirms[0]);
+  });
+
+  test('C. 박스 크기만 — resize 직후 PATCH 0 → 저장된 box 가 N6 최종 입력에 그대로', async ({ page }) => {
+    const saves = recordSaves(page);
+    await resizeBox(page, LAYOUT_BLOCK);
+    await expectNoSaveYet(page, saves);
+    await page.getByTestId('n5-confirm-button').click();
+    const input = await n6RenderInput(page, LAYOUT_BLOCK);
+    const sent = layoutPatchesOf(saves.patches);
+    expect(sent).toHaveLength(1);
+    expect(Object.keys(sent[0].body.layoutAdjust!)).toEqual(['box']);
+    console.log(`[layout-resize] PATCH body ${JSON.stringify(sent[0].body)}`);
+    expect(input.layoutAdjust?.box).toEqual(sent[0].responseBlock!.layoutAdjust!.box);
+    expect(sent[0].doneAt).toBeLessThan(saves.confirms[0]);
+  });
+
+  test('D. 글자 크기만 — [+] 직후 PATCH 0 → 저장된 절대 fontScale 이 N6 최종 입력에 그대로', async ({ page }) => {
+    const saves = recordSaves(page);
+    await bumpFontScale(page, LAYOUT_BLOCK);
+    await expectNoSaveYet(page, saves);
+    await page.getByTestId('n5-confirm-button').click();
+    const input = await n6RenderInput(page, LAYOUT_BLOCK);
+    const sent = layoutPatchesOf(saves.patches);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].body.layoutAdjust!.fontScale).toBe(1.05);
+    console.log(`[layout-font] PATCH body ${JSON.stringify(sent[0].body)}`);
+    expect(input.layoutAdjust?.fontScale).toBe(1.05);
+    expect(input.layoutAdjust?.box).toEqual(sent[0].responseBlock!.layoutAdjust!.box);
+    expect(sent[0].doneAt).toBeLessThan(saves.confirms[0]);
+  });
+
+  test('E. 번역문 초안 + 박스 + 글자 크기 — 같은 블록은 PATCH 1회 · 모든 PATCH 응답 뒤 confirm 1회 · N6 에 셋 다', async ({ page }) => {
+    const saves = recordSaves(page);
+    await moveBox(page, LAYOUT_BLOCK);
+    await page.getByTestId('n5-font-scale-increase').click();
+    await expect(overlay(page, LAYOUT_BLOCK)).toHaveAttribute('data-font-scale', '1.05');
+    await layoutSettled(page);
+    const DRAFT = 'All three edits';
+    await editor(page, LAYOUT_BLOCK).fill(DRAFT); // [확인]을 누르지 않는다
+    await resizeBox(page, 9101); // 다른 블록 배치도 함께
+    await expectNoSaveYet(page, saves);
+
+    await page.getByTestId('n5-confirm-button').click();
+    const input = await n6RenderInput(page, LAYOUT_BLOCK);
+    const for9112 = saves.patches.filter((p) => p.blockId === LAYOUT_BLOCK);
+    expect(for9112).toHaveLength(1); // 번역 초안 + 배치를 한 요청으로
+    expect(for9112[0].body.trans1).toBe(DRAFT);
+    expect(Object.keys(for9112[0].body.layoutAdjust!).sort()).toEqual(['box', 'fontScale']);
+    expect(input.trans1).toBe(DRAFT);
+    expect(input.layoutAdjust?.fontScale).toBe(1.05);
+    expect(input.layoutAdjust?.box).toEqual(for9112[0].responseBlock!.layoutAdjust!.box);
+    const for9101 = saves.patches.filter((p) => p.blockId === 9101);
+    expect(for9101).toHaveLength(1);
+    expect((await n6RenderInput(page, 9101)).layoutAdjust?.box).toEqual(for9101[0].responseBlock!.layoutAdjust!.box);
+    // 네트워크 순서 — 모든 PATCH 응답 완료 → POST /confirm(1회)
+    expect(saves.confirms).toHaveLength(1);
+    for (const p of saves.patches) {
+      expect(p.status).toBe(200);
+      expect(p.doneAt).toBeLessThan(saves.confirms[0]);
+    }
+  });
+
+  test('배치 PATCH 응답 전에는 확정하지 않는다 — 응답을 붙잡은 동안 confirm 0건, 풀리면 그 뒤 1건', async ({ page }) => {
+    await page.evaluate(() => {
+      const w = window as unknown as { __release?: () => void; __confirms: number; __layoutPatches: number };
+      w.__confirms = 0;
+      w.__layoutPatches = 0;
+      const gate = new Promise<void>((resolve) => (w.__release = resolve));
+      const originalFetch = window.fetch.bind(window);
+      window.fetch = async (input, init) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (init?.method === 'PATCH' && /\/blocks\/\d+$/.test(url) && String(init.body).includes('layoutAdjust')) {
+          w.__layoutPatches += 1;
+          await gate;
+        }
+        if (init?.method === 'POST' && url.endsWith('/confirm')) w.__confirms += 1;
+        return originalFetch(input, init);
+      };
+    });
+    const counts = () => page.evaluate(() => {
+      const w = window as unknown as { __confirms: number; __layoutPatches: number };
+      return { confirms: w.__confirms, patches: w.__layoutPatches };
+    });
+    await moveBox(page, LAYOUT_BLOCK);
+    expect(await counts()).toEqual({ confirms: 0, patches: 0 });
+    await page.getByTestId('n5-confirm-button').click();
+    await expect.poll(async () => (await counts()).patches).toBe(1);
+    await page.waitForTimeout(800);
+    expect((await counts()).confirms).toBe(0);
+    await page.evaluate(() => (window as unknown as { __release: () => void }).__release());
+    await expect.poll(async () => (await counts()).confirms, { timeout: 20_000 }).toBe(1);
+    expect((await n6RenderInput(page, LAYOUT_BLOCK)).layoutAdjust?.box).not.toBeNull();
+  });
+});

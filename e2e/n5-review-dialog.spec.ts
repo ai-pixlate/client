@@ -99,7 +99,9 @@ test('확인창 — Figma 구조·실제 데이터 집계, 돌아가기는 요�
   await expect(page.getByText('번역이 완료되었습니다.')).toBeVisible({ timeout: 10_000 });
 });
 
-test('렌더 대기 section을 누르면 우측이 같은 section으로 이동해 상태를 보인다', async ({ page }) => {
+// 이 spec 은 section 상태 표시만 본다. 왼쪽 section 배경 클릭 뒤 우측 패널이 움직이지 않는 것(PM 확정)은
+// e2e/n5-selection-chrome-panel-scroll.spec.ts 가 맡는다 — 여기서 패널 이동·viewport 진입을 기대하지 않는다.
+test('렌더 대기 section을 누르면 그 section이 선택되고, 우측 그 section의 상태가 렌더 대기다', async ({ page }) => {
   await reachN5(page);
   await page.getByTestId('n5-fit-height').click();
   const slice = await box(page, 'n5-slice-translated-504');
@@ -107,9 +109,9 @@ test('렌더 대기 section을 누르면 우측이 같은 section으로 이동�
 
   await expect(page.getByTestId('n5-section-selected-tag')).toHaveText('Section4');
   await expect(page.getByTestId('n5-section-tag-4')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('[data-testid^="n5-block-row-"][aria-pressed="true"]')).toHaveCount(0);
   const progress = page.getByTestId('n5-section-status-4-progress');
   await expect(progress).toHaveText('렌더 대기 중');
-  await expect(progress).toBeInViewport();
   await expect(progress.locator('span')).toHaveCSS('color', 'rgb(23, 23, 23)'); // 오류 색이 아니다
   await expect(page.getByTestId('n5-section-status-4-failed')).toHaveCount(0);
 });
@@ -123,23 +125,22 @@ test('렌더 진행·실패·제외 section도 우측에 각자 상태가 보이
     await page.mouse.click(s.x + s.width * 0.8, s.y + s.height * 0.95);
   };
 
+  // 상태 표시만 본다 — 패널 이동은 selection 전용 spec 이 맡는다
   await click(504);
+  await expect(page.getByTestId('n5-section-tag-4')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByTestId('n5-section-status-4-progress')).toHaveText('렌더링 중');
-  await expect(page.getByTestId('n5-section-status-4-progress')).toBeInViewport();
 
   await click(505);
   await expect(page.getByTestId('n5-section-tag-5')).toHaveAttribute('aria-pressed', 'true');
   const failed = page.getByTestId('n5-section-status-5-failed');
   await expect(failed).toContainText('실행 실패');
   await expect(failed).toContainText('렌더링');
-  await expect(failed).toBeInViewport();
   await expect(page.getByTestId('n5-section-status-5-render-retry')).toBeDisabled();
   await expect(page.getByTestId('n5-slice-translated-505')).toHaveCSS('background-image', /505-original/);
 
   await click(503);
   await expect(page.getByTestId('n5-section-tag-3')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByTestId('n5-section-status-3-progress')).toHaveText('제외된 섹션');
-  await expect(page.getByTestId('n5-section-status-3-progress')).toBeInViewport();
 });
 
 test('겹침 진단 — 어떤 block이 어디서 겹치는지 보이고 실제 선택은 바뀌지 않는다', async ({ page }) => {

@@ -1,14 +1,13 @@
 import { type Page, type Request, expect, test } from '@playwright/test';
 
 import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
-import { useLocalLayoutEditing } from './helpers/layout-write';
 
 // ─────────────────────────────────────────────────────────────────
-// N5 블록 배치 저장(F-CFM-15, BlockPatch.layoutAdjust) — 계약 확정·서버 구현 대기. Mock 에서만 쓰기가 켜진다.
-// - 조작을 마쳤을 때 1회 저장: 끌기·손잡이는 손을 놓을 때(box 만), [+][−] 는 한 번 누를 때(box + fontScale)
-// - 본문 = { trans1(서버 현재 값), revision(실행 시점 최신), layoutAdjust } · 응답 block 이 정본(정규화)
-// - Undo/Redo 는 과거 값을 현재 revision 으로 다시 저장한다
-// - 실서버(쓰기 차단)는 useLocalLayoutEditing 으로 같은 화면에서 확인한다
+// N5 블록 배치 저장(F-CFM-15, BlockPatch.layoutAdjust) — 실 API·Mock 같은 경로(BE develop 구현 완료, dev 배포 미확인).
+// - 박스 이동·크기·글자 배율·실행 취소/다시 실행은 N5 에서 local 초안만 바꾼다 — 조작 직후 PATCH·재렌더 task 없음
+// - [저장하러 가기]에서 배치 미저장 블록마다 PATCH 1회: { trans1(서버 현재 값), revision(최신), layoutAdjust(바뀐 키만) }
+//   같은 블록의 번역 초안이 있으면 한 요청(trans1 = 초안)으로. 응답 block 이 정본(정규화)
+// - 저장이 하나라도 실패하면 confirm 하지 않고 N5 에 남으며 local 초안을 그대로 둔다
 // Mock 은 실제 계약 모양으로 응답하지만 실서버 검증이 아니다.
 // ─────────────────────────────────────────────────────────────────
 
@@ -18,7 +17,6 @@ test.use({ viewport: { width: 1920, height: 1080 } });
 const url = (scenario?: string) => `/jobs/${MOCK_JOB_ID}?qaTypeset=1${scenario ? `&mockScenario=${scenario}` : ''}`;
 const overlay = (page: Page, id: number) => page.getByTestId(`n5-block-overlay-${id}`);
 const slice = (page: Page, id: number) => page.getByTestId(`n5-slice-translated-${id}`);
-const overflow9104 = (page: Page) => page.getByTestId('n5-block-row-9104').getByTestId('n5-cell-failure-overflow');
 
 type LayoutBody = { trans1: string; revision: number; layoutAdjust?: { box?: { x: number; y: number; w: number; h: number } | null; fontScale?: number | null } | null };
 type Patch = { blockId: number; body: LayoutBody; request: Request };
@@ -65,24 +63,39 @@ async function select(page: Page, id: number) {
 async function openFontToolbar(page: Page) {
   await expect(page.getByTestId('n5-font-scale-toolbar')).toBeVisible();
 }
-/** 저장이 끝나 이력 버튼이 다시 쓸 수 있게 될 때까지 */
+/** local 조작이 이력에 들어갈 때까지(서버 저장 없음) */
 const settled = (page: Page) => expect(page.getByTestId('n5-undo')).toBeEnabled();
+const confirmPosts = (page: Page) => {
+  const list: string[] = [];
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && new URL(r.url()).pathname.endsWith('/confirm')) list.push(r.url());
+  });
+  return list;
+};
+/** [저장하러 가기] — 미저장 수정 저장 뒤 확인창(기본 fixture 는 확인 항목이 있다)이나 오류가 뜰 때까지 */
+async function saveAll(page: Page) {
+  await page.getByTestId('n5-confirm-button').click();
+  await expect(page.getByTestId('n5-review-dialog').or(page.getByTestId('n5-confirm-error'))).toBeVisible({ timeout: 20_000 });
+}
 
 const ORIGINAL_9112 = { x: 40, y: 300, w: 500, h: 80 };
 
-test('move — 손을 놓을 때 1회, box 만 · 서버 trans1 · 최신 revision · 이전 결과 이미지 · 넘침 숨김 → 렌더 뒤 최신 조판', async ({ page }) => {
+test('move — 조작 직후 PATCH 0 · 재렌더 없음 → [저장하러 가기]에서 1회(box 만 · 서버 trans1 · 최신 revision) · 응답이 정본', async ({ page }) => {
   const patches = trackPatches(page);
-  const previewReads: string[] = [];
-  page.on('request', (r) => {
-    if (r.method() === 'GET' && new URL(r.url()).pathname.endsWith('/preview')) previewReads.push(r.url());
-  });
   await open(page);
-  await expect(overflow9104(page)).toBeVisible();
   await select(page, 9112);
   const before = await localBox(page, 9112);
   await dragBody(page, 9112, 30, 20);
   await settled(page);
+  const after = await localBox(page, 9112);
+  expect(after.left).toBeGreaterThan(before.left);
+  // 조작 직후 — 서버 저장·미리보기 재렌더 없음, 번역문 칸 「재렌더링 중…」 없음
+  await page.waitForTimeout(500);
+  expect(patches).toEqual([]);
+  await expect(page.getByText('재렌더링 중…')).toHaveCount(0);
+  await expect(slice(page, 502)).toHaveAttribute('data-preview-display', 'local-typeset');
 
+  await saveAll(page);
   const sent = layoutPatches(patches);
   expect(sent).toHaveLength(1);
   const { body } = sent[0];
@@ -90,31 +103,16 @@ test('move — 손을 놓을 때 1회, box 만 · 서버 trans1 · 최신 revisi
   expect(body.trans1).toBe('Instant effect guaranteed');
   expect(Object.keys(body.layoutAdjust!)).toEqual(['box']);
   const box = body.layoutAdjust!.box!;
-  // 옮기기 = 위치만. 폭은 원본 그대로, 높이는 조작 직전 화면에 보이던 Auto Height 높이(서버 h=80 이 아니다), 좌표는 섹션 로컬 원본 px
+  // 옮기기 = 위치만. 폭은 원본 그대로, 높이는 조작 직전 화면의 Auto Height 높이(서버 h=80 이 아니다), 좌표는 섹션 로컬 원본 px
   expect(box.w).toBe(ORIGINAL_9112.w);
   expect(Math.abs(box.h - (before.height * ORIGINAL_9112.w) / before.width)).toBeLessThan(0.01);
   expect(box.h).not.toBe(ORIGINAL_9112.h);
   expect(box.x).toBeGreaterThan(ORIGINAL_9112.x);
-  expect(box.y).toBeGreaterThan(ORIGINAL_9112.y);
-  const after = await localBox(page, 9112);
   expect(Math.abs(after.left / after.width - box.x / box.w)).toBeLessThan(0.001);
-  expect(after.left).toBeGreaterThan(before.left);
-
   const response = await responseOf(sent[0]);
   expect(response.block.revision).toBe(body.revision + 1);
   expect(response.block.layoutAdjust).toEqual({ box, fontScale: null });
   expect(typeof response.rerenderTaskId).toBe('number');
-
-  // 재렌더 동안: 이전 결과 이미지(새 HTML 을 얹지 않음) · 서버 넘침 숨김
-  await expect(slice(page, 502)).toHaveAttribute('data-preview-display', 'previous-rendered-image');
-  await expect(overflow9104(page)).toHaveCount(0);
-  // task 완료 → /preview 재조회 → 최신 조판 · 넘침 복귀
-  await expect(slice(page, 502)).toHaveAttribute('data-preview-display', 'local-typeset', { timeout: 20_000 });
-  expect(previewReads.length).toBeGreaterThan(1);
-  await expect(overflow9104(page)).toBeVisible();
-  // 저장 뒤 화면 박스 = 서버 저장값(renderInput 적용 박스)
-  const synced = await localBox(page, 9112);
-  for (const key of ['left', 'top', 'width', 'height'] as const) expect(Math.abs(synced[key] - after[key])).toBeLessThan(0.01);
 });
 
 test('저장 뒤 미리보기 안내는 section 위 상태 자리에 보이고, viewer·section 위치는 움직이지 않는다', async ({ page }) => {
@@ -128,187 +126,176 @@ test('저장 뒤 미리보기 안내는 section 위 상태 자리에 보이고, 
 
   await page.getByTestId('n5-block-editor-9112').fill('Visible effect');
   await page.getByTestId('n5-block-save-9112').click();
+  // 번역문 [확인] 저장 + 재검사 — 이 칸에는 「재렌더링 중…」이 보인다
+  await expect(page.getByTestId('n5-block-row-9112').getByText('재렌더링 중…')).toBeVisible();
   // 재렌더 동안 — 안내가 상태 자리에 보이고, 이미지 위 공간(헤더)은 생기지 않는다
   await expect(slot.getByTestId('n5-canvas-section-status-notice')).toBeVisible();
   await expect(page.getByTestId('n5-section-header-2')).toHaveCount(0);
   expect(await tops()).toEqual(before);
-  // 우측 패널에는 같은 안내가 그대로 있다
   await expect(page.getByTestId('n5-section-status-2-notice')).toBeVisible();
-  // 재렌더가 끝나면 안내가 사라지고 위치는 여전히 같다
   await expect(slot).toBeEmpty({ timeout: 20_000 });
   expect(await tops()).toEqual(before);
 });
 
-test('resize(Auto Height) — 손을 놓을 때 1회, box 만 · 높이는 줄바꿈 결과 그대로', async ({ page }) => {
+test('resize(Auto Height) — 조작 직후 PATCH 0 → [저장하러 가기]에서 1회(box 만 · 높이는 줄바꿈 결과)', async ({ page }) => {
   const patches = trackPatches(page);
   await open(page);
   await select(page, 9112);
   const h = (await page.getByTestId('n5-block-handle-e').boundingBox())!;
   await drag(page, h.x + h.width / 2 + 6.5, h.y + h.height / 2, -120, 0);
   await settled(page);
+  await page.waitForTimeout(500);
+  expect(patches).toEqual([]);
+  const shown = await localBox(page, 9112);
+
+  await saveAll(page);
   const sent = layoutPatches(patches);
   expect(sent).toHaveLength(1);
   expect(Object.keys(sent[0].body.layoutAdjust!)).toEqual(['box']);
   const box = sent[0].body.layoutAdjust!.box!;
   expect(box.w).toBeLessThan(ORIGINAL_9112.w);
-  const shown = await localBox(page, 9112);
   // 보낸 박스 비율 = 화면(Auto Height 로 맞춘) 박스 비율
   expect(Math.abs(shown.height / shown.width - box.h / box.w)).toBeLessThan(0.001);
 });
 
-test('font [+][−] — 한 번 누름 = 저장 1회(box + 절대 fontScale), 연속 클릭은 순서대로 최신 revision, 1.0 은 null 로 정규화', async ({ page }) => {
+test('font [+][−] — 누를 때마다 PATCH 0 → [저장하러 가기]에서 마지막 값 1회(box + 절대 fontScale)', async ({ page }) => {
   const patches = trackPatches(page);
   await open(page);
   await select(page, 9112);
   await openFontToolbar(page);
   await page.getByTestId('n5-font-scale-increase').click();
   await page.getByTestId('n5-font-scale-increase').click();
+  await page.getByTestId('n5-font-scale-increase').click();
+  await page.getByTestId('n5-font-scale-decrease').click();
   await expect(overlay(page, 9112)).toHaveAttribute('data-font-scale', '1.1');
   await settled(page);
-  await page.getByTestId('n5-font-scale-decrease').click();
-  await page.getByTestId('n5-font-scale-decrease').click();
-  await expect(overlay(page, 9112)).toHaveAttribute('data-font-scale', '1');
-  await settled(page);
+  await page.waitForTimeout(500);
+  expect(patches).toEqual([]);
+  await expect(page.getByText('재렌더링 중…')).toHaveCount(0);
 
-  const sent = layoutPatches(patches);
-  expect(sent.map((p) => p.body.layoutAdjust!.fontScale)).toEqual([1.05, 1.1, 1.05, 1]);
-  for (const p of sent) expect(Object.keys(p.body.layoutAdjust!).sort()).toEqual(['box', 'fontScale']);
-  // 앞 저장이 끝난 뒤 그 응답 revision 으로 보낸다 — 연속 클릭도 409 없이 하나씩
-  const revisions = sent.map((p) => p.body.revision);
-  for (let i = 1; i < revisions.length; i += 1) expect(revisions[i]).toBe(revisions[i - 1] + 1);
-  const last = await responseOf(sent[3]);
-  expect((last.block.layoutAdjust as { fontScale: number | null } | null)?.fontScale ?? null).toBeNull();
-  await expect(page.getByTestId('n5-history-notice')).toHaveCount(0);
-});
-
-test('Undo/Redo — 이전 box·이후 box 를 현재 revision 으로 다시 저장한다 · 원본으로 돌아가면 layoutAdjust null 로 정규화', async ({ page }) => {
-  const patches = trackPatches(page);
-  await open(page);
-  await select(page, 9112);
-  await dragBody(page, 9112, 30, 20);
-  await settled(page);
-  const moved = layoutPatches(patches)[0].body.layoutAdjust!.box!;
-
-  await page.getByTestId('n5-undo').click();
-  await expect(page.getByTestId('n5-redo')).toBeEnabled();
-  const undo = layoutPatches(patches)[1];
-  expect(undo.body.layoutAdjust).toEqual({ box: ORIGINAL_9112 });
-  expect(undo.body.revision).toBe(layoutPatches(patches)[0].body.revision + 1);
-  expect((await responseOf(undo)).block.layoutAdjust).toBeNull();
-  await expect(page.getByTestId('n5-undo')).toBeDisabled();
-
-  await page.getByTestId('n5-redo').click();
-  await settled(page);
-  const redo = layoutPatches(patches)[2];
-  expect(redo.body.layoutAdjust).toEqual({ box: moved });
-  expect((await responseOf(redo)).block.layoutAdjust).toEqual({ box: moved, fontScale: null });
-});
-
-test('Idempotency-Key — 배치 저장은 조작마다 새 UUID v4(끌기·[+]·Undo·Redo 각각), 번역문 저장은 키를 싣지 않는다', async ({ page }) => {
-  const patches = trackPatches(page);
-  await open(page);
-  await page.getByTestId('n5-block-editor-9112').fill('Visible effect');
-  await page.getByTestId('n5-block-save-9112').click();
-  await expect(page.getByTestId('n5-block-save-9112')).toHaveText('확인');
-  await settled(page);
-  await dragBody(page, 9112, 30, 20);
-  await settled(page);
-  await openFontToolbar(page);
-  await page.getByTestId('n5-font-scale-increase').click();
-  await settled(page);
-  await page.getByTestId('n5-undo').click();
-  await expect(page.getByTestId('n5-redo')).toBeEnabled();
-  await page.getByTestId('n5-redo').click();
-  await settled(page);
-
-  const keyOf = (p: Patch) => p.request.headers()['idempotency-key'];
-  const layout = layoutPatches(patches);
-  expect(layout).toHaveLength(4); // 끌기 · [+] · Undo · Redo
-  const keys = layout.map(keyOf);
-  for (const key of keys) expect(key).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
-  expect(new Set(keys).size).toBe(keys.length); // 다른 조작에 같은 키를 쓰지 않는다
-  const text = patches.filter((p) => !('layoutAdjust' in p.body));
-  expect(text.length).toBeGreaterThan(0);
-  for (const p of text) expect(keyOf(p)).toBeUndefined();
-});
-
-test('혼합 이력 — 번역문 저장 뒤 옮기기, Undo 두 번은 box → 번역문 순서로 저장한다', async ({ page }) => {
-  const patches = trackPatches(page);
-  await open(page);
-  await page.getByTestId('n5-block-editor-9112').fill('Visible effect');
-  await page.getByTestId('n5-block-save-9112').click();
-  await expect(page.getByTestId('n5-block-save-9112')).toHaveText('확인');
-  await settled(page);
-  // 편집기에 들어가면서 이미 선택됐다
-  await expect(page.getByTestId('n5-block-selection')).toBeVisible();
-  await dragBody(page, 9112, 30, 20);
-  await settled(page);
-
-  await page.getByTestId('n5-undo').click();
-  await expect(page.getByTestId('n5-redo')).toBeEnabled();
-  await page.getByTestId('n5-undo').click();
-  await expect(page.getByTestId('n5-undo')).toBeDisabled();
-  await expect(page.getByTestId('n5-block-editor-9112')).toHaveValue('Instant effect guaranteed');
-
-  const order = patches.map((p) => ('layoutAdjust' in p.body ? 'layout' : `text:${p.body.trans1}`));
-  expect(order).toEqual(['text:Visible effect', 'layout', 'layout', 'text:Instant effect guaranteed']);
-  // 배치 저장은 그 시점 서버 번역문을 싣는다
-  expect(layoutPatches(patches).map((p) => p.body.trans1)).toEqual(['Visible effect', 'Visible effect']);
-});
-
-test('저장하지 않은 번역 초안이 있어도 배치 저장은 서버 번역문을 보내고 초안을 지킨다', async ({ page }) => {
-  const patches = trackPatches(page);
-  await open(page);
-  await page.getByTestId('n5-block-editor-9112').fill('Unsaved draft');
-  await expect(page.getByTestId('n5-block-selection')).toBeVisible();
-  await dragBody(page, 9112, 30, 20);
-  await settled(page);
+  await saveAll(page);
   const sent = layoutPatches(patches);
   expect(sent).toHaveLength(1);
-  expect(sent[0].body.trans1).toBe('Instant effect guaranteed');
-  expect(patches.filter((p) => p.body.trans1 === 'Unsaved draft')).toHaveLength(0);
-  await expect(page.getByTestId('n5-block-editor-9112')).toHaveValue('Unsaved draft');
-  await expect(page.getByTestId('n5-block-save-9112')).toBeEnabled();
+  expect(Object.keys(sent[0].body.layoutAdjust!).sort()).toEqual(['box', 'fontScale']);
+  expect(sent[0].body.layoutAdjust!.fontScale).toBe(1.1);
+  expect(((await responseOf(sent[0])).block.layoutAdjust as { fontScale: number | null }).fontScale).toBe(1.1);
 });
 
-test('409 REVISION_CONFLICT — 화면 박스를 되돌리고 이력을 남기지 않으며 기존 충돌 표시로 넘긴다', async ({ page }) => {
-  await open(page, 'n5-layout-conflict');
-  await select(page, 9112);
-  const before = await localBox(page, 9112);
-  await dragBody(page, 9112, 30, 20);
-  await expect(page.getByTestId('n5-history-notice')).toHaveText('변경 사항을 저장하지 못했습니다. 마지막으로 저장된 상태로 돌아갑니다.');
-  const back = await localBox(page, 9112);
-  for (const key of ['left', 'top', 'width', 'height'] as const) expect(Math.abs(back[key] - before[key])).toBeLessThan(0.01);
-  await expect(page.getByTestId('n5-undo')).toBeDisabled();
-  await expect(page.getByTestId('n5-block-conflict-9112')).toBeVisible();
-});
-
-test('저장 실패(500) — 마지막 저장 상태로 되돌리고 이력을 남기지 않는다', async ({ page }) => {
-  await open(page, 'n5-layout-fail');
-  await select(page, 9112);
-  const before = await localBox(page, 9112);
-  await dragBody(page, 9112, 30, 20);
-  await expect(page.getByTestId('n5-history-notice')).toBeVisible();
-  const back = await localBox(page, 9112);
-  for (const key of ['left', 'top'] as const) expect(Math.abs(back[key] - before[key])).toBeLessThan(0.01);
-  await expect(page.getByTestId('n5-undo')).toBeDisabled();
-});
-
-test('실서버 쓰기 차단 — 같은 조작이 세션 local 로만 바뀌고 배치 PATCH 가 나가지 않는다', async ({ page }) => {
-  await useLocalLayoutEditing(page);
+test('Undo/Redo — local 만 바꾼다(PATCH 0) · 원래대로 돌아가면 저장할 배치가 없고, 다시 실행하면 그 값을 저장한다', async ({ page }) => {
   const patches = trackPatches(page);
   await open(page);
   await select(page, 9112);
-  const before = await localBox(page, 9112);
+  const original = await localBox(page, 9112);
   await dragBody(page, 9112, 30, 20);
-  await openFontToolbar(page);
-  await page.getByTestId('n5-font-scale-increase').click();
-  await expect(overlay(page, 9112)).toHaveAttribute('data-font-scale', '1.05');
-  expect((await localBox(page, 9112)).left).toBeGreaterThan(before.left);
-  await page.waitForTimeout(300);
+  await settled(page);
+  const moved = await localBox(page, 9112);
+
+  await page.getByTestId('n5-undo').click();
+  await expect(page.getByTestId('n5-redo')).toBeEnabled();
+  await expect(page.getByTestId('n5-undo')).toBeDisabled();
+  const back = await localBox(page, 9112);
+  for (const key of ['left', 'top'] as const) expect(Math.abs(back[key] - original[key])).toBeLessThan(0.01);
+  await page.getByTestId('n5-redo').click();
+  await settled(page);
+  const again = await localBox(page, 9112);
+  for (const key of ['left', 'top'] as const) expect(Math.abs(again[key] - moved[key])).toBeLessThan(0.01);
+  await page.waitForTimeout(500);
   expect(patches).toEqual([]);
-  await expect(page.getByTestId('n5-undo')).toBeEnabled();
+
+  await saveAll(page);
+  const sent = layoutPatches(patches);
+  expect(sent).toHaveLength(1);
+  expect(sent[0].body.layoutAdjust!.box!.x).toBeGreaterThan(ORIGINAL_9112.x);
 });
+
+test('Undo 로 원래 배치로 돌아간 블록은 [저장하러 가기]에서 보내지 않는다', async ({ page }) => {
+  const patches = trackPatches(page);
+  await open(page);
+  await select(page, 9112);
+  await dragBody(page, 9112, 30, 20);
+  await settled(page);
+  await page.getByTestId('n5-undo').click();
+  await expect(page.getByTestId('n5-undo')).toBeDisabled();
+  await saveAll(page);
+  expect(layoutPatches(patches)).toEqual([]);
+});
+
+test('같은 블록의 번역 초안 + 배치 — PATCH 1회(trans1 = 초안 + layoutAdjust) · [확인]으로 이미 저장한 번역문은 다시 보내지 않는다', async ({ page }) => {
+  const patches = trackPatches(page);
+  await open(page);
+  // 9101 — [확인]으로 이미 저장
+  await page.getByTestId('n5-block-editor-9101').fill('Saved by confirm button');
+  await page.getByTestId('n5-block-save-9101').click();
+  await expect(page.getByTestId('n5-block-save-9101')).toHaveText('확인');
+  await expect.poll(() => patches.length).toBe(1);
+  // 9112 — 번역 초안 + 박스 이동(둘 다 미저장)
+  await page.getByTestId('n5-block-editor-9112').fill('Draft and layout');
+  await expect(page.getByTestId('n5-block-selection')).toBeVisible();
+  await dragBody(page, 9112, 30, 20);
+  await settled(page);
+  expect(patches).toHaveLength(1);
+
+  await saveAll(page);
+  const for9112 = patches.filter((p) => p.blockId === 9112);
+  expect(for9112).toHaveLength(1);
+  console.log(`[layout-combined] PATCH body ${JSON.stringify(for9112[0].body)}`);
+  expect(for9112[0].body.trans1).toBe('Draft and layout');
+  expect(Object.keys(for9112[0].body.layoutAdjust!)).toEqual(['box']);
+  expect(patches.filter((p) => p.blockId === 9101)).toHaveLength(1);
+  // 배치가 실린 저장은 조작마다 새 Idempotency-Key(UUID v4), 번역문만 저장은 키를 싣지 않는다
+  expect(for9112[0].request.headers()['idempotency-key']).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  expect(patches.find((p) => p.blockId === 9101)!.request.headers()['idempotency-key']).toBeUndefined();
+  const res = await responseOf(for9112[0]);
+  expect(res.block.revision).toBe(for9112[0].body.revision + 1);
+});
+
+test('같은 블록 번역문을 [확인]으로 저장한 뒤 배치만 바꾸면 — [저장하러 가기]는 배치 PATCH 1회(trans1 = 저장된 서버값)만, 번역문을 다시 저장하지 않는다', async ({ page }) => {
+  const patches = trackPatches(page);
+  await open(page);
+  await page.getByTestId('n5-block-editor-9112').fill('Confirmed first');
+  await page.getByTestId('n5-block-save-9112').click();
+  await expect(page.getByTestId('n5-block-save-9112')).toHaveText('확인');
+  await expect.poll(() => patches.length).toBe(1);
+  const confirmed = await responseOf(patches[0]);
+  await expect(page.getByTestId('n5-block-selection')).toBeVisible();
+  await dragBody(page, 9112, 30, 20);
+  await settled(page);
+  await page.waitForTimeout(500);
+  expect(patches).toHaveLength(1);
+
+  await saveAll(page);
+  expect(patches).toHaveLength(2);
+  const final = patches[1];
+  expect(final.blockId).toBe(9112);
+  expect(final.body.trans1).toBe('Confirmed first');
+  expect(final.body.revision).toBe(confirmed.block.revision);
+  expect(Object.keys(final.body.layoutAdjust!)).toEqual(['box']);
+  // 번역문만 다시 보내는 요청은 없다
+  expect(patches.filter((p) => !('layoutAdjust' in p.body))).toHaveLength(1);
+});
+
+for (const [scenario, label] of [
+  ['n5-layout-conflict', '409 REVISION_CONFLICT'],
+  ['n5-layout-fail', '500'],
+] as const) {
+  test(`배치 저장 실패(${label}) — confirm 하지 않고 N5 에 남으며 local 초안(옮긴 박스)을 그대로 둔다`, async ({ page }) => {
+    const patches = trackPatches(page);
+    const confirms = confirmPosts(page);
+    await open(page, scenario);
+    await select(page, 9112);
+    await dragBody(page, 9112, 30, 20);
+    await settled(page);
+    const moved = await localBox(page, 9112);
+    await saveAll(page);
+    await expect(page.getByTestId('n5-confirm-error')).toHaveText('저장하지 못한 수정이 있어 다음 단계로 넘어가지 않았습니다. 표시된 칸을 확인한 뒤 다시 시도해 주세요.');
+    expect(layoutPatches(patches)).toHaveLength(1);
+    expect(confirms).toEqual([]);
+    const kept = await localBox(page, 9112);
+    for (const key of ['left', 'top', 'width', 'height'] as const) expect(Math.abs(kept[key] - moved[key])).toBeLessThan(0.01);
+    await expect(page.getByTestId('n5-review-dialog')).toHaveCount(0);
+    if (scenario === 'n5-layout-conflict') await expect(page.getByTestId('n5-block-conflict-9112')).toBeVisible();
+  });
+}
 
 test.describe('Mock 서버 계약 — 해제·정규화·범위·형식·렌더 대상', () => {
   const patch = (page: Page, blockId: number, body: unknown) =>
@@ -446,12 +433,8 @@ test.describe('PR #116 대비 — legacy 적용 box', () => {
       .toBe(true);
   }
 
-  test('legacy 적용 box를 편집 시작값으로 쓰고, 옮긴 뒤 Undo하면 화면의 이전 box를 다시 저장한다', async ({ page }) => {
+  test('legacy 적용 box를 편집 시작값으로 쓰고, 옮긴 배치를 [저장하러 가기]에서 저장한다', async ({ page }) => {
     const patches = trackPatches(page);
-    const previewReads: number[] = [];
-    page.on('request', (r) => {
-      if (r.method() === 'GET' && new URL(r.url()).pathname.endsWith('/preview')) previewReads.push(Date.now());
-    });
     await open(page, 'n5-layout-legacy');
     const initial = await readBlock(page, 9112);
     expect(initial.layoutAdjust).toBeNull();
@@ -463,6 +446,8 @@ test.describe('PR #116 대비 — legacy 적용 box', () => {
     const shownBefore = await localBox(page, 9112);
     await dragBody(page, 9112, 30, 20);
     await settled(page);
+    expect(patches).toEqual([]);
+    await saveAll(page);
     const [move] = layoutPatches(patches);
     const moved = move.body.layoutAdjust!.box!;
     // 옮기기는 legacy box 폭 그대로(시작값이 원본 bbox 였다면 w=500 이 나간다) · 높이는 화면의 Auto Height 높이
@@ -472,27 +457,7 @@ test.describe('PR #116 대비 — legacy 적용 box', () => {
     expect(move.body.revision).toBe(initial.revision);
     const moveRes = await responseOf(move);
     expect(moveRes.block.revision).toBe(initial.revision + 1);
-
-    await page.getByTestId('n5-undo').click();
-    await expect(page.getByTestId('n5-redo')).toBeEnabled();
-    await expect(page.getByTestId('n5-undo')).toBeDisabled();
-    const undo = layoutPatches(patches)[1];
-    // Undo = 이전 적용 box 를 명시적으로 다시 저장(legacy 출처·null 복원을 기대하지 않는다)
-    expect(undo.body).toEqual({ trans1: initial.trans1, revision: initial.revision + 1, layoutAdjust: { box: LEGACY_9112 } });
-    const undoRes = await responseOf(undo);
-    expect(undoRes.block.revision).toBe(initial.revision + 2);
-    expect(undoRes.block.layoutAdjust).toEqual({ box: LEGACY_9112, fontScale: null }); // 저장 출처는 seller layoutAdjust
-    expect(typeof undoRes.rerenderTaskId).toBe('number');
-    await expectScreenBox(page, LEGACY_9112);
-
-    // 재렌더 완료 → /blocks·/preview 재조회 뒤에도 같은 box · 이후 revision 정본 = Undo 응답 값
-    const readsBefore = previewReads.length;
-    await expect.poll(() => taskStatus(page, undoRes.rerenderTaskId!), { timeout: 20_000 }).toBe('done');
-    await expect.poll(() => previewReads.length, { timeout: 20_000 }).toBeGreaterThan(readsBefore);
-    await expect(slice(page, 502)).toHaveAttribute('data-preview-display', 'local-typeset', { timeout: 20_000 });
-    expect(await renderBox(page, 9112)).toEqual(LEGACY_9112);
-    expect((await readBlock(page, 9112)).revision).toBe(undoRes.block.revision);
-    await expectScreenBox(page, LEGACY_9112);
+    expect(moveRes.block.layoutAdjust).toEqual({ box: moved, fontScale: null });
   });
 
   test('layoutAdjust가 null로 유지돼도 revision과 rerenderTaskId가 바뀌면 변경으로 처리한다(Mock 서버 계약)', async ({ page }) => {

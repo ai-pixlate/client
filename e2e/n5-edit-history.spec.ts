@@ -2,7 +2,6 @@ import { type Page, test, expect } from '@playwright/test';
 
 import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 import { reachN5 } from './helpers/reach-n5';
-import { useLocalLayoutEditing } from './helpers/layout-write';
 
 // ─────────────────────────────────────────────────────────────────
 // N5 통합 편집 이력(F-CFM-03) + 글자 크기 [+][-](F-CFM-15 2차).
@@ -15,10 +14,7 @@ import { useLocalLayoutEditing } from './helpers/layout-write';
 
 test.use({ viewport: { width: 1920, height: 1080 } });
 
-// 박스·배율은 세션 local 편집만 본다 — Mock 에서도 layoutAdjust 쓰기를 끈다(실서버 쓰기 차단과 같은 동작). 저장 흐름은 n5-layout-adjust.spec.ts
-test.beforeEach(async ({ page }) => {
-  await useLocalLayoutEditing(page);
-});
+// 박스·배율 조작은 N5 에서 local 초안만 바꾼다(PATCH 없음) — 이 spec 은 화면 계산만 본다. [저장하러 가기]의 저장 흐름은 n5-layout-adjust.spec.ts
 
 const NOTICE = {
   undo: '실행 취소를 하지 못했습니다. 현재 상태를 유지합니다.',
@@ -330,11 +326,11 @@ test.describe('번역문 이력', () => {
     await expect(page.getByTestId(`n5-block-row-${BLOCK}`)).toHaveAttribute('aria-pressed', 'true'); // 되돌아간 대상을 고른다
     await expect(redo).toBeEnabled();
 
-    // 저장과 같은 재렌더 흐름 — task 완료 뒤 블록을 다시 받는다
-    await expect(page.getByText('재렌더링 중…')).toBeVisible();
+    // 저장과 같은 재렌더 흐름 — task 완료 뒤 블록을 다시 받는다. 실행 취소가 만든 재렌더는 번역문 [확인] 저장이 아니라
+    // 번역문 칸의 「재렌더링 중…」은 켜지 않는다
     const blockGet = page.waitForRequest((req) => req.method() === 'GET' && req.url().endsWith('/blocks'), { timeout: 30_000 });
-    await blockGet;
     await expect(page.getByText('재렌더링 중…')).toHaveCount(0);
+    await blockGet;
 
     await redo.click();
     await expect(editor).toHaveValue(B);
