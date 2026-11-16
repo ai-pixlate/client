@@ -149,7 +149,6 @@ test('I. resize 는 사용자 폭 + 그 폭의 Auto Height, 글자 배율은 배
   const scale = resized.w / afterResize.width;
   expect(Math.abs(resized.h - afterResize.height * scale)).toBeLessThan(0.05);
 
-  await page.getByTestId('n5-font-scale-handle').click();
   await page.getByTestId('n5-font-scale-increase').click();
   await settled(page);
   const font = patches.at(-1)!;

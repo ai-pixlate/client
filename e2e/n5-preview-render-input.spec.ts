@@ -98,7 +98,6 @@ test('정렬 기준점 — left·center·right 가 [+] 에서 각각 왼쪽·가
     const sizeBefore = parseFloat(await render(page, id).evaluate((el) => getComputedStyle(el).fontSize));
     // 9101 은 폭 900 이라 두 번이면 섹션 경계에 닿는다 — 한 번만 누른다
     const presses = id === 9101 ? 1 : 2;
-    await page.getByTestId('n5-font-scale-handle').click();
     for (let i = 0; i < presses; i += 1) await page.getByTestId('n5-font-scale-increase').click();
     const after = await overlayBox(page, id);
     expect(after.width).toBeGreaterThan(before.width);

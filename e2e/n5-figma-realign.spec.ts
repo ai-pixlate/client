@@ -5,7 +5,7 @@ import { useLocalLayoutEditing } from './helpers/layout-write';
 
 // ─────────────────────────────────────────────────────────────────
 // N5 Figma 재정합(544:3168) — shell·canvas·패널 geometry, 선택 block UI(1512:23496),
-// 글자크기 action handle과 툴바(저장 계약 없음), 패널 목록·저장 버튼 분리.
+// 선택 즉시 보이는 글자크기 툴바(저장 계약 없음), 패널 목록·저장 버튼 분리.
 // ─────────────────────────────────────────────────────────────────
 
 test.use({ viewport: { width: 1920, height: 1080 } });
@@ -73,34 +73,33 @@ test('상단 정보는 실제 Job 값이고 Figma 위치에 있다', async ({ pa
   expect([rect.x, rect.y]).toEqual([152, 46]);
 });
 
-test('선택 block은 테두리·번호·핸들 8개·action handle을 보이고, 다른 block을 고르면 옮겨 간다', async ({ page }) => {
+test('선택 block은 글자 바깥 16px 테두리·번호·핸들 8개·글자크기 툴바를 보이고, 다른 block을 고르면 옮겨 간다', async ({ page }) => {
   await expect(page.getByTestId('n5-block-selection')).toHaveCount(0);
   await page.getByTestId('n5-block-pin-9112').click();
 
-  await expect(page.getByTestId('n5-block-overlay-9112')).toHaveCSS('border-top-color', 'rgb(255, 106, 56)');
+  await expect(page.getByTestId('n5-block-selection-frame')).toHaveCSS('border-top-color', 'rgb(255, 106, 56)');
   await expect(page.getByTestId('n5-block-pin-9112').locator('span')).toHaveCSS('background-color', 'rgb(255, 106, 56)');
   const handles = page.locator('[data-testid^="n5-block-handle-"]');
   await expect(handles).toHaveCount(8);
   const overlay = await box(page, 'n5-block-overlay-9112');
+  const frame = await box(page, 'n5-block-selection-frame');
+  near(frame.x, overlay.x - 16, 1);
+  near(frame.y + frame.height, overlay.y + overlay.height + 16, 1);
   const nw = await box(page, 'n5-block-handle-nw');
   const se = await box(page, 'n5-block-handle-se');
-  near(nw.x + nw.width / 2, overlay.x, 1);
-  near(se.y + se.height / 2, overlay.y + overlay.height, 1);
+  near(nw.x + nw.width / 2, frame.x, 1);
+  near(se.y + se.height / 2, frame.y + frame.height, 1);
   near(nw.width, 7.667, 0.5);
 
-  // action handle은 block 높이와 무관하게 오른쪽 변 위, block 위에서 18(Figma 1512:23496). 툴바는 눌러야 열린다
-  const handle = await box(page, 'n5-font-scale-handle');
-  expect([handle.width, handle.height]).toEqual([12, 12]);
-  near(handle.x + 6, overlay.x + overlay.width, 1);
-  near(handle.y + 6, overlay.y + 18, 1);
-  await expect(page.getByTestId('n5-font-scale-toolbar')).toHaveCount(0);
+  // 따로 여는 손잡이 없이 툴바가 바로 보인다(Figma 1512:23496)
+  await expect(page.getByTestId('n5-font-scale-handle')).toHaveCount(0);
+  await expect(page.getByTestId('n5-font-scale-toolbar')).toBeVisible();
 
-  // 번호 배지가 왼쪽 위 핸들보다 위에 그려지고, 잡기는 핸들이 받는다
+  // 번호 배지는 테두리 바깥 왼쪽 위라 손잡이를 가리지 않고, 선택된 배지는 누르는 대상이 아니다
   const pin = page.getByTestId('n5-block-pin-9112');
-  const pinZ = Number(await pin.evaluate((el) => getComputedStyle(el).zIndex));
-  const handleZ = Number(await page.getByTestId('n5-block-handle-nw').evaluate((el) => getComputedStyle(el).zIndex));
-  expect(pinZ).toBeGreaterThan(handleZ);
   await expect(pin).toHaveCSS('pointer-events', 'none');
+  const badge = (await pin.locator('span').boundingBox())!;
+  expect(badge.y + badge.height).toBeLessThan(nw.y);
 
   const firstHandle = await box(page, 'n5-block-handle-nw');
   await page.getByTestId('n5-block-pin-9103').click();
@@ -114,7 +113,6 @@ test('글자크기 버튼은 서버 요청 없이 동작하고 선택이 풀리�
     if (r.method() !== 'GET' && new URL(r.url()).pathname.startsWith('/jobs')) writes.push(`${r.method()} ${r.url()}`);
   });
   await page.getByTestId('n5-block-pin-9112').click();
-  await page.getByTestId('n5-font-scale-handle').click();
   for (const id of ['n5-font-scale-increase', 'n5-font-scale-decrease']) {
     await expect(page.getByTestId(id)).toBeEnabled();
     await expect(page.getByTestId(id)).not.toHaveAttribute('title');
@@ -125,75 +123,62 @@ test('글자크기 버튼은 서버 요청 없이 동작하고 선택이 풀리�
   expect(writes).toEqual([]);
 });
 
-test('글자크기 툴바 — 선택 직후 닫혀 있고 handle로 여닫으며, 다른 block을 고르면 닫힌다', async ({ page }) => {
+test('글자크기 툴바 — 선택 즉시 보이고(117×34, 버튼 28×28 간격 2), 키보드로 누를 수 있고, 다른 block으로 옮겨 간다', async ({ page }) => {
   const toolbar = page.getByTestId('n5-font-scale-toolbar');
-  const handle = page.getByTestId('n5-font-scale-handle');
   await page.getByTestId('n5-block-pin-9112').click();
-  await expect(handle).toHaveAttribute('aria-expanded', 'false');
-  await expect(toolbar).toHaveCount(0);
-
-  await handle.click();
-  await expect(handle).toHaveAttribute('aria-expanded', 'true');
+  await expect(toolbar).toBeVisible();
   await expect(toolbar).toContainText('글자크기');
-  const button = await box(page, 'n5-font-scale-increase');
-  expect([button.width, button.height]).toEqual([28, 28]);
+  const plus = await box(page, 'n5-font-scale-increase');
+  const minus = await box(page, 'n5-font-scale-decrease');
+  expect([plus.width, plus.height]).toEqual([28, 28]);
+  near(minus.x - (plus.x + plus.width), 2, 0.5);
   const rect = await box(page, 'n5-font-scale-toolbar');
-  expect([Math.round(rect.width), Math.round(rect.height)]).toEqual([119, 38]);
+  expect([Math.round(rect.width), Math.round(rect.height)]).toEqual([117, 34]);
   await page.screenshot({ path: test.info().outputPath('n5-font-toolbar-open.png') });
 
-  await handle.click();
-  await expect(toolbar).toHaveCount(0);
-
-  // 키보드도 같은 동작이다(Space는 pan 키와 겹치지 않아야 한다)
-  await handle.focus();
+  // 키보드 — Enter·Space(pan 키와 겹치지 않는다)로 누른다
+  const overlay = page.getByTestId('n5-block-overlay-9112');
+  const start = Number(await overlay.getAttribute('data-font-scale'));
+  await page.getByTestId('n5-font-scale-increase').focus();
   await page.keyboard.press('Enter');
-  await expect(toolbar).toBeVisible();
+  await expect.poll(async () => Number(await overlay.getAttribute('data-font-scale'))).toBeGreaterThan(start);
+  await page.getByTestId('n5-font-scale-decrease').focus();
   await page.keyboard.press('Space');
-  await expect(toolbar).toHaveCount(0);
+  await expect.poll(async () => Number(await overlay.getAttribute('data-font-scale'))).toBe(start);
 
-  // 다른 block으로 옮기면 닫히고, 원래 block으로 돌아와도 닫힌 채다
-  await handle.click();
-  await expect(toolbar).toBeVisible();
+  // 다른 block을 고르면 그 block 테두리 위로 옮겨 간다(툴바는 하나)
   await page.getByTestId('n5-block-pin-9103').click();
-  await expect(page.getByTestId('n5-block-overlay-9103')).toHaveCSS('border-top-color', 'rgb(255, 106, 56)');
-  await expect(toolbar).toHaveCount(0);
-  await page.getByTestId('n5-block-pin-9112').click();
-  await expect(page.getByTestId('n5-block-overlay-9112')).toHaveCSS('border-top-color', 'rgb(255, 106, 56)');
-  await expect(toolbar).toHaveCount(0);
+  await expect(toolbar).toHaveCount(1);
+  const frame = await box(page, 'n5-block-selection-frame');
+  near((await box(page, 'n5-font-scale-toolbar')).x, frame.x + 8, 1);
 });
 
-test('handle과 툴바를 눌러도 선택이 바뀌지 않고 section이 선택되지 않는다', async ({ page }) => {
+test('툴바를 눌러도 선택이 바뀌지 않고 section이 선택되지 않는다', async ({ page }) => {
   await page.getByTestId('n5-block-pin-9112').click();
   const before = await page.getByTestId('n5-section-selected-tag').textContent();
-  await page.getByTestId('n5-font-scale-handle').click();
   const toolbar = await box(page, 'n5-font-scale-toolbar');
-  await page.mouse.click(toolbar.x + 20, toolbar.y + 19);
+  await page.mouse.click(toolbar.x + 20, toolbar.y + 17);
   await expect(page.getByTestId('n5-font-scale-toolbar')).toBeVisible();
-  await expect(page.getByTestId('n5-block-overlay-9112')).toHaveCSS('border-top-color', 'rgb(255, 106, 56)');
+  await expect(page.getByTestId('n5-block-overlay-9112')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByTestId('n5-section-selected-tag')).toHaveText(before!);
 });
 
-test('section 오른쪽 끝 block — 툴바가 section 밖 오른쪽에 그대로 뜨고 잘리지 않는다', async ({ page }) => {
-  // 폭이 넓어 예전에는 아래로 옮겨 붙던 block
+test('넓은 block — 툴바가 테두리 위 왼쪽(8, -42)에 뜨고 그 자리에서 눌린다', async ({ page }) => {
   await page.getByTestId('n5-block-pin-9102').click();
-  await page.getByTestId('n5-font-scale-handle').click();
-  const overlay = await box(page, 'n5-block-overlay-9102');
-  const canvas = await box(page, 'n5-canvas');
+  const frame = await box(page, 'n5-block-selection-frame');
   const rect = await box(page, 'n5-font-scale-toolbar');
-  near(rect.x, overlay.x + overlay.width + 25, 1);
-  near(rect.y, overlay.y - 1, 1);
-  expect(rect.x + rect.width).toBeGreaterThan(canvas.x + canvas.width);
+  near(rect.x, frame.x + 8, 1);
+  near(rect.y, frame.y - 42, 1);
 
-  // 실제로 그 자리에서 눌리는지(잘리거나 다른 요소에 가리지 않는지)와 화면 캡처
   const hit = await page.evaluate(
     ([x, y]) => document.elementFromPoint(x, y)?.closest('[data-testid="n5-font-scale-toolbar"]') !== null,
     [rect.x + rect.width - 6, rect.y + rect.height / 2],
   );
   expect(hit).toBe(true);
-  await page.screenshot({ path: test.info().outputPath('n5-font-toolbar-overflow.png') });
+  await page.screenshot({ path: test.info().outputPath('n5-font-toolbar-wide.png') });
 });
 
-test('높은 block의 action handle은 Figma 1512:23496대로 block 위에서 18이다', async ({ page }) => {
+test('높은 block도 툴바는 테두리 위 42, 손잡이는 테두리 위에 있다', async ({ page }) => {
   // 진입부터 Auto Height 라 박스 높이 = 글 높이다 — 여러 줄 글로 높은 block 을 만든다(편집 중 글로 다시 잰다)
   const editor = page.getByTestId('n5-block-editor-9102');
   const sentence = (await editor.inputValue()).slice(0, 60);
@@ -201,21 +186,20 @@ test('높은 block의 action handle은 Figma 1512:23496대로 block 위에서 18
   // 입력칸을 고르면 그 block 이 선택된다
   await expect(page.getByTestId('n5-block-overlay-9102')).toHaveAttribute('aria-pressed', 'true');
   await expect.poll(async () => (await box(page, 'n5-block-overlay-9102')).height).toBeGreaterThanOrEqual(68);
-  const overlay = await box(page, 'n5-block-overlay-9102');
-  const handle = await box(page, 'n5-font-scale-handle');
-  expect(overlay.height).toBeGreaterThanOrEqual(68);
-  near(handle.x + 6, overlay.x + overlay.width, 1);
-  near(handle.y + 6, overlay.y + 18, 1);
+  const frame = await box(page, 'n5-block-selection-frame');
+  const e = await box(page, 'n5-block-handle-e');
+  near((await box(page, 'n5-font-scale-toolbar')).y, frame.y - 42, 1);
+  near(e.x + e.width / 2, frame.x + frame.width, 1);
+  near(e.y + e.height / 2, frame.y + frame.height / 2, 1);
 });
 
-test('zoom·pan — 툴바가 block과 함께 움직이고 화면 크기는 그대로다', async ({ page }) => {
+test('zoom·pan — 툴바가 테두리와 함께 움직이고 화면 크기·간격은 그대로다', async ({ page }) => {
   await page.getByTestId('n5-block-pin-9112').click();
-  await page.getByTestId('n5-font-scale-handle').click();
   const relative = async () => {
     const overlay = await box(page, 'n5-block-overlay-9112');
+    const frame = await box(page, 'n5-block-selection-frame');
     const rect = await box(page, 'n5-font-scale-toolbar');
-    const handle = await box(page, 'n5-font-scale-handle');
-    return { rect, overlay, dx: rect.x - (overlay.x + overlay.width), dy: rect.y - overlay.y, handleY: handle.y + 6 - overlay.y };
+    return { rect, overlay, frame, dx: rect.x - frame.x, dy: rect.y - frame.y, pad: overlay.x - frame.x };
   };
   const start = await relative();
 
@@ -223,64 +207,20 @@ test('zoom·pan — 툴바가 block과 함께 움직이고 화면 크기는 그�
   await expect(page.getByTestId('n5-canvas')).not.toHaveAttribute('data-zoom', '1');
   const zoomed = await relative();
   expect(zoomed.overlay.width).toBeGreaterThan(start.overlay.width);
-  near(zoomed.dx, 25, 1);
-  near(zoomed.dy, -1, 1);
-  near(zoomed.handleY, 18, 1);
-  near(zoomed.rect.width, 119, 1);
-  near(zoomed.rect.height, 38, 1);
+  near(zoomed.dx, 8, 1);
+  near(zoomed.dy, -42, 1);
+  near(zoomed.pad, 16, 1);
+  near(zoomed.rect.width, 117, 1);
+  near(zoomed.rect.height, 34, 1);
 
   const viewport = await box(page, 'n5-viewport');
   await page.mouse.move(viewport.x + 200, viewport.y + 400);
   await page.mouse.wheel(0, 80);
   await expect.poll(async () => (await relative()).rect.y).not.toBe(zoomed.rect.y);
   const panned = await relative();
-  near(panned.dx, 25, 1);
-  near(panned.dy, -1, 1);
+  near(panned.dx, 8, 1);
+  near(panned.dy, -42, 1);
   near(panned.overlay.y - zoomed.overlay.y, panned.rect.y - zoomed.rect.y, 1);
-});
-
-test('workspace 오른쪽 끝 — 필요한 만큼만 왼쪽으로 밀고 뒤집지 않으며, handle로 닫을 수 있다', async ({ page }) => {
-  await page.getByTestId('n5-block-pin-9102').click();
-  const viewport = await box(page, 'n5-viewport');
-  const limit = viewport.x + viewport.width - 24;
-  await page.getByTestId('n5-font-scale-handle').click();
-  const zoomUntil = async (reached: (blockRight: number) => boolean) => {
-    for (let i = 0; i < 30; i += 1) {
-      const current = await box(page, 'n5-block-overlay-9102');
-      if (reached(current.x + current.width)) return;
-      await page.getByTestId('n5-zoom-in').click();
-      await expect.poll(async () => (await box(page, 'n5-block-overlay-9102')).width).toBeGreaterThan(current.width);
-    }
-    throw new Error('배율을 올려도 block 오른쪽 변이 목표 위치에 닿지 않았다');
-  };
-
-  // 화면 중심 기준으로 확대하면 block이 위로 밀려나므로 세로로 다시 데려온다
-  const bringBlockIntoView = async () => {
-    const before = await box(page, 'n5-block-overlay-9102');
-    await page.mouse.move(viewport.x + 100, viewport.y + 500);
-    await page.mouse.wheel(0, before.y - (viewport.y + 400));
-    await expect.poll(async () => Math.abs((await box(page, 'n5-font-scale-handle')).y - (viewport.y + 400))).toBeLessThan(100);
-  };
-
-  // 배율을 올려 block 오른쪽 변을 workspace 끝 쪽으로 보낸다 — 넘는 만큼만 민다
-  await zoomUntil((blockRight) => blockRight + 25 + 119 > limit);
-  await bringBlockIntoView();
-  const overlay = await box(page, 'n5-block-overlay-9102');
-  const rect = await box(page, 'n5-font-scale-toolbar');
-  near(rect.x + rect.width, limit, 1);
-  near(rect.y, overlay.y - 1, 1);
-  expect(rect.x).toBeGreaterThan(overlay.x + overlay.width);
-  await page.screenshot({ path: test.info().outputPath('n5-font-toolbar-clamped.png') });
-
-  // 더 올려 툴바가 handle과 겹쳐도 workspace 안에 있고, handle이 위에 남아 닫을 수 있다
-  await zoomUntil((blockRight) => blockRight > limit - 119 + 6);
-  await bringBlockIntoView();
-  const covered = await box(page, 'n5-block-overlay-9102');
-  expect(covered.x + covered.width).toBeLessThan(limit);
-  near((await box(page, 'n5-font-scale-toolbar')).x + 119, limit, 1);
-  await page.screenshot({ path: test.info().outputPath('n5-font-toolbar-covered.png') });
-  await page.getByTestId('n5-font-scale-handle').click();
-  await expect(page.getByTestId('n5-font-scale-toolbar')).toHaveCount(0);
 });
 
 test('선택한 section 태그는 section 바로 위에 뜨고 canvas 크기를 바꾸지 않는다', async ({ page }) => {

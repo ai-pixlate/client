@@ -46,8 +46,7 @@ const textHeight = (page: Page, id = BLOCK) =>
 
 async function dragHandle(page: Page, key: string, dx: number, dy: number, hold?: () => Promise<void>) {
   const h = (await page.getByTestId(`n5-block-handle-${key}`).boundingBox())!;
-  // 오른쪽 변 손잡이는 낮은 block에서 action handle과 겹친다 — 그 옆을 잡는다(누르는 영역 안)
-  const x = h.x + h.width / 2 + (key.includes('e') ? 6.5 : 0);
+  const x = h.x + h.width / 2;
   const y = h.y + h.height / 2;
   await page.mouse.move(x, y);
   await page.mouse.down();
@@ -135,7 +134,6 @@ test.describe('Auto Height', () => {
     expect(low.height).toBeLessThan(68);
     await dragHandle(page, 'e', 20, 0);
     near((await boxOf(page, short)).width, low.width + 20, 'width', 1);
-    await page.getByTestId('n5-font-scale-handle').click();
     await expect(page.getByTestId('n5-font-scale-toolbar')).toBeVisible();
   });
 
@@ -234,7 +232,6 @@ test.describe('Auto Height', () => {
     await openQa(page);
     await dragHandle(page, 'e', -180, 0);
     const before = await boxOf(page);
-    await page.getByTestId('n5-font-scale-handle').click();
     await page.getByTestId('n5-font-scale-increase').click();
     const after = await boxOf(page);
     near(after.width, before.width * 1.05, 'width');
@@ -400,7 +397,6 @@ test.describe('최초 진입 Auto Height', () => {
     await expectWrapsText(page);
     const start = await boxOf(page);
     await page.getByTestId(`n5-block-pin-${BLOCK}`).click();
-    await page.getByTestId('n5-font-scale-handle').click();
     await page.getByTestId('n5-font-scale-increase').click();
     await expect.poll(async () => (await boxOf(page)).height).toBeGreaterThan(start.height);
     await expectWrapsText(page);
@@ -485,7 +481,7 @@ test.describe('최초 진입 Auto Height', () => {
   });
 });
 
-test.describe('낮은 block의 글자크기 손잡이', () => {
+test.describe('낮은 block의 오른쪽 손잡이', () => {
   const center = async (page: Page, testId: string) => {
     const b = (await page.getByTestId(testId).boundingBox())!;
     return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
@@ -493,44 +489,33 @@ test.describe('낮은 block의 글자크기 손잡이', () => {
   const hitAt = (page: Page, x: number, y: number) =>
     page.evaluate(([px, py]) => document.elementFromPoint(px, py)?.closest('[data-testid]')?.getAttribute('data-testid') ?? null, [x, y]);
 
-  test('어떤 높이에서도 Figma 위치(오른쪽 변, 위 +18)이고, 글자크기 손잡이와 오른쪽 손잡이를 각각 쓸 수 있다', async ({ page }) => {
+  test('어떤 높이에서도 오른쪽 손잡이는 선택 테두리(글자 바깥 16) 오른쪽 변 가운데이고, 끌어 폭을 바꾼다', async ({ page }) => {
     await page.goto(QA_URL);
     await expect(page.getByTestId('n5-qa-badge')).toBeVisible({ timeout: 20_000 });
-    // 글이 비면 세로 조절이 되어 원하는 높이를 만들 수 있다. 36은 두 손잡이 중심이 정확히 포개지는 높이다
+    // 글이 비면 세로 조절이 되어 원하는 높이를 만들 수 있다
     await page.getByTestId(`n5-block-editor-${BLOCK}`).fill('');
     for (const target of [60, 50, 36, 24, 14]) {
       const before = (await page.getByTestId(`n5-block-overlay-${BLOCK}`).boundingBox())!;
       await dragHandle(page, 's', 0, target - before.height);
       const overlay = (await page.getByTestId(`n5-block-overlay-${BLOCK}`).boundingBox())!;
       near(overlay.height, target, `height ${target}`, 1);
-      const right = overlay.x + overlay.width;
+      const right = overlay.x + overlay.width + 16;
 
-      const font = await center(page, 'n5-font-scale-handle');
-      near(font.x, right, 'font x', 0.6);
-      near(font.y, overlay.y + 18, 'font y', 0.6);
       const e = await center(page, 'n5-block-handle-e');
       near(e.x, right, 'e x', 0.6);
       near(e.y, overlay.y + overlay.height / 2, 'e y', 0.6);
+      expect(await hitAt(page, e.x, e.y), `e hit ${target}`).toBe('n5-block-handle-e');
+      // 글자크기 툴바는 선택 즉시 보인다
+      await expect(page.getByTestId('n5-font-scale-toolbar')).toBeVisible();
 
-      // 글자크기 손잡이의 보이는 영역은 항상 글자크기다
-      expect(await hitAt(page, font.x, font.y), `font hit ${target}`).toBe('n5-font-scale-handle');
-      // 오른쪽 손잡이는 그 양옆에서 잡힌다
-      // (아주 낮으면 e·se 가 서로 겹쳐 둘 중 하나가 잡힌다. 둘 다 오른쪽 변을 움직인다)
-      for (const dx of [-9, 9]) expect(['n5-block-handle-e', 'n5-block-handle-se'], `e hit ${target} ${dx}`).toContain(await hitAt(page, e.x + dx, e.y));
-
-      // 실제 조작 — 넓혔다가 되돌리고, 글자크기 툴바를 여닫는다
+      // 실제 조작 — 좁혔다가 되돌린다
       const width = overlay.width;
-      await page.mouse.move(e.x + 9, e.y);
+      await page.mouse.move(e.x, e.y);
       await page.mouse.down();
-      await page.mouse.move(e.x + 9 - 30, e.y, { steps: 3 });
+      await page.mouse.move(e.x - 30, e.y, { steps: 3 });
       await page.mouse.up();
       near((await page.getByTestId(`n5-block-overlay-${BLOCK}`).boundingBox())!.width, width - 30, `drag ${target}`, 1);
       await page.getByTestId('n5-undo').click();
-
-      await page.mouse.click(font.x, font.y);
-      await expect(page.getByTestId('n5-font-scale-toolbar')).toBeVisible();
-      await page.mouse.click(font.x, font.y);
-      await expect(page.getByTestId('n5-font-scale-toolbar')).toHaveCount(0);
     }
   });
 
@@ -599,7 +584,6 @@ test.describe('일반 N5(renderInput 조판 화면)', () => {
     sameBox(await boxOf(page), fromLeft);
 
     // 글자 크기 — 다시 재서 높이가 바뀌고 서버 요청이 없다
-    await page.getByTestId('n5-font-scale-handle').click();
     await page.getByTestId('n5-font-scale-increase').click();
     const scaled = await boxOf(page);
     expect(scaled.height).toBeGreaterThan(fromLeft.height);

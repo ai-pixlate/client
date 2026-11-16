@@ -108,7 +108,8 @@ test('resize — 방향별로 크기만 바뀌고 서버 요청이 없다', asyn
   expect(slice.right).toBeGreaterThan(now.x + now.width);
 
   await expect(page.getByTestId(`n5-block-row-${BLOCK_ID}`)).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByTestId('n5-font-scale-toolbar')).toHaveCount(0);
+  // 글자크기 툴바는 선택 내내 보인다(Figma 1512:23496)
+  await expect(page.getByTestId('n5-font-scale-toolbar')).toBeVisible();
   expect(sent).toEqual([]);
 });
 
@@ -147,7 +148,6 @@ test('resize boundary — 네 방향과 모서리 모두 section 경계에서 �
 
 test('move — 위치만 바뀌고, section 밖으로 못 나가며, 다른 block과는 겹친다', async ({ page }) => {
   const sent = collectWrites(page);
-  await page.getByTestId('n5-font-scale-handle').click();
   const start = await box(page, BLOCK);
 
   await dragBody(page, 25, 30);
@@ -157,19 +157,16 @@ test('move — 위치만 바뀌고, section 밖으로 못 나가며, 다른 bloc
   near(moved.width, start.width);
   near(moved.height, start.height);
 
-  // 번호·손잡이·action handle·열린 툴바가 따라온다. 선택은 유지되고 툴바도 닫히지 않는다
+  // 번호·선택 테두리(글자 바깥 16)·손잡이·툴바가 따라온다. 선택은 유지된다
   const pin = await box(page, `n5-block-pin-${BLOCK_ID}`);
-  near(pin.x, moved.x - 8, 2);
-  near(pin.y, moved.y - 8, 2);
+  near(pin.x, moved.x - 16 - 16, 2);
+  near(pin.y, moved.y - 16 - 24, 2);
   const se = await box(page, 'n5-block-handle-se');
-  near(se.x + se.width / 2, moved.x + moved.width);
-  near(se.y + se.height / 2, moved.y + moved.height);
-  const action = await box(page, 'n5-font-scale-handle');
-  near(action.x + 6, moved.x + moved.width);
-  near(action.y + 6, moved.y + 18);
+  near(se.x + se.width / 2, moved.x + moved.width + 16);
+  near(se.y + se.height / 2, moved.y + moved.height + 16);
   const toolbar = await box(page, 'n5-font-scale-toolbar');
-  near(toolbar.x, moved.x + moved.width + 25);
-  near(toolbar.y, moved.y - 1);
+  near(toolbar.x, moved.x - 16 + 8);
+  near(toolbar.y, moved.y - 16 - 42);
   await expect(page.getByTestId(`n5-block-row-${BLOCK_ID}`)).toHaveAttribute('aria-pressed', 'true');
 
   // 다른 block(9101, 바로 위) 위로 옮겨도 그대로 겹친다

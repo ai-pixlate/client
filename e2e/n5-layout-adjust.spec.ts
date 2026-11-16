@@ -63,7 +63,6 @@ async function select(page: Page, id: number) {
   await expect(page.getByTestId('n5-block-selection')).toBeVisible();
 }
 async function openFontToolbar(page: Page) {
-  await page.getByTestId('n5-font-scale-handle').click();
   await expect(page.getByTestId('n5-font-scale-toolbar')).toBeVisible();
 }
 /** 저장이 끝나 이력 버튼이 다시 쓸 수 있게 될 때까지 */

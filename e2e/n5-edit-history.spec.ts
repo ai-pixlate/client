@@ -62,7 +62,6 @@ async function dragHandle(page: Page, key: string, dx: number, dy: number) {
 
 async function selectWithToolbar(page: Page, blockId: number) {
   await page.getByTestId(`n5-block-pin-${blockId}`).click();
-  await page.getByTestId('n5-font-scale-handle').click();
   await expect(page.getByTestId('n5-font-scale-toolbar')).toBeVisible();
 }
 
