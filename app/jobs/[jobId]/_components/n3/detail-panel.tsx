@@ -5,13 +5,14 @@ import { useEffect } from 'react';
 
 import { formatN3SectionTitle, getN3SectionViewState } from '@/lib/n3/section-card-state';
 import { filterN3VisibleVerdicts } from '@/lib/n3/verdict';
-import { N3StatusChip } from './section-list-card';
 import { VerdictCard } from './verdict-card';
 
 // ─────────────────────────────────────────────────────────────────
-// N3 — 선택 섹션 판정 상세 (Figma 1422:10176 가운데 칼럼).
+// N3 — 선택 섹션 판정 상세 (Figma 1759:11529 왼쪽 묶음의 오른쪽 칸, Frame 948).
 //
-// 제목(SECTION 0n) · 상태 칩 · 판정 행과 bucket 버튼의 한 흐름(함께 스크롤, 카드 버튼과 같은 동작).
+// 제목(SECTION 0n, 20 SemiBold h24) · 12 아래 판정 본문(pl8 · pr12 · py12).
+// 판정 목록만 스크롤하고 bucket 버튼은 본문 아래에 늘 보이게 둔다(카드 버튼과 같은 동작).
+// 상태 칩은 목록 카드가 보여 준다 — 최신 Figma 상세에는 제목 아래 칩이 없다.
 // 제외 사유 요약 배지는 두지 않는다 — 최신 Figma/PRD는 사유를 카드 칩과 판정 행으로만 보여 준다.
 // 12월 판정(channel_policy)은 filterN3VisibleVerdicts로 거른다.
 //
@@ -64,45 +65,46 @@ export function DetailPanel({
       data-contract-inconsistent={state.isContractInconsistent || undefined}
       className="flex h-full min-h-0 flex-col"
     >
-      <div className="flex shrink-0 flex-col gap-2">
-        <p data-testid="n3-detail-title" className="text-[20px] leading-[normal] font-semibold tracking-[-0.02em] text-[#171717]">
-          {formatN3SectionTitle(section.sectionOrder)}
-        </p>
-        {/* 카드와 같은 상태값을 그대로 보인다. 판정 실패는 아래 전용 행이 같은 말을 한다 */}
-        {state.chip && !state.isJudgeFailed && <N3StatusChip label={state.chip} testId="n3-detail-status" />}
-      </div>
+      <p
+        data-testid="n3-detail-title"
+        className="h-6 shrink-0 text-[20px] leading-[24px] font-semibold tracking-[-0.02em] text-[#171717]"
+      >
+        {formatN3SectionTitle(section.sectionOrder)}
+      </p>
 
-      {/* Figma 1502:20200 — 판정과 버튼이 12 간격의 한 흐름이다. 버튼은 칼럼 아래에 고정하지 않고 판정이 많으면 함께 스크롤한다 */}
-      <div data-testid="n3-detail-flow" className="mt-[11px] flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pt-3 pr-3 pb-5">
-        {state.isJudgeFailed && (
-          <div data-testid="n3-verdict-judge-failed" className="flex w-full flex-col items-start rounded-[8px] bg-white px-5 py-3">
-            <p className="text-[18px] font-medium tracking-[-0.03em] text-[#171717]">판정 실패</p>
-          </div>
-        )}
+      {/* Figma 1759:11545 — 제목 아래 12, 판정 목록(gap 12)은 내부 스크롤, [그래도 번역하기]는 아래에 고정 */}
+      <div className="mt-3 flex min-h-0 flex-1 flex-col py-3 pr-3 pl-2">
+        <div data-testid="n3-detail-flow" className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
+          {state.isJudgeFailed && (
+            <div data-testid="n3-verdict-judge-failed" className="flex w-full shrink-0 flex-col items-start rounded-[8px] bg-white px-2 py-3">
+              <p className="text-[18px] font-medium tracking-[-0.03em] text-[#171717]">판정 실패</p>
+            </div>
+          )}
 
-        {verdicts.map((verdict) => (
-          <VerdictCard key={verdict.id ?? `${section.id}-${verdict.verdictType}`} verdict={verdict} />
-        ))}
+          {verdicts.map((verdict) => (
+            <VerdictCard key={verdict.id ?? `${section.id}-${verdict.verdictType}`} verdict={verdict} />
+          ))}
 
-        {isVerdictPending ? (
-          <p className="px-1 text-sm text-[#999]">
-            {isDetailError ? '판정 정보를 불러오지 못했습니다.' : '판정 정보를 불러오는 중...'}
-          </p>
-        ) : (
-          state.isNoVerdict && (
-            <p data-testid="n3-verdict-empty" className="px-1 text-sm text-[#999]">
-              걸린 판정이 없어요
+          {isVerdictPending ? (
+            <p className="px-1 text-sm text-[#999]">
+              {isDetailError ? '판정 정보를 불러오지 못했습니다.' : '판정 정보를 불러오는 중...'}
             </p>
-          )
-        )}
+          ) : (
+            state.isNoVerdict && (
+              <p data-testid="n3-verdict-empty" className="px-1 text-sm text-[#999]">
+                걸린 판정이 없어요
+              </p>
+            )
+          )}
+        </div>
 
         <button
           type="button"
           data-testid="n3-detail-action"
           disabled={isMutating}
           onClick={onChangeBucket}
-          // Figma 1619:10064 — 왼쪽 8, 폭 385(칼럼 405에서 오른쪽 12)
-          className="ml-2 w-[calc(100%-8px)] shrink-0 rounded-[6px] border border-[#eaeaea] bg-white px-8 py-3.5 text-[14px] leading-[normal] font-medium tracking-[-0.03em] text-[#171717] transition-colors hover:bg-[#f5f5f5] disabled:cursor-not-allowed disabled:opacity-40"
+          // Figma 1759:11591 — 본문 폭(404 − 8 − 12 = 384) 그대로, h45
+          className="h-[45px] w-full shrink-0 rounded-[6px] border border-[#eaeaea] bg-white px-8 text-[14px] leading-[normal] font-medium tracking-[-0.03em] text-[#171717] transition-colors hover:bg-[#f5f5f5] disabled:cursor-not-allowed disabled:opacity-40"
         >
           {state.actionLabel}
         </button>

@@ -2,33 +2,21 @@ import type { ApiSectionVerdict, ApiVerdictType } from '@/lib/api/n3-schema';
 import { getN3VerdictBadgeLabel } from '@/lib/n3/verdict';
 
 // ─────────────────────────────────────────────────────────────────
-// N3 — 판정 배지 + 카드 (Figma 1422:10176 「N3 섹션 확인 / 디폴트」의 Badge 반영).
+// N3 — 판정 배지 + 카드 (Figma 1759:11529 「N3 섹션 확인 / 디폴트 수정」의 Badge 반영).
 //
-// 색상 톤(Figma Badge variant):
-//   - regulatory(규제 위반) → red(#e5484d)
-//   - local_irrelevant(현지 수정 필수) · needs_fix(현지 확인 필요) → orange(#ff6a38)
+// Badge(px8 · py4 · radius 6 · dot 6 · gap 6 · 12 Regular) 톤:
+//   - regulatory(규제 위반) · channel_policy(채널 정책) · local_irrelevant(현지 수정 필수)
+//     · needs_fix(현지 확인 필요) → orange subtle(bg #fff0eb · border/text #ff6a38)
 //   - regulatory_replaceable(규제 표현) · regulatory_conditional(조건부 규제)
-//     → 중립(흰 배경 + 회색 테두리) — 제외 이유가 아닌 낮은 강조
-//   - channel_policy(채널 정책, 12월)는 이번 9월 정렬 범위가 아니라 기존 값을 둔다
-//     (Figma는 red).
-//
-// regulatory_replaceable(규제 표현)은 Figma에 표본이 없는 variant라
-// 4단계에서 근거를 다시 확인했다. Figma Badge/Status Chip 디자인시스템
-// 컴포넌트(별도 컴포넌트, 상태칩 전용)에는 이 값에 대응하는 variant가
-// 없고, 대신 scripts/verify-n3-verdict-contract.mjs(이 프로젝트의 verdict
-// 계약 검증 스크립트, v3.4.1)가 명시한 기본 bucket 기대값에서 결정적
-// 근거를 찾았다: regulatory는 exclude(자동 제외)인 반면
-// regulatory_replaceable은 regulatory_conditional·needs_fix와 같은
-// include(대체 표현이 있어 바로 차단하지 않음)다. 즉 이 프로젝트 자체가
-// regulatory_replaceable을 "그대로 두면 안 되는 하드 위반"이 아니라
-// "대체 가능해서 include로 두는 나머지 중립 판정군"과 같은 급으로
-// 다루고 있다 — 그래서 red가 아니라 neutral 톤을 쓴다.
+//     → neutral(bg white · border #eaeaea · text #171717)
+// 예전 Figma의 red(#e5484d · #fcebec) 규제 위반 톤은 최신 Figma에 없어 쓰지 않는다.
+// verdictType의 의미(bucket 기본값 등)는 바꾸지 않고 시각 매핑만 맞춘다.
 // ─────────────────────────────────────────────────────────────────
 
-type BadgeTone = 'red' | 'orange' | 'neutral';
+type BadgeTone = 'orange' | 'neutral';
 
 const TONE_BY_VERDICT_TYPE: Record<ApiVerdictType, BadgeTone> = {
-  regulatory: 'red',
+  regulatory: 'orange',
   regulatory_replaceable: 'neutral',
   regulatory_conditional: 'neutral',
   local_irrelevant: 'orange',
@@ -37,13 +25,11 @@ const TONE_BY_VERDICT_TYPE: Record<ApiVerdictType, BadgeTone> = {
 };
 
 const TONE_CHROME: Record<BadgeTone, { bg: string; border: string; text: string }> = {
-  red: { bg: 'bg-[#fcebec]', border: 'border-[#e5484d]', text: 'text-[#e5484d]' },
   orange: { bg: 'bg-[#fff0eb]', border: 'border-[#ff6a38]', text: 'text-[#ff6a38]' },
   neutral: { bg: 'bg-white', border: 'border-[#eaeaea]', text: 'text-[#171717]' },
 };
 
 function dotColorFor(tone: BadgeTone): string {
-  if (tone === 'red') return '#e5484d';
   if (tone === 'orange') return '#ff6a38';
   return '#707070';
 }
@@ -92,7 +78,8 @@ export function VerdictCard({ verdict }: { verdict: ApiSectionVerdict }) {
   if (!verdict.verdictType) return null;
 
   return (
-    <div className="flex w-full flex-col items-start gap-3 rounded-[8px] bg-white px-5 py-3">
+    // Figma 1759:11546 — px8 · py12 · 배지와 본문 사이 16 · 본문 줄 간격 6
+    <div className="flex w-full shrink-0 flex-col items-start gap-4 rounded-[8px] bg-white px-2 py-3">
       <VerdictBadge type={verdict.verdictType} />
       <div className="flex w-full flex-col gap-1.5">
         {verdict.problemText && (

@@ -2,15 +2,13 @@
 
 import type { ApiSection, ApiSourceImage } from '@/lib/api/n3-schema';
 import { formatN3SectionTitle, getN3SectionViewState } from '@/lib/n3/section-card-state';
-import { filterN3VisibleVerdicts } from '@/lib/n3/verdict';
 import { SectionCropThumbnail } from './section-crop-thumbnail';
-import { VerdictBadge } from './verdict-card';
 
 // ─────────────────────────────────────────────────────────────────
 // N3 — 섹션 목록 카드 (Figma component set 1416:12943, variant 7종 — getN3CardVisual).
 //
 // - compact(600×160): 번역 예정 · 번역 선택 · 제외된 · 판정실패. 버튼은 테두리 없음
-// - verdict(602×161·193 — 배지 줄 수만큼): 제외 판정 · 되살린 · 제외 선택. 버튼에 테두리
+// - verdict(602×161): 제외 판정 · 되살린 · 제외 선택. 버튼에 테두리
 // - 배경: 흰색(번역 예정 · 번역 선택 · 되살린) / #f5f5f5(나머지). 판정실패는 카드·이미지 불투명도 50%
 // - 선택: 1px orange 테두리
 //
@@ -18,8 +16,9 @@ import { VerdictBadge } from './verdict-card';
 // Figma의 판정실패 버튼 샘플 「판정실패」는 쓰지 않고 PRD 버튼([그래도 번역하기])을 유지한다.
 //
 // 카드 클릭은 선택만, 버튼은 bucket 변경만 한다(버튼 click은 카드로 올리지 않는다).
-// 배지는 목록 응답의 verdicts만 그린다. 12월 판정(channel_policy)은 filterN3VisibleVerdicts로 거른다.
-// 카드마다 상세 API를 부르지 않는다.
+// 카드는 썸네일 · SECTION NN · 상태 칩 · 제외/포함 버튼만 보인다. 판정 배지와 설명은 왼쪽 판정 상세(DetailPanel)가
+// 보여 준다(Figma 1759:11529 — 목록과 상세의 역할 분리). 카드마다 상세 API를 부르지 않는다.
+// 폭은 Figma 600(verdict 602)을 상한으로 두고 노트북에서는 목록 폭에 맞춰 줄어든다.
 // ─────────────────────────────────────────────────────────────────
 
 /** Figma 썸네일 폭 96 — 긴 섹션은 위쪽만 보이게 자른다 */
@@ -58,7 +57,6 @@ export function SectionListCard({
   const isWhite = variant === 'translation-pending' || variant === 'translation-selected' || variant === 'restored';
   const isJudgementFailed = state.isJudgeFailed;
   const title = formatN3SectionTitle(section.sectionOrder);
-  const badges = filterN3VisibleVerdicts(section.verdicts);
 
   return (
     <div
@@ -81,12 +79,12 @@ export function SectionListCard({
         }
       }}
       className={`flex shrink-0 cursor-pointer gap-5 rounded-[8px] border text-left transition-colors ${
-        isCompact ? 'h-40 w-full py-[13px] pr-4 pl-[15px]' : 'min-h-[161px] w-[calc(100%+2px)] -mx-px p-5'
+        isCompact ? 'h-40 w-full max-w-[600px] py-[13px] pr-4 pl-[15px]' : 'min-h-[161px] w-full max-w-[602px] p-5'
       } ${isWhite ? 'bg-white' : 'bg-[#f5f5f5]'} ${isSelected ? 'border-[#707070]' : 'border-[#eaeaea]'} ${
         isJudgementFailed ? 'opacity-50' : ''
       }`}
     >
-      {/* verdict 카드 높이는 배지 줄 수로 정해진다(161·193) — 이미지는 그 높이를 채울 뿐 카드를 늘리지 않는다 */}
+      {/* 이미지는 카드 높이를 채울 뿐 카드를 늘리지 않는다 */}
       <div
         data-testid={`n3-section-thumb-${section.id}`}
         className={`relative shrink-0 self-stretch overflow-hidden rounded-[4px] ${isJudgementFailed ? 'opacity-50' : ''}`}
@@ -105,15 +103,8 @@ export function SectionListCard({
       <div className={`relative flex min-w-0 flex-1 flex-col ${isCompact ? 'pt-[14px]' : 'justify-between gap-7'}`}>
         <div className={`flex flex-col ${isCompact ? 'gap-2' : 'gap-4'}`}>
           <p className="text-[18px] leading-[normal] font-medium tracking-[-0.03em] text-[#171717]">{title}</p>
-          {(state.chip || badges.length > 0) && (
-            <div className="flex flex-wrap gap-2">
-              {/* 회색 카드 위에서는 칩이 사라지지 않게 흰 바탕으로 둔다(Figma 제외된 variant에는 칩 표본이 없다) */}
-              {state.chip && <N3StatusChip label={state.chip} onGray={!isWhite} />}
-              {badges.map((verdict, i) => (
-                <VerdictBadge key={verdict.id ?? `${verdict.verdictType}-${i}`} type={verdict.verdictType!} />
-              ))}
-            </div>
-          )}
+          {/* 회색 카드 위에서는 칩이 사라지지 않게 흰 바탕으로 둔다(Figma 제외된 variant에는 칩 표본이 없다) */}
+          {state.chip && <N3StatusChip label={state.chip} onGray={!isWhite} />}
         </div>
 
         <div className={`flex justify-end ${isCompact ? 'absolute right-[7px] bottom-[10px]' : ''}`}>
