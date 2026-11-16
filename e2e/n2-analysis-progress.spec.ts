@@ -93,10 +93,11 @@ async function setup(page: Page, script: unknown[]) {
       const caption = document.querySelector('[data-testid="processing-log-description"]');
       const text = caption ? (caption.textContent ?? '').replace(/\s+/g, ' ').trim() : '';
       if (text && w.__detailLog[w.__detailLog.length - 1] !== text) w.__detailLog.push(text);
-      const rows = Array.from(document.querySelectorAll('p')).filter((p) => /^0[1-5]\s/.test(p.textContent ?? ''));
+      // 행 키는 화면 위치(01~05행)다 — 표시 번호는 01 · (빈칸) · (빈칸) · 02 · 03 이다(Figma 660:4139)
+      const rows = Array.from(document.querySelectorAll('[data-testid="processing-step-title"]'));
       if (rows.length === 5) {
         const states: Record<string, string> = {};
-        for (const p of rows) states[(p.textContent ?? '').trim().slice(0, 2)] = (p.nextElementSibling?.textContent ?? '').trim();
+        rows.forEach((p, i) => (states[`0${i + 1}`] = (p.nextElementSibling?.textContent ?? '').trim()));
         const last = w.__rowsLog[w.__rowsLog.length - 1];
         if (!last || JSON.stringify(last) !== JSON.stringify(states)) w.__rowsLog.push(states);
       }
@@ -123,7 +124,7 @@ async function setup(page: Page, script: unknown[]) {
 const detailLog = (page: Page) => page.evaluate(() => (window as unknown as { __detailLog: string[] }).__detailLog);
 const rowsLog = (page: Page) => page.evaluate(() => (window as unknown as { __rowsLog: Record<string, string>[] }).__rowsLog);
 const allDone = (s: Record<string, string>) => ['01', '02', '03', '04', '05'].every((no) => s[no] === '완료');
-const fiveStepRows = (page: Page) => page.locator('p').filter({ hasText: /^0[1-5]\s/ });
+const fiveStepRows = (page: Page) => page.getByTestId('processing-step-title');
 const logCaption = (page: Page) => page.getByTestId('processing-log-description');
 const DEFAULT_LOG_CAPTION = '완료된 항목은 분리하고, 현재 판단만 선명하게 정리 중 입니다.';
 
@@ -137,15 +138,17 @@ async function expectRows(page: Page, expected: Record<string, string>, timeout 
   await expect.poll(async () => (await rowsLog(page)).at(-1), { timeout }).toEqual(expected);
 }
 
-/** Figma 660:4139 의 5단계 목록 — 항상 정확히 5개, 이 순서다. */
+/** Figma 660:4139 의 목록 — 5행 · 사용자 단계 3개(첫 세 행이 하나의 01 묶음). dot 는 첫 묶음의 첫 행에만 보인다 */
 async function expectFigmaFiveRows(page: Page) {
   await expect(fiveStepRows(page)).toHaveText([
     /^01\s+콘텐츠 영역 나누기$/,
-    /^02\s+전체 텍스트 인식$/,
-    /^03\s+문단별 역할 파악$/,
-    /^04\s+제품 라벨 자동 제외$/,
-    /^05\s+규제 · 현지 적합성 확인$/,
+    /^전체 텍스트 인식$/,
+    /^문단별 역할 파악$/,
+    /^02\s+제품 라벨 자동 제외$/,
+    /^03\s+규제 · 현지 적합성 확인$/,
   ]);
+  const dotOpacity = await page.getByTestId('processing-step-dot').evaluateAll((els) => els.map((el) => getComputedStyle(el).opacity));
+  expect(dotOpacity).toEqual(['1', '0', '0', '1', '1']);
 }
 
 /** 순서대로 나타났는지(사이에 다른 상태가 끼어도 된다) */

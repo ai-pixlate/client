@@ -32,13 +32,11 @@ async function installStepRecorder(page: Page) {
     const w = window as unknown as { __n2StepLog: Record<string, string>[] };
     w.__n2StepLog = [];
     const snapshot = () => {
-      const rows = Array.from(document.querySelectorAll('p')).filter((p) => /^0[1-5]\s/.test(p.textContent ?? ''));
+      const rows = Array.from(document.querySelectorAll('[data-testid="processing-step-title"]'));
       if (rows.length !== 5) return;
       const states: Record<string, string> = {};
-      for (const p of rows) {
-        const no = (p.textContent ?? '').trim().slice(0, 2);
-        states[no] = (p.nextElementSibling?.textContent ?? '').trim();
-      }
+      // 행 키는 화면 위치(01~05행) — 표시 번호는 01 · (빈칸) · (빈칸) · 02 · 03 이다
+      rows.forEach((p, i) => (states[`0${i + 1}`] = (p.nextElementSibling?.textContent ?? '').trim()));
       const last = w.__n2StepLog[w.__n2StepLog.length - 1];
       if (!last || JSON.stringify(last) !== JSON.stringify(states)) w.__n2StepLog.push(states);
     };
@@ -133,7 +131,7 @@ test('N2 에서 currentStep=N1 로 돌아가면 5단계 완료 표시 없이 바
     const start = () =>
       new MutationObserver(() => {
         if (w.__n1ResponseAt === undefined || w.__n2GoneAt !== undefined) return;
-        const hasN2Rows = Array.from(document.querySelectorAll('p')).some((p) => /^0[1-5]\s/.test(p.textContent ?? ''));
+        const hasN2Rows = document.querySelector('[data-testid="processing-step-title"]') != null;
         if (!hasN2Rows) w.__n2GoneAt = performance.now();
       }).observe(document.documentElement, { childList: true, subtree: true, characterData: true });
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);

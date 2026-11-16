@@ -88,10 +88,10 @@ async function recordN4Snapshots(page: Page) {
       const snapshot = () => {
         const onN4 = Array.from(document.querySelectorAll('h1, h2, h3')).some((h) => h.textContent?.trim() === '번역 중');
         const bar = document.querySelector('[role="progressbar"]');
-        const rowEls = Array.from(document.querySelectorAll('p')).filter((p) => /^0[1-5]\s/.test(p.textContent ?? ''));
+        const rowEls = Array.from(document.querySelectorAll('[data-testid="processing-step-title"]'));
         if (!onN4 || !bar || rowEls.length !== 5) return;
         const rows: Record<string, string> = {};
-        for (const p of rowEls) rows[(p.textContent ?? '').trim().slice(0, 2)] = (p.nextElementSibling?.textContent ?? '').trim();
+        rowEls.forEach((p, i) => (rows[`0${i + 1}`] = (p.nextElementSibling?.textContent ?? '').trim()));
         const text = document.body.textContent ?? '';
         const caption = captions.find((c) => text.includes(c)) ?? '';
         const entry = { rows, progress: Number(bar.getAttribute('aria-valuenow')), caption };
