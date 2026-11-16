@@ -56,12 +56,12 @@ test('확인창 — Figma 구조·실제 데이터 집계, 돌아가기는 요�
   await expect(page.getByTestId('n5-review-count-execution-failed')).toHaveText('3건');
   await expect(page.getByTestId('n5-review-total')).toHaveText('10건');
   const regulatory = page.getByTestId('n5-review-group-regulatory-warning');
-  await expect(regulatory).toContainText('Section 1 - Block 01');
+  await expect(regulatory).toContainText('섹션 1 -1');
   await expect(regulatory).toContainText('번역문의 표현이 금지 표현 목록에 있습니다');
   await expect(regulatory.locator('h3')).toHaveCSS('color', 'rgb(255, 106, 56)');
-  await expect(page.getByTestId('n5-review-group-empty-translation')).toContainText('Section 1 - Block 03');
-  await expect(page.getByTestId('n5-review-group-execution-failed')).toContainText('Section 1 렌더링');
-  await expect(page.getByTestId('n5-review-group-execution-failed')).toContainText('Section 5 렌더링');
+  await expect(page.getByTestId('n5-review-group-empty-translation')).toContainText('섹션 1 -3');
+  await expect(page.getByTestId('n5-review-group-execution-failed')).toContainText('섹션 1 렌더링');
+  await expect(page.getByTestId('n5-review-group-execution-failed')).toContainText('섹션 5 렌더링');
 
   // 돌아가기
   await page.getByTestId('n5-review-cancel').click();

@@ -95,8 +95,8 @@ export function groupN5ReviewIssues(issues: readonly N5ReviewIssue[]): N5ReviewI
   });
 }
 
-/** 「Section 2 - Block 03」 · 「Section 1 렌더링」 */
+/** Figma 1657:10490 — 「섹션 3 -2」(block, 앞자리 0 없음 · - 뒤 공백 없음) · 「섹션 1 렌더링」(section 실행 실패) */
 export function formatN5ReviewIssueLocation(issue: N5ReviewIssue): string {
-  if (issue.blockOrder != null) return `Section ${issue.sectionOrder} - Block ${String(issue.blockOrder).padStart(2, '0')}`;
-  return `Section ${issue.sectionOrder}${issue.stageLabel ? ` ${issue.stageLabel}` : ''}`;
+  if (issue.blockOrder != null) return `섹션 ${issue.sectionOrder} -${issue.blockOrder}`;
+  return `섹션 ${issue.sectionOrder}${issue.stageLabel ? ` ${issue.stageLabel}` : ''}`;
 }

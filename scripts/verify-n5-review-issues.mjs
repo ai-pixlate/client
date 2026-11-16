@@ -49,9 +49,9 @@ const groups = groupN5ReviewIssues(issues);
 check('Figma 순서로 묶는다', groups.map((g) => g.title).join() === '규제 경고,검사실패,번역문 비어 있음,실행 실패,저장하지 못한 번역문', groups.map((g) => g.title).join());
 check('규제 경고만 Warning', groups.filter((g) => g.isWarning).map((g) => g.kind).join() === 'regulatory-warning');
 const reg = issues.find((i) => i.kind === 'regulatory-warning');
-check('위치 — block', formatN5ReviewIssueLocation(reg) === 'Section 2 - Block 01', formatN5ReviewIssueLocation(reg));
+check('위치 — block', formatN5ReviewIssueLocation(reg) === '섹션 2 -1', formatN5ReviewIssueLocation(reg));
 const exec = issues.find((i) => i.kind === 'execution-failed');
-check('위치 — section', formatN5ReviewIssueLocation(exec) === 'Section 1 렌더링');
+check('위치 — section', formatN5ReviewIssueLocation(exec) === '섹션 1 렌더링');
 check('항목 없으면 묶음도 없다', groupN5ReviewIssues([]).length === 0);
 
 console.log('\noverlap');
