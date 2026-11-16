@@ -39,9 +39,27 @@ test('확인창 — Figma 구조·실제 데이터 집계, 돌아가기는 요�
   await expect(dialog).toContainText('해결되지 않은 항목이 남아 있습니다.');
   await expect(dialog).toContainText('확인하고 저장하면 그대로 최종 렌더링 단계로 이동합니다.');
 
-  // geometry
+  // geometry — 이 fixture 는 10건(6건 이상)이다. 정책(a56dcca): 6건 이상이면 목록을 5번째 항목까지 보이는 높이로 제한하고
+  // 목록만 스크롤한다. 모달 높이는 710 고정이 아니라 그 내용에 맞추고(최대 710), 화면 가운데에 둔다.
+  await expect(dialog.locator('[data-review-issue]')).toHaveCount(10);
   const d = await box(page, 'n5-review-dialog');
-  expect([Math.round(d.x), Math.round(d.y), Math.round(d.width), Math.round(d.height)]).toEqual([701, 185, 518, 710]);
+  const viewport = page.viewportSize()!;
+  expect(Math.round(d.width)).toBe(518);
+  expect(Math.round(d.x)).toBe(Math.round((viewport.width - 518) / 2));
+  expect(d.height).toBeLessThanOrEqual(710);
+  expect(Math.abs(d.y + d.height / 2 - viewport.height / 2)).toBeLessThanOrEqual(1);
+  // 목록만 스크롤 — 모달 자체는 넘치지 않고, 6번째 항목부터 목록 아래로 가려진다
+  const list = page.getByTestId('n5-review-list');
+  const scroll = await list.evaluate((el) => ({ scrollHeight: el.scrollHeight, clientHeight: el.clientHeight }));
+  expect(scroll.scrollHeight).toBeGreaterThan(scroll.clientHeight);
+  expect(await dialog.evaluate((el) => el.scrollHeight <= el.clientHeight)).toBe(true);
+  const listBox = await box(page, 'n5-review-list');
+  const issueBoxes = await dialog.locator('[data-review-issue]').evaluateAll((els) => els.map((el) => el.getBoundingClientRect().bottom));
+  expect(issueBoxes[4]).toBeLessThanOrEqual(listBox.y + listBox.height);
+  expect(issueBoxes[5]).toBeGreaterThan(listBox.y + listBox.height);
+  // 제목·버튼은 밀리지 않고 화면 안에 있다
+  await expect(dialog.getByRole('heading', { name: '확인할 항목이 있습니다' })).toBeInViewport({ ratio: 1 });
+  await expect(page.getByTestId('n5-review-continue')).toBeInViewport({ ratio: 1 });
   const cancelBox = await box(page, 'n5-review-cancel');
   const continueBox = await box(page, 'n5-review-continue');
   expect(Math.round(cancelBox.height)).toBe(45);
@@ -62,6 +80,11 @@ test('확인창 — Figma 구조·실제 데이터 집계, 돌아가기는 요�
   await expect(page.getByTestId('n5-review-group-empty-translation')).toContainText('섹션 1 -3');
   await expect(page.getByTestId('n5-review-group-execution-failed')).toContainText('섹션 1 렌더링');
   await expect(page.getByTestId('n5-review-group-execution-failed')).toContainText('섹션 5 렌더링');
+  // 위치 표기(Figma 1657:10490) — 실제 dialog DOM 의 모든 위치 줄이 「섹션 N -M」 또는 「섹션 N 단계」 형식이다
+  const locations = await dialog.locator('[data-review-issue] p:first-child').allTextContents();
+  expect(locations).toHaveLength(10);
+  for (const text of locations) expect(text).toMatch(/^섹션 \d+ (-[1-9]\d*|렌더링|인페인팅)$/);
+  expect(locations.join(' ')).not.toMatch(/Section|Block| -0/);
 
   // 돌아가기
   await page.getByTestId('n5-review-cancel').click();
