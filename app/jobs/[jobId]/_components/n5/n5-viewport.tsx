@@ -245,8 +245,8 @@ function SectionStatusHeader({
  * 7단계 — Figma(544:3168 재확인)는 좌측 canvas의 각 block 좌상단에도 우측
  * panel과 같은 번호 배지(BlockNumberBadge, n5-panel.tsx)를 보여준다. 이전엔
  * canvas 쪽에 번호 배지가 전혀 없었다 — 색/모양은 우측 배지와 동일하게
- * 맞추고, block rect의 좌상단 모서리에 걸치도록 배치한다(Figma가 보여준
- * "텍스트 바로 옆" 위치를 일반화한 규칙).
+ * 맞추고, 글자를 가리지 않게 block rect 왼쪽 위 바깥(배지 모서리가 글자 모서리에 닿는 자리)에
+ * 둔다(BlockOverlay, UNSELECTED_BADGE_OFFSET).
  */
 /** n5-panel.tsx BlockNumberBadge와 같은 규칙 — leading-none으로 폰트
  *  line-height가 만드는 수직 오프셋을 없애 숫자를 정중앙에 둔다(N5 3차
@@ -369,7 +369,7 @@ function BlockOverlay({
           e.stopPropagation();
           onSelect();
         }}
-        // 선택 테두리는 글자에서 16px 떨어진 선택 UI(BlockSelectionChrome)가 그린다 — 이 영역은 bbox 그대로 클릭·끌기만 받는다
+        // 선택 테두리는 글자에서 12px 떨어진 선택 UI(BlockSelectionChrome)가 그린다 — 이 영역은 bbox 그대로 클릭·끌기만 받는다
         className={`absolute z-[2] ${drag ? 'cursor-move' : 'cursor-pointer'}`}
         style={{ left: visualRect.left, top: visualRect.top, width: visualRect.width, height: visualRect.height }}
       />
@@ -387,7 +387,7 @@ function BlockOverlay({
         // 않다. 다만 소수 px 위치는 브라우저마다 서브픽셀 렌더링 방식이 달라
         // 미세한 흐림/치우침 인상을 줄 수 있어, 정수 px로 스냅한다(패딩/
         // translate로 임의 보정한 값이 아니라 위치 자체를 반올림한 것).
-        // 선택된 block은 Figma 1512:23496처럼 선택 테두리 바깥 왼쪽 위(테두리에서 왼쪽 16·위 24, 화면 px)로 빼서 글자를 가리지 않는다
+        // 배지는 글자를 가리지 않게 글자 왼쪽 위 바깥에 둔다(Figma 544:3168). 선택된 block은 선택 테두리 바깥으로 더 빼고 화면 px로 고정한다
         style={
           isSelected
             ? {
@@ -396,7 +396,7 @@ function BlockOverlay({
                 transform: `scale(${1 / zoom})`,
                 transformOrigin: '0 0',
               }
-            : { left: Math.round(visualRect.left - 8), top: Math.round(visualRect.top - 8) }
+            : { left: Math.round(visualRect.left - UNSELECTED_BADGE_OFFSET), top: Math.round(visualRect.top - UNSELECTED_BADGE_OFFSET) }
         }
       >
         <BlockPinBadge index={index} isSelected={isSelected} />
@@ -418,12 +418,15 @@ const HANDLE_POSITIONS: { key: ResizeHandle; x: number; y: number; cursor: strin
 
 /** 이만큼 움직여야 클릭이 아니라 끌기로 본다(화면 px) */
 const BLOCK_DRAG_START_DISTANCE_PX = 3;
-// Figma 1512:23496 「Selection」(화면 px, zoom과 무관). 글자(bbox) 바깥 16에 선택 테두리와 손잡이 8개를 둔다 — 보이는 여백일 뿐
-// 저장하는 bbox·layoutAdjust는 바꾸지 않는다. 글자크기 툴바는 테두리 왼쪽에서 8, 위로 42(툴바 34 + 간격 8)에 선택 즉시 보인다.
-// 선택된 번호 배지는 테두리에서 왼쪽 16·위 24(배지 20 + 간격 4)로 빠져 툴바(왼쪽 8부터)와도 겹치지 않는다.
-const SELECTION_CHROME_PADDING_PX = 16;
-const SELECTED_BADGE_OFFSET_PX = { left: 16, top: 24 };
-const FONT_TOOLBAR_OFFSET_PX = { left: 8, top: 42 };
+// Figma 544:3168 / 1512:23496 「Selection」 실측(화면 px, zoom과 무관). 선택 테두리(Selected Crop Fragment)와 손잡이 8개의 중심은
+// 글자(bbox) 바깥 12에 있다(16은 손잡이 절반까지 포함한 인스턴스 경계다). 보이는 여백일 뿐 저장하는 bbox·layoutAdjust는 바꾸지 않는다.
+// 글자 기준으로 번호 배지는 왼쪽 32·위 40, 글자크기 툴바(34 높이)는 왼쪽 8·위 58 — 테두리 기준으로 아래 offset이다.
+// 툴바는 선택 즉시 보이고, 배지(테두리 -20 ~ 0)와 툴바(테두리 +4부터)는 서로 겹치지 않는다.
+const SELECTION_CHROME_PADDING_PX = 12;
+const SELECTED_BADGE_OFFSET_PX = { left: 20, top: 28 };
+const FONT_TOOLBAR_OFFSET_PX = { left: 4, top: 46 };
+/** 선택 안 된 번호 배지 — 글자 왼쪽 위 바깥(배지 오른쪽 아래 모서리가 글자 왼쪽 위에 닿는다, Figma 544:3168). canvas px라 배지와 함께 확대된다 */
+const UNSELECTED_BADGE_OFFSET = 20;
 /** 툴바 꼬리(Figma Group 11) — 툴바 왼쪽에서 22~30, 아래로 테두리를 가리킨다 */
 const FONT_TOOLBAR_TAIL_CENTER_PX = 26;
 
@@ -434,7 +437,7 @@ const FONT_TOOLBAR_TAIL_CENTER_PX = 26;
  * 핸들 8개(F-CFM-15)는 영역 크기만 바꾸고 section 밖으로 넓히지 못한다. [+][-]는 글자 배율과 박스를 함께 바꾼다.
  * 둘 다 이 세션의 local 초안만 바꾼다 — 저장 계약이 없어 서버 요청을 만들지 않는다. 캔버스의 글자는 서버 렌더 이미지라
  * 재렌더 계약이 생기기 전에는 이미지 속 글자 크기가 바뀌지 않는다.
- * 테두리·손잡이는 bbox에서 화면 16px 바깥에 그린다. 손잡이를 끈 거리는 그대로 bbox 크기 변화로 옮긴다(시작 위치만 바깥이다).
+ * 테두리·손잡이는 bbox에서 화면 12px 바깥에 그린다. 손잡이를 끈 거리는 그대로 bbox 크기 변화로 옮긴다(시작 위치만 바깥이다).
  * 글자크기 툴바는 선택하면 바로 보인다(따로 여는 손잡이가 없다).
  */
 function BlockSelectionChrome({
@@ -558,7 +561,7 @@ function BlockSelectionChrome({
   }
 
   const inverseScale = `scale(${1 / zoom})`;
-  // 선택 테두리 — bbox(rect)를 화면 16px만큼 바깥으로 넓힌 canvas 좌표. 저장 좌표가 아니다
+  // 선택 테두리 — bbox(rect)를 화면 12px만큼 바깥으로 넓힌 canvas 좌표. 저장 좌표가 아니다
   const padding = SELECTION_CHROME_PADDING_PX / zoom;
   const chrome: DisplayRect = {
     left: rect.left - padding,
