@@ -184,7 +184,7 @@ test.describe('F-CFM-13 — 좌우 selection 연동 + 자동 스크롤', () => {
     await expect(page.getByTestId('n5-block-overlay-9101')).toHaveAttribute('aria-pressed', 'false');
   });
 
-  test('좌측 section 배경 클릭 → selectedSectionId 갱신, 우측 SectionN 헤더로 자동 스크롤', async ({
+  test('좌측 section 배경 클릭 → selectedSectionId 갱신, 우측 패널은 움직이지 않는다(PM 확정)', async ({
     page,
   }) => {
     await page.getByTestId('n5-fit-height').click();
@@ -200,11 +200,15 @@ test.describe('F-CFM-13 — 좌우 selection 연동 + 자동 스크롤', () => {
 
     const clickX = box.x + box.width * 0.15;
     const clickY = Math.min(box.y + box.height * 0.9, viewportBox.y + viewportBox.height - 8);
+    const panelBody = page.getByTestId('n5-panel-body');
+    const scrollTopBefore = await panelBody.evaluate((el) => el.scrollTop);
     await page.mouse.click(clickX, clickY);
 
     await expect(page.getByTestId('n5-section-selected-tag')).toHaveText('Section5');
     await expect(page.getByTestId('n5-section-tag-5')).toHaveAttribute('aria-pressed', 'true');
-    await expect(page.getByTestId('n5-section-tag-5')).toBeInViewport();
+    // section 을 고르는 것은 오른쪽 표를 움직이라는 뜻이 아니다 — 패널 scrollTop 그대로
+    await page.waitForTimeout(600);
+    expect(Math.abs((await panelBody.evaluate((el) => el.scrollTop)) - scrollTopBefore)).toBeLessThanOrEqual(1);
 
     // 블록 자체는 선택되지 않는다 — section만 선택된 상태
     await expect(page.locator('[data-testid^="n5-block-row-"][aria-pressed="true"]')).toHaveCount(0);
