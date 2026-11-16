@@ -151,10 +151,12 @@ function N5Loaded({
           같이 꽉 찬다(세로 여백은 N5Panel 안쪽에서 개별적으로 준다, 아래
           참고). 좌우 padding은 rail→workspace 간격(pl, ProcessingStageLayout
           의 calc(6.25vw-80px) 공식과 동일 — rail 몫 80px을 먼저 상쇄)과
-          panel→프레임 오른쪽 끝 간격(pr, 같은 화면들의 clamp(45px,3.125vw,
-          60px)과 동일)을 그대로 재사용한다. workspace와 panel 사이 gap은
-          Figma 실측(52px, 1920 기준 2.708vw)을 상한으로 쓴다. */}
-      <div className="flex h-full min-h-0 min-w-0 flex-1 gap-[clamp(20px,2.71vw,52px)] pr-[clamp(45px,3.125vw,60px)] pl-[clamp(0px,calc(6.25vw_-_80px),40px)]">
+          panel→프레임 오른쪽 끝 간격(pr)과 workspace↔panel gap은 Figma 1920
+          실측(60 · 52)을 상한으로 둔다.
+          노트북 반응형 순서 — 먼저 gap(52→24)과 오른쪽 gutter(60→32)가 1920→1440
+          사이에 같은 기울기(0.06 — 1440에서 24·32, 1900 부근부터 상한 52·60에 고정돼 1920은 Figma 그대로)로 줄고, 그다음 1440 아래에서 panel(433→360, n5-panel.tsx)이
+          줄어든다. workspace(N5Viewport)는 flex-1 · min-w-0 로 남은 폭을 받는다. */}
+      <div className="flex h-full min-h-0 min-w-0 flex-1 gap-[clamp(24px,calc((100vw_-_1440px)_*_0.06_+_24px),52px)] pr-[clamp(32px,calc((100vw_-_1440px)_*_0.06_+_32px),60px)] pl-[clamp(0px,calc(6.25vw_-_80px),40px)]">
         <N5Viewport
           preview={preview}
           blocks={blocks}

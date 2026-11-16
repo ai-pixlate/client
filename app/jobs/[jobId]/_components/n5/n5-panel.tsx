@@ -880,15 +880,15 @@ export function N5Panel({
   }
 
   return (
-    // width: Figma(544:3168) 실측 433px(1920 기준 22.56vw에서 상한에 닿는다)를 상한으로
-    // 쓰고, 하한(360px)은 패널이 지나치게 좁아지는 걸 막는 안전장치다.
+    // width: Figma(544:3168) 실측 433px 를 상한으로 1440 까지 유지하고(그 위에서는 gap·gutter 가 먼저 준다,
+    // n5-view.tsx), 1440 아래에서 1px 씩 줄어 하한 360px 에 닿는다(100vw − 1007px).
     // pt/pb: 패널이 이제 rail과 같은 h-full(세로 전체)이라, Figma가 보여준
     // "패널 타이틀 y=60, 저장 버튼 하단 여백=80"을 패널 자신의 바깥 padding
     // 으로 준다 — 60/1080=5.56vh, 80/1080≈7.41vh(다른 화면의 하단 gutter와
     // 같은 계수, ProcessingStageLayout의 pb-[clamp(60px,7.41vh,80px)] 참고).
     <div
       data-testid="n5-panel"
-      className="flex h-full w-[var(--n5-panel-width)] shrink-0 flex-col pt-[clamp(24px,5.56vh,60px)] pb-[clamp(40px,7.41vh,80px)] [--n5-panel-width:clamp(360px,22.56vw,433px)]"
+      className="flex h-full w-[var(--n5-panel-width)] shrink-0 flex-col pt-[clamp(24px,5.56vh,60px)] pb-[clamp(40px,7.41vh,80px)] [--n5-panel-width:clamp(360px,calc(100vw_-_1007px),433px)]"
     >
       {/* Figma(544:3168)는 타이틀과 번역문/원문 토글이 한 줄에 justify-between으로
           나란히 있다. 국가/언어·블록 개수 메타 줄은 Figma에 대응 요소가 없고
@@ -911,7 +911,8 @@ export function N5Panel({
           data-testid="n5-panel-body"
           className="pix-hover-scroll -mr-1.5 min-h-0 flex-1"
         >
-          <div className="flex w-[var(--n5-panel-width)] flex-col gap-6 pb-[72px]">
+          {/* 내용 폭 = panel 폭(clamp 변수) — 고정 px 가 아니라 panel 과 함께 줄고, 긴 글은 칸 안에서 줄바꿈한다 */}
+          <div className="flex w-[var(--n5-panel-width)] min-w-0 flex-col gap-6 pb-[72px] break-words">
         {groups.length === 0 ? (
           <p className="flex flex-1 items-center justify-center text-center text-sm text-[#999]">
             표시할 텍스트 블록이 없습니다.
