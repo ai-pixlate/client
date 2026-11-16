@@ -1,6 +1,6 @@
 /**
  * N5 블록 배치 저장(BlockPatch.layoutAdjust) Mock 서버 동작 — OpenAPI 3.5.10 blockPatch 「블록 배치」 계약을 흉내 낸다.
- * 실제 서버 구현이 아니다(서버 구현 대기). FE 코드와 분리해 둔 순수 함수다(scripts/verify-n5-layout-adjust.mjs).
+ * 실제 서버 구현이 아니다(BE develop 구현 완료 — 이 Mock 은 그 계약의 대역이다). FE 코드와 분리해 둔 순수 함수다(scripts/verify-n5-layout-adjust.mjs).
  *
  * - 요청 형식(422): 빈 객체 · box 좌표 일부만 · 정의되지 않은 키 · fontScale ≤ 0
  * - 업무 검증(400): 섹션 밖 박스(0 ≤ x, 0 ≤ y, w > 0, h > 0, x+w ≤ 폭, y+h ≤ 높이 — 허용 오차 없음, 보정하지 않음)

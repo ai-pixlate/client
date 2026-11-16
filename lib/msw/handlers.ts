@@ -514,8 +514,9 @@ function registerOrReuseN6RenderTask(): number {
 }
 
 /**
- * 최종 렌더 입력 snapshot — 새 최종 렌더를 등록하는 순간(confirm·POST render)의 서버 block 상태(trans1·revision).
- * 실서버 final render 가 confirm 시점의 block revision/trans1 을 manifest 에 담는 것과 같은 의미다. N6 결과 이미지는 이 값으로 만든다
+ * 최종 렌더 입력 snapshot — 새 최종 렌더를 등록하는 순간(confirm·POST render)의 서버 block 상태(trans1·revision·layoutAdjust).
+ * 실서버 final render 가 confirm 시점의 block revision/trans1 과 저장된 배치(box·font_scale)를 manifest 에 담는 것과 같은 의미다
+ * (BE tests/test_block_layout_adjust.py test_final_render_uses_same_box_scale_and_updates_overflow). N6 결과 이미지는 이 값으로 만든다
  * (FE 화면 상태가 아니라 Mock 서버 상태를 snapshot 한다).
  */
 interface N6RenderSnapshotBlock {
@@ -523,6 +524,8 @@ interface N6RenderSnapshotBlock {
   sectionId: number;
   revision: number | null;
   trans1: string;
+  /** confirm 시점에 저장된 셀러 배치(정규화 후). 없으면 null — 원본 bbox · 배율 1.0 */
+  layoutAdjust: { box: { x: number; y: number; w: number; h: number } | null; fontScale: number | null } | null;
 }
 const n6RenderSnapshots = new Map<number, N6RenderSnapshotBlock[]>();
 
@@ -530,7 +533,13 @@ function snapshotN5BlocksForFinalRender(): N6RenderSnapshotBlock[] {
   const included = new Set(n5PreviewSectionState.filter((section) => section.bucket === 'include').map((section) => section.id));
   return [...n5BlockState.values()]
     .filter((block) => block.sectionId != null && included.has(block.sectionId) && block.isExcluded !== true && (block.trans1 ?? '') !== '')
-    .map((block) => ({ blockId: block.id as number, sectionId: block.sectionId as number, revision: block.revision ?? null, trans1: block.trans1 as string }));
+    .map((block) => ({
+      blockId: block.id as number,
+      sectionId: block.sectionId as number,
+      revision: block.revision ?? null,
+      trans1: block.trans1 as string,
+      layoutAdjust: (block.layoutAdjust as N6RenderSnapshotBlock['layoutAdjust'] | undefined) ?? null,
+    }));
 }
 
 /** Mock 산출물 순서 ↔ 섹션(mockN6Deliverables 의 501·502 번역 이미지) */
@@ -1377,7 +1386,7 @@ export const handlers = [
       return badRequest('trans1(string)과 revision(number)이 필요합니다');
     }
 
-    // ── 블록 배치(layoutAdjust, 계약 확정·서버 구현 대기 — lib/mock-api/n5-layout-adjust.ts). 키가 있을 때만 다룬다
+    // ── 블록 배치(layoutAdjust, BE develop 구현 완료·dev 배포 확인 필요 — lib/mock-api/n5-layout-adjust.ts). 키가 있을 때만 다룬다
     const hasLayout = 'layoutAdjust' in body;
     const layoutScenario = getN5LayoutScenario(request.referrer);
     const parsedLayout = hasLayout ? parseMockLayoutPatch(body.layoutAdjust) : null;
