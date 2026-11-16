@@ -367,6 +367,13 @@ console.log('\ntoJobMetaViewModel');
   check('없는 값은 지어내지 않는다', empty.countryLabel === null && empty.regulatoryClassLabel === null && empty.categoryLabel === null);
   const loading = toJobMetaViewModel({ targetCountry: 'US', regulatoryClass: 'cosmetic', categoryId: 7 }, [], [], labels);
   check('목록을 받기 전에는 해당 이름만 비운다', loading.countryLabel === null && loading.categoryLabel === null && loading.regulatoryClassLabel === '화장품');
+  const channels = [{ id: 3, name: '아마존' }, { id: 4 }];
+  const withChannel = toJobMetaViewModel({ targetCountry: 'US', channelSpecId: 3, regulatoryClass: 'cosmetic', categoryId: 7 }, countries, categories, labels, channels);
+  check('channelSpecId → ChannelSpec.name', withChannel.channelLabel === '아마존' && withChannel.countryLabel === '미국' && withChannel.categoryLabel === '선크림');
+  check('channelSpecId 없음 → 채널만 생략', toJobMetaViewModel({ targetCountry: 'US', channelSpecId: null }, countries, categories, labels, channels).channelLabel === null);
+  check('목록에 없는 id → 생략', toJobMetaViewModel({ channelSpecId: 9 }, countries, categories, labels, channels).channelLabel === null);
+  check('name 없음 → 생략', toJobMetaViewModel({ channelSpecId: 4 }, countries, categories, labels, channels).channelLabel === null);
+  check('채널 목록 조회 전·실패 → 생략', toJobMetaViewModel({ channelSpecId: 3 }, countries, categories, labels).channelLabel === null);
 }
 
 console.log('\nN5 오류 상태');

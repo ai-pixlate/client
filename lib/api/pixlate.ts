@@ -16,7 +16,7 @@ import type {
   ApiLibraryCard,
   ApiExportArtifactType,
 } from '@/lib/api/n6-schema';
-import type { ApiCategory, ApiCountry, ApiLanguage } from '@/lib/api/master-schema';
+import type { ApiCategory, ApiChannelSpec, ApiCountry, ApiLanguage } from '@/lib/api/master-schema';
 import type { ApiBrand, ApiBrandCreate, ApiBrandLogo, ApiBrandUpdate } from '@/lib/api/brand-schema';
 
 // ─────────────────────────────────────────────
@@ -426,6 +426,11 @@ export function getMasterCountries(): Promise<ApiCountry[]> {
 
 export function getMasterLanguages(): Promise<ApiLanguage[]> {
   return apiFetch<ApiLanguage[]>('/master/languages');
+}
+
+/** 규격(판매 채널) 목록 (masterChannelSpecs). Job.channelSpecId 의 표시 이름을 찾는 데 쓴다 */
+export function getMasterChannelSpecs(): Promise<ApiChannelSpec[]> {
+  return apiFetch<ApiChannelSpec[]>('/master/channel-specs');
 }
 
 /** N1 카테고리 트리 (API-MST-04). 평면 노드 배열 — 트리 구성은 app/jobs/new/_lib/category-tree.ts */

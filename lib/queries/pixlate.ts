@@ -33,6 +33,7 @@ import {
   getMasterCountries,
   getMasterLanguages,
   getMasterCategories,
+  getMasterChannelSpecs,
   getBrands,
   getBrand,
   createBrand,
@@ -92,6 +93,7 @@ export const pixlateKeys = {
   masterCountries: () => ['pixlate', 'master', 'countries'] as const,
   masterLanguages: () => ['pixlate', 'master', 'languages'] as const,
   masterCategories: () => ['pixlate', 'master', 'categories'] as const,
+  masterChannelSpecs: () => ['pixlate', 'master', 'channel-specs'] as const,
   brands: () => ['pixlate', 'brands'] as const,
   brand: (brandId: number) => ['pixlate', 'brands', brandId] as const,
   brandLogos: (brandId: number) => ['pixlate', 'brands', brandId, 'logos'] as const,
@@ -571,6 +573,15 @@ export function useMasterCategoriesQuery() {
   return useQuery({
     queryKey: pixlateKeys.masterCategories(),
     queryFn: getMasterCategories,
+    staleTime: Infinity,
+  });
+}
+
+/** 판매 채널 표시 이름용. 받지 못해도 화면을 막지 않는다(그 항목만 비운다) */
+export function useMasterChannelSpecsQuery() {
+  return useQuery({
+    queryKey: pixlateKeys.masterChannelSpecs(),
+    queryFn: getMasterChannelSpecs,
     staleTime: Infinity,
   });
 }

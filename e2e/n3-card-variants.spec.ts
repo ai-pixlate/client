@@ -185,3 +185,79 @@ test('전 섹션 제외 — 안내는 hover·focus에만 보이고 눌러도 요
   await cta.hover();
   await expect(tooltip).toHaveCount(0);
 });
+
+// ─────────────────────────────────────────────────────────────────
+// N3 목록 위 작업 조건(Figma 1759:11536) — 국가 · 판매 채널은 글자, 규제 분류 · 카테고리는 태그. 순서 그대로.
+// 판매 채널 = Job.channelSpecId → GET /master/channel-specs 의 name. 못 찾거나 목록 조회가 실패하면 채널만 생략한다.
+// ─────────────────────────────────────────────────────────────────
+
+test.describe('N3 작업 조건', () => {
+  const meta = (page: import('@playwright/test').Page) => page.getByTestId('n3-job-meta');
+  /** /jobs/{id} 응답의 channelSpecId 를 바꾸거나 /master/channel-specs 를 실패시킨다(MSW 응답 위에서 fetch 를 감싼다) */
+  async function override(page: import('@playwright/test').Page, options: { channelSpecId?: null; channelListStatus?: number }) {
+    await page.addInitScript((opts) => {
+      const original = window.fetch.bind(window);
+      window.fetch = async (input, init) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        const { pathname } = new URL(url, location.href);
+        if (opts.channelListStatus && pathname === '/master/channel-specs') {
+          return new Response(JSON.stringify({ error: { code: 'INTERNAL_ERROR', message: 'x', retryable: true, details: null, traceId: 't' } }), {
+            status: opts.channelListStatus,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        const response = await original(input, init);
+        if (opts.channelSpecId === null && /^\/jobs\/\d+$/.test(pathname) && (init?.method ?? 'GET') === 'GET' && response.ok) {
+          const body = await response.json();
+          return new Response(JSON.stringify({ ...body, channelSpecId: null }), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        return response;
+      };
+    }, options);
+  }
+  const texts = (page: import('@playwright/test').Page) => meta(page).locator('p, span').allTextContents();
+
+  test('A. 국가 · 채널 · 규제 분류 · 카테고리를 Figma 순서로 보인다(채널은 태그가 아니다)', async ({ page }) => {
+    await reachN3(page);
+    await expect(meta(page)).toContainText('아마존');
+    await expect(meta(page).locator('span')).toHaveCount(2);
+    // 카테고리 이름은 Mock 서버 job 상태(categoryId)가 정한다 — 순서와 자리만 본다
+    const [country, channel, regulatory, category] = await texts(page);
+    expect([country, channel, regulatory]).toEqual(['미국', '아마존', '화장품']);
+    expect(category).toBeTruthy();
+    // 국가·채널은 글자(p), 규제 분류·카테고리는 태그(span)
+    expect(await meta(page).locator('p').allTextContents()).toEqual(['미국', '아마존']);
+    expect(await meta(page).locator('span').allTextContents()).toEqual(['화장품', category]);
+    // Figma — 패널 안 28 · 높이 28 · 아래 12 뒤 첫 카드
+    const list = (await page.getByTestId('n3-section-list').boundingBox())!;
+    const row = (await meta(page).boundingBox())!;
+    const firstCard = (await page.locator('[data-testid^="n3-section-card-"]').first().boundingBox())!;
+    expect(Math.round(row.x - list.x)).toBe(28);
+    expect(Math.round(row.y - list.y)).toBe(28);
+    expect(Math.round(row.height)).toBe(28);
+    expect(Math.round(firstCard.y - (row.y + row.height))).toBe(12);
+  });
+
+  test('B. channelSpecId 가 없으면 채널만 생략하고 나머지는 그대로', async ({ page }) => {
+    await override(page, { channelSpecId: null });
+    await reachN3(page);
+    await expect(meta(page).locator('span')).toHaveCount(2);
+    const shown = await texts(page);
+    expect(shown.slice(0, 2)).toEqual(['미국', '화장품']);
+    expect(shown).toHaveLength(3);
+    expect(shown).not.toContain('아마존');
+  });
+
+  test('C. 채널 목록 조회가 실패해도 N3 는 그대로이고 채널만 생략한다', async ({ page }) => {
+    await override(page, { channelListStatus: 500 });
+    await reachN3(page);
+    await expect(page.getByTestId('n3-section-list')).toBeVisible();
+    await expect(page.locator('[data-testid^="n3-section-card-"]').first()).toBeVisible();
+    await expect(page.getByTestId('n3-proceed')).toBeVisible();
+    await expect(meta(page).locator('span')).toHaveCount(2);
+    const shown = await texts(page);
+    expect(shown.slice(0, 2)).toEqual(['미국', '화장품']);
+    expect(shown).toHaveLength(3);
+    expect(shown).not.toContain('아마존');
+  });
+});

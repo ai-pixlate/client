@@ -10,6 +10,7 @@ import {
   pixlateKeys,
   useJobQuery,
   useMasterCategoriesQuery,
+  useMasterChannelSpecsQuery,
   useMasterCountriesQuery,
   useSectionDetailQuery,
   useSectionsQuery,
@@ -118,8 +119,10 @@ export function N3View({ jobId }: { jobId: string }) {
   const jobQuery = useJobQuery(jobId);
   const countriesQuery = useMasterCountriesQuery();
   const categoriesQuery = useMasterCategoriesQuery();
+  // 채널 목록을 받지 못해도(실패·조회 중) N3 는 그대로 — 채널 글자만 생략된다
+  const channelSpecsQuery = useMasterChannelSpecsQuery();
   const jobMeta = jobQuery.data
-    ? toJobMetaViewModel(jobQuery.data, countriesQuery.data ?? [], categoriesQuery.data ?? [], REGULATORY_CLASS_LABELS)
+    ? toJobMetaViewModel(jobQuery.data, countriesQuery.data ?? [], categoriesQuery.data ?? [], REGULATORY_CLASS_LABELS, channelSpecsQuery.data ?? [])
     : null;
 
   const [selectedSectionId, setSelectedSectionId] = useState<number | null>(null);

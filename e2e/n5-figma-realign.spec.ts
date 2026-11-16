@@ -61,12 +61,16 @@ test('1920×1080 — 핵심 container가 Figma 좌표에 있다', async ({ page 
 
 test('상단 정보는 실제 Job 값이고 Figma 위치에 있다', async ({ page }) => {
   const meta = page.getByTestId('n5-job-meta');
-  await expect(meta).toContainText('미국');
-  await expect(meta).toContainText('화장품');
+  // 국가 · 판매 채널(Job.channelSpecId → /master/channel-specs) · 규제 분류 · 카테고리 순서(공용 JobMetaTags)
+  await expect(meta).toContainText('아마존');
+  expect((await meta.locator('p, span').allTextContents()).slice(0, 3)).toEqual(['미국', '아마존', '화장품']);
   await expect(meta).not.toContainText('OTC');
   await expect(meta).not.toContainText('선크림');
   const rect = await box(page, 'n5-job-meta');
   expect([rect.x, rect.y]).toEqual([152, 46]);
+  expect(rect.height).toBeLessThanOrEqual(29); // 채널이 더해져도 한 줄
+  const workspace = await box(page, 'n5-viewport');
+  expect(rect.x + rect.width).toBeLessThan(workspace.x + workspace.width);
 });
 
 test('선택 block은 글자 바깥 12px 테두리·번호·핸들 8개·글자크기 툴바를 보이고, 다른 block을 고르면 옮겨 간다', async ({ page }) => {

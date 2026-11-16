@@ -47,7 +47,7 @@ import {
   type MockN5SectionRender,
 } from '@/lib/mock-api/n5-preview-render';
 import { mockLibraryCards } from '@/lib/mock-api/library-fixtures';
-import { mockMasterCountries, mockMasterLanguages } from '@/lib/mock-api/master-fixtures';
+import { mockMasterChannelSpecs, mockMasterCountries, mockMasterLanguages } from '@/lib/mock-api/master-fixtures';
 import {
   applyMockLayoutPatch,
   clearsMockLegacyBox,
@@ -1874,6 +1874,7 @@ export const handlers = [
   // ──────────────────────────────────────────
   http.get('/master/countries', () => HttpResponse.json(mockMasterCountries)),
   http.get('/master/languages', () => HttpResponse.json(mockMasterLanguages)),
+  http.get('/master/channel-specs', () => HttpResponse.json(mockMasterChannelSpecs)),
   // N1 카테고리 트리 (API-MST-04) — 실서버와 같은 Category 평면 배열
   http.get('/master/categories', () => HttpResponse.json(mockMasterCategories)),
 

@@ -1,15 +1,21 @@
 import type { JobMetaViewModel } from '@/lib/n5/adapter';
 
 /**
- * 작업 조건 표시(Figma 「N3 섹션 상단」 1507:21672) — 국가 글자 + 태그(규제 분류 · 카테고리). N3 목록 위·N5 workspace 좌상단이 같이 쓴다.
- * 실제 값이 있는 항목만 그린다. 판매 채널(Figma 표본 「아마존」)은 FE 에 채널 이름을 얻는 계약이 없어 그리지 않는다.
+ * 작업 조건 표시(Figma 「N3 섹션 상단」 1507:21672 · N3 1759:11536) — 국가 · 판매 채널은 12px 글자, 규제 분류 · 카테고리는 태그.
+ * 순서는 Figma 그대로(미국 · 아마존 · [OTC 의약품] [선크림]). N3 목록 위·N5 workspace 좌상단이 같이 쓴다.
+ * 실제 값이 있는 항목만 그린다 — 채널은 Job.channelSpecId 를 GET /master/channel-specs 의 name 으로 찾고, 못 찾으면 생략한다.
  */
 export function JobMetaTags({ meta, testId, className = '' }: { meta: JobMetaViewModel; testId: string; className?: string }) {
   const tags = [meta.regulatoryClassLabel, meta.categoryLabel].filter((label): label is string => !!label);
-  if (!meta.countryLabel && tags.length === 0) return null;
+  const texts = [meta.countryLabel, meta.channelLabel].filter((label): label is string => !!label);
+  if (texts.length === 0 && tags.length === 0) return null;
   return (
     <div data-testid={testId} className={`flex items-center gap-3 ${className}`}>
-      {meta.countryLabel && <p className="text-[12px] leading-[normal] tracking-[-0.02em] whitespace-nowrap text-black">{meta.countryLabel}</p>}
+      {texts.map((label) => (
+        <p key={label} className="text-[12px] leading-[normal] tracking-[-0.02em] whitespace-nowrap text-black">
+          {label}
+        </p>
+      ))}
       {tags.length > 0 && (
         <div className="flex items-center gap-0.5">
           {tags.map((label) => (

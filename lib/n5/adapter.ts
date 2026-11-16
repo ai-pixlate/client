@@ -691,21 +691,29 @@ export function buildAcknowledgedWarnings(
  * CSV_SCHEMA_MISMATCH, RATE_LIMITED, INTERNAL_ERROR, SERVICE_UNAVAILABLE.
  * ------------------------------------------------------------------ */
 
-/** N5 상단 정보(Figma 「N3 섹션 상단」 1507:21672). 실제 값이 있는 항목만 담고, 없으면 빈 값으로 둔다 */
+/**
+ * 작업 조건(Figma 「N3 섹션 상단」 1507:21672 · N3 1759:11536) — 국가 · 판매 채널 · 규제 분류 · 카테고리.
+ * 실제 값이 있는 항목만 담고, 없으면(id 없음 · 목록에 없음 · 이름 없음 · 목록 조회 전·실패) 빈 값으로 둔다 — 임의 이름을 만들지 않는다.
+ */
 export interface JobMetaViewModel {
   countryLabel: string | null;
+  /** Job.channelSpecId → GET /master/channel-specs 의 name */
+  channelLabel: string | null;
   regulatoryClassLabel: string | null;
   categoryLabel: string | null;
 }
 
 export function toJobMetaViewModel(
-  job: { targetCountry?: string | null; regulatoryClass?: string | null; categoryId?: number | null },
+  job: { targetCountry?: string | null; channelSpecId?: number | null; regulatoryClass?: string | null; categoryId?: number | null },
   countries: readonly { code?: string; name?: string }[],
   categories: readonly { id?: number; name?: string }[],
   regulatoryClassLabels: Readonly<Record<string, string>>,
+  channelSpecs: readonly { id?: number; name?: string }[] = [],
 ): JobMetaViewModel {
+  const channelName = job.channelSpecId != null ? channelSpecs.find((spec) => spec.id === job.channelSpecId)?.name : undefined;
   return {
     countryLabel: countries.find((country) => country.code === job.targetCountry)?.name ?? null,
+    channelLabel: channelName ? channelName : null,
     regulatoryClassLabel: job.regulatoryClass ? (regulatoryClassLabels[job.regulatoryClass] ?? null) : null,
     categoryLabel: categories.find((category) => category.id === job.categoryId)?.name ?? null,
   };

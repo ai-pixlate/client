@@ -37,7 +37,7 @@ export const mockN5Job: ApiJob = {
   regulatoryClass: 'cosmetic',
   targetLanguage: 'en',
   specType: 'original',
-  channelSpecId: null,
+  channelSpecId: 1, // lib/mock-api/master-fixtures.ts mockMasterChannelSpecs(아마존)
   categoryId: 1,
   internalCategory: null,
   keywords: [],

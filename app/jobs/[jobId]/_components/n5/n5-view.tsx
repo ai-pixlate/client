@@ -6,6 +6,7 @@ import { REGULATORY_CLASS_LABELS } from '@/lib/job/regulatory-class-labels';
 import {
   useJobQuery,
   useMasterCategoriesQuery,
+  useMasterChannelSpecsQuery,
   useMasterCountriesQuery,
   useN5BlocksQuery,
   useN5ReviewTasksQuery,
@@ -218,6 +219,7 @@ export function N5View({ jobId }: { jobId: string }) {
   // 상단 정보의 표시 이름용. 받지 못해도 검수는 막지 않고 그 항목만 비워 둔다
   const countriesQuery = useMasterCountriesQuery();
   const categoriesQuery = useMasterCategoriesQuery();
+  const channelSpecsQuery = useMasterChannelSpecsQuery();
   // 실패 상태 표시용. 받지 못해도 검수는 막지 않고 그 표시만 비워 둔다
   const reviewTasksQuery = useN5ReviewTasksQuery(jobId);
   const sectionDtoById = useN5SectionStatusQuery(jobId);
@@ -254,7 +256,7 @@ export function N5View({ jobId }: { jobId: string }) {
   // 지문 A(/blocks) = B(/preview) 인 섹션만 renderInput(정렬·서버 style·적용 박스)을 블록에 잇는다
   const { blocks, syncBySection } = syncPreviewWithBlocks(blocksQuery.data.map(toBlockViewModel), preview);
 
-  const jobMeta = toJobMetaViewModel(jobQuery.data, countriesQuery.data ?? [], categoriesQuery.data ?? [], REGULATORY_CLASS_LABELS);
+  const jobMeta = toJobMetaViewModel(jobQuery.data, countriesQuery.data ?? [], categoriesQuery.data ?? [], REGULATORY_CLASS_LABELS, channelSpecsQuery.data ?? []);
 
   const taskItems = reviewTasksQuery.data?.items ?? [];
   const sectionStatusById = new Map(
