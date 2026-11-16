@@ -32,6 +32,7 @@ import {
   isN5OverlapScenario,
   n5ErrorRestoredSectionDetail,
   n5ErrorRestoredSectionListItem,
+  recheckMockTextSignals,
 } from '@/lib/mock-api/n5-error-fixtures';
 import { isTypesetQaUrl } from '@/lib/n5/typeset-render-model';
 import {
@@ -289,10 +290,9 @@ const n5BlockState = new Map<number, ApiTextBlock>(mockN5Blocks.map((b) => [b.id
 /**
  * 현재 미해결 경고 집합 — 모든 block의 signals[]를 {blockId, code}로 펼친
  * 것. confirm의 acknowledgedWarnings와 정확히 같아야 한다(달라지면 409
- * INVALID_STATE). PATCH가 signals를 갱신하지 않으므로(계약에 없음) 이 목록은
- * job 생애주기 동안 고정이다 — FE의 buildAcknowledgedWarnings가 매 확정
- * 시점에 같은 소스(로드된 block.signals)에서 다시 계산해 보내므로 정상
- * 흐름에서는 항상 일치한다.
+ * INVALID_STATE). 번역문 PATCH 는 새 번역문으로 글 기반 signal 을 다시 검사한다(recheckMockTextSignals —
+ * 실서버 PATCH 응답 block 이 해결된 signal 을 빼는 것과 같은 의미). FE의 buildAcknowledgedWarnings가 매 확정
+ * 시점에 같은 소스(최신 block.signals)에서 다시 계산해 보내므로 정상 흐름에서는 항상 일치한다.
  */
 function computeCurrentN5Warnings(blocks: Iterable<ApiTextBlock> = n5BlockState.values()): { blockId: number; code: string }[] {
   const warnings: { blockId: number; code: string }[] = [];
@@ -1441,6 +1441,8 @@ export const handlers = [
       charCount: body.trans1.length,
       revision: current.revision + 1,
       layoutAdjust: nextLayout,
+      // 번역문이 바뀌면 글 기반 검사를 새 번역문으로 — 해결된 signal 은 응답 block 에서 빠지고 이후 /blocks 에도 다시 나오지 않는다
+      signals: body.trans1 === current.trans1 ? current.signals : recheckMockTextSignals(current.signals, body.trans1),
     };
     n5BlockState.set(blockId, updated);
     if (clearsLegacy) n5LegacyLayoutBox.delete(blockId);

@@ -83,12 +83,26 @@ export function applyN3CardVariant(section: ApiSection): ApiSection {
   }
 }
 
+/**
+ * Mock 글 검사 대역 — 번역문이 바뀌면 금지 표현 signal 을 새 번역문으로 다시 판단한다. 금지 표현이 남아 있을 때만 유지한다.
+ * 글만으로 다시 판단할 수 없는 signal(필수 고지 누락 등)은 그대로 둔다. 실제 검사 규칙이 아니라 계약 의미
+ * (저장 응답 block 이 최신 검사 결과이고, 해결된 signal 은 이후 /blocks 에도 다시 나오지 않는다)의 대역이다.
+ */
+const MOCK_PROHIBITED_TERMS = ['instant effect', 'guaranteed'];
+export function recheckMockTextSignals(signals: ApiTextBlock['signals'], trans1: string): ApiTextBlock['signals'] {
+  const text = trans1.toLowerCase();
+  const stillProhibited = MOCK_PROHIBITED_TERMS.some((term) => text.includes(term));
+  return (signals ?? []).filter((signal) => signal.code !== 'prohibited_expression' || stillProhibited);
+}
+
 export function applyN5ErrorBlocks(block: ApiTextBlock): ApiTextBlock {
-  const signals = SIGNALS_BY_BLOCK[block.id as number];
-  if (!signals) return block;
-  const failedTranslation = signals.some((s) => s.code === 'translation_failed');
+  const fixed = SIGNALS_BY_BLOCK[block.id as number];
+  if (!fixed) return block;
+  const failedTranslation = fixed.some((s) => s.code === 'translation_failed');
   // 번역이 생성되지 않은 칸(사용자가 직접 저장하면 그 값을 보여 준다)
   const isUntouched = (block.revision ?? 1) <= 1;
+  // 사용자가 저장한 칸은 시나리오 signal 도 새 번역문으로 다시 판단한다 — 해결된 금지 표현을 다시 끼워 넣지 않는다
+  const signals = isUntouched ? fixed : recheckMockTextSignals(fixed, block.trans1 ?? '');
   return { ...block, signals, ...(failedTranslation && isUntouched ? { trans1: null } : {}) };
 }
 

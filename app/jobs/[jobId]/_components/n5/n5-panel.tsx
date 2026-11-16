@@ -291,10 +291,6 @@ function TranslationEditor({
   const [saveConflict, setSaveConflict] = useState<ApiTextBlock | null>(null);
   const conflictLatest = saveConflict ?? editSession.historyConflicts.get(block.id) ?? null;
   const [saveError, setSaveError] = useState<string | null>(null);
-  // 편집 중인지(textarea 또는 이어서 누른 [확인]에 focus). 벗어난 뒤에도 dirty 면 「저장하지 않은 수정」을 보인다
-  const [isEditing, setIsEditing] = useState(false);
-  const saveButtonRef = useRef<HTMLButtonElement>(null);
-
   // 상태를 셋으로 나눠 둔다(PM 확정):
   // - draft(clean/dirty): 입력 즉시 바뀐다 — 왼쪽 미리보기도 같은 초안(editSession.translationDrafts)으로 바로 그린다
   // - 검사 결과(넘침·잘림·금지 표현·verify signal): 마지막 서버 결과를 그대로 둔다. dirty 라고 숨기거나 지우지 않는다
@@ -359,8 +355,11 @@ function TranslationEditor({
   // 입력 중(dirty)에도 직전 서버 결과를 그대로 보인다 — FE 가 초안으로 넘침을 다시 계산하지 않는다(PM 확정).
   const serverOverflow = block.serverOverflow === 'legacy' ? hasWidthOverflowSignal(block.badges) : block.serverOverflow === true;
   const showOverflow = serverOverflow && !isRerendering;
-  // 확인 없이 칸을 벗어난 미저장 초안. 저장 중·저장 실패(409/500)는 각자의 표시가 있어 함께 내지 않는다
-  const showUnsaved = isDirty && !isEditing && !isSaving && !saveError && !conflictLatest;
+  // 서버 저장값과 달라지는 순간부터(입력 중·칸을 벗어난 뒤 모두) 「저장하지 않은 수정」을 보인다.
+  // 저장 중([확인] → 저장 중…)·저장 실패(409 충돌 · 오류 문구)는 각자의 표시가 우선이라 함께 내지 않는다
+  const showUnsaved = isDirty && !isSaving && !saveError && !conflictLatest;
+  // 지금 보이는 검사 결과(넘침·금지 표현 등 signal·검사 실패)는 입력 중인 초안이 아니라 마지막 저장값의 서버 결과다 — 그 기준을 함께 알린다
+  const hasServerChecks = showOverflow || taskFailures.verifyFailed || getSignalRows(block.badges).length > 0;
   const hasFailureMessage = translationFailure != null || taskFailures.verifyFailed || previewFailure != null || showOverflow;
 
   async function handleSave() {
@@ -426,12 +425,7 @@ function TranslationEditor({
           data-testid={`n5-block-editor-${block.id}`}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          onFocus={() => {
-            setIsEditing(true);
-            onSelect();
-          }}
-          // 바로 [확인]을 누르는 경우는 벗어난 것으로 보지 않는다(저장 직전 깜빡임 방지)
-          onBlur={(e) => setIsEditing(e.relatedTarget != null && e.relatedTarget === saveButtonRef.current)}
+          onFocus={onSelect}
           rows={3}
           placeholder={translationFailure ? '번역문을 직접 입력하세요' : undefined}
           // Figma 1069:10215 — 글 높이만큼 늘어나고 버튼까지 60을 띄운다. 미지원 브라우저는 rows 높이로 표시된다
@@ -450,13 +444,12 @@ function TranslationEditor({
           {showUnsaved && (
             <span role="status" data-testid={`n5-block-unsaved-${block.id}`} className="text-[11px] text-[#999]">
               저장하지 않은 수정
+              {hasServerChecks && <span data-testid={`n5-block-checks-basis-${block.id}`}> · 검사 결과는 마지막 저장값 기준</span>}
             </span>
           )}
           <button
-            ref={saveButtonRef}
             type="button"
             data-testid={`n5-block-save-${block.id}`}
-            onBlur={() => setIsEditing(false)}
             onClick={(e) => {
               e.stopPropagation();
               handleSave();
