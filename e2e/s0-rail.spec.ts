@@ -30,7 +30,14 @@ async function openStep(page: Page, step: (typeof STEPS)[number]) {
           const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
           if (new URL(url, location.href).pathname !== `/jobs/${jobId}/tasks` || !response.ok) return response;
           const body = await response.json();
-          return new Response(JSON.stringify({ ...body, currentStep: (window as unknown as { __s0Step: string }).__s0Step, jobStatus: 'running' }), { status: 200, headers: { 'content-type': 'application/json' } });
+          const step = (window as unknown as { __s0Step: string }).__s0Step;
+          // N6 는 confirm 이 등록한 현재 최종 렌더 task 를 따라간다(FE 가 POST /render 하지 않는다). 강제로 N6 에 들어갈 때도
+          // confirm 을 거친 것과 같게 그 task(job 단위 · 완료)를 함께 준다 — 없으면 「최종 렌더 중」에서 계속 기다린다
+          const items =
+            step === 'N6'
+              ? [...(body.items ?? []), { taskId: 990001, taskType: 'render', unitType: 'job', unitId: Number(jobId), status: 'done' }]
+              : body.items;
+          return new Response(JSON.stringify({ ...body, items, currentStep: step, jobStatus: 'running' }), { status: 200, headers: { 'content-type': 'application/json' } });
         };
       },
       { forced: step, jobId: MOCK_JOB_ID },

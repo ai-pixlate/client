@@ -138,7 +138,7 @@ test('Case 4 — A 성공 · B 500 → confirm 0회 · N5 유지 · B 초안 유
   await editDraft(page, C, 'Untouched C');
   await page.getByTestId('n5-confirm-button').click();
 
-  await expect(page.getByTestId('n5-confirm-error')).toContainText('저장하지 못한 번역문');
+  await expect(page.getByTestId('n5-confirm-error')).toContainText('저장하지 못한 수정');
   await page.waitForTimeout(1_000);
   const entries = await log(page);
   expect(entries.filter((entry) => entry.startsWith('PATCH'))).toEqual([`PATCH start ${A}`, `PATCH ok ${A}`, `PATCH start ${B}`, `PATCH fail ${B}`]);
@@ -173,7 +173,7 @@ test('Case 5 — PATCH 409 REVISION_CONFLICT → confirm 0회 · N5 유지 · �
   await page.getByTestId('n5-confirm-button').click();
 
   await expect(page.getByTestId(`n5-block-conflict-${B}`)).toBeVisible({ timeout: 15_000 });
-  await expect(page.getByTestId('n5-confirm-error')).toContainText('저장하지 못한 번역문');
+  await expect(page.getByTestId('n5-confirm-error')).toContainText('저장하지 못한 수정');
   await page.waitForTimeout(1_000);
   const entries = (await log(page)).slice(before);
   expect(entries.filter((entry) => entry.startsWith('PATCH'))).toEqual([`PATCH start ${B}`, `PATCH fail(409) ${B}`]);

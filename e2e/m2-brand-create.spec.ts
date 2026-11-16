@@ -29,8 +29,10 @@ function recordBrandRequests(page: Page) {
 const calls = (list: Recorded[], method: string, path?: string) =>
   list.filter((r) => r.method === method && (path == null || r.path === path)).map((r) => r.path);
 
+/** 등록 화면 — 등록 경로도 GET /brands 가 0개일 때만 열리므로 브랜드 0개 계정(create-* 또는 no-brand 시나리오)으로 연다 */
 async function openCreate(page: Page, query = '') {
-  await page.goto(`/brand?mode=create${query}`);
+  const scenario = query.includes('mockScenario=') ? '' : '&mockScenario=m2-no-brand';
+  await page.goto(`/brand?mode=create${query}${scenario}`);
   await expect(m2(page)).toHaveAttribute('data-m2-status', 'create');
 }
 
@@ -195,17 +197,118 @@ test('G. 등록 성공 + 로고 실패 — 다시 저장은 로고만 보내고 
   expect(calls(requests, 'PATCH')).toEqual([]);
 });
 
-test('M2 [새 브랜드 추가] → 등록 화면(빈 값) · 취소하면 M2 로 돌아간다', async ({ page }) => {
+test('M2 [새 브랜드 추가] — 브랜드가 이미 있으면 추가 등록으로 가지 않는다(요청·이동 없음, 안내 툴팁)', async ({ page }) => {
   const requests = recordBrandRequests(page);
   await page.goto('/brand');
   await expect(m2(page)).toHaveAttribute('data-m2-status', 'view');
-  await page.getByTestId('m2-new-brand').click();
-  await expect(page).toHaveURL(/\/brand\?mode=create$/);
-  await expect(m2(page)).toHaveAttribute('data-m2-status', 'create');
-  await expect(page.getByTestId('m2-name-ko')).toHaveValue('');
-  await page.getByTestId('m2-cancel').click();
+  const button = page.getByTestId('m2-new-brand');
+  await expect(button).toHaveAttribute('aria-disabled', 'true');
+  await button.hover();
+  await expect(page.getByRole('tooltip')).toHaveText('현재 서비스에서는 브랜드를 추가로 등록할 수 없습니다');
+  await button.click({ force: true });
+  await page.waitForTimeout(300);
   await expect(page).toHaveURL(/\/brand$/);
+  expect(calls(requests, 'POST')).toEqual([]);
+});
+
+test('G. 브랜드가 이미 있으면 /brand?mode=create 직접 진입도 등록 화면을 열지 않는다 — 일반은 M2 보기, next=n1 은 N1', async ({ page }) => {
+  const requests = recordBrandRequests(page);
+  await page.goto('/brand?mode=create');
+  await expect(page).toHaveURL(/\/brand\?brandId=101$/);
   await expect(m2(page)).toHaveAttribute('data-m2-status', 'view');
+  await page.goto('/brand?mode=create&next=n1');
+  await expect(page).toHaveURL(/\/jobs\/new\?brandId=101$/);
+  await expect(page.getByTestId('m2-create')).toHaveCount(0);
+  expect(calls(requests, 'POST')).toEqual([]);
+});
+
+test('F. 목록 조회 실패 — 등록 화면을 열지 않고(0개로 보지 않음) N1 으로도 가지 않으며 POST 0', async ({ page }) => {
+  const requests = recordBrandRequests(page);
+  await page.goto('/brand?mode=create&next=n1&mockScenario=m2-list-fail');
+  await expect(m2(page)).toHaveAttribute('data-m2-load', 'error', { timeout: 15_000 });
+  await expect(page.getByTestId('m2-create')).toHaveCount(0);
+  await expect(page).toHaveURL(/\/brand\?mode=create/);
+  expect(calls(requests, 'POST')).toEqual([]);
+});
+
+test('H. 여러 브랜드 — 등록 경로·M2 모두 고르지 않고 제한 안내 · POST 0', async ({ page }) => {
+  const requests = recordBrandRequests(page);
+  await page.goto('/brand?mode=create&next=n1&mockScenario=m2-multi-brand');
+  await expect(m2(page)).toHaveAttribute('data-m2-load', 'ambiguous');
+  await expect(page.getByTestId('m2-load-message')).toHaveText('현재 여러 브랜드가 등록되어 있어 작업을 시작할 수 없습니다.');
+  await expect(page).toHaveURL(/mode=create/);
+  expect(calls(requests, 'POST')).toEqual([]);
+});
+
+test('C·D. 응답 유실(서버는 생성) — POST 1회 → 결과 확인 GET /brands → 생성된 브랜드로 N1 · 확인 전 재클릭에도 POST 추가 0', async ({ page }) => {
+  const requests = recordBrandRequests(page);
+  await openCreate(page, '&next=n1&mockScenario=m2-create-response-lost');
+  await fillNames(page);
+  const listBefore = calls(requests, 'GET', '/brands').length;
+  // 같은 틱 두 번 클릭(확인 전 재클릭)
+  await createButton(page).evaluate((el: HTMLButtonElement) => {
+    el.click();
+    el.click();
+  });
+  await expect(page).toHaveURL(/\/jobs\/new\?brandId=\d+$/, { timeout: 15_000 });
+  expect(calls(requests, 'POST', '/brands')).toHaveLength(1);
+  // POST 직전 확인 1회 + 결과 확인 1회
+  expect(calls(requests, 'GET', '/brands').length - listBefore).toBe(2);
+});
+
+test('E. 응답 유실 뒤 다시 들어오면 — 이미 생긴 브랜드로 연결하고 등록 화면·POST 를 다시 보이지 않는다', async ({ page }) => {
+  const requests = recordBrandRequests(page);
+  await openCreate(page, '&mockScenario=m2-create-response-lost');
+  await fillNames(page);
+  await createButton(page).click();
+  await expect(page).toHaveURL(/\/brand\?brandId=\d+$/, { timeout: 15_000 });
+  const id = new URL(page.url()).searchParams.get('brandId');
+  // 같은 계정으로 보관함에 돌아와 다시 작업을 시작한다 — 등록 화면이 아니라 그 브랜드의 N1 로 간다
+  await page.getByTestId('m2-back').click();
+  await expect(page).toHaveURL(/\/$/);
+  const link = page.getByTestId('library-add-card-link');
+  await expect(link).toHaveAttribute('href', `/jobs/new?brandId=${id}`);
+  await link.click();
+  await expect(page).toHaveURL(new RegExp(`/jobs/new\\?brandId=${id}$`));
+  expect(calls(requests, 'POST', '/brands')).toHaveLength(1);
+});
+
+test('결과 확인도 실패 — 입력 유지 · 안내 · [다시 확인]은 목록 재조회만(POST 0) → 확인되면 그 브랜드로', async ({ page }) => {
+  const requests = recordBrandRequests(page);
+  await openCreate(page, '&next=n1&mockScenario=m2-create-lost-list-fail');
+  await fillNames(page);
+  await createButton(page).click();
+  await expect(page.getByTestId('m2-save-error')).toHaveText('등록 결과를 확인하지 못했습니다. 다시 등록하지 말고 먼저 결과를 확인해 주세요.');
+  await expect(page.getByTestId('m2-create')).toHaveCount(0);
+  await expect(page.getByTestId('m2-name-ko')).toHaveValue('새 브랜드');
+  expect(calls(requests, 'POST', '/brands')).toHaveLength(1);
+  const listBefore = calls(requests, 'GET', '/brands').length;
+
+  await page.getByTestId('m2-create-verify').click();
+  await expect(page).toHaveURL(/\/jobs\/new\?brandId=\d+$/, { timeout: 15_000 });
+  expect(calls(requests, 'POST', '/brands')).toHaveLength(1);
+  expect(calls(requests, 'GET', '/brands').length).toBeGreaterThan(listBefore);
+});
+
+test('응답 유실인데 서버에도 없음 — 자동 재시도 없이 안내하고, 사용자가 다시 누를 때만 POST', async ({ page }) => {
+  const requests = recordBrandRequests(page);
+  await openCreate(page, '&mockScenario=m2-create-lost-not-created');
+  await fillNames(page);
+  await createButton(page).click();
+  await expect(page.getByTestId('m2-save-error')).toHaveText('등록된 브랜드를 확인하지 못했습니다. 입력한 내용으로 다시 등록할 수 있습니다.');
+  await page.waitForTimeout(500);
+  expect(calls(requests, 'POST', '/brands')).toHaveLength(1);
+  await expect(createButton(page)).toBeEnabled();
+  await createButton(page).click();
+  await expect.poll(() => calls(requests, 'POST', '/brands').length).toBe(2);
+});
+
+test('I. 다른 탭이 먼저 등록 — POST 직전 목록 재확인에서 브랜드를 찾아 POST 하지 않고 그 브랜드로 연결(동시 요청 완전 방지는 서버 몫)', async ({ page }) => {
+  const requests = recordBrandRequests(page);
+  await openCreate(page, '&next=n1&mockScenario=m2-create-other-tab');
+  await fillNames(page);
+  await createButton(page).click();
+  await expect(page).toHaveURL(/\/jobs\/new\?brandId=\d+$/, { timeout: 15_000 });
   expect(calls(requests, 'POST')).toEqual([]);
 });
 

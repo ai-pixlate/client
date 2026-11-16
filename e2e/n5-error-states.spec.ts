@@ -125,15 +125,45 @@ test('오류 종합 — section·signal·번역문 칸 실패가 함께 보이�
   const original = await editor.inputValue();
   await editor.fill('Short');
   await expect(preview.getByTestId('n5-cell-failure-overflow')).toBeVisible();
-  // 입력하는 동안은 「저장하지 않은 수정」이 없고, 확인 없이 칸을 벗어나면 보인다(초안은 그대로)
-  await expect(page.getByTestId('n5-block-unsaved-9103')).toHaveCount(0);
+  // 서버값과 달라지는 순간부터(입력 중에도) 「저장하지 않은 수정」 — 보이는 검사 결과는 마지막 저장값 기준임을 함께 알린다
+  const unsaved = page.getByTestId('n5-block-unsaved-9103');
+  await expect(editor).toBeFocused();
+  await expect(unsaved).toHaveText('저장하지 않은 수정 · 검사 결과는 마지막 저장값 기준');
+  // 칸을 벗어나도 그대로(초안 유지)
   await editor.blur();
-  await expect(page.getByTestId('n5-block-unsaved-9103')).toHaveText('저장하지 않은 수정');
+  await expect(unsaved).toHaveText('저장하지 않은 수정 · 검사 결과는 마지막 저장값 기준');
   await expect(editor).toHaveValue('Short');
   // 서버값으로 되돌리면 dirty 가 풀려 사라진다
   await editor.fill(original);
   await editor.blur();
   await expect(page.getByTestId('n5-block-unsaved-9103')).toHaveCount(0);
+});
+
+test('저장 성공 응답에서 해결된 금지 표현 signal 이 바로 사라지고, 재렌더 뒤 /blocks 재조회에도 다시 나오지 않는다', async ({ page }) => {
+  await reachN5(page);
+  const signal = page.getByTestId('n5-block-signal-9112-prohibited_expression');
+  await expect(signal).toBeVisible();
+  const editor = page.getByTestId('n5-block-editor-9112');
+  await editor.fill('Visibly smoother skin');
+  // 입력 중에는 마지막 서버 결과(금지 표현)를 그대로 둔다 — 초안으로 다시 계산하지 않는다
+  await expect(signal).toBeVisible();
+  await expect(page.getByTestId('n5-block-checks-basis-9112')).toBeVisible();
+
+  const patchResponse = page.waitForResponse((res) => res.request().method() === 'PATCH' && /\/blocks\/9112$/.test(res.url()));
+  await page.getByTestId('n5-block-save-9112').click();
+  const body = (await (await patchResponse).json()) as { block: { signals: { code: string }[] } };
+  expect(body.block.signals.map((s) => s.code)).not.toContain('prohibited_expression');
+  // 1단계 — PATCH 성공 응답 직후(재렌더 완료 전) 사라진다
+  await expect(signal).toHaveCount(0);
+  await expect(page.getByTestId('n5-block-unsaved-9112')).toHaveCount(0);
+
+  // 2단계 — 재렌더 완료 → /blocks 재조회 뒤에도 다시 나오지 않는다
+  const blocksRefetch = page.waitForResponse((res) => res.request().method() === 'GET' && /\/blocks$/.test(new URL(res.url()).pathname), { timeout: 30_000 });
+  await expect(page.getByTestId('n5-block-row-9112').getByText('재렌더링 중…')).toHaveCount(0, { timeout: 30_000 });
+  const refetched = (await (await blocksRefetch).json()) as { id: number; signals: { code: string }[] }[];
+  expect(refetched.find((b) => b.id === 9112)!.signals.map((s) => s.code)).not.toContain('prohibited_expression');
+  await page.waitForTimeout(500);
+  await expect(signal).toHaveCount(0);
 });
 
 test('기본 화면 — signal 사유가 바로 읽히고 하단 중앙 도구가 없다', async ({ page }) => {

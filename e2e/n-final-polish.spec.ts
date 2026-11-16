@@ -5,7 +5,8 @@ import { reachN5 } from './helpers/reach-n5';
 import { reachN6 } from './helpers/reach-n6';
 
 // ─────────────────────────────────────────────────────────────────
-// N 화면 최종 보정 — N3 하단 정렬(Figma 1422:10176), N5 확인창(1313:12384), N6 동작 칸·렌더 중(1262:7603), Mock 오류 URL.
+// N 화면 최종 보정 — N3 배치(Figma 1759:11529 — 이전 1422:10176 3열은 대체됨), N5 확인창(1313:12384 + 항목 수 기준 스크롤 a56dcca),
+// N6 동작 칸·렌더 중(1262:7603), Mock 오류 URL.
 // ─────────────────────────────────────────────────────────────────
 
 test.skip(({ browserName }) => browserName !== 'chromium', '화면 수치 검증은 Chromium 기준이다');
@@ -21,8 +22,10 @@ function recordWrites(page: Page) {
   return writes;
 }
 
-test.describe('N3 하단 정렬', () => {
-  test('1920×1080 — Figma 수치와 같고 CTA·이미지 아래 끝이 같다', async ({ page }) => {
+test.describe('N3 배치', () => {
+  // Figma 1759:11529 — 작업 영역 x200·y112·1600×920. 오른쪽 목록 688×863 · gap 12 · CTA 688×45(아래 끝 1032).
+  // 왼쪽 묶음(이미지 404 · gap 24 · 상세 404)은 높이 863 으로 작업 영역 세로 가운데(y140.5)라 이미지 아래 끝은 CTA 아래 끝과 같지 않다.
+  test('1920×1080 — Figma 수치와 같다', async ({ page }) => {
     await page.setViewportSize({ width: 1920, height: 1080 });
     await reachN3(page);
     await expect(page.getByTestId('n3-proceed')).toBeVisible();
@@ -31,33 +34,37 @@ test.describe('N3 하단 정렬', () => {
     const image = await box(page, 'n3-section-image');
     const action = await box(page, 'n3-detail-action');
     const near = (a: number, b: number, label: string) => expect(Math.abs(a - b), `${label}: ${a} ≈ ${b}`).toBeLessThanOrEqual(1);
-    near(list.x, 140, 'list x');
+    near(list.x, 1112, 'list x');
     near(list.y, 112, 'list y');
-    near(list.width, 668, 'list w');
-    near(list.height, 849, 'list h');
-    near(cta.x, 140, 'cta x');
-    near(cta.y, 975, 'cta y');
-    near(cta.width, 668, 'cta w');
+    near(list.width, 688, 'list w');
+    near(list.height, 863, 'list h');
+    near(cta.x, 1112, 'cta x');
+    near(cta.y, 987, 'cta y');
+    near(cta.width, 688, 'cta w');
     near(cta.height, 45, 'cta h');
-    near(list.y + list.height + 14, cta.y, 'list + 14');
-    near(image.x, 1395, 'image x');
-    near(image.y, 113, 'image y');
-    near(image.width, 405, 'image w');
-    near(image.height, 907, 'image h');
-    near(cta.y + cta.height, 1020, 'cta bottom');
-    near(image.y + image.height, cta.y + cta.height, 'image bottom');
-    near(action.x, 896, 'detail action x');
-    near(action.width, 385, 'detail action w');
+    near(list.y + list.height + 12, cta.y, 'list + 12');
+    near(cta.y + cta.height, 1032, 'cta bottom');
+    near(image.x, 200, 'image x');
+    near(image.y, 140.5, 'image y');
+    near(image.width, 404, 'image w');
+    near(image.height, 863, 'image h');
+    near(image.y + image.height / 2, 112 + 920 / 2, 'image 세로 가운데');
+    near(action.x, 636, 'detail action x');
+    near(action.width, 384, 'detail action w');
   });
 
   for (const [width, height] of LAPTOPS) {
-    test(`${width}×${height} — CTA·상세 버튼·이미지가 보이고 가로 넘침이 없다`, async ({ page }) => {
+    test(`${width}×${height} — 가로 구조 그대로 CTA·상세 버튼·이미지가 보이고 가로 넘침이 없다`, async ({ page }) => {
       await page.setViewportSize({ width, height });
       await reachN3(page);
+      const list = await box(page, 'n3-section-list');
       const cta = await box(page, 'n3-proceed');
       const image = await box(page, 'n3-section-image');
       const action = await box(page, 'n3-detail-action');
-      expect(Math.abs(image.y + image.height - (cta.y + cta.height))).toBeLessThanOrEqual(1);
+      // 왼쪽 묶음은 작업 영역(목록 위 ~ CTA 아래) 세로 가운데, 목록과 같은 높이
+      expect(Math.abs(image.y + image.height / 2 - (list.y + cta.y + cta.height) / 2)).toBeLessThanOrEqual(1);
+      expect(Math.abs(image.height - list.height)).toBeLessThanOrEqual(1);
+      expect(image.x + image.width).toBeLessThan(list.x); // 이미지 | 상세 | 목록 가로 순서
       for (const b of [cta, action, image]) {
         expect(b.y + b.height).toBeLessThanOrEqual(height);
         expect(b.height).toBeGreaterThan(0);
@@ -75,11 +82,13 @@ test.describe('N5 확인창', () => {
     await expect(page.getByTestId('n5-review-dialog')).toBeVisible();
   }
 
-  test('1920×1080 — 항목 수와 무관하게 518×710이고 버튼 크기·간격이 Figma와 같다', async ({ page }) => {
+  // 높이는 항목 수 기준이다(a56dcca) — 1~5건은 내용에 맞추고(HUG), 6건 이상은 목록을 5번째 항목까지로 줄여 목록만 스크롤한다. 최대 710
+  test('1920×1080 — 폭 518 · 높이는 내용에 맞추고 710 이하 · 버튼 크기·간격이 Figma와 같다', async ({ page }) => {
     await openDialog(page, 1920, 1080);
     const dialog = await box(page, 'n5-review-dialog');
     expect(dialog.width).toBe(518);
-    expect(dialog.height).toBe(710);
+    expect(dialog.height).toBeLessThanOrEqual(710);
+    expect(await page.getByTestId('n5-review-dialog').evaluate((el) => el.scrollHeight <= el.clientHeight)).toBe(true);
     expect(dialog.x).toBe((1920 - 518) / 2);
     const cancel = await box(page, 'n5-review-cancel');
     const proceed = await box(page, 'n5-review-continue');
@@ -90,11 +99,12 @@ test.describe('N5 확인창', () => {
     expect(dialog.y + dialog.height - (proceed.y + proceed.height)).toBe(32);
   });
 
-  test('항목이 많은 시나리오도 같은 크기이고 목록만 스크롤한다', async ({ page }) => {
+  test('항목이 많은(6건 이상) 시나리오는 710 이하이고 목록만 스크롤한다', async ({ page }) => {
     await openDialog(page, 1440, 900, 'n5-errors');
     const dialog = await box(page, 'n5-review-dialog');
-    expect(dialog.height).toBe(710);
+    expect(dialog.height).toBeLessThanOrEqual(710);
     expect(Number((await page.getByTestId('n5-review-total').innerText()).replace('건', ''))).toBeGreaterThan(5);
+    expect(await page.getByTestId('n5-review-list').evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
     const scroll = await page.getByTestId('n5-review-dialog').evaluate((el) => el.scrollHeight <= el.clientHeight);
     expect(scroll).toBe(true);
     const list = page.getByTestId('n5-review-list');
@@ -106,7 +116,8 @@ test.describe('N5 확인창', () => {
     test(`${width}×${height} — 화면 안에 있고 버튼이 보이며 Esc·포커스 복귀가 동작한다`, async ({ page }) => {
       await openDialog(page, width, height);
       const dialog = await box(page, 'n5-review-dialog');
-      expect(dialog.height).toBe(Math.min(710, height - 32));
+      // 내용에 맞춘 높이 — 최대 min(710, 화면 − 32)
+      expect(dialog.height).toBeLessThanOrEqual(Math.min(710, height - 32));
       expect(dialog.y).toBeGreaterThanOrEqual(0);
       expect(dialog.y + dialog.height).toBeLessThanOrEqual(height);
       const proceed = await box(page, 'n5-review-continue');

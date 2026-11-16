@@ -406,6 +406,9 @@ test('N4 E-5 — N4 도중 새로 시작(페이지 이동)한 다음 실행이 �
   await reachN4(page);
   // 첫 실행을 verify(03) 진행 중에 끊는다 — 화면 unmount 정리 없이 페이지가 바뀐다
   await expect.poll(() => onScreen(rec.dom, N4_TITLE).at(-1)?.rows, { timeout: 30_000 }).toBe('DDAPP');
+  // 이전 화면을 먼저 떠난 뒤에 두 번째 실행 시각을 잰다 — 그러지 않으면 아직 남아 있던 첫 실행 화면(DDAPP)의 마지막 기록이
+  // 두 번째 실행의 첫 표시로 섞인다(측정 경합). 정리 없이 페이지가 바뀌는 조건은 같다(전체 이동)
+  await page.goto('about:blank');
   const secondFrom = Date.now();
   await reachN4(page);
   await expect(page.locator('[data-testid="n5-panel"]')).toBeVisible({ timeout: 40_000 });

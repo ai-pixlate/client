@@ -76,7 +76,7 @@ async function confirmOutcome(page: Page): Promise<'refused' | 'confirmed'> {
   await expect
     .poll(async () => {
       if ((await calls(page)).confirm > before) outcome = 'confirmed';
-      else if (await page.getByTestId('n5-confirm-error').filter({ hasText: '저장하지 못한 번역문' }).count()) outcome = 'refused';
+      else if (await page.getByTestId('n5-confirm-error').filter({ hasText: '저장하지 못한 수정' }).count()) outcome = 'refused';
       return outcome;
     }, { timeout: 20_000 })
     .not.toBeNull();

@@ -66,7 +66,7 @@ async function failSave(page: Page, blockId: number, text: string) {
 
 /** 확정이 저장 실패로 거절됐는지 — 안내가 보이고 버튼이 다시 쓸 수 있게 된다 */
 async function expectRefused(page: Page) {
-  await expect(page.getByTestId('n5-confirm-error')).toContainText('저장하지 못한 번역문');
+  await expect(page.getByTestId('n5-confirm-error')).toContainText('저장하지 못한 수정');
   await expect(page.getByTestId('n5-confirm-button')).toBeEnabled();
   await expect(page.getByTestId('n5-review-dialog')).toHaveCount(0); // 저장 실패를 확인창으로 넘기지 않는다
   await expect(page.getByTestId('n5-panel')).toBeVisible();

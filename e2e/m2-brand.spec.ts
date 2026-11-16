@@ -473,8 +473,8 @@ const UNCONNECTED_BUTTONS = [
   { testId: 'm2-logo-change', text: '로고 변경', border: 'rgb(234, 234, 234)', color: 'rgb(23, 23, 23)' },
   { testId: 'm2-logo-delete-action', text: '삭제', border: 'rgb(229, 72, 77)', color: 'rgb(229, 72, 77)' },
 ];
-/** 눌러도 아무 일이 없는 버튼 — [새 브랜드 추가]는 신규 등록 화면으로 연결돼 빠진다(e2e/m2-brand-create.spec.ts) */
-const NO_ACTION_BUTTONS = UNCONNECTED_BUTTONS.filter(({ testId }) => testId !== 'm2-new-brand');
+/** 눌러도 아무 일이 없는 버튼 — [새 브랜드 추가]도 브랜드가 이미 있는 보기·수정 화면에서는 이동하지 않는다(e2e/m2-brand-create.spec.ts) */
+const NO_ACTION_BUTTONS = UNCONNECTED_BUTTONS;
 
 test('왼쪽 폼은 스크롤막대가 보이지 않지만 휠과 키보드로 스크롤된다', async ({ page }) => {
   await page.setViewportSize({ width: 1728, height: 700 });
