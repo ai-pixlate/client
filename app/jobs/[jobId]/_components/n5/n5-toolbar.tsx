@@ -242,14 +242,14 @@ export function FitControls({
 }
 
 // ─────────────────────────────────────────────────────────────────
-// BlockFontScaleToolbar — 선택 block의 글자크기 조작(Figma 1507:21925). 크기 119×38.
+// BlockFontScaleToolbar — 선택 block의 글자크기 조작(Figma 1507:21925). 크기 117×34(테두리 포함), 버튼 28×28 간격 2.
 //
 // [+][-]는 각각 따로 비활성이 된다(N5_FONT_SCALE_STEP, canIncreaseScale·canDecreaseScale). 저장 계약(단위·기준점·재렌더)이
 // 아직 없어 N5 편집 세션의 local 값만 바꾸고 서버 요청을 만들지 않는다. 버튼은 Figma 1507:21925(글자 #171717)와
 // Icon Button XS Disabled(116:982, 글자 #999) 값이다.
 // ─────────────────────────────────────────────────────────────────
 
-export const BLOCK_FONT_SCALE_TOOLBAR_SIZE = { width: 119, height: 38 };
+export const BLOCK_FONT_SCALE_TOOLBAR_SIZE = { width: 117, height: 34 };
 
 function FontScaleButton({
   testId,
@@ -300,24 +300,28 @@ export function BlockFontScaleToolbar({
       data-testid="n5-font-scale-toolbar"
       role="group"
       aria-label="글자크기"
-      className="relative flex items-center gap-1 rounded-[8px] border border-[#ff6a38] bg-white py-1 pr-1 pl-2"
-      style={{ width: BLOCK_FONT_SCALE_TOOLBAR_SIZE.width }}
+      // Figma 1507:21925 — 글자 x9(테두리 1 + 8), 버튼 묶음 x54·y3, 오른쪽 5(테두리 1 + 4)
+      className="relative box-border flex items-center gap-1 rounded-[8px] border border-[#ff6a38] bg-white py-0.5 pr-1 pl-2"
+      style={{ width: BLOCK_FONT_SCALE_TOOLBAR_SIZE.width, height: BLOCK_FONT_SCALE_TOOLBAR_SIZE.height }}
     >
       <p className="flex-1 text-[12px] leading-[normal] font-light tracking-[-0.04em] whitespace-nowrap text-[#ff6a38]">글자크기</p>
-      <FontScaleButton testId="n5-font-scale-increase" label="글자 크게" isPlus enabled={canIncrease} onClick={onIncrease} />
-      <FontScaleButton testId="n5-font-scale-decrease" label="글자 작게" isPlus={false} enabled={canDecrease} onClick={onDecrease} />
-      {/* action handle을 가리키는 꼬리. workspace 끝에서 밀려 handle과 겹치면 그리지 않는다 */}
+      <div className="flex shrink-0 gap-[2px]">
+        <FontScaleButton testId="n5-font-scale-increase" label="글자 크게" isPlus enabled={canIncrease} onClick={onIncrease} />
+        <FontScaleButton testId="n5-font-scale-decrease" label="글자 작게" isPlus={false} enabled={canDecrease} onClick={onDecrease} />
+      </div>
+      {/* 아래 선택 테두리를 가리키는 꼬리(Figma Group 11, 왼쪽 22). workspace 끝에서 밀려 테두리를 벗어나면 그리지 않는다 */}
       {showTail && (
         <svg
-          width="11"
-          height="12"
-          viewBox="0 0 11 12"
+          data-testid="n5-font-scale-toolbar-tail"
+          width="8"
+          height="8"
+          viewBox="0 0 8 8"
           fill="none"
           aria-hidden="true"
-          className="absolute top-1/2 right-[calc(100%-1px)] -translate-y-1/2"
+          className="absolute top-full left-[21px]"
         >
-          <path d="M10.5 0.5L0.8 6L10.5 11.5" fill="white" stroke="#ff6a38" />
-          <path d="M11 1V11" stroke="white" strokeWidth="1.5" />
+          <path d="M0.5 0.5L4 7L7.5 0.5" fill="white" stroke="#ff6a38" />
+          <path d="M1 0.5H7" stroke="white" strokeWidth="1.5" />
         </svg>
       )}
     </div>

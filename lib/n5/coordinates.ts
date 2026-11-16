@@ -198,43 +198,28 @@ export function screenDeltaToBboxDelta(
  * ------------------------------------------------------------------ */
 
 /**
- * 글자크기 툴바의 가로 위치. 항상 block 오른쪽에 붙이고 section 경계는 보지 않는다(툴바는 이미지가 아닌 편집 UI다).
- * workspace 오른쪽 끝을 넘을 때만 왼쪽으로 필요한 만큼 민다. 위치를 뒤집지 않는다.
+ * 글자크기 툴바의 가로 위치. 선택 테두리 위쪽, 테두리 왼쪽에서 조금 안쪽(preferredLeft)에 둔다. section 경계는 보지 않는다
+ * (툴바는 이미지가 아닌 편집 UI다). workspace 오른쪽 끝을 넘을 때만 왼쪽으로 필요한 만큼 민다.
  * block이 workspace 밖으로 완전히 나가면 민 위치에 남지 않고 block과 함께 움직인다.
  * 모든 값은 같은 화면 px 좌표계다.
  */
 export function getFontScaleToolbarLeft(options: {
+  /** 밀리지 않았을 때의 툴바 왼쪽 */
+  preferredLeft: number;
+  /** 선택 테두리 왼쪽 — 이보다 왼쪽으로는 밀지 않는다 */
   blockLeft: number;
-  blockRight: number;
   toolbarWidth: number;
-  /** block 오른쪽 변에서 툴바까지의 거리 */
-  gap: number;
   /** 툴바 오른쪽 끝이 넘지 않아야 할 위치 */
   maxRight: number;
 }): number {
-  const { blockLeft, blockRight, toolbarWidth, gap, maxRight } = options;
-  return Math.min(blockRight + gap, Math.max(maxRight, blockLeft) - toolbarWidth);
-}
-
-/** 글자크기 action handle 중심 — block 오른쪽 변, 위에서 18(화면 px, Figma 1512:23496). block 높이와 무관하다 */
-export const FONT_HANDLE_CENTER_TOP_PX = 18;
-/** 평소 누르는 영역 절반: 손잡이 약 7(테두리 안쪽 기준 inset 4), action handle 8 */
-const RESIZE_HANDLE_HIT_HALF_PX = 7;
-const FONT_HANDLE_HIT_HALF_PX = 8;
-
-/**
- * 오른쪽 변 손잡이(e·se)의 누르는 영역이 action handle과 겹치는지. 겹치면 위치는 그대로 두고 누르는 영역만 나눈다 —
- * action handle은 보이는 12px만 받고, 손잡이는 영역을 좌우로 넓혀 action handle 양옆에서 잡히게 한다.
- * @param handleCenterTop block 위에서 손잡이 중심까지(화면 px)
- */
-export function overlapsFontHandleHitArea(handleCenterTop: number): boolean {
-  return Math.abs(handleCenterTop - FONT_HANDLE_CENTER_TOP_PX) < RESIZE_HANDLE_HIT_HALF_PX + FONT_HANDLE_HIT_HALF_PX;
+  const { preferredLeft, blockLeft, toolbarWidth, maxRight } = options;
+  return Math.min(preferredLeft, Math.max(maxRight, blockLeft) - toolbarWidth);
 }
 
 /**
- * 이보다 낮게 보이는(화면 px = preview scale × zoom 적용 후) Auto Height block은 compact resize를 쓴다. 오른쪽 손잡이(ne·e·se)와
- * 글자크기 손잡이가 몰려 정확한 점을 찾아 눌러야 하는 높이다. 위치는 Figma 그대로 두고 누르는 방식만 바꾼다 —
- * 오른쪽 변 전체가 가로 resize 하나를 받고, 글자크기 손잡이는 보이는 12px만 받는다. Figma에 낮은 block 표본이 없어 정한 UX 값이다.
+ * 이보다 낮게 보이는(화면 px = preview scale × zoom 적용 후) Auto Height block은 compact resize를 쓴다. 오른쪽 손잡이(ne·e·se)가
+ * 몰려 정확한 점을 찾아 눌러야 하는 높이다. 위치는 Figma 그대로 두고 누르는 방식만 바꾼다 —
+ * 오른쪽 변 전체가 가로 resize 하나를 받는다. Figma에 낮은 block 표본이 없어 정한 UX 값이다.
  */
 export const COMPACT_RESIZE_HEIGHT_PX = 48;
 /** 48로 계산된 값이 부동소수 오차로 47.9999…가 되어 경계에서 모드가 흔들리지 않게 하는 여유 */

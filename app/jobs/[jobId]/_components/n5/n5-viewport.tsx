@@ -15,13 +15,11 @@ import type { BlockViewModel, JobMetaViewModel, PreviewSectionViewModel, Preview
 import type { BoundingBox } from '@/lib/api/types';
 import { N5_SAVE_NOTICE_MESSAGES } from '@/lib/n5/messages';
 import {
-  FONT_HANDLE_CENTER_TOP_PX,
   getBlockDisplayRect,
   getCompactRightResizeZone,
   isCompactResizeHeight,
   getBlockHitRect,
   getFontScaleToolbarLeft,
-  overlapsFontHandleHitArea,
   screenDeltaToBboxDelta,
   type DisplayRect,
 } from '@/lib/n5/coordinates';
@@ -337,11 +335,14 @@ function BlockOverlay({
   fontScale,
   onSelect,
   drag,
+  zoom,
 }: {
   block: BlockViewModel;
   visualRect: DisplayRect;
   index: number;
   isSelected: boolean;
+  /** 현재 canvas zoom — 선택된 번호 배지를 선택 테두리 기준 화면 px 위치·크기로 둔다 */
+  zoom: number;
   /** 사용자 글자 배율(세션 local). 화면에 보이지 않는 테스트 hook으로만 내보낸다 */
   fontScale: number;
   /** block을 선택하는 클릭 동작 */
@@ -368,7 +369,8 @@ function BlockOverlay({
           e.stopPropagation();
           onSelect();
         }}
-        className={`absolute z-[2] ${isSelected ? 'border border-[#ff6a38]' : ''} ${drag ? 'cursor-move' : 'cursor-pointer'}`}
+        // 선택 테두리는 글자에서 16px 떨어진 선택 UI(BlockSelectionChrome)가 그린다 — 이 영역은 bbox 그대로 클릭·끌기만 받는다
+        className={`absolute z-[2] ${drag ? 'cursor-move' : 'cursor-pointer'}`}
         style={{ left: visualRect.left, top: visualRect.top, width: visualRect.width, height: visualRect.height }}
       />
       <div
@@ -385,7 +387,17 @@ function BlockOverlay({
         // 않다. 다만 소수 px 위치는 브라우저마다 서브픽셀 렌더링 방식이 달라
         // 미세한 흐림/치우침 인상을 줄 수 있어, 정수 px로 스냅한다(패딩/
         // translate로 임의 보정한 값이 아니라 위치 자체를 반올림한 것).
-        style={{ left: Math.round(visualRect.left - 8), top: Math.round(visualRect.top - 8) }}
+        // 선택된 block은 Figma 1512:23496처럼 선택 테두리 바깥 왼쪽 위(테두리에서 왼쪽 16·위 24, 화면 px)로 빼서 글자를 가리지 않는다
+        style={
+          isSelected
+            ? {
+                left: visualRect.left - (SELECTION_CHROME_PADDING_PX + SELECTED_BADGE_OFFSET_PX.left) / zoom,
+                top: visualRect.top - (SELECTION_CHROME_PADDING_PX + SELECTED_BADGE_OFFSET_PX.top) / zoom,
+                transform: `scale(${1 / zoom})`,
+                transformOrigin: '0 0',
+              }
+            : { left: Math.round(visualRect.left - 8), top: Math.round(visualRect.top - 8) }
+        }
       >
         <BlockPinBadge index={index} isSelected={isSelected} />
       </div>
@@ -404,21 +416,26 @@ const HANDLE_POSITIONS: { key: ResizeHandle; x: number; y: number; cursor: strin
   { key: 'se', x: 1, y: 1, cursor: 'nwse-resize' },
 ];
 
-// Figma 1512:23496 실측(화면 px) — action handle 중심은 block 오른쪽 변 위, block 위에서 18. 툴바는 block 오른쪽 25
 /** 이만큼 움직여야 클릭이 아니라 끌기로 본다(화면 px) */
 const BLOCK_DRAG_START_DISTANCE_PX = 3;
-const FONT_HANDLE_SIZE_PX = 12;
-const FONT_TOOLBAR_GAP_PX = 25;
-const FONT_TOOLBAR_TAIL_WIDTH_PX = 11;
+// Figma 1512:23496 「Selection」(화면 px, zoom과 무관). 글자(bbox) 바깥 16에 선택 테두리와 손잡이 8개를 둔다 — 보이는 여백일 뿐
+// 저장하는 bbox·layoutAdjust는 바꾸지 않는다. 글자크기 툴바는 테두리 왼쪽에서 8, 위로 42(툴바 34 + 간격 8)에 선택 즉시 보인다.
+// 선택된 번호 배지는 테두리에서 왼쪽 16·위 24(배지 20 + 간격 4)로 빠져 툴바(왼쪽 8부터)와도 겹치지 않는다.
+const SELECTION_CHROME_PADDING_PX = 16;
+const SELECTED_BADGE_OFFSET_PX = { left: 16, top: 24 };
+const FONT_TOOLBAR_OFFSET_PX = { left: 8, top: 42 };
+/** 툴바 꼬리(Figma Group 11) — 툴바 왼쪽에서 22~30, 아래로 테두리를 가리킨다 */
+const FONT_TOOLBAR_TAIL_CENTER_PX = 26;
 
 /**
- * 선택 block의 핸들 8개·글자크기 action handle·툴바(Figma 1512:23496). section 밖 canvas overlay에 그려서
+ * 선택 block의 선택 테두리·핸들 8개·글자크기 툴바(Figma 1512:23496). section 밖 canvas overlay에 그려서
  * section 경계와 무관하고, canvas transform을 함께 받아 zoom·pan을 그대로 따라간다. 화면 크기는 zoom과 무관하다.
  *
  * 핸들 8개(F-CFM-15)는 영역 크기만 바꾸고 section 밖으로 넓히지 못한다. [+][-]는 글자 배율과 박스를 함께 바꾼다.
  * 둘 다 이 세션의 local 초안만 바꾼다 — 저장 계약이 없어 서버 요청을 만들지 않는다. 캔버스의 글자는 서버 렌더 이미지라
  * 재렌더 계약이 생기기 전에는 이미지 속 글자 크기가 바뀌지 않는다.
- * 툴바 열림 상태는 block 하나의 상태라 호출부가 key를 block id로 준다. block이 바뀌거나 선택 UI가 사라지면 닫힌다.
+ * 테두리·손잡이는 bbox에서 화면 16px 바깥에 그린다. 손잡이를 끈 거리는 그대로 bbox 크기 변화로 옮긴다(시작 위치만 바깥이다).
+ * 글자크기 툴바는 선택하면 바로 보인다(따로 여는 손잡이가 없다).
  */
 function BlockSelectionChrome({
   bbox,
@@ -471,7 +488,6 @@ function BlockSelectionChrome({
   /** viewport padding 안쪽 폭. pan과 같은 좌표계라 오른쪽 padding을 남기고 멈춘다 */
   usableWidth: number;
 }) {
-  const [isToolbarOpen, setIsToolbarOpen] = useState(false);
   // 끄는 동안의 조작 방식. 높이·zoom이 바뀌어 compact 경계를 넘어도 손을 놓을 때까지 시작한 방식(과 잡은 요소)을 유지한다
   const [activeDragMode, setActiveDragMode] = useState<'normal' | 'compact' | null>(null);
   // 끌기 시작 시점의 값. pointer capture로 손잡이 밖에서도 이어지고, 해제되면 함께 지운다
@@ -542,23 +558,29 @@ function BlockSelectionChrome({
   }
 
   const inverseScale = `scale(${1 / zoom})`;
-  const blockLeft = panX + rect.left * zoom;
-  const blockRight = blockLeft + rect.width * zoom;
+  // 선택 테두리 — bbox(rect)를 화면 16px만큼 바깥으로 넓힌 canvas 좌표. 저장 좌표가 아니다
+  const padding = SELECTION_CHROME_PADDING_PX / zoom;
+  const chrome: DisplayRect = {
+    left: rect.left - padding,
+    top: rect.top - padding,
+    width: rect.width + padding * 2,
+    height: rect.height + padding * 2,
+  };
+  const chromeScreenLeft = panX + chrome.left * zoom;
+  const chromeScreenRight = chromeScreenLeft + chrome.width * zoom;
   const toolbarLeft = getFontScaleToolbarLeft({
-    blockLeft,
-    blockRight,
+    preferredLeft: chromeScreenLeft + FONT_TOOLBAR_OFFSET_PX.left,
+    blockLeft: chromeScreenLeft,
     toolbarWidth: BLOCK_FONT_SCALE_TOOLBAR_SIZE.width,
-    gap: FONT_TOOLBAR_GAP_PX,
     maxRight: usableWidth,
   });
-  // 위치는 block 높이와 무관하다. 낮은 block에서 겹치는 오른쪽 손잡이는 위치가 아니라 누르는 영역으로 나눈다
+  const tailCenter = toolbarLeft + FONT_TOOLBAR_TAIL_CENTER_PX;
+  // 위치는 block 높이와 무관하다
   const blockScreenHeight = rect.height * zoom;
   // compact — 낮게 보이는 Auto Height block은 오른쪽 손잡이(ne·e·se)를 따로 잡지 않고 오른쪽 변 전체가 가로 resize(e)를 받는다.
   // 높이는 줄바꿈이 정하므로 세 손잡이의 차이는 폭뿐이다. 잴 수 없는 block은 모서리가 높이를 바꾸므로 기존 방식을 쓴다
   const isCompact = activeDragMode ? activeDragMode === 'compact' : fitAutoHeight != null && isCompactResizeHeight(blockScreenHeight);
-  const compactZone = isCompact ? getCompactRightResizeZone(rect, zoom) : null;
-  const overlapsHandle = (x: number, y: number) => !isCompact && x === 1 && overlapsFontHandleHitArea(blockScreenHeight * y);
-  const isFontHandleHitNarrowed = isCompact || HANDLE_POSITIONS.some(({ x, y }) => overlapsHandle(x, y));
+  const compactZone = isCompact ? getCompactRightResizeZone(chrome, zoom) : null;
   const stopPropagation = (e: React.SyntheticEvent) => e.stopPropagation();
   return (
     <div
@@ -569,7 +591,20 @@ function BlockSelectionChrome({
       data-resize-mode={isCompact ? 'compact' : 'normal'}
       className="pointer-events-none absolute inset-0"
     >
-      {/* 쌓는 순서: 핸들은 번호 배지(z-10) 아래, 툴바와 action handle은 그 위. 툴바가 밀려 겹쳐도 handle로 닫을 수 있다 */}
+      {/* 선택 테두리 — 화면 px 1px 선. 쌓는 순서: 테두리·핸들은 번호 배지(z-10) 아래, 툴바는 그 위 */}
+      <span
+        aria-hidden="true"
+        data-testid="n5-block-selection-frame"
+        className="absolute z-[4] box-border border border-[#ff6a38]"
+        style={{
+          left: chrome.left,
+          top: chrome.top,
+          width: chrome.width * zoom,
+          height: chrome.height * zoom,
+          transform: inverseScale,
+          transformOrigin: '0 0',
+        }}
+      />
       {HANDLE_POSITIONS.map(({ key, x, y, cursor }) => (
         <span
           key={key}
@@ -577,12 +612,10 @@ function BlockSelectionChrome({
           data-testid={`n5-block-handle-${key}`}
           // 8px는 잡기에 작아 before로 잡는 영역만 넓힌다. pointer만 쓰는 조작이라 aria-hidden을 유지한다
           // compact의 오른쪽 손잡이는 보이기만 하고, 누르는 것은 오른쪽 resize 영역이 받는다
-          className={`${isCompact && x === 1 ? 'pointer-events-none' : 'pointer-events-auto'} absolute z-[5] box-border size-[7.667px] touch-none rounded-[1.355px] border border-[#ff6a38] bg-white before:absolute ${
-            overlapsHandle(x, y) ? 'before:-inset-x-[12px] before:-inset-y-[4px]' : 'before:-inset-[4px]'
-          }`}
+          className={`${isCompact && x === 1 ? 'pointer-events-none' : 'pointer-events-auto'} absolute z-[5] box-border size-[7.667px] touch-none rounded-[1.355px] border border-[#ff6a38] bg-white before:absolute before:-inset-[4px]`}
           style={{
-            left: rect.left + rect.width * x,
-            top: rect.top + rect.height * y,
+            left: chrome.left + chrome.width * x,
+            top: chrome.top + chrome.height * y,
             transform: `translate(-50%, -50%) ${inverseScale}`,
             cursor,
           }}
@@ -606,53 +639,26 @@ function BlockSelectionChrome({
           onClick={stopPropagation}
         />
       )}
-      <button
-        type="button"
-        data-testid="n5-font-scale-handle"
-        aria-label="글자크기 조절"
-        aria-expanded={isToolbarOpen}
-        // 12px는 누르기에 작아 before로 누르는 영역을 16px로 넓힌다. 오른쪽 손잡이와 겹치는 낮은 block·compact에서는 보이는 12px만 받는다
-        className={`pointer-events-auto absolute z-[21] cursor-pointer rounded-[2.6px] bg-[#ff6a38] before:absolute ${
-          isFontHandleHitNarrowed ? 'before:inset-0' : 'before:-inset-0.5'
-        } focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ff6a38]`}
-        style={{
-          left: rect.left + rect.width,
-          top: rect.top + FONT_HANDLE_CENTER_TOP_PX / zoom,
-          width: FONT_HANDLE_SIZE_PX,
-          height: FONT_HANDLE_SIZE_PX,
-          transform: `translate(-50%, -50%) ${inverseScale}`,
-        }}
+      <div
+        className="pointer-events-auto absolute z-20"
         onPointerDown={stopPropagation}
-        onClick={(e) => {
-          e.stopPropagation();
-          setIsToolbarOpen((open) => !open);
+        onClick={stopPropagation}
+        style={{
+          left: (toolbarLeft - panX) / zoom,
+          top: chrome.top - FONT_TOOLBAR_OFFSET_PX.top / zoom,
+          transform: inverseScale,
+          transformOrigin: '0 0',
         }}
-        // Space는 window에서 pan 키로 먼저 잡는다. 이 버튼에서는 버튼 동작으로 쓴다
-        onKeyDown={(e) => {
-          if (e.code === 'Space') e.stopPropagation();
-        }}
-      />
-      {isToolbarOpen && (
-        <div
-          className="pointer-events-auto absolute z-20"
-          onPointerDown={stopPropagation}
-          onClick={stopPropagation}
-          style={{
-            left: (toolbarLeft - panX) / zoom,
-            top: rect.top + (FONT_HANDLE_CENTER_TOP_PX - BLOCK_FONT_SCALE_TOOLBAR_SIZE.height / 2) / zoom,
-            transform: inverseScale,
-            transformOrigin: '0 0',
-          }}
-        >
-          <BlockFontScaleToolbar
-            showTail={toolbarLeft - blockRight >= FONT_HANDLE_SIZE_PX / 2 + FONT_TOOLBAR_TAIL_WIDTH_PX}
-            canIncrease={!isEditLocked && canIncreaseScale({ box: bbox, currentScale: fontScale, step: N5_FONT_SCALE_STEP, section })}
-            canDecrease={!isEditLocked && canDecreaseScale({ box: bbox, currentScale: fontScale, step: N5_FONT_SCALE_STEP, section })}
-            onIncrease={() => onFontScaleChange('increase')}
-            onDecrease={() => onFontScaleChange('decrease')}
-          />
-        </div>
-      )}
+      >
+        <BlockFontScaleToolbar
+          // workspace 끝에서 밀려 꼬리가 테두리 위를 벗어나면 그리지 않는다
+          showTail={tailCenter >= chromeScreenLeft && tailCenter <= chromeScreenRight}
+          canIncrease={!isEditLocked && canIncreaseScale({ box: bbox, currentScale: fontScale, step: N5_FONT_SCALE_STEP, section })}
+          canDecrease={!isEditLocked && canDecreaseScale({ box: bbox, currentScale: fontScale, step: N5_FONT_SCALE_STEP, section })}
+          onIncrease={() => onFontScaleChange('increase')}
+          onDecrease={() => onFontScaleChange('decrease')}
+        />
+      </div>
     </div>
   );
 }
@@ -981,6 +987,7 @@ function ImageLayer({
                 fontScale={baseFontScaleById(block.id)}
                 onSelect={selectHandlerOf(block)}
                 drag={blockDrag}
+                zoom={zoom}
               />
             ))}
             <N5PreviewStatusSlot sectionId={slice.sectionId} status={status} />
