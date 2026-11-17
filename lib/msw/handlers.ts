@@ -362,7 +362,7 @@ function getN5BlocksFromState(sectionId?: number, referrer = ''): ApiTextBlock[]
  * 전까지는 이전 값을 유지).
  */
 let n5TaskIdCounter = 90000;
-const n5TaskState = new Map<number, { blockId: number; pollCount: number }>();
+const n5TaskState = new Map<number, { blockId: number; pollCount: number; createdAt?: number }>();
 
 // ─────────────────────────────────────────────
 // N5 /preview 렌더 입력·시도·결과(server PR #108 계약 모양, lib/mock-api/n5-preview-render.ts)
@@ -394,6 +394,58 @@ const n5SectionRenderState = new Map<number, MockN5SectionRender>(
     ];
   }),
 );
+
+// ─────────────────────────────────────────────
+// ?mockRender=supersede|supersede-cancelled — 실제 BE 처럼 같은 섹션의 새 저장이 진행 중인 앞선 미리보기 시도를 대체한다.
+//   supersede           앞선 task 는 /tasks 에서 사라진다(계약: JOB-05 는 cancelled 항목 제외)
+//   supersede-cancelled 앞선 task 는 /tasks 에 cancelled 로 남는다
+// 이 모드에서는 시도가 조회 횟수가 아니라 경과 시간으로 진행한다(서버 시간 흐름 흉내) — /tasks 를 polling 하지 않아도
+// /preview 조회만으로 끝난 시도를 볼 수 있고, 이어지는 같은 섹션 저장이 아직 진행 중인 앞선 시도를 실제로 대체한다.
+// ?mockRenderHold=<sectionId,...> — 그 섹션의 현재 시도를 running 에 붙잡는다(주소에서 빼면 이어서 끝난다).
+// 기본 Mock 동작은 바꾸지 않는다 — 회귀 시나리오에서만 켠다.
+// ─────────────────────────────────────────────
+type MockRenderMode = { supersede: 'remove' | 'cancel' | null; holdSectionIds: ReadonlySet<number> };
+function getMockRenderMode(referrer: string): MockRenderMode {
+  try {
+    const params = new URL(referrer).searchParams;
+    const value = params.get('mockRender');
+    const hold = (params.get('mockRenderHold') ?? '').split(',').map(Number).filter((id) => Number.isInteger(id) && id > 0);
+    return { supersede: value === 'supersede' ? 'remove' : value === 'supersede-cancelled' ? 'cancel' : null, holdSectionIds: new Set(hold) };
+  } catch {
+    return { supersede: null, holdSectionIds: new Set() };
+  }
+}
+/** supersede-cancelled 로 대체된 앞선 task(taskId → blockId) */
+const n5CancelledTaskState = new Map<number, number>();
+
+function isMockRenderHeld(blockId: number, referrer: string): boolean {
+  const sectionId = n5BlockState.get(blockId)?.sectionId;
+  return sectionId != null && getMockRenderMode(referrer).holdSectionIds.has(sectionId);
+}
+
+/** supersede 모드의 시도 진행 시간(ms) — 이만큼 지나면 running, 다음 값이 지나면 끝난다 */
+const MOCK_SUPERSEDE_RUNNING_MS = 600;
+const MOCK_SUPERSEDE_DONE_MS = 2_500;
+
+/** task 한 걸음 진행 — 기본은 조회 1회당 1, supersede 모드는 경과 시간. 붙잡은 섹션은 running(1)에 머문다 */
+function advanceMockTask(task: { blockId: number; pollCount: number; createdAt?: number }, referrer: string) {
+  const next = getMockRenderMode(referrer).supersede
+    ? (() => {
+        const elapsed = Date.now() - (task.createdAt ?? 0);
+        return elapsed >= MOCK_SUPERSEDE_DONE_MS ? 2 : elapsed >= MOCK_SUPERSEDE_RUNNING_MS ? 1 : 0;
+      })()
+    : task.pollCount + 1;
+  task.pollCount = isMockRenderHeld(task.blockId, referrer) ? Math.min(next, 1) : next;
+}
+
+/** supersede 모드 — /preview 조회만으로도 각 섹션 현재 시도가 진행된다 */
+function advanceMockPreviewAttempts(referrer: string) {
+  if (!getMockRenderMode(referrer).supersede) return;
+  for (const render of n5SectionRenderState.values()) {
+    const task = render.attempt ? n5TaskState.get(render.attempt.taskId) : undefined;
+    if (task) advanceMockTask(task, referrer);
+  }
+}
 
 /** 시도의 task 상태를 반영하고, 끝났으면 그때의 입력으로 결과를 채택한다 */
 function settleMockSectionRender(sectionId: number, referrer: string): MockN5SectionRender {
@@ -1353,6 +1405,7 @@ export const handlers = [
   http.get('/jobs/:jobId/preview', ({ params, request }) => {
     const jobId = params.jobId as string;
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
+    advanceMockPreviewAttempts(request.referrer);
     const { preview } = buildMockN5PreviewWithRender(request.referrer);
     if (isN5ErrorScenario(request.referrer)) {
       return HttpResponse.json({
@@ -1448,10 +1501,17 @@ export const handlers = [
     if (clearsLegacy) n5LegacyLayoutBox.delete(blockId);
 
     const rerenderTaskId = n5TaskIdCounter++;
-    n5TaskState.set(rerenderTaskId, { blockId, pollCount: 0 });
+    n5TaskState.set(rerenderTaskId, { blockId, pollCount: 0, createdAt: Date.now() });
     // 저장이 섹션 미리보기 시도를 새로 만든다. 이전 성공 결과는 새 결과가 채택될 때까지 남는다
     const sectionId = updated.sectionId as number;
     const render = n5SectionRenderState.get(sectionId) ?? { result: null, attempt: null };
+    // ?mockRender=supersede* — 아직 끝나지 않은 앞선 시도는 이 시도로 대체된다(BE: cancelled/superseded)
+    const supersede = getMockRenderMode(request.referrer).supersede;
+    const previousTask = render.attempt ? n5TaskState.get(render.attempt.taskId) : undefined;
+    if (supersede && render.attempt && previousTask && render.attempt.status !== 'done' && render.attempt.status !== 'failed') {
+      n5TaskState.delete(render.attempt.taskId);
+      if (supersede === 'cancel') n5CancelledTaskState.set(render.attempt.taskId, previousTask.blockId);
+    }
     n5SectionRenderState.set(sectionId, { ...render, attempt: { taskId: rerenderTaskId, status: 'pending', errorCode: null, retryable: false } });
 
     const [withFingerprint] = withSectionInputFingerprint([updated], request.referrer);
@@ -1531,8 +1591,24 @@ export const handlers = [
       }
     }
 
+    for (const [taskId, blockId] of n5CancelledTaskState.entries()) {
+      items.push({
+        taskId,
+        taskType: 'render',
+        unitType: 'text_block',
+        unitId: blockId,
+        // 계약상 /tasks 는 cancelled 항목을 빼지만, 남아 있는 경우도 견디는지 보는 방어 모드다(uiStatus 에는 cancelled 값이 없다)
+        status: 'cancelled',
+        retryCount: 0,
+        maxRetry: 3,
+        retryable: false,
+        errorCode: 'SUPERSEDED',
+        revision: null,
+      });
+    }
+
     for (const [taskId, state] of n5TaskState.entries()) {
-      state.pollCount += 1;
+      advanceMockTask(state, request.referrer);
       const block = n5BlockState.get(state.blockId);
       // "실패유도"를 trans1에 넣으면 이 task가 실패로 끝난다 — 실패/polling
       // 종료 경로를 mock에서도 재현하기 위한 테스트 전용 hook이다.
