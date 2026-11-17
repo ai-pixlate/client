@@ -800,7 +800,19 @@ export function N5Panel({
       sections,
       expectedBySection: groupExpectedBySection(expectedSavedRef.current.values()),
       previewOnlySectionIds: previewOnlySectionIdsRef.current,
-      latestBlocks: latestBlocks.flatMap((block) => (typeof block.id === 'number' ? [{ id: block.id, revision: block.revision ?? null, trans1: block.trans1 ?? null }] : [])),
+      latestBlocks: latestBlocks.flatMap((block) =>
+        typeof block.id === 'number'
+          ? [
+              {
+                id: block.id,
+                revision: block.revision ?? null,
+                trans1: block.trans1 ?? null,
+                sectionId: block.sectionId ?? null,
+                sectionInputFingerprint: block.sectionInputFingerprint ?? null,
+              },
+            ]
+          : [],
+      ),
     });
     return { result, sections };
   }

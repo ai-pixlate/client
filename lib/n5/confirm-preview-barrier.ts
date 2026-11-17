@@ -11,7 +11,7 @@
  * 순수 모듈이다(React·브라우저 API 없음, scripts/verify-n5-confirm-preview-barrier.mjs 로 Node 에서 검증).
  */
 
-import type { PreviewInputState, PreviewRenderState } from './preview-state';
+import { compareFingerprintsAB, deriveSectionFingerprintA, type PreviewInputState, type PreviewRenderState } from './preview-state.ts';
 
 /**
  * complete = 현재 입력 준비 + 서버 isCurrent=true
@@ -97,6 +97,12 @@ export function isSectionPreviewInProgress(section: ConfirmPreviewSectionInput |
  *   (downstream._render_inputs). 빈 번역으로 저장한 block 은 renderInput 에서 빠지는 것이 정상이다.
  * - include 섹션은 render 를 항상 객체로 낸다(render=null 은 제외 섹션만). /preview 는 한 조회 시점(REPEATABLE READ) 값이다.
  * - confirm 은 기대 revision 을 받지 않는다 — 판정 뒤 ~ confirm 트랜잭션 사이의 다른 저장은 FE 가 막을 수 없다(서버 계약 필요).
+ *
+ * 섹션 입력 지문 A=B — revision 정합에 더하는 조건(대체하지 않는다)
+ * - A = 이번 장벽 조회의 /blocks sectionInputFingerprint(그 섹션 block 들의 값, deriveSectionFingerprintA)
+ * - B = 같은 회차 /preview sections[].inputFingerprint
+ * - A·B 가 모두 값이고 같을 때만 완료다. 다르면 두 조회가 다른 입력을 본 것이라 다시 조회한다(bounded polling).
+ *   어느 한쪽이라도 null(A=null·B=null 포함)이거나 같은 섹션의 A 가 서로 다르면 비교할 수 없어 완료로 보지 않는다.
  * ------------------------------------------------------------------ */
 
 /** 이번 [저장하러 가기]에서 PATCH 성공 응답(block)으로 확인한 서버 정본 */
@@ -140,15 +146,26 @@ export function groupExpectedBySection(expected: Iterable<ExpectedSavedBlock>): 
  * complete         = 현재 미리보기(isCurrent) + 저장한 모든 block 의 /blocks·renderInput revision 이 기대값과 같다
  * waiting-preview  = 미리보기가 아직 최신이 아니다(진행·채택 직후·입력 준비 등)
  * waiting-revision = 서버가 아직 이전 revision 을 보여 준다(기대값보다 작다) — 다시 조회한다
+ * waiting-fingerprint = revision·isCurrent 는 맞지만 /blocks 지문 A 와 /preview 지문 B 가 같지 않다(다름·null·A 불일치) — 다시 조회한다
  * conflict         = 내 저장 뒤 다른 변경(기대값보다 큰 revision · 저장값과 다른 번역문 · 섹션이 제외됨)
  * failed · invalid = 기존 판정(현재 시도 실패·입력 오류 / 응답 누락·계약 밖·기대와 모순)
  */
-export type ConfirmSavedSectionVerdict = 'complete' | 'waiting-preview' | 'waiting-revision' | 'conflict' | 'failed' | 'invalid';
+export type ConfirmSavedSectionVerdict =
+  | 'complete'
+  | 'waiting-preview'
+  | 'waiting-revision'
+  | 'waiting-fingerprint'
+  | 'conflict'
+  | 'failed'
+  | 'invalid';
 
 export interface ConfirmLatestBlock {
   id: number;
   revision: number | null;
   trans1: string | null;
+  sectionId: number | null;
+  /** 지문 A — /blocks sectionInputFingerprint(없거나 null 이면 null) */
+  sectionInputFingerprint: string | null;
 }
 
 export interface ConfirmSavedSectionInput extends ConfirmPreviewSectionInput {
@@ -165,6 +182,8 @@ export function judgeConfirmSavedSection(
   section: ConfirmSavedSectionInput | undefined,
   expected: readonly ExpectedSavedBlock[],
   latestBlocksById: ReadonlyMap<number, ConfirmLatestBlock>,
+  /** 같은 회차 /blocks 에서 이 섹션 block 들의 지문 A 값 */
+  sectionFingerprintsA: readonly (string | null)[] = [],
 ): ConfirmSavedSectionVerdict {
   // ① 현재 서버 block(/blocks) — 다른 저장이 있었는지를 미리보기보다 먼저 본다
   let blocksOlder = false;
@@ -197,7 +216,10 @@ export function judgeConfirmSavedSection(
     if (order === 'older') renderOlder = true;
     else if (item.renderExpectation === 'absent') return 'invalid';
   }
-  return renderOlder ? 'waiting-revision' : 'complete';
+  if (renderOlder) return 'waiting-revision';
+  // ④ 지문 A(/blocks) = B(/preview) — 값이 둘 다 있고 같을 때만 완료. null·다름·A 불일치는 다시 조회한다
+  const match = compareFingerprintsAB(deriveSectionFingerprintA(sectionFingerprintsA), section?.input.fingerprint ?? null);
+  return match === 'match' ? 'complete' : 'waiting-fingerprint';
 }
 
 export type ConfirmSaveBarrierState = 'complete' | 'waiting' | 'conflict' | 'failed' | 'invalid';
@@ -222,11 +244,18 @@ export function judgeConfirmSaveBarrier(options: {
 }): ConfirmSaveBarrierResult {
   const byId = new Map(options.sections.map((section) => [section.id, section]));
   const latestById = new Map(options.latestBlocks.map((block) => [block.id, block]));
+  const fingerprintsBySection = new Map<number, (string | null)[]>();
+  for (const block of options.latestBlocks) {
+    if (block.sectionId == null) continue;
+    const list = fingerprintsBySection.get(block.sectionId) ?? [];
+    list.push(block.sectionInputFingerprint);
+    fingerprintsBySection.set(block.sectionId, list);
+  }
   const verdicts = new Map<number, ConfirmSavedSectionVerdict>();
   const conflictBlockIds: number[] = [];
   for (const [sectionId, expectedMap] of options.expectedBySection) {
     const expected = [...expectedMap.values()];
-    const verdict = judgeConfirmSavedSection(byId.get(sectionId), expected, latestById);
+    const verdict = judgeConfirmSavedSection(byId.get(sectionId), expected, latestById, fingerprintsBySection.get(sectionId) ?? []);
     verdicts.set(sectionId, verdict);
     if (verdict === 'conflict') {
       for (const item of expected) {
@@ -247,7 +276,7 @@ export function judgeConfirmSaveBarrier(options: {
       ? 'conflict'
       : values.includes('failed')
         ? 'failed'
-        : values.some((value) => value === 'waiting-preview' || value === 'waiting-revision')
+        : values.some((value) => value === 'waiting-preview' || value === 'waiting-revision' || value === 'waiting-fingerprint')
           ? 'waiting'
           : 'complete';
   return { state, verdicts, conflictBlockIds };
