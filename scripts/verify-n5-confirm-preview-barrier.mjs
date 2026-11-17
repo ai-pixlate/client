@@ -125,7 +125,9 @@ function savedSection(id, blocks, over = {}) {
   });
 }
 const exp = (blockId, sectionId, revision, renderExpectation = 'present', savedTrans1 = `t${blockId}`) => ({ blockId, sectionId, revision, savedTrans1, renderExpectation });
-const latest = (...rows) => rows.map(([id, revision, trans1]) => ({ id, revision, trans1: trans1 ?? `t${id}` }));
+// sectionId: 11~19 → 501, 21~29 → 502. 지문 A 기본값은 /preview 지문 B 와 같은 FP_NEW
+const latest = (...rows) =>
+  rows.map(([id, revision, trans1, fp = FP_NEW]) => ({ id, revision, trans1: trans1 ?? `t${id}`, sectionId: id < 20 ? 501 : 502, sectionInputFingerprint: fp }));
 const judge = (sections, expectedList, latestBlocks, previewOnly = []) =>
   judgeConfirmSaveBarrier({ sections, expectedBySection: groupExpectedBySection(expectedList), previewOnlySectionIds: previewOnly, latestBlocks });
 
@@ -155,6 +157,36 @@ const twoDone = vm(savedSection(501, [rblock(11, 12)]), savedSection(502, [rbloc
 check('여러 섹션 — 둘 다 완료 → complete', judge(twoDone, [exp(11, 501, 12), exp(21, 502, 4)], latest([11, 12], [21, 4])).state === 'complete');
 check('기대 없는 앞선 저장 섹션(preview only) 진행 중 → waiting', judge(two, [exp(11, 501, 12)], latest([11, 12]), [502]).state === 'waiting');
 check('기대·대상 없음 → complete', judge(twoDone, [], []).state === 'complete');
+
+console.log('\n[섹션 입력 지문 A(/blocks) = B(/preview)]');
+const e1 = [exp(11, 501, 12)];
+const s1 = vm(savedSection(501, [rblock(11, 12)]));
+check('A=B · revision·isCurrent 일치 → complete', judge(s1, e1, latest([11, 12])).state === 'complete');
+const abDiff = judge(s1, e1, latest([11, 12, undefined, FP_OLD]));
+check('A≠B → waiting(오류 아님 · 다시 조회)', abDiff.state === 'waiting' && abDiff.verdicts.get(501) === 'waiting-fingerprint');
+check('A≠B 다음 조회에서 A=B → complete', judge(s1, e1, latest([11, 12])).state === 'complete');
+check('A=null · B 값 → waiting(완료 아님)', judge(s1, e1, latest([11, 12, undefined, null])).state === 'waiting');
+const bNull = vm(savedSection(501, [rblock(11, 12)], { inputFingerprint: null, renderInput: null, render: { attempt: null, result: null, isCurrent: false } }));
+check('B=null(입력 준비 중) · A 값 → 완료 아님', judge(bNull, e1, latest([11, 12])).state !== 'complete');
+check('A=null · B=null → 완료 아님', judge(bNull, e1, latest([11, 12, undefined, null])).state !== 'complete');
+// 계약 밖 조합이지만 FE 지문 판정만 따로 본다 — isCurrent·renderInput 이 맞아도 B=null 이면 complete 가 아니다
+const bOnlyNull = vm(savedSection(501, [rblock(11, 12)], { inputFingerprint: null }));
+check('isCurrent=true · renderInput 있음 · B=null → complete 아님', judge(bOnlyNull, e1, latest([11, 12])).state !== 'complete');
+check('같은 섹션 A 가 서로 다름(inconsistent) → waiting', judge(s3, e3, latest([11, 12], [12, 7, undefined, FP_OLD], [13, 19])).state === 'waiting');
+check('같은 섹션 다른 block 의 A 하나가 null · 나머지 같음 → complete(null 은 비교에서 빼고 값 하나)', judge(s3, e3, latest([11, 12], [12, 7, undefined, null], [13, 19])).state === 'complete');
+check('A≠B 여도 revision 충돌이 먼저 → conflict', judge(s1, e1, latest([11, 13, undefined, FP_OLD])).state === 'conflict');
+check('A=B 여도 revision 이 이전이면 waiting-revision', judge(s1, e1, latest([11, 11])).verdicts.get(501) === 'waiting-revision');
+check('A=B 여도 isCurrent=false 면 waiting-preview', judge(vm(savedSection(501, [rblock(11, 12)], { render: { attempt: attempt(136, 'running'), result: result(81, FP_OLD), isCurrent: false } })), e1, latest([11, 12])).verdicts.get(501) === 'waiting-preview');
+// 빈 번역 — 일부 비움(renderInput 에 없음) · 섹션 전체 비움(renderInput.blocks=[]) 모두 A=B 가 있어야 완료
+check('일부 빈 번역 + A=B → complete', judge(vm(savedSection(501, [rblock(11, 12)])), blank, latest([11, 12], [12, 14, ''])).state === 'complete');
+check('일부 빈 번역 + A≠B → waiting', judge(vm(savedSection(501, [rblock(11, 12)])), blank, latest([11, 12, undefined, FP_OLD], [12, 14, '', FP_OLD])).state === 'waiting');
+const allBlank = [exp(11, 501, 12, 'absent', ''), exp(12, 501, 14, 'absent', '')];
+const emptyInput = vm(savedSection(501, []));
+check('섹션 전체 빈 번역(renderInput.blocks=[]) + A=B → complete', judge(emptyInput, allBlank, latest([11, 12, ''], [12, 14, ''])).state === 'complete');
+check('섹션 전체 빈 번역 + A≠B → waiting', judge(emptyInput, allBlank, latest([11, 12, '', FP_OLD], [12, 14, '', FP_OLD])).state === 'waiting');
+check('섹션 전체 빈 번역 + A=null → waiting', judge(emptyInput, allBlank, latest([11, 12, '', null], [12, 14, '', null])).state === 'waiting');
+check('기대 없는 preview only 섹션은 기존 판정 그대로(지문 조건 없음)', judge(twoDone, [], latest([21, 4, undefined, FP_OLD]), [502]).state === 'complete');
+
 check('같은 block 을 다시 저장하면 나중 응답이 정본', groupExpectedBySection([exp(11, 501, 12), exp(11, 501, 13)]).get(501).get(11).revision === 13);
 
 console.log(`\n결과: PASS ${pass} / FAIL ${fail}\n`);
