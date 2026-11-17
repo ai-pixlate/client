@@ -100,8 +100,18 @@ export interface N5EditSessionApi {
   undo: () => void;
   redo: () => void;
   notice: N5SaveNotice | null;
-  /** 서버 실행 취소·다시 실행 진행 중 — 새 편집을 시작하지 않는다 */
+  /** 서버 실행 취소·다시 실행 진행 중이거나 [저장하러 가기] 최종 저장 중 — 새 편집을 시작하지 않는다 */
   isEditLocked: boolean;
+  /**
+   * [저장하러 가기] 최종 저장 잠금. 잠긴 동안 사용자 편집(번역 입력·[확인]·박스 이동/크기·글자 배율·실행 취소/다시 실행·섹션 제외/복원)은
+   * handler 에서 무시한다 — 저장 대상을 정한 뒤 생긴 local 수정이 confirm 에서 조용히 빠지지 않게 한다. 이미 있던 초안은 그대로 저장한다.
+   * 이미 잠겨 있으면 false
+   */
+  /** 최종 저장 잠금 중(화면 표시용). handler 는 isFinalizationLocked() 로 같은 tick 값을 읽는다 */
+  isFinalizing: boolean;
+  beginFinalizationLock: () => boolean;
+  endFinalizationLock: () => void;
+  isFinalizationLocked: () => boolean;
 
   /** 사용자가 직접 만든 박스(이동·크기·글자 배율·번역 저장으로 생긴 local 초안). Auto Height 표시값은 들어 있지 않다 */
   bboxDrafts: ReadonlyMap<number, BoundingBox>;
@@ -213,6 +223,21 @@ export function useN5EditSession({
     setPendingEdits(pendingEditsRef.current);
   }, []);
 
+  // [저장하러 가기] 최종 저장 잠금 — 사용자 편집 handler 가 같은 tick 에도 바로 읽도록 ref 로 둔다(UI disabled 만 믿지 않는다)
+  const finalizingRef = useRef(false);
+  const [isFinalizing, setIsFinalizing] = useState(false);
+  const beginFinalizationLock = useCallback(() => {
+    if (finalizingRef.current) return false;
+    finalizingRef.current = true;
+    setIsFinalizing(true);
+    return true;
+  }, []);
+  const endFinalizationLock = useCallback(() => {
+    finalizingRef.current = false;
+    setIsFinalizing(false);
+  }, []);
+  const isFinalizationLocked = useCallback(() => finalizingRef.current, []);
+
 
   // ── 박스·글자 배율 local 초안 ─ 재조회·보기 전환으로 지우지 않는다. 서버에서 블록·섹션이 사라지면 그 초안만 정리한다
   const [bboxDrafts, setBboxDrafts] = useState<ReadonlyMap<number, BoundingBox>>(() => new Map());
@@ -261,6 +286,7 @@ export function useN5EditSession({
   /** 끌기 시작 순간의 사용자 초안·높이 모드 — 손을 놓을 때 이력의 「조작 전」(논리 박스·모드)으로 쓴다(끄는 동안 초안이 바뀐다) */
   const dragStartRef = useRef<{ drafts: ReadonlyMap<number, BoundingBox>; manual: ReadonlySet<number> } | null>(null);
   const setLayoutDragging = useCallback((dragging: boolean) => {
+    if (dragging && finalizingRef.current) return;
     if (dragging && !layoutDraggingRef.current) dragStartRef.current = { drafts: latestRef.current.bboxDrafts, manual: manualHeightRef.current };
     layoutDraggingRef.current = dragging;
   }, []);
@@ -385,6 +411,7 @@ export function useN5EditSession({
   /** 끄는 동안의 화면 박스 — Auto Height 표시 박스와 같으면 사용자 초안을 만들지 않는다 */
   const setDragBox = useCallback(
     (blockId: number, next: BoundingBox) => {
+      if (finalizingRef.current) return;
       const auto = autoFitBoxesRef.current.get(blockId);
       if (auto && isSameBox(auto, next) && !latestRef.current.bboxDrafts.has(blockId)) return;
       setUserBox(blockId, next);
@@ -398,6 +425,14 @@ export function useN5EditSession({
       setTranslationDrafts((drafts) => updateTranslationDrafts(drafts, blockId, update));
     },
     [],
+  );
+  /** 사용자 입력 경로 — 최종 저장 중에는 새 초안을 만들지 않는다(저장 결과 반영은 위 updateTranslationDraft 를 쓴다) */
+  const updateTranslationDraftByUser = useCallback(
+    (blockId: number, update: (prev: TranslationDraft | undefined) => TranslationDraft | undefined) => {
+      if (finalizingRef.current) return;
+      updateTranslationDraft(blockId, update);
+    },
+    [updateTranslationDraft],
   );
   // 사용자 편집(초안) · 서버 저장(PATCH 진행 중 = pendingEdits) · 미리보기 재렌더(이 task)는 서로 다른 상태다
   const [rerenderTaskByBlock, setRerenderTaskByBlock] = useState<ReadonlyMap<number, N5RerenderTask>>(() => new Map());
@@ -460,7 +495,7 @@ export function useN5EditSession({
 
   const commitBoxEdit = useCallback(
     (kind: 'box-move' | 'box-resize', blockId: number, before: BoundingBox, after: BoundingBox, manualHeight = false) => {
-      if (isSameBox(before, after)) return;
+      if (isSameBox(before, after) || finalizingRef.current) return;
       // 높이 모드 — 세로를 직접 정한 조작이면 manual 로, 이미 manual 이면 이동·가로 조절에도 유지한다(이동·가로는 auto 를 유지)
       const start = dragStartRef.current;
       const wasManual = (start?.manual ?? manualHeightRef.current).has(blockId);
@@ -482,7 +517,7 @@ export function useN5EditSession({
 
   const changeFontScale = useCallback(
     (block: BlockViewModel, direction: 'increase' | 'decrease') => {
-      if (!canStartSave(sessionRef.current)) return;
+      if (!canStartSave(sessionRef.current) || finalizingRef.current) return;
       const section = sections.find((candidate) => candidate.id === block.sectionId);
       // 단계 계산은 화면 박스(Auto Height 표시 포함)에서, 이력의 이전 값은 논리 배치(사용자 초안 없으면 서버 박스)로
       const bbox = layoutBoxes.get(block.id) ?? getTranslatedBaseBox(block);
@@ -561,7 +596,12 @@ export function useN5EditSession({
     },
     [beginServerEdit, clearHistoryConflict, commitTranslation, endServerEdit, jobId, patchBlock, queryClient, setRerenderTask, updateTranslationDraft],
   );
-  const saveTranslation = saveTranslationImpl;
+  /** 칸의 [확인] — 최종 저장 중에는 시작하지 않는다(최종 저장 자체는 saveBlockForConfirm 이 같은 경로를 쓴다) */
+  const saveTranslation = useCallback(
+    async (blockId: number, text: string): Promise<TranslationSaveResult> =>
+      finalizingRef.current ? { started: false } : saveTranslationImpl(blockId, text),
+    [saveTranslationImpl],
+  );
 
   // ── 섹션 제외·되돌리기(SEC-03) ─ 저장이 끝난 뒤에 반영한다. 제외 여부의 정본은 프리뷰의 bucket/excludedStage 다
   const [pendingSectionIds, setPendingSectionIds] = useState<ReadonlySet<number>>(() => new Set());
@@ -571,7 +611,7 @@ export function useN5EditSession({
 
   const saveSectionBucket = useCallback(
     (sectionId: number, bucket: SectionBucket) => {
-      if (pendingSectionIdsRef.current.has(sectionId) || !beginServerEdit()) return;
+      if (finalizingRef.current || pendingSectionIdsRef.current.has(sectionId) || !beginServerEdit()) return;
       pendingSectionIdsRef.current.add(sectionId);
       setPendingSectionIds(new Set(pendingSectionIdsRef.current));
       setFailedSectionId((prev) => (prev === sectionId ? null : prev));
@@ -693,7 +733,7 @@ export function useN5EditSession({
 
   const runHistory = useCallback(
     (direction: HistoryDirection) => {
-      if (!isHistoryAvailable || layoutDraggingRef.current) return;
+      if (!isHistoryAvailable || layoutDraggingRef.current || finalizingRef.current) return;
       if (!canStartSave(sessionRef.current) || pendingEditsRef.current > 0) return;
       const { history } = sessionRef.current;
       const command = direction === 'undo' ? peekUndo(history) : peekRedo(history);
@@ -806,12 +846,16 @@ export function useN5EditSession({
   const isServerEditPending = useCallback(() => sessionRef.current.inFlight !== null || pendingEditsRef.current > 0, []);
 
   return {
-    canUndo: isHistoryAvailable && isIdle && canUndo(session.history),
-    canRedo: isHistoryAvailable && isIdle && canRedo(session.history),
+    canUndo: isHistoryAvailable && isIdle && !isFinalizing && canUndo(session.history),
+    canRedo: isHistoryAvailable && isIdle && !isFinalizing && canRedo(session.history),
     undo,
     redo,
     notice: session.notice,
-    isEditLocked: session.inFlight !== null,
+    isEditLocked: session.inFlight !== null || isFinalizing,
+    isFinalizing,
+    beginFinalizationLock,
+    endFinalizationLock,
+    isFinalizationLocked,
     bboxDrafts,
     layoutBoxes,
     setBboxDraft: setDragBox,
@@ -825,7 +869,7 @@ export function useN5EditSession({
     failedSectionId,
     saveSectionBucket,
     translationDrafts,
-    updateTranslationDraft,
+    updateTranslationDraft: updateTranslationDraftByUser,
     rerenderTaskByBlock,
     setRerenderTask,
     historyConflicts,

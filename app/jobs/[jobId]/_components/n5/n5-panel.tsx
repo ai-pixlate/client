@@ -453,6 +453,8 @@ function TranslationEditor({
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onFocus={onSelect}
+          // [저장하러 가기] 최종 저장 중에는 새 입력을 받지 않는다(handler 에서도 막는다)
+          readOnly={editSession.isFinalizing}
           rows={3}
           placeholder={translationFailure ? '번역문을 직접 입력하세요' : undefined}
           // Figma 1069:10215 — 글 높이만큼 늘어나고 버튼까지 60을 띄운다. 미지원 브라우저는 rows 높이로 표시된다
@@ -751,6 +753,8 @@ export function N5Panel({
   //      더 큰 revision 은 내 저장 뒤 다른 저장(다른 탭 등) — 정상 완료로 보지 않고 확정하지 않는다(lib/n5/confirm-preview-barrier.ts)
   //   ④ /blocks·/preview 정본으로 확인 항목과 acknowledgedWarnings 를 만든다. 확정 직전(확인창을 거친 경우 포함)에 /blocks·/preview 를 한 번 더
   //      받아 같은 revision 조건을 다시 확인하고 곧바로 confirm 한다
+  // 저장 대상을 정한 뒤 생긴 local 수정이 confirm 에서 빠지지 않도록, ②~확정 동안 편집 세션을 잠근다(beginFinalizationLock — 번역 입력·[확인]·
+  // 박스·배율·실행 취소/다시 실행·섹션 제외/복원 handler 가 무시한다).
   // confirm 에 기대 block revision 집합을 보내는 필드는 아직 계약이 없다 — 임의 필드를 만들지 않는다. 그래서 마지막 확인 ~ confirm 트랜잭션 사이의
   // 다른 탭 저장은 FE 가 막을 수 없다(서버 계약 필요). FE 는 그 창을 좁힐 뿐이다.
   // 저장하지 못한 번역문을 확인창에서 그대로 넘기던 정책(10/29)은 이번 요구(N5 수정값이 N6 에서 사라지면 안 된다)로 바뀌었다.
@@ -891,6 +895,8 @@ export function N5Panel({
   async function handleConfirmClick() {
     // ① 같은 tick 의 연속 클릭·강제 이벤트도 막도록 ref 로 다시 확인한다
     if (finalizingRef.current || confirmMutation.isPending || allSectionsExcluded || editSession.isServerEditPending()) return;
+    // 저장 대상을 정하기 전에 편집 세션을 잠근다 — 이후 새 local 수정은 시작되지 않는다(이미 있던 초안은 그대로 저장한다)
+    if (!editSession.beginFinalizationLock()) return;
     finalizingRef.current = true;
     setIsFinalizing(true);
     setConfirmError(null);
@@ -908,6 +914,7 @@ export function N5Panel({
       if (mountedRef.current) setConfirmError('서버 상태를 확인하지 못해 다음 단계로 넘어가지 않았습니다. 잠시 뒤 다시 시도해 주세요.');
     } finally {
       finalizingRef.current = false;
+      editSession.endFinalizationLock();
       if (mountedRef.current) setIsFinalizing(false);
     }
   }
@@ -921,8 +928,15 @@ export function N5Panel({
   async function handleConfirm() {
     // 확정 직전 재확인 — 진행 중인 서버 저장이 있으면 보내지 않는다(확인창이 열린 사이에 생긴 경우 포함)
     if (confirmMutation.isPending || editSession.isServerEditPending()) return;
+    // 확인창 경로는 여기서 잠근다([저장하러 가기] 흐름 안에서는 이미 잠겨 있다)
+    const ownsLock = editSession.beginFinalizationLock();
     setConfirmError(null);
     try {
+      // 저장 대상을 정한 뒤 생긴 수정이 남아 있으면 확정하지 않는다(잠금 이전 경로 방어 — 수정은 그대로 둔다)
+      if (editSession.listUnsavedBlockIds().length > 0) {
+        setConfirmError('저장하지 않은 수정이 있어 다음 단계로 넘어가지 않았습니다. [저장하러 가기]를 다시 눌러 주세요.');
+        return;
+      }
       // 확정 직전 재확인 — /blocks·/preview 를 다시 받아 이번 저장 revision 이 그대로인지 본다(확인창이 열린 사이의 다른 저장 포함).
       // 통과하면 다른 await 없이 바로 confirm 한다. 이 확인 ~ confirm 트랜잭션 사이의 다른 저장은 서버 계약 없이는 막을 수 없다
       let result: ConfirmSaveBarrierResult;
@@ -971,6 +985,8 @@ export function N5Panel({
         }
       }
       setConfirmError(err instanceof Error ? err.message : '확정에 실패했습니다.');
+    } finally {
+      if (ownsLock) editSession.endFinalizationLock();
     }
   }
 
