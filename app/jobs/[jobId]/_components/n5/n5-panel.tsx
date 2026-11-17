@@ -21,7 +21,7 @@ import {
 } from '@/lib/n5/adapter';
 import type { BlockTaskFailures, BlockViewModel, PreviewSectionViewModel, RetryTarget, SectionStatusViewModel } from '@/lib/n5/adapter';
 import { PanelSectionStatus, RetryButton, SignalRows } from './n5-section-status';
-import { isConfirmPreviewSettling, judgeConfirmPreviewBarrier } from '@/lib/n5/confirm-preview-barrier';
+import { isConfirmPreviewSettling, isSectionPreviewInProgress, judgeConfirmPreviewBarrier } from '@/lib/n5/confirm-preview-barrier';
 import { buildN5ReviewIssues, formatN5ReviewIssueLocation, groupN5ReviewIssues, type N5ReviewIssue } from '@/lib/n5/review-issues';
 import type { N5ViewMode } from '@/lib/n5/viewport';
 import {
@@ -264,12 +264,15 @@ function TranslationEditor({
   onDraftUpdate,
   taskFailures,
   editSession,
+  previewSection,
 }: {
   jobId: string;
   block: BlockViewModel;
   onSelect: () => void;
   taskFailures: BlockTaskFailures;
   editSession: N5EditSessionApi;
+  /** 이 블록 섹션의 /preview 상태 — 자기 재렌더 task 가 같은 섹션의 후속 저장으로 대체됐을 때 이어 본다 */
+  previewSection: PreviewSectionViewModel | undefined;
   /** 이 칸의 미저장 초안(N5Panel 소유 — 이 편집기가 사라졌다 다시 생겨도 남는다). 없으면 서버값 그대로 */
   draftEntry: TranslationDraft | undefined;
   onDraftUpdate: (
@@ -319,12 +322,26 @@ function TranslationEditor({
     setSyncedText(block.translatedText); // 초안이 없으므로 화면도 이 값을 따른다
   }
 
-  const taskQuery = useN5TaskStatusQuery(jobId, rerenderTaskId);
+  // 같은 섹션을 이어서 저장하면 서버는 앞선 미리보기 시도를 대체(superseded)하고 /tasks 에서 내리거나 cancelled 로 둔다.
+  // 저장 뒤 받은 목록에 내 task 가 없거나 cancelled 면 그 task 는 더 따라가지 않고(무한 polling·거짓 실패 없음),
+  // 「재렌더링 중…」은 섹션의 현재 미리보기 시도(/preview)로 이어 본다. 과거 task 가 없다는 사실을 성공·실패로 해석하지 않는다.
+  const [supersededTaskId, setSupersededTaskId] = useState<number | null>(null);
+  const isSuperseded = rerenderTaskId != null && supersededTaskId === rerenderTaskId;
+  const taskQuery = useN5TaskStatusQuery(jobId, isSuperseded ? null : rerenderTaskId);
   const activeTaskItem =
-    rerenderTaskId != null ? taskQuery.data?.items?.find((i) => i.taskId === rerenderTaskId) : undefined;
-  const isRerendering = rerenderTaskId != null && activeTaskItem?.status !== 'done' &&
-    activeTaskItem?.status !== 'failed' && activeTaskItem?.status !== 'cancelled';
-  const rerenderFailed = activeTaskItem?.status === 'failed' || activeTaskItem?.status === 'cancelled';
+    rerenderTaskId != null && !isSuperseded ? taskQuery.data?.items?.find((i) => i.taskId === rerenderTaskId) : undefined;
+  if (rerenderTaskId != null && !isSuperseded && taskQuery.data && (!activeTaskItem || activeTaskItem.status === 'cancelled')) {
+    setSupersededTaskId(rerenderTaskId);
+  }
+  const isRerendering = isSuperseded
+    ? isSectionPreviewInProgress(previewSection)
+    : rerenderTaskId != null && activeTaskItem?.status !== 'done' && activeTaskItem?.status !== 'failed' && activeTaskItem?.status !== 'cancelled';
+  const rerenderFailed = activeTaskItem?.status === 'failed';
+  // 대체를 알게 된 순간 섹션 현재 상태를 한 번 새로 받는다(캐시가 대체 전 시도를 들고 있을 수 있다)
+  useEffect(() => {
+    if (supersededTaskId == null) return;
+    void queryClient.invalidateQueries({ queryKey: pixlateKeys.n5Preview(jobId) });
+  }, [supersededTaskId, jobId, queryClient]);
 
   // invalidateQueries는 실제 네트워크 재조회를 트리거하는 부수효과라 effect에
   // 남긴다 — 다만 그 결과로 파생되는 표시값(isRerendering/rerenderFailed 위)은
@@ -533,11 +550,13 @@ function BlockRow({
   onDraftUpdate,
   taskFailures,
   editSession,
+  previewSection,
 }: {
   jobId: string;
   block: BlockViewModel;
   taskFailures: BlockTaskFailures;
   editSession: N5EditSessionApi;
+  previewSection: PreviewSectionViewModel | undefined;
   index: number;
   /** content slot(원문/번역문)이 이 값에 따라 통째로 바뀐다 — 동시에 쌓아 보여주지 않는다. */
   viewMode: N5ViewMode;
@@ -611,6 +630,7 @@ function BlockRow({
                 onDraftUpdate={onDraftUpdate}
                 taskFailures={taskFailures}
                 editSession={editSession}
+                previewSection={previewSection}
               />
             ) : (
               <ReadOnlyTranslation text={block.translatedText} />
@@ -692,6 +712,7 @@ export function N5Panel({
   editSession: N5EditSessionApi;
 }) {
   const groups = useMemo(() => groupBlocksBySection(sections, blocks, sectionStatusById), [sections, blocks, sectionStatusById]);
+  const previewSectionById = useMemo(() => new Map(sections.map((section) => [section.id, section])), [sections]);
   const firstGroupHasStatus = groups.length > 0 && getSectionStatusRowCount(sectionStatusById.get(groups[0].sectionId)) > 0;
 
   const confirmMutation = useConfirmN5Mutation(jobId);
@@ -1008,6 +1029,7 @@ export function N5Panel({
                     onDraftUpdate={handleDraftUpdate}
                     taskFailures={blockTaskFailuresById.get(block.id) ?? NO_TASK_FAILURES}
                     editSession={editSession}
+                    previewSection={previewSectionById.get(block.sectionId)}
                   />
                 ))}
               </ul>
