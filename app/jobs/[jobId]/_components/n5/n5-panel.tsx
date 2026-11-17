@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
-import { ApiRequestError, getJobTasks } from '@/lib/api/pixlate';
+import { ApiRequestError, getN5Preview } from '@/lib/api/pixlate';
 import type { ApiTextBlock } from '@/lib/api/n5-schema';
 import {
   areAllSectionsExcluded,
@@ -17,9 +17,11 @@ import {
   isInvalidStateError,
   parseApiError,
   toBlockViewModel,
+  toPreviewViewModel,
 } from '@/lib/n5/adapter';
 import type { BlockTaskFailures, BlockViewModel, PreviewSectionViewModel, RetryTarget, SectionStatusViewModel } from '@/lib/n5/adapter';
 import { PanelSectionStatus, RetryButton, SignalRows } from './n5-section-status';
+import { isConfirmPreviewSettling, judgeConfirmPreviewBarrier } from '@/lib/n5/confirm-preview-barrier';
 import { buildN5ReviewIssues, formatN5ReviewIssueLocation, groupN5ReviewIssues, type N5ReviewIssue } from '@/lib/n5/review-issues';
 import type { N5ViewMode } from '@/lib/n5/viewport';
 import {
@@ -710,7 +712,9 @@ export function N5Panel({
   //      같은 블록의 번역 초안과 배치는 한 PATCH(최신 revision 1회)로, 이미 [확인]으로 저장한 번역문은 다시 보내지 않는다.
   //      하나라도 실패(409·4xx·5xx·네트워크)하면 나머지를 보내지 않고 확정하지 않으며 N5 에 남는다(local 초안 유지·기존 충돌/실패 표시).
   //      N6 데이터 정확성의 기준은 이 PATCH 저장 완료다 — confirm 은 그 뒤에만 나간다
-  //   ③ 이 저장과 앞선 저장(번역문·배치·실행 취소 모두)의 재렌더 task 가 끝날 때까지 기다린다(2초 polling). 실패·취소로 끝나면 확정하지 않고 기존 실패 표시로 남긴다.
+  //   ③ 모든 저장이 끝난 뒤, 저장으로 영향받은 섹션의 「현재」 미리보기(/preview render.isCurrent)가 현재 입력 기준으로 끝날 때까지 기다린다(2초 polling).
+  //      PATCH 응답의 rerenderTaskId 생명주기는 보지 않는다 — 같은 섹션의 후속 저장이 앞선 시도를 대체(superseded·cancelled)하고 /tasks 에서 내릴 수 있다.
+  //      현재 시도가 실패하면 확정하지 않고 기존 실패 표시로 남긴다.
   //      이것은 N6 반영을 위한 서버 필수 조건이 아니다(confirm 은 진행 중 preview 재렌더를 취소하고 저장된 값으로 최종 렌더를 따로 만든다).
   //      사용자가 최신 저장 결과의 미리보기를 확인하게 하는 UX 장벽이며, 재렌더 실패 시 진행 여부는 PM/UX 정책 확인 전까지 현재대로 막는다
   //   ④ /blocks·/preview·/tasks 를 다시 읽고, 그 최신 서버 정본으로 확인 항목과 acknowledgedWarnings 를 만든다
@@ -740,11 +744,22 @@ export function N5Panel({
     return latest ? latest.map(toBlockViewModel) : blocks;
   }
 
+  /** 섹션 미리보기 정본(/preview)을 새로 받는다 — 캐시도 함께 갱신해 화면이 같은 값을 본다 */
+  async function fetchLatestPreviewSections() {
+    const preview = await queryClient.fetchQuery({ queryKey: pixlateKeys.n5Preview(jobId), queryFn: () => getN5Preview(jobId), staleTime: 0 });
+    return toPreviewViewModel(preview).sections;
+  }
+
   /** ②·③·④ — 성공하면 true. 실패하면 안내를 남기고 false */
   async function settleServerState(): Promise<boolean> {
-    // ② 저장하지 않은 수정(번역 초안 · 배치 초안) 저장 — 블록 순서대로 하나씩, 각 응답을 기다린다
-    const newTaskIds = new Set<number>();
+    const sectionIdOf = (blockId: number) =>
+      (readLatestBlocks().find((candidate) => candidate.id === blockId) ?? blocks.find((candidate) => candidate.id === blockId))?.sectionId;
+    // ② 저장하지 않은 수정(번역 초안 · 배치 초안) 저장 — 블록 순서대로 하나씩, 각 응답을 기다린다.
+    // 응답의 rerenderTaskId 는 모으지 않는다 — 같은 섹션의 다음 저장이 그 시도를 대체(superseded)할 수 있어 완료 기준이 아니다.
+    // 대신 저장한 블록의 섹션을 모은다(rerenderTaskId=null 이어도 그 섹션의 현재 미리보기를 확인한다)
+    const affectedSectionIds = new Set<number>();
     for (const blockId of editSession.listUnsavedBlockIds()) {
+      const sectionId = sectionIdOf(blockId);
       const result = await editSession.saveBlockForConfirm(blockId);
       if (!mountedRef.current) return false;
       if (!result.started || !result.ok) {
@@ -753,35 +768,44 @@ export function N5Panel({
         setConfirmError('저장하지 못한 수정이 있어 다음 단계로 넘어가지 않았습니다. 표시된 칸을 확인한 뒤 다시 시도해 주세요.');
         return false;
       }
-      if (result.rerenderTaskId != null) newTaskIds.add(result.rerenderTaskId);
+      if (sectionId != null) affectedSectionIds.add(sectionId);
     }
 
-    // ③ 재렌더 task 완료 대기 — 이번 저장의 task 와, 클릭 때 아직 끝나지 않은 앞선 저장의 task
-    const knownTaskIds = [...editSession.rerenderTaskByBlock.values()].flatMap((task) => (task.taskId != null ? [task.taskId] : []));
-    const watched = new Set<number>(newTaskIds);
-    for (let attempt = 0; ; attempt += 1) {
-      const list = await queryClient.fetchQuery({ queryKey: pixlateKeys.tasks(jobId), queryFn: () => getJobTasks(jobId), staleTime: 0 });
-      if (!mountedRef.current) return false;
-      const statusOf = (taskId: number) => list.items?.find((item) => item.taskId === taskId)?.status;
-      if (attempt === 0) {
-        for (const taskId of knownTaskIds) {
-          const status = statusOf(taskId);
-          if (status === 'pending' || status === 'running') watched.add(taskId);
+    // ③ 모든 저장이 끝난 뒤, 영향받은 섹션의 「현재」 미리보기가 현재 저장 입력 기준으로 끝났는지 /preview 로 기다린다.
+    //    과거 task 의 done·cancelled·목록에서 사라짐은 보지 않는다(최신성 정본 = 서버 render.isCurrent, lib/n5/confirm-preview-barrier.ts).
+    //    클릭 전 [확인]·실행 취소 같은 앞선 저장은, 첫 조회 때 그 섹션의 시도가 아직 진행 중일 때만 함께 기다린다.
+    const earlierSectionIds = new Set<number>();
+    for (const blockId of editSession.rerenderTaskByBlock.keys()) {
+      const sectionId = sectionIdOf(blockId);
+      if (sectionId != null && !affectedSectionIds.has(sectionId)) earlierSectionIds.add(sectionId);
+    }
+    if (affectedSectionIds.size > 0 || earlierSectionIds.size > 0) {
+      const watched = new Set<number>(affectedSectionIds);
+      for (let attempt = 0; ; attempt += 1) {
+        const sections = await fetchLatestPreviewSections();
+        if (!mountedRef.current) return false;
+        if (attempt === 0) {
+          for (const sectionId of earlierSectionIds) {
+            if (isConfirmPreviewSettling(sections.find((section) => section.id === sectionId))) watched.add(sectionId);
+          }
         }
+        const barrier = judgeConfirmPreviewBarrier(sections, watched);
+        if (barrier.state === 'complete') break;
+        if (barrier.state === 'failed') {
+          setConfirmError('미리보기를 다시 만들지 못한 칸이 있어 다음 단계로 넘어가지 않았습니다. 해당 칸에서 다시 시도해 주세요.');
+          return false;
+        }
+        if (barrier.state === 'invalid') {
+          setConfirmError('미리보기 상태를 확인하지 못해 다음 단계로 넘어가지 않았습니다. 새로고침 후 다시 시도해 주세요.');
+          return false;
+        }
+        if (attempt >= N5_CONFIRM_RERENDER_MAX_POLLS) {
+          setConfirmError('미리보기 재렌더가 끝나지 않아 다음 단계로 넘어가지 않았습니다. 잠시 뒤 다시 시도해 주세요.');
+          return false;
+        }
+        await new Promise((resolve) => setTimeout(resolve, N5_CONFIRM_RERENDER_POLL_MS));
+        if (!mountedRef.current) return false;
       }
-      const statuses = [...watched].map(statusOf);
-      if (statuses.some((status) => status === 'failed' || status === 'cancelled')) {
-        setConfirmError('미리보기를 다시 만들지 못한 칸이 있어 다음 단계로 넘어가지 않았습니다. 해당 칸에서 다시 시도해 주세요.');
-        return false;
-      }
-      // 목록에 아직 없는 새 task 도 끝난 것으로 보지 않는다
-      if (statuses.every((status) => status === 'done')) break;
-      if (attempt >= N5_CONFIRM_RERENDER_MAX_POLLS) {
-        setConfirmError('미리보기 재렌더가 끝나지 않아 다음 단계로 넘어가지 않았습니다. 잠시 뒤 다시 시도해 주세요.');
-        return false;
-      }
-      await new Promise((resolve) => setTimeout(resolve, N5_CONFIRM_RERENDER_POLL_MS));
-      if (!mountedRef.current) return false;
     }
 
     // ④ 최신 서버 정본 재조회
