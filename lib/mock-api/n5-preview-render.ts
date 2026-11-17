@@ -57,8 +57,16 @@ const ROLE_STYLE: Record<string, { fontSizePx: number; fontWeight: number; lette
 };
 const ALIGN_BY_BLOCK: Record<number, 'left' | 'center' | 'right'> = { 9101: 'center', 9103: 'right' };
 
+/** BE downstream._render_inputs 와 같게 원문·번역문은 공백만 있어도 대상이 아니다(빈 번역으로 저장한 블록은 renderInput 에서 빠진다) */
 function isRenderTarget(block: ApiTextBlock): boolean {
-  return block.role !== 'product_label' && !block.isExcluded && !!block.sourceKo && !!block.trans1 && block.bbox != null && !!ROLE_STYLE[block.role ?? ''];
+  return (
+    block.role !== 'product_label' &&
+    !block.isExcluded &&
+    !!block.sourceKo?.trim() &&
+    !!block.trans1?.trim() &&
+    block.bbox != null &&
+    !!ROLE_STYLE[block.role ?? '']
+  );
 }
 
 function toRenderBlock(block: ApiTextBlock, sectionWidth: number): ApiPreviewRenderBlock {
