@@ -82,7 +82,7 @@ Secret(JWT, access token, password 등)은 절대 Git에 커밋하지 않습니�
 | `npm run verify:coords` | **좌표 변환 자동 검증** (브라우저 불필요) |
 | `npm run verify:n5-adapter` | N5 Adapter(OpenAPI DTO → ViewModel) 자동 검증 (브라우저 불필요) |
 | `npm run verify:n5-preview-state` | N5 `/preview` 입력 상태·렌더 상태(시도·결과·최신)·지문 A/B·표시 규칙·서버 style 8키 변환 자동 검증 (브라우저 불필요) |
-| `npm run verify:n5-confirm-barrier` | N5 [저장하러 가기] 미리보기 장벽 판정(영향받은 섹션의 `/preview` 현재 상태 기준 — 대체된 과거 task 를 보지 않음, 진행 중·채택 직후·실패·제외·계약 밖) 자동 검증 (브라우저 불필요) |
+| `npm run verify:n5-confirm-barrier` | N5 [저장하러 가기] 저장·미리보기 장벽 판정(영향받은 섹션의 `/preview` 현재 상태 + 저장한 block 의 PATCH 응답 revision 이 `/blocks`·`renderInput` 에 그대로인지 — 대체된 과거 task 를 보지 않음, 이전/더 큰 revision·빈 번역·진행 중·실패·제외·계약 밖) 자동 검증 (브라우저 불필요) |
 | `npm run verify:n5-layout-adjust` | N5 블록 배치 저장(layoutAdjust — 계약 확정·서버 구현 대기) 요청 조립(바꾼 필드만·소수 유지·빈 객체 금지)·서버값 읽기(키 없음 ≠ null)·편집 기준·렌더 대상·쓰기 허용(Mock 만)·Mock 서버 정규화 자동 검증 (브라우저 불필요) |
 | `npx playwright test e2e/n5-layout-adjust.spec.ts --project=chromium` | N5 배치 저장 흐름(손 놓을 때·[+][−] 1회 저장, revision·409·500, rerenderTaskId, Undo/Redo 재저장, 혼합 이력, 초안 보호, 실서버 쓰기 차단, Mock 계약) 검증 — MSW Mock 기준이며 실서버 검증이 아니다 (Chromium, dev 서버 필요) |
 | `npm run verify:n5-layout-edit` | N5 배치 영역 편집 순수 계산(이동·크기 조절·[+][-]·가운데선 snap, 섹션 경계) 자동 검증 (브라우저 불필요) |
