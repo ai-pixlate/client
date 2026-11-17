@@ -166,7 +166,7 @@ export interface N5EditSessionApi {
 
 export type TranslationSaveResult =
   | { started: false }
-  | { started: true; ok: true; revision: number | null; rerenderTaskId: number | null }
+  | { started: true; ok: true; revision: number | null; rerenderTaskId: number | null; /** 서버 정본(PATCH 응답 block). 보낼 것이 없어 PATCH 하지 않았으면 null */ block: ApiTextBlock | null }
   | { started: true; ok: false; conflict: ApiTextBlock | null; error: unknown };
 
 export function useN5EditSession({
@@ -532,7 +532,7 @@ export function useN5EditSession({
     [dispatch, fitForText],
   );
 
-  const saveTranslation = useCallback(
+  const saveTranslationImpl = useCallback(
     async (blockId: number, text: string): Promise<TranslationSaveResult> => {
       const latest = queryClient.getQueryData<ApiTextBlock[]>(pixlateKeys.n5Blocks(jobId))?.find((b) => b.id === blockId);
       if (latest?.revision == null || !beginServerEdit()) return { started: false };
@@ -544,7 +544,7 @@ export function useN5EditSession({
         setRerenderTask(blockId, rerenderTaskId, 'translation');
         updateTranslationDraft(blockId, (prev) => resolveTranslationSaveSucceeded(prev, text));
         commitTranslation(blockId, textBeforeSave, response.block?.trans1 ?? text);
-        return { started: true, ok: true, revision: response.block?.revision ?? null, rerenderTaskId };
+        return { started: true, ok: true, revision: response.block?.revision ?? null, rerenderTaskId, block: response.block ?? null };
       } catch (err) {
         // 초안은 그대로 두고 실패 표시만 켠다(번역문 저장 실패는 입력 유지) — 409 는 기존 충돌 표시로 넘긴다
         updateTranslationDraft(blockId, resolveTranslationSaveFailed);
@@ -561,6 +561,7 @@ export function useN5EditSession({
     },
     [beginServerEdit, clearHistoryConflict, commitTranslation, endServerEdit, jobId, patchBlock, queryClient, setRerenderTask, updateTranslationDraft],
   );
+  const saveTranslation = saveTranslationImpl;
 
   // ── 섹션 제외·되돌리기(SEC-03) ─ 저장이 끝난 뒤에 반영한다. 제외 여부의 정본은 프리뷰의 bucket/excludedStage 다
   const [pendingSectionIds, setPendingSectionIds] = useState<ReadonlySet<number>>(() => new Set());
@@ -766,8 +767,8 @@ export function useN5EditSession({
       const layoutAdjust = pendingLayoutPatch(blockId);
       if (layoutAdjust == null) {
         setLayoutDirty(blockId, false); // 보낼 배치가 없다(서버 값과 같거나 렌더 대상 아님)
-        if (text == null) return { started: true, ok: true, revision: latest.revision, rerenderTaskId: null };
-        return saveTranslation(blockId, text);
+        if (text == null) return { started: true, ok: true, revision: latest.revision, rerenderTaskId: null, block: null };
+        return saveTranslationImpl(blockId, text);
       }
       if (!beginServerEdit()) return { started: false };
       clearHistoryConflict(blockId);
@@ -782,7 +783,7 @@ export function useN5EditSession({
         setRerenderTask(blockId, rerenderTaskId, text != null ? 'translation' : 'layout');
         if (text != null) updateTranslationDraft(blockId, (prev) => resolveTranslationSaveSucceeded(prev, text));
         setLayoutDirty(blockId, false);
-        return { started: true, ok: true, revision: response.block?.revision ?? null, rerenderTaskId };
+        return { started: true, ok: true, revision: response.block?.revision ?? null, rerenderTaskId, block: response.block ?? null };
       } catch (err) {
         // local 초안(번역문·배치)은 그대로 — 확정하지 않고 N5 에 남는다. 409 는 기존 충돌 표시로
         if (text != null) updateTranslationDraft(blockId, resolveTranslationSaveFailed);
@@ -797,7 +798,7 @@ export function useN5EditSession({
         endServerEdit();
       }
     },
-    [beginServerEdit, clearHistoryConflict, endServerEdit, jobId, patchBlock, pendingLayoutPatch, queryClient, saveTranslation, setLayoutDirty, setRerenderTask, updateTranslationDraft],
+    [beginServerEdit, clearHistoryConflict, endServerEdit, jobId, patchBlock, pendingLayoutPatch, queryClient, saveTranslationImpl, setLayoutDirty, setRerenderTask, updateTranslationDraft],
   );
 
   const isIdle = session.inFlight === null && pendingEdits === 0;
