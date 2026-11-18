@@ -732,8 +732,9 @@ export function N5Panel({
   //      더 큰 revision 은 내 저장 뒤 다른 저장(다른 탭 등) — 정상 완료로 보지 않고 확정하지 않는다(lib/n5/confirm-preview-barrier.ts)
   //      ③ 의 polling 응답은 판정에만 쓴다 — 기다리는 중(waiting)에는 화면 캐시를 바꾸지 않고, 판정이 끝났을 때(완료·충돌·실패·확인 불가)만
   //      받은 /blocks·/preview 한 쌍을 화면에 한 번에 넣는다(publishN5Snapshot)
-  //   ④ /blocks·/preview 정본으로 확인 항목과 acknowledgedWarnings 를 만든다. 확정 직전(확인창을 거친 경우 포함)에 /blocks·/preview 를 한 번 더
-  //      받아 같은 revision 조건을 다시 확인하고 곧바로 confirm 한다
+  //   ④ 확인 항목은 ②(Phase A, 서버 저장) 직후 계산한다. 항목이 있으면 ③(Phase B, 미리보기 장벽)을 기다리지 않고 확인창을 바로 연다.
+  //      [확인하고 저장] 또는 항목이 없을 때 ③을 기다린 뒤, 완료된 /blocks 정본으로 확인 항목을 다시 만들어 사용자가 확인하지 않은
+  //      새 항목이 있으면 확정하지 않고 확인창을 다시 연다. 없으면 같은 정본으로 acknowledgedWarnings 를 만들어 곧바로 confirm 한다
   // 저장 대상을 정한 뒤 생긴 local 수정이 confirm 에서 빠지지 않도록, ②~확정 동안 편집 세션을 잠근다(beginFinalizationLock — 번역 입력·[확인]·
   // 박스·배율·실행 취소/다시 실행·섹션 제외/복원 handler 가 무시한다).
   // confirm 에 기대 block revision 집합을 보내는 필드는 아직 계약이 없다 — 임의 필드를 만들지 않는다. 그래서 마지막 확인 ~ confirm 트랜잭션 사이의
@@ -763,10 +764,14 @@ export function N5Panel({
     return latest ? latest.map(toBlockViewModel) : blocks;
   }
 
-  /** 이번 최종 저장에서 PATCH 응답으로 받은 서버 정본(blockId → 기대값). 확인창을 거친 확정 직전 재확인도 이 값을 쓴다 */
+  /** 이번 최종 저장에서 PATCH 응답으로 받은 서버 정본(blockId → 기대값). 확인창을 거친 확정 직전 장벽도 이 값을 쓴다 */
   const expectedSavedRef = useRef(new Map<number, ExpectedSavedBlock>());
   /** 기대 revision 없이 현재 미리보기만 기다리는 섹션(클릭 전 [확인]·실행 취소로 아직 만들어지는 중이던 섹션) */
   const previewOnlySectionIdsRef = useRef(new Set<number>());
+  /** 이번 저장 전에 저장된(클릭 전 [확인]·실행 취소) 섹션 — 장벽 첫 조회 때 그 미리보기가 아직 진행 중이면 함께 기다린다 */
+  const earlierSectionIdsRef = useRef(new Set<number>());
+  /** 확인창에 보여 준 항목 — 장벽 뒤 다시 만든 항목 중 여기 없는 것이 있으면 확정하지 않고 다시 보여 준다 */
+  const acknowledgedIssueKeysRef = useRef(new Set<string>());
 
   /**
    * 장벽 판정용으로 /blocks·/preview 를 함께 새로 받는다. query 의 fetch 를 함께 쓰지 않는다(화면 쪽 invalidate 가 진행 중 fetch 를 취소하면 장벽이 안내 없이 끊긴다).
@@ -812,15 +817,14 @@ export function N5Panel({
     }
   }
 
-  /** ②·③·④ — 성공하면 true. 실패하면 안내를 남기고 false */
-  async function settleServerState(): Promise<boolean> {
+  /**
+   * Phase A(②) — 저장하지 않은 수정(번역 초안 · 배치 초안)을 블록 순서대로 하나씩 저장하고 각 응답을 기다린다. 성공하면 true, 실패하면 안내를 남기고 false.
+   * 응답의 rerenderTaskId 는 모으지 않는다 — 같은 섹션의 다음 저장이 그 시도를 대체(superseded)할 수 있어 완료 기준이 아니다.
+   * 응답 block 의 revision 을 서버 정본 기대값으로 기록한다(FE 가 +1 로 추측하지 않는다). 미리보기 완료는 Phase B 가 본다
+   */
+  async function saveUnsavedEdits(): Promise<boolean> {
     const sectionIdOf = (blockId: number) =>
       (readLatestBlocks().find((candidate) => candidate.id === blockId) ?? blocks.find((candidate) => candidate.id === blockId))?.sectionId;
-    // ② 저장하지 않은 수정(번역 초안 · 배치 초안) 저장 — 블록 순서대로 하나씩, 각 응답을 기다린다.
-    // 응답의 rerenderTaskId 는 모으지 않는다 — 같은 섹션의 다음 저장이 그 시도를 대체(superseded)할 수 있어 완료 기준이 아니다.
-    // 대신 저장한 블록의 섹션을 모은다(rerenderTaskId=null 이어도 그 섹션의 현재 미리보기를 확인한다)
-    // 응답 block 의 revision 을 서버 정본 기대값으로 기록한다(FE 가 +1 로 추측하지 않는다)
-    const affectedSectionIds = new Set<number>();
     expectedSavedRef.current = new Map();
     previewOnlySectionIdsRef.current = new Set();
     for (const blockId of editSession.listUnsavedBlockIds()) {
@@ -836,50 +840,57 @@ export function N5Panel({
       const expected = result.block ? toExpectedSavedBlock(result.block) : null;
       if (expected) {
         expectedSavedRef.current.set(expected.blockId, expected);
-        affectedSectionIds.add(expected.sectionId);
       } else if (sectionId != null && (result.block != null || result.rerenderTaskId != null)) {
         // PATCH 는 했지만 응답 block 으로 기대값을 만들 수 없다 — revision 정합은 볼 수 없어 현재 미리보기만 기다린다
         previewOnlySectionIdsRef.current.add(sectionId);
       }
     }
-
-    // ③ 모든 저장이 끝난 뒤, 영향받은 섹션의 「현재」 미리보기가 현재 저장 입력 기준으로 끝났는지 /preview 로 기다린다.
-    //    과거 task 의 done·cancelled·목록에서 사라짐은 보지 않는다(최신성 정본 = 서버 render.isCurrent, lib/n5/confirm-preview-barrier.ts).
-    //    클릭 전 [확인]·실행 취소 같은 앞선 저장은, 첫 조회 때 그 섹션의 시도가 아직 진행 중일 때만 함께 기다린다.
+    const affectedSectionIds = new Set([...expectedSavedRef.current.values()].map((expected) => expected.sectionId));
     const earlierSectionIds = new Set<number>();
     for (const blockId of editSession.rerenderTaskByBlock.keys()) {
       const sectionId = sectionIdOf(blockId);
       if (sectionId != null && !affectedSectionIds.has(sectionId)) earlierSectionIds.add(sectionId);
     }
-    if (affectedSectionIds.size > 0 || earlierSectionIds.size > 0 || previewOnlySectionIdsRef.current.size > 0) {
-      // 모든 PATCH 가 끝난 뒤에만 시작한다 — /preview 입력은 최종 DB 상태 기준이다
-      for (let attempt = 0; ; attempt += 1) {
-        let judged = await fetchAndJudgeServerState();
-        if (!mountedRef.current) return false;
-        if (attempt === 0) {
-          const settling = [...earlierSectionIds].filter((sectionId) => isConfirmPreviewSettling(judged.sections.find((section) => section.id === sectionId)));
-          if (settling.length > 0) {
-            for (const sectionId of settling) previewOnlySectionIdsRef.current.add(sectionId);
-            judged = await fetchAndJudgeServerState();
-            if (!mountedRef.current) return false;
-          }
-        }
-        const { result } = judged;
-        if (result.state === 'complete') break;
-        if (result.state !== 'waiting' || attempt >= N5_CONFIRM_RERENDER_MAX_POLLS) {
-          reportBarrierStop(result);
-          return false;
-        }
-        await new Promise((resolve) => setTimeout(resolve, N5_CONFIRM_RERENDER_POLL_MS));
-        if (!mountedRef.current) return false;
-      }
-      return true;
-    }
-
-    // ④ 저장할 것이 없었다 — 확인 항목을 만들 최신 서버 정본만 다시 받는다(/blocks·/preview 를 한 쌍으로 넣는다)
-    publishN5Snapshot(queryClient, jobId, await fetchN5Snapshot(jobId));
-    return mountedRef.current;
+    earlierSectionIdsRef.current = earlierSectionIds;
+    return true;
   }
+
+  /**
+   * Phase B(③) — 모든 저장이 끝난 뒤, 영향받은 섹션의 「현재」 미리보기가 현재 저장 입력 기준으로 끝났는지 /preview 로 기다린다(2초 polling).
+   * 과거 task 의 done·cancelled·목록에서 사라짐은 보지 않는다(최신성 정본 = 서버 render.isCurrent, lib/n5/confirm-preview-barrier.ts).
+   * 앞선 저장 섹션은 첫 조회 때 그 섹션의 시도가 아직 진행 중일 때만 함께 기다린다. 기다릴 섹션이 없어도 한 번은 새로 받아 같은 조건을 확인한다.
+   * 완료면 true(그 응답이 화면에 들어가 있다). 아니면 안내를 남기고 false
+   */
+  async function waitForPreviewBarrier(): Promise<boolean> {
+    for (let attempt = 0; ; attempt += 1) {
+      let judged = await fetchAndJudgeServerState();
+      if (!mountedRef.current) return false;
+      if (attempt === 0) {
+        const settling = [...earlierSectionIdsRef.current].filter((sectionId) =>
+          isConfirmPreviewSettling(judged.sections.find((section) => section.id === sectionId)),
+        );
+        if (settling.length > 0) {
+          for (const sectionId of settling) previewOnlySectionIdsRef.current.add(sectionId);
+          judged = await fetchAndJudgeServerState();
+          if (!mountedRef.current) return false;
+        }
+      }
+      const { result } = judged;
+      if (result.state === 'complete') return true;
+      if (result.state !== 'waiting' || attempt >= N5_CONFIRM_RERENDER_MAX_POLLS) {
+        reportBarrierStop(result);
+        return false;
+      }
+      await new Promise((resolve) => setTimeout(resolve, N5_CONFIRM_RERENDER_POLL_MS));
+      if (!mountedRef.current) return false;
+    }
+  }
+
+  const issueKeyOf = (issue: N5ReviewIssue) =>
+    `${issue.kind}|${issue.sectionId}|${issue.blockId ?? ''}|${issue.stageLabel ?? ''}|${issue.message}`;
+  /** 확인 항목 — 블록은 최신 /blocks 캐시(서버 정본), 섹션 상태는 이 화면 값(기존 입력 구성 그대로) */
+  const buildIssuesNow = () =>
+    buildN5ReviewIssues({ sections, blocks: readLatestBlocks(), sectionStatusById, blockTaskFailuresById, failedDraftBlockIds: new Set() });
 
   async function handleConfirmClick() {
     // ① 같은 tick 의 연속 클릭·강제 이벤트도 막도록 ref 로 다시 확인한다
@@ -890,16 +901,19 @@ export function N5Panel({
     setIsFinalizing(true);
     setConfirmError(null);
     try {
-      if (!(await settleServerState())) return;
-      // 미저장 초안은 모두 저장됐다 — 저장하지 못한 번역문 항목은 남지 않는다
-      const issues = buildN5ReviewIssues({ sections, blocks: readLatestBlocks(), sectionStatusById, blockTaskFailuresById, failedDraftBlockIds: new Set() });
+      // Phase A — 서버 저장이 모두 성공해야 다음으로 간다
+      if (!(await saveUnsavedEdits())) return;
+      // 미저장 초안은 모두 저장됐다 — 저장하지 못한 번역문 항목은 남지 않는다. 확인 항목이 있으면 미리보기 장벽을 기다리지 않고 바로 보여 준다
+      const issues = buildIssuesNow();
       if (issues.length > 0) {
+        acknowledgedIssueKeysRef.current = new Set(issues.map(issueKeyOf));
         setReviewIssues(issues);
         return;
       }
+      acknowledgedIssueKeysRef.current = new Set();
       await handleConfirm();
     } catch {
-      // 장벽 조회 실패(네트워크 등) — 확정하지 않고 N5 에 남는다(초안은 그대로)
+      // 저장·장벽 조회 실패(네트워크 등) — 확정하지 않고 N5 에 남는다(초안은 그대로)
       if (mountedRef.current) setConfirmError('서버 상태를 확인하지 못해 다음 단계로 넘어가지 않았습니다. 잠시 뒤 다시 시도해 주세요.');
     } finally {
       finalizingRef.current = false;
@@ -908,7 +922,7 @@ export function N5Panel({
     }
   }
 
-  // [확인하고 저장] — 확정만 실행한다. 이 선택을 서버에 따로 남기지 않는다.
+  // [확인하고 저장] — Phase B(미리보기 장벽)부터 이어서 확정한다. 이 선택을 서버에 따로 남기지 않는다.
   function handleReviewContinue() {
     setReviewIssues(null);
     void handleConfirm();
@@ -919,6 +933,10 @@ export function N5Panel({
     if (confirmMutation.isPending || editSession.isServerEditPending()) return;
     // 확인창 경로는 여기서 잠근다([저장하러 가기] 흐름 안에서는 이미 잠겨 있다)
     const ownsLock = editSession.beginFinalizationLock();
+    if (ownsLock) {
+      finalizingRef.current = true;
+      setIsFinalizing(true);
+    }
     setConfirmError(null);
     try {
       // 저장 대상을 정한 뒤 생긴 수정이 남아 있으면 확정하지 않는다(잠금 이전 경로 방어 — 수정은 그대로 둔다)
@@ -926,18 +944,20 @@ export function N5Panel({
         setConfirmError('저장하지 않은 수정이 있어 다음 단계로 넘어가지 않았습니다. [저장하러 가기]를 다시 눌러 주세요.');
         return;
       }
-      // 확정 직전 재확인 — /blocks·/preview 를 다시 받아 이번 저장 revision 이 그대로인지 본다(확인창이 열린 사이의 다른 저장 포함).
-      // 통과하면 다른 await 없이 바로 confirm 한다. 이 확인 ~ confirm 트랜잭션 사이의 다른 저장은 서버 계약 없이는 막을 수 없다
-      let result: ConfirmSaveBarrierResult;
+      // Phase B — /blocks·/preview 를 새로 받아 이번 저장 revision·지문 A=B·현재 미리보기가 맞을 때까지 기다린다(확인창이 열린 사이의 다른 저장 포함).
+      // 마지막 완료 판정 뒤에는 다른 await 없이 바로 confirm 한다. 이 확인 ~ confirm 트랜잭션 사이의 다른 저장은 서버 계약 없이는 막을 수 없다
       try {
-        ({ result } = await fetchAndJudgeServerState());
+        if (!(await waitForPreviewBarrier())) return;
       } catch {
         if (mountedRef.current) setConfirmError('서버 상태를 확인하지 못해 다음 단계로 넘어가지 않았습니다. 잠시 뒤 다시 시도해 주세요.');
         return;
       }
       if (!mountedRef.current) return;
-      if (result.state !== 'complete') {
-        reportBarrierStop(result);
+      // 최종 경고 재검증 — 장벽이 받은 정본으로 확인 항목을 다시 만든다. 사용자가 확인하지 않은 항목이 생겼으면 확정하지 않고 다시 보여 준다
+      const issues = buildIssuesNow();
+      if (issues.some((issue) => !acknowledgedIssueKeysRef.current.has(issueKeyOf(issue)))) {
+        acknowledgedIssueKeysRef.current = new Set(issues.map(issueKeyOf));
+        setReviewIssues(issues);
         return;
       }
       const response = await confirmMutation.mutateAsync({
@@ -975,7 +995,11 @@ export function N5Panel({
       }
       setConfirmError(err instanceof Error ? err.message : '확정에 실패했습니다.');
     } finally {
-      if (ownsLock) editSession.endFinalizationLock();
+      if (ownsLock) {
+        editSession.endFinalizationLock();
+        finalizingRef.current = false;
+        if (mountedRef.current) setIsFinalizing(false);
+      }
     }
   }
 
