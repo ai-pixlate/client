@@ -394,6 +394,15 @@ export function useN5EditSession({
     return bbox ? { bbox, fontScale: scales.get(blockId) ?? getBaseFontScale(block) } : null;
   }, []);
 
+  /**
+   * 박스 위치·크기·글자 배율을 조정할 수 있는 블록 — 읽기 전용(editable=false, 번역 제외)은 조정하지 않는다.
+   * 화면에서 조정 UI 를 숨기는 것과 별개로 handler 에서도 막는다(박스·배율 초안·배치 미저장·이력을 만들지 않는다)
+   */
+  const isLayoutEditableBlock = useCallback(
+    (blockId: number) => latestRef.current.blocks.find((candidate) => candidate.id === blockId)?.editable === true,
+    [],
+  );
+
   /** 사용자 박스 초안을 바꾼다. 서버 박스와 같으면(논리적으로 조정 없음) 초안을 지워 Auto Height 표시로 돌아간다 */
   const setUserBox = useCallback((blockId: number, next: BoundingBox) => {
     const block = latestRef.current.blocks.find((candidate) => candidate.id === blockId);
@@ -411,12 +420,12 @@ export function useN5EditSession({
   /** 끄는 동안의 화면 박스 — Auto Height 표시 박스와 같으면 사용자 초안을 만들지 않는다 */
   const setDragBox = useCallback(
     (blockId: number, next: BoundingBox) => {
-      if (finalizingRef.current) return;
+      if (finalizingRef.current || !isLayoutEditableBlock(blockId)) return;
       const auto = autoFitBoxesRef.current.get(blockId);
       if (auto && isSameBox(auto, next) && !latestRef.current.bboxDrafts.has(blockId)) return;
       setUserBox(blockId, next);
     },
-    [setUserBox],
+    [isLayoutEditableBlock, setUserBox],
   );
 
   // ── 번역문 ─ 초안·재렌더 task·충돌을 여기 두어 패널의 저장과 실행 취소가 같은 값을 본다
@@ -495,7 +504,7 @@ export function useN5EditSession({
 
   const commitBoxEdit = useCallback(
     (kind: 'box-move' | 'box-resize', blockId: number, before: BoundingBox, after: BoundingBox, manualHeight = false) => {
-      if (isSameBox(before, after) || finalizingRef.current) return;
+      if (isSameBox(before, after) || finalizingRef.current || !isLayoutEditableBlock(blockId)) return;
       // 높이 모드 — 세로를 직접 정한 조작이면 manual 로, 이미 manual 이면 이동·가로 조절에도 유지한다(이동·가로는 auto 를 유지)
       const start = dragStartRef.current;
       const wasManual = (start?.manual ?? manualHeightRef.current).has(blockId);
@@ -512,12 +521,12 @@ export function useN5EditSession({
       setLayoutDirty(blockId, true);
       dispatch({ type: 'edit-succeeded', command });
     },
-    [dispatch, setLayoutDirty, setManualHeight],
+    [dispatch, isLayoutEditableBlock, setLayoutDirty, setManualHeight],
   );
 
   const changeFontScale = useCallback(
     (block: BlockViewModel, direction: 'increase' | 'decrease') => {
-      if (!canStartSave(sessionRef.current) || finalizingRef.current) return;
+      if (!canStartSave(sessionRef.current) || finalizingRef.current || !isLayoutEditableBlock(block.id)) return;
       const section = sections.find((candidate) => candidate.id === block.sectionId);
       // 단계 계산은 화면 박스(Auto Height 표시 포함)에서, 이력의 이전 값은 논리 배치(사용자 초안 없으면 서버 박스)로
       const bbox = layoutBoxes.get(block.id) ?? getTranslatedBaseBox(block);
@@ -542,7 +551,7 @@ export function useN5EditSession({
       setLayoutDirty(block.id, true);
       dispatch({ type: 'edit-succeeded', command });
     },
-    [applyLayoutDraft, dispatch, fitForText, layoutBoxes, logicalLayoutOf, sections, setLayoutDirty, translationDrafts],
+    [applyLayoutDraft, dispatch, fitForText, isLayoutEditableBlock, layoutBoxes, logicalLayoutOf, sections, setLayoutDirty, translationDrafts],
   );
 
   const commitTranslation = useCallback(

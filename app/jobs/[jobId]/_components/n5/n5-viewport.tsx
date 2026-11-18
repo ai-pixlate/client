@@ -448,6 +448,7 @@ const FONT_TOOLBAR_TAIL_CENTER_PX = 26;
  * 글자크기 툴바는 선택하면 바로 보인다(따로 여는 손잡이가 없다).
  */
 function BlockSelectionChrome({
+  adjustable,
   bbox,
   section,
   scale,
@@ -465,6 +466,8 @@ function BlockSelectionChrome({
   panX,
   usableWidth,
 }: {
+  /** 조정 가능(editable) — false 면 선택 테두리만 그리고 손잡이·글자크기 툴바는 그리지 않는다(읽기 전용·번역 제외 block) */
+  adjustable: boolean;
   /** 현재 표시 중인 bbox(section-local 원본 px) */
   bbox: BoundingBox;
   /** 소속 section 크기(원본 px) */
@@ -515,7 +518,7 @@ function BlockSelectionChrome({
   useEffect(() => () => onDragActiveChange(false), [onDragActiveChange]);
 
   function handleResizePointerDown(e: React.PointerEvent<HTMLSpanElement>, handle: ResizeHandle) {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || !adjustable) return;
     e.preventDefault();
     e.stopPropagation();
     if (isEditLocked) return;
@@ -590,7 +593,7 @@ function BlockSelectionChrome({
   // compact — 낮게 보이는 Auto Height block은 오른쪽 손잡이(ne·e·se)를 따로 잡지 않고 오른쪽 변 전체가 가로 resize(e)를 받는다.
   // 높이는 줄바꿈이 정하므로 세 손잡이의 차이는 폭뿐이다. 잴 수 없는 block은 모서리가 높이를 바꾸므로 기존 방식을 쓴다
   const isCompact = activeDragMode ? activeDragMode === 'compact' : fitAutoHeight != null && isCompactResizeHeight(blockScreenHeight);
-  const compactZone = isCompact ? getCompactRightResizeZone(chrome, zoom) : null;
+  const compactZone = adjustable && isCompact ? getCompactRightResizeZone(chrome, zoom) : null;
   const stopPropagation = (e: React.SyntheticEvent) => e.stopPropagation();
   return (
     <div
@@ -599,6 +602,7 @@ function BlockSelectionChrome({
       data-manual-height={isManualHeight ? 'true' : 'false'}
       data-auto-height-overflow={autoHeightOverflow}
       data-resize-mode={isCompact ? 'compact' : 'normal'}
+      data-adjustable={adjustable ? 'true' : 'false'}
       className="pointer-events-none absolute inset-0"
     >
       {/* 선택 테두리 — 화면 px 1px 선. 쌓는 순서: 테두리·핸들은 번호 배지(z-10) 아래, 툴바는 그 위 */}
@@ -615,7 +619,7 @@ function BlockSelectionChrome({
           transformOrigin: '0 0',
         }}
       />
-      {HANDLE_POSITIONS.map(({ key, x, y, cursor }) => (
+      {adjustable && HANDLE_POSITIONS.map(({ key, x, y, cursor }) => (
         <span
           key={key}
           aria-hidden="true"
@@ -649,6 +653,7 @@ function BlockSelectionChrome({
           onClick={stopPropagation}
         />
       )}
+      {adjustable && (
       <div
         className="pointer-events-auto absolute z-20"
         onPointerDown={stopPropagation}
@@ -669,6 +674,7 @@ function BlockSelectionChrome({
           onDecrease={() => onFontScaleChange('decrease')}
         />
       </div>
+      )}
     </div>
   );
 }
@@ -1725,7 +1731,8 @@ export function N5Viewport({
       : {
           onPointerDown(e, block) {
             dragClickPendingRef.current = false;
-            if (e.button !== 0 || spaceHeldRef.current || !block.bbox || isEditLocked) return; // Space는 pan이 쓴다
+            // Space는 pan이 쓴다. 읽기 전용 block 은 옮기지 않는다(누르면 click 으로 선택만 된다)
+            if (e.button !== 0 || spaceHeldRef.current || !block.bbox || isEditLocked || !block.editable) return;
             const section = preview.sections.find((s) => s.id === block.sectionId);
             if (!section) return;
             e.stopPropagation();
@@ -1971,6 +1978,7 @@ export function N5Viewport({
             {viewMode === 'translated' && selectedBlockCanvasRect && selectedBlockBbox && selectedBlockId != null && selectedSection && (
               <BlockSelectionChrome
                 key={selectedBlockId}
+                adjustable={serverBlocks.find((candidate) => candidate.id === selectedBlockId)?.editable === true}
                 bbox={selectedBlockBbox}
                 section={selectedSection}
                 scale={preview.scale}
