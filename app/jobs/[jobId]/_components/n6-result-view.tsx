@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 
 import {
   selectN6RenderTask,
@@ -707,6 +708,12 @@ function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeli
 
   const isExporting = exportMutation.isPending || downloadMutation.isPending;
 
+  const router = useRouter();
+  const handleSave = () => {
+    if (saveMutation.isPending || saveMutation.isSuccess) return;
+    saveMutation.mutate(undefined, { onSuccess: () => router.push('/') });
+  };
+
   // [선택 항목 내보내기] — 선택한 components 로 POST /export → artifactId → GET /exports/{artifactId}/download
   // → presigned URL 로 브라우저 기본 다운로드. 로컬 폴더를 고르게 하지 않는다(File System Access API 를 쓰지 않는다).
   // 한 번으로 끝난다 — Figma 에 없는 두 번째 [다운로드] 버튼을 띄우지 않는다. 생성 실패와 다운로드 주소 조회 실패는 각 mutation 의 오류로 나눠 보인다.
@@ -811,24 +818,17 @@ function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeli
             </p>
           )}
 
-          {saveMutation.isSuccess ? (
-            <span
-              data-testid="n6-save-done"
-              className="flex w-full items-center justify-center gap-1.5 rounded-[6px] border border-[#eaeaea] bg-white px-8 py-3.5 text-[14px] font-medium tracking-[-0.03em] text-[#04421f]"
-            >
-              보관함에 저장됨
-            </span>
-          ) : (
-            <button
-              type="button"
-              data-testid="n6-save-button"
-              onClick={() => saveMutation.mutate()}
-              disabled={saveMutation.isPending}
-              className="w-full rounded-[6px] border border-[#eaeaea] bg-white px-8 py-3.5 text-[14px] font-medium tracking-[-0.03em] text-[#171717] transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              {saveMutation.isPending ? '저장하는 중…' : '보관함에 저장'}
-            </button>
-          )}
+          {/* [보관함에 저장] — 서버 저장 성공(200) 뒤에만 보관함(M1 '/')으로 이동한다. 실패하면 N6 에 남아 오류를 보이고 다시 누를 수 있다.
+              성공 뒤 이동하는 동안에도 다시 누르지 못하게 둔다. 저장 완료 상태 글자(디자인에 없는 초록 「보관함에 저장됨」)는 두지 않는다 */}
+          <button
+            type="button"
+            data-testid="n6-save-button"
+            onClick={handleSave}
+            disabled={saveMutation.isPending || saveMutation.isSuccess}
+            className="w-full rounded-[6px] border border-[#eaeaea] bg-white px-8 py-3.5 text-[14px] font-medium tracking-[-0.03em] text-[#171717] transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {saveMutation.isPending || saveMutation.isSuccess ? '저장하는 중…' : '보관함에 저장'}
+          </button>
           {saveMutation.isError && (
             <p className="text-[12px] text-red-500" data-testid="n6-save-error">
               저장에 실패했습니다. 다시 시도해주세요.

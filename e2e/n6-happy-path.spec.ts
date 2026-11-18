@@ -134,12 +134,12 @@ test('render → deliverables → validation → export → download → save �
   expect(href).toContain('mock-presigned');
   expect(href).toContain('export.zip');
 
-  // ── save 실행 ─────────────────────────────────────────────────
-  await page.getByTestId('n6-save-button').click();
-  await expect(page.getByTestId('n6-save-done')).toBeVisible({ timeout: 10_000 });
-  expect(requests.some((r) => r.method === 'POST' && r.path === `/jobs/${MOCK_JOB_ID}/save`)).toBe(true);
-
-  // ── 새로고침 없이 전체 흐름 유지 ────────────────────────────────
+  // ── 새로고침 없이 N6 까지 이어졌다 ──────────────────────────────
   await expect(page).toHaveURL(new RegExp(`/jobs/${MOCK_JOB_ID}$`));
   await expect(page.getByText('번역이 완료되었습니다.')).toBeVisible();
+
+  // ── save 실행 → 서버 저장 성공 뒤 보관함(M1 '/')으로 이동 ─────────
+  await page.getByTestId('n6-save-button').click();
+  await expect(page).toHaveURL(/\/$/, { timeout: 10_000 });
+  expect(requests.some((r) => r.method === 'POST' && r.path === `/jobs/${MOCK_JOB_ID}/save`)).toBe(true);
 });

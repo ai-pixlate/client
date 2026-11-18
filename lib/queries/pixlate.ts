@@ -47,7 +47,7 @@ import {
   n2DisplayedProgressKey,
   n4DisplayedProgressKey,
 } from '@/lib/processing/displayed-progress-storage';
-import type { ApiBlockPatch, ApiConfirmRequest, ApiJobTaskStatus, ApiTextBlock } from '@/lib/api/n5-schema';
+import type { ApiBlockPatch, ApiConfirmRequest, ApiJob, ApiJobTaskStatus, ApiTextBlock } from '@/lib/api/n5-schema';
 import type { ApiExportRequest, ApiExportArtifactType } from '@/lib/api/n6-schema';
 import { sectionBucketMutationOptions } from '@/lib/queries/section-bucket-mutation';
 import { shouldRetryQuery } from '@/lib/auth/query-retry';
@@ -609,8 +609,15 @@ export function useExportComponentDownloadMutation(jobId: string) {
 // ─────────────────────────────────────────────
 
 export function useSaveJobMutation(jobId: string) {
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: () => saveJob(jobId),
+    onSuccess: () => {
+      // 계약(API-FIN-06): 저장 성공 = done/N6 · is_saved=true. 이동한 보관함과 job 화면이 이 값을 바로 보도록 캐시에 반영하고, 서버 값으로 다시 받는다
+      queryClient.setQueryData<ApiJob>(pixlateKeys.job(jobId), (job) => (job ? { ...job, isSaved: true } : job));
+      void queryClient.invalidateQueries({ queryKey: pixlateKeys.job(jobId), exact: true });
+      void queryClient.invalidateQueries({ queryKey: pixlateKeys.library() });
+    },
   });
 }
 
