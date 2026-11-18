@@ -86,6 +86,7 @@ Secret(JWT, access token, password 등)은 절대 Git에 커밋하지 않습니�
 | `npm run verify:n5-layout-adjust` | N5 블록 배치 저장(layoutAdjust — 계약 확정·서버 구현 대기) 요청 조립(바꾼 필드만·소수 유지·빈 객체 금지)·서버값 읽기(키 없음 ≠ null)·편집 기준·렌더 대상·쓰기 허용(Mock 만)·Mock 서버 정규화 자동 검증 (브라우저 불필요) |
 | `npx playwright test e2e/n5-layout-adjust.spec.ts --project=chromium` | N5 배치 저장 흐름(손 놓을 때·[+][−] 1회 저장, revision·409·500, rerenderTaskId, Undo/Redo 재저장, 혼합 이력, 초안 보호, 실서버 쓰기 차단, Mock 계약) 검증 — MSW Mock 기준이며 실서버 검증이 아니다 (Chromium, dev 서버 필요) |
 | `npx playwright test e2e/n5-display-stability.spec.ts --project=chromium` | N5 표시 안정화 검증 — [확인] 저장·재렌더·완료·번역 전/후 전환 동안 local-typeset·새 문장 유지, `?mockPresign=rotate`(조회마다 presigned URL 변경)에서 같은 asset 을 다시 받지 않음, 전환 시 `/blocks`·`/preview` 재조회 0, 박스 폭 유지, 읽기 전용 block 조정 UI·배치 PATCH 없음, 확인 항목은 PATCH 직후 표시·[확인하고 저장] 뒤 미리보기 장벽 완료 전 confirm 0 — MSW Mock 기준이며 실서버 검증이 아니다 (Chromium, dev 서버 필요) |
+| `npx playwright test e2e/n5-stale-snapshot-race.spec.ts --project=chromium` | N5 stale snapshot race 검증 — PATCH 성공 전에 시작한 `/blocks`·`/preview` snapshot 이 늦게 도착해도 새 번역문·revision·local-typeset 유지, PATCH 뒤 시작한 snapshot 은 반영, PATCH 실패 시 초안 유지·confirm 0 — MSW Mock 기준이며 실서버 검증이 아니다 (Chromium, dev 서버 필요) |
 | `npm run verify:n5-layout-edit` | N5 배치 영역 편집 순수 계산(이동·크기 조절·[+][-]·가운데선 snap, 섹션 경계) 자동 검증 (브라우저 불필요) |
 | `npm run verify:n5-history` | N5 실행 취소·다시 실행 이력 엔진(저장 성공 뒤 commit, 실패 시 불변) 자동 검증 (브라우저 불필요) |
 | `npm run verify:n5-failed-drafts` | N5 번역문 미저장 초안(편집·저장 성공/실패 전이, 실패 칸 집계) 자동 검증 (브라우저 불필요) |
