@@ -117,7 +117,7 @@ test('정렬 기준점 — left·center·right 가 [+] 에서 각각 왼쪽·가
   expect(writes).toEqual([]);
 });
 
-test('번역 저장 — 글만 PATCH 하고, 재렌더 동안은 이전 결과(최신 아님)·넘침 없음, 끝나면 다시 최신 조판이다', async ({ page }) => {
+test('번역 저장 — 글만 PATCH 하고, 재렌더 동안에도 이전 서버 이미지로 돌아가지 않고 편집한 조판을 유지하며, 끝나면 최신 조판이다', async ({ page }) => {
   const writes = recordWrites(page);
   await open(page);
   // 9104 는 서버 넘침이지만 일반 넘침 안내는 보이지 않는다(팀 QA 결정)
@@ -126,12 +126,25 @@ test('번역 저장 — 글만 PATCH 하고, 재렌더 동안은 이전 결과(�
   await editor.fill('Visible effect');
   // 저장 전 초안이 바로 조판에 보인다
   await expect(render(page, 9112)).toHaveText('Visible effect');
+  // 재렌더를 running 에 붙잡아(?mockRenderHold=502) 「재렌더 중」을 확실히 본다
+  await page.evaluate(() => {
+    const url = new URL(location.href);
+    url.searchParams.set('mockRenderHold', '502');
+    history.replaceState(history.state, '', url);
+  });
   await page.getByTestId('n5-block-save-9112').click();
-  await expect(slice(page, 502)).toHaveAttribute('data-preview-display', 'previous-rendered-image');
-  await expect(page.getByTestId(`${status2}-notice`)).toHaveText('최신 미리보기 아님');
+  // 재렌더 중(최신 아님) — 편집한 섹션은 이전 서버 이미지(previous-rendered-image)로 돌아가지 않고 지금 저장 입력의 조판을 유지한다
+  await expect(page.getByTestId('n5-block-row-9112').getByText('재렌더링 중…')).toBeVisible();
+  await expect(slice(page, 502)).toHaveAttribute('data-preview-display', 'local-typeset');
+  await expect(render(page, 9112)).toHaveText('Visible effect');
   // 최신이 아닌 동안 넘침을 내지 않는다
   await expect(page.getByTestId('n5-block-row-9104').getByTestId('n5-cell-failure-overflow')).toHaveCount(0);
   await page.screenshot({ path: test.info().outputPath('save-rerendering.png') });
+  await page.evaluate(() => {
+    const url = new URL(location.href);
+    url.searchParams.delete('mockRenderHold');
+    history.replaceState(history.state, '', url);
+  });
   await expect(slice(page, 502)).toHaveAttribute('data-preview-display', 'local-typeset', { timeout: 15_000 });
   await expect(page.getByTestId(`${status2}-notice`)).toHaveCount(0);
   await expect(render(page, 9112)).toHaveText('Visible effect');

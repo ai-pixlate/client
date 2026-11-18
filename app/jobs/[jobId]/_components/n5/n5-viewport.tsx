@@ -1218,6 +1218,24 @@ export function N5Viewport({
   // 그대로다(bucket 과 무관). 서버 displayTop(include 만 누적)은 쓰지 않고 모든 섹션을
   // 순서대로 쌓으므로, 제외된 섹션도 같은 자리·같은 높이를 유지한다(스택 재배치 없음).
   // 「번역 후」 표시 — 정상 입력 + 지문 A=B + 최신 결과 + 서버 style 정상·글꼴 준비일 때만 renderInput 조판을 쓴다
+  // 이번 화면에서 편집한 섹션 — 번역·박스·배율 초안이 있거나, 이번 화면에서 저장해 재렌더가 생긴 블록의 섹션.
+  // 재렌더 중 /preview 가 isCurrent=false 로 와도 이 섹션은 이전 서버 이미지로 돌아가지 않는다(resolvePreviewSectionDisplay)
+  const { translationDrafts: displayTranslationDrafts, bboxDrafts: displayBboxDrafts, fontScaleDrafts: displayFontScaleDrafts, rerenderTaskByBlock } =
+    editSession;
+  const editedSectionIds = useMemo(() => {
+    const sectionByBlock = new Map(serverBlocks.map((block) => [block.id, block.sectionId]));
+    const ids = new Set<number>();
+    const add = (blockId: number) => {
+      const sectionId = sectionByBlock.get(blockId);
+      if (sectionId != null) ids.add(sectionId);
+    };
+    for (const blockId of displayTranslationDrafts.keys()) add(blockId);
+    for (const blockId of displayBboxDrafts.keys()) add(blockId);
+    for (const blockId of displayFontScaleDrafts.keys()) add(blockId);
+    for (const [blockId, task] of rerenderTaskByBlock) if (task.taskId != null) add(blockId);
+    return ids;
+  }, [serverBlocks, displayTranslationDrafts, displayBboxDrafts, displayFontScaleDrafts, rerenderTaskByBlock]);
+
   const slices = useMemo(
     () =>
       buildSectionSlices(preview.sections, preview.scale, (section) =>
@@ -1229,9 +1247,10 @@ export function N5Viewport({
             syncBySection.get(section.id)?.bound === true &&
             section.background != null &&
             section.renderBlocks.every((block) => block.style != null && isFontReady(block.style)),
+          hasLocalEdit: editedSectionIds.has(section.id),
         }),
       ),
-    [preview.sections, preview.scale, syncBySection, isFontReady],
+    [preview.sections, preview.scale, syncBySection, isFontReady, editedSectionIds],
   );
 
   // 손잡이·본체 끌기로 바꾼 bbox(위치·크기 전부) — 세션 local 초안이다(use-n5-edit-session.ts). 저장 계약이 없어 서버로

@@ -280,13 +280,20 @@ export function resolvePreviewSectionDisplay(options: {
   match: FingerprintMatch;
   /** 서버 style 로 그릴 수 있음(모든 블록 style 형식 정상 + 폰트 준비) */
   canTypeset: boolean;
+  /**
+   * 이 섹션에 이번 화면의 편집이 있다(번역·박스·배율 초안, 또는 이번 화면에서 저장해 생긴 재렌더). 그 편집이 최신 서버 결과에
+   * 반영되기 전(대기·진행·채택 전·입력 변경)에는 이전 서버 이미지로 돌아가지 않는다 — 사용자에게는 수정이 되돌아간 것처럼 보인다.
+   */
+  hasLocalEdit?: boolean;
 }): PreviewSectionDisplaySource {
-  const { input, render, match, canTypeset } = options;
+  const { input, render, match, canTypeset, hasLocalEdit = false } = options;
   if (input.kind === 'excluded' || render.kind === 'excluded') return 'excluded';
   if (input.kind === 'invalid-contract' || render.kind === 'invalid-contract') return 'legacy';
-  if (render.kind === 'current') {
-    return input.kind === 'ready' && match === 'match' && canTypeset ? 'local-typeset' : 'current-rendered-image';
-  }
+  const canDrawSavedInput = input.kind === 'ready' && match === 'match' && canTypeset;
+  if (render.kind === 'current') return canDrawSavedInput ? 'local-typeset' : 'current-rendered-image';
+  // 편집한 섹션이 재렌더를 기다리는 동안 — 지금 저장 입력(renderInput, 지문 A=B)을 그대로 조판해 보인다.
+  // 실패(failed)는 기존대로 이전 결과·실패 안내를 보인다(이전 결과를 지우지 않는다)
+  if (hasLocalEdit && canDrawSavedInput && render.kind !== 'failed') return 'local-typeset';
   // 최신이 아니다 — 이전 결과가 있으면 그대로(진행 중·실패·입력 오류·준비 중이어도), 없으면 원본
   return render.result ? 'previous-rendered-image' : 'original-image';
 }
