@@ -317,6 +317,8 @@ export function usePatchN5BlockMutation(jobId: string) {
     onSuccess: (response) => {
       const updated = response.block;
       if (!updated) return;
+      // 성공한 저장만 경계를 만든다(실패·409 는 onSuccess 가 아니다) — 이 저장 전에 시작한 snapshot 은 이 값을 덮지 못한다
+      markN5SnapshotBoundary(jobId);
       queryClient.setQueryData<ApiTextBlock[]>(pixlateKeys.n5Blocks(jobId), (prev) =>
         prev ? prev.map((b) => (b.id === updated.id ? mergePatchedBlockIntoSnapshot(b, updated) : b)) : prev,
       );
@@ -346,6 +348,17 @@ export interface N5Snapshot {
 
 let n5SnapshotSeq = 0;
 const publishedN5SnapshotSeq = new Map<string, number>();
+/** 마지막으로 성공한 block 저장(PATCH)의 순번 — 같은 카운터를 쓴다 */
+const n5SnapshotBoundarySeq = new Map<string, number>();
+
+/**
+ * 성공한 block 저장(번역문·번역문+배치·배치만 — 모두 usePatchN5BlockMutation)이 화면 /blocks 캐시를 바꾼 순간을 표시한다.
+ * 이보다 먼저 시작한 snapshot 은 PATCH 전 서버 값이라 화면에 넣지 않는다(publishN5Snapshot). 뒤에 시작한 snapshot 은 그대로 넣는다.
+ * revision 을 FE 가 계산하지 않는다 — 순서만 본다. 이 저장의 재렌더가 끝나면 use-n5-preview-sync 가 새 snapshot 을 받는다
+ */
+export function markN5SnapshotBoundary(jobId: string): void {
+  n5SnapshotBoundarySeq.set(jobId, ++n5SnapshotSeq);
+}
 
 /** /blocks·/preview 를 함께 받는다(캐시는 바꾸지 않는다) */
 export async function fetchN5Snapshot(jobId: string): Promise<N5Snapshot> {
@@ -356,11 +369,14 @@ export async function fetchN5Snapshot(jobId: string): Promise<N5Snapshot> {
 
 /**
  * 받은 한 쌍을 화면 캐시에 한 번에 넣는다 — 「새 blocks + 이전 preview」 같은 중간 조합을 화면이 그리지 않게 한 batch 로 알린다.
- * 동기로 끝난다(넣은 직후 캐시를 읽어도 이 값이다). 이미 더 늦게 시작한 쌍을 넣었으면 이 쌍은 넣지 않는다(false) —
- * 먼저 시작했지만 늦게 끝난 응답이 새 화면을 이전 값으로 되돌리지 않게 한다.
+ * 동기로 끝난다(넣은 직후 캐시를 읽어도 이 값이다). 넣지 않는 경우(false) — 먼저 시작했지만 늦게 끝난 응답이 새 화면을 이전 값으로 되돌리지 않게 한다:
+ * - 이미 더 늦게 시작한 쌍을 넣었다
+ * - 이 쌍을 받기 시작한 뒤 block 저장이 성공했다(markN5SnapshotBoundary)
+ * 화면에 넣지 않을 뿐이다 — 저장 장벽은 받은 쌍으로 판정을 그대로 한다(n5-panel.tsx).
  */
 export function publishN5Snapshot(queryClient: QueryClient, jobId: string, snapshot: N5Snapshot): boolean {
-  if (snapshot.seq < (publishedN5SnapshotSeq.get(jobId) ?? 0)) return false;
+  const floor = Math.max(publishedN5SnapshotSeq.get(jobId) ?? 0, n5SnapshotBoundarySeq.get(jobId) ?? 0);
+  if (snapshot.seq < floor) return false;
   publishedN5SnapshotSeq.set(jobId, snapshot.seq);
   notifyManager.batch(() => {
     queryClient.setQueryData(pixlateKeys.n5Blocks(jobId), snapshot.blocks);
