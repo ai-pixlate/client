@@ -50,6 +50,8 @@ export function buildN5ReviewIssues(input: {
   blockTaskFailuresById: ReadonlyMap<number, Pick<BlockTaskFailures, 'verifyFailed'>>;
   /** 마지막 저장 시도가 실패해 서버값과 다른 초안이 남은 block */
   failedDraftBlockIds: ReadonlySet<number>;
+  /** 화면에 보이는 블록의 섹션 안 번호(패널·캔버스 번호와 같은 값). 없거나 빠진 블록은 섹션 안 순서로 센다 */
+  blockOrderById?: ReadonlyMap<number, number>;
 }): N5ReviewIssue[] {
   const issues: N5ReviewIssue[] = [];
   for (const section of input.sections) {
@@ -67,7 +69,7 @@ export function buildN5ReviewIssues(input: {
 
     const sectionBlocks = input.blocks.filter((block) => block.sectionId === section.id);
     sectionBlocks.forEach((block, index) => {
-      const at = { ...location, blockId: block.id, blockOrder: index + 1 };
+      const at = { ...location, blockId: block.id, blockOrder: input.blockOrderById?.get(block.id) ?? index + 1 };
       for (const badge of block.badges) {
         if (badge.code === 'prohibited_expression') {
           issues.push({ ...at, kind: 'regulatory-warning', message: badge.reason ?? '규제 경고를 확인해 주세요.' });

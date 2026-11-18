@@ -21,7 +21,7 @@ test.skip(({ browserName }) => browserName !== 'chromium', 'Chromium 기준이�
 const SECTION = 501;
 const BLOCK = 9101;
 const NARROW_BLOCK = 9102;
-const READ_ONLY_BLOCK = 9105; // product_label · isExcluded=true → editable=false
+const READ_ONLY_BLOCK = 9105; // product_label · isExcluded=true → N5 에 보이지 않는다
 
 async function setMockParams(page: Page, params: Record<string, string | null>) {
   await page.evaluate((params) => {
@@ -159,31 +159,14 @@ test('A. [확인] → 재렌더 → 완료 → 번역 전/후: local-typeset 유
   expect(await sectionImageLoads(page, 'background')).toBe(backgroundLoadsBefore);
 });
 
-test('B. 박스 폭을 늘린 뒤 [확인] 해도 화면 폭 유지 · 읽기 전용 block 은 선택만 되고 조정·배치 PATCH 가 없다', async ({ page }) => {
+test('B. 박스 폭을 늘린 뒤 [확인] 해도 화면 폭 유지 · 제외 block 은 선택·조정 대상이 없고 배치 PATCH 도 없다', async ({ page }) => {
   await reachN5(page);
   await instrumentNetwork(page);
 
-  // 읽기 전용 block — 선택 표시는 있고 조정 UI 는 없다
-  const roHit = page.getByTestId(`n5-block-hit-${READ_ONLY_BLOCK}`);
-  await roHit.scrollIntoViewIfNeeded();
-  await roHit.click({ force: true });
+  // 제외 block(isExcluded=true) — N5 에 행·번호·선택·클릭 영역이 없다(e2e/n5-excluded-blocks.spec.ts). 조정할 대상 자체가 없다
+  await expect(page.getByTestId(`n5-block-hit-${READ_ONLY_BLOCK}`)).toHaveCount(0);
+  await expect(page.getByTestId(`n5-block-overlay-${READ_ONLY_BLOCK}`)).toHaveCount(0);
   const selection = page.getByTestId('n5-block-selection');
-  await expect(selection).toBeVisible();
-  await expect(selection).toHaveAttribute('data-adjustable', 'false');
-  await expect(page.getByTestId('n5-block-selection-frame')).toBeVisible();
-  await expect(page.locator('[data-testid^="n5-block-handle-"]')).toHaveCount(0);
-  await expect(page.getByTestId('n5-font-scale-toolbar')).toHaveCount(0);
-  await expect(page.getByTestId('n5-block-resize-zone-right')).toHaveCount(0);
-  // 끌어도 움직이지 않는다(박스 초안 없음) · 이력도 생기지 않는다
-  const overlay = page.getByTestId(`n5-block-overlay-${READ_ONLY_BLOCK}`);
-  const before = await overlay.boundingBox();
-  const hit = (await roHit.boundingBox())!;
-  await page.mouse.move(hit.x + hit.width / 2, hit.y + hit.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(hit.x + hit.width / 2 + 30, hit.y + hit.height / 2 + 20, { steps: 8 });
-  await page.mouse.up();
-  expect(await overlay.boundingBox()).toEqual(before);
-  await expect(page.getByTestId('n5-undo')).toBeDisabled();
 
   // 편집 가능한 block — 폭을 늘리고 [확인]
   const narrowHit = page.getByTestId(`n5-block-hit-${NARROW_BLOCK}`);
@@ -214,7 +197,7 @@ test('B. 박스 폭을 늘린 뒤 [확인] 해도 화면 폭 유지 · 읽기 �
   expect([...displays]).toEqual(['local-typeset']);
   expect(widths.every((width) => Math.abs(width - widened) <= 1)).toBe(true);
 
-  // [저장하러 가기] — 읽기 전용 block 은 PATCH 하지 않는다(배치 PATCH 0). 편집한 9102 의 배치는 저장된다
+  // [저장하러 가기] — 제외 block 은 PATCH 하지 않는다(배치 PATCH 0). 편집한 9102 의 배치는 저장된다
   await page.getByTestId('n5-confirm-button').click();
   await expect(page.getByTestId('n5-review-dialog')).toBeVisible({ timeout: 20_000 });
   expect(await count(page, `PATCH /blocks/${READ_ONLY_BLOCK}`)).toBe(0);

@@ -376,6 +376,15 @@ function apiBboxToBoundingBox(bbox: ApiBbox): BoundingBox {
 }
 
 /**
+ * N5 에 텍스트 블록으로 보이는 블록인가 — 단일 기준은 서버 `isExcluded`다(제품 라벨·브랜드 로고 등 번역 대상에서 제외된 블록은 false).
+ * role·isProductLabel·isBrandLogo 로 다시 판정하지 않는다. 키가 없는 오래된 응답은 기존처럼 보이는 블록으로 둔다(true 로 추측하지 않는다).
+ * /blocks 응답(raw)은 그대로 두고 N5 표시용 목록을 만들 때만 쓴다 — 확인 항목·confirm 은 raw 전체를 본다.
+ */
+export function isN5VisibleBlock(block: Pick<ApiTextBlock, 'isExcluded'>): boolean {
+  return block.isExcluded !== true;
+}
+
+/**
  * TextBlock의 핵심 식별 필드(id/sectionId/role/revision)는 OpenAPI 스펙상 `required`로
  * 선언돼 있지 않다(1단계 조사에서 확인된 계약 공백). 값이 실제로 비어 있으면 임의
  * 기본값으로 조용히 채우지 않고 여기서 명시적으로 던진다 — 예를 들어 role을 'body'로

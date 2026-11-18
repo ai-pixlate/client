@@ -110,10 +110,11 @@ test.describe('N5 진입 — section별 preview 렌더', () => {
     await expect(page.getByTestId('n5-section-status-4-progress')).toHaveText('렌더 대기 중');
   });
 
-  test('isExcluded 블록(9105, product_label)은 편집 input 자체를 렌더하지 않는다', async ({ page }) => {
-    await page.getByTestId('n5-block-row-9105').scrollIntoViewIfNeeded();
+  test('isExcluded 블록(9105, product_label)은 N5 에 행·편집 input·캔버스 블록이 없다', async ({ page }) => {
+    await expect(page.getByTestId('n5-block-row-9105')).toHaveCount(0);
     await expect(page.locator('[data-testid="n5-block-editor-9105"]')).toHaveCount(0);
-    await expect(page.getByTestId('n5-block-row-9105')).toContainText('읽기 전용');
+    await expect(page.getByTestId('n5-block-overlay-9105')).toHaveCount(0);
+    await expect(page.getByTestId('n5-block-pin-9105')).toHaveCount(0);
   });
 });
 

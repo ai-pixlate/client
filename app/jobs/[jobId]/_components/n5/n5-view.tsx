@@ -16,6 +16,7 @@ import {
 import {
   buildSectionStatus,
   getBlockTaskFailures,
+  isN5VisibleBlock,
   syncPreviewWithBlocks,
   toBlockViewModel,
   toJobMetaViewModel,
@@ -113,6 +114,9 @@ function N5Loaded({
   const [revealRequestSeq, setRevealRequestSeq] = useState(0);
   // 패널 자동 이동 요청 — selection 값이 아니라 "이 대상을 패널에 보여 달라"는 일회성 이벤트다
   const [panelReveal, setPanelReveal] = useState<N5PanelRevealRequest | null>(null);
+
+  // 선택된 블록이 재조회 뒤 보이지 않게 되면(제외 블록이 되었거나 사라짐) 선택을 푼다 — 보이지 않는 블록의 선택 UI 를 남기지 않는다
+  if (selectedBlockId != null && !blocks.some((block) => block.id === selectedBlockId)) setSelectedBlockId(null);
 
   function selectBlock(block: BlockViewModel, navigation: { canvas: boolean; panel: boolean }) {
     setSelectedBlockId(block.id);
@@ -259,7 +263,12 @@ export function N5View({ jobId }: { jobId: string }) {
 
   const preview = toPreviewViewModel(previewQuery.data);
   // 지문 A(/blocks) = B(/preview) 인 섹션만 renderInput(정렬·서버 style·적용 박스)을 블록에 잇는다
-  const { blocks, syncBySection } = syncPreviewWithBlocks(blocksQuery.data.map(toBlockViewModel), preview);
+  // 지문 A 는 섹션의 /blocks 전체로 비교한다(제외 블록 포함 — 서버 계산과 같은 집합). 그 뒤 N5 에 보일 블록만 남긴다:
+  // 제외 블록(isExcluded=true)은 패널 행·캔버스 번호·선택·끌기·편집 어디에도 들어가지 않는다. raw 캐시는 그대로다
+  const synced = syncPreviewWithBlocks(blocksQuery.data.map(toBlockViewModel), preview);
+  const syncBySection = synced.syncBySection;
+  const visibleBlockIds = new Set(blocksQuery.data.filter(isN5VisibleBlock).map((block) => block.id));
+  const blocks = synced.blocks.filter((block) => visibleBlockIds.has(block.id));
 
   const jobMeta = toJobMetaViewModel(jobQuery.data, countriesQuery.data ?? [], categoriesQuery.data ?? [], REGULATORY_CLASS_LABELS, channelSpecsQuery.data ?? []);
 

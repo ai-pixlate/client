@@ -865,9 +865,25 @@ export function N5Panel({
 
   const issueKeyOf = (issue: N5ReviewIssue) =>
     `${issue.kind}|${issue.sectionId}|${issue.blockId ?? ''}|${issue.stageLabel ?? ''}|${issue.message}`;
-  /** 확인 항목 — 블록은 최신 /blocks 캐시(서버 정본), 섹션 상태는 이 화면 값(기존 입력 구성 그대로) */
-  const buildIssuesNow = () =>
-    buildN5ReviewIssues({ sections, blocks: readLatestBlocks(), sectionStatusById, blockTaskFailuresById, failedDraftBlockIds: new Set() });
+  /** 확인 항목 — 블록은 최신 /blocks 캐시(서버 정본, 제외 블록 포함 — 항목 집합은 그대로), 섹션 상태는 이 화면 값(기존 입력 구성 그대로).
+   *  블록 번호만 화면에 보이는 블록(blocks — 제외 블록 없음)의 섹션 안 번호로 맞춘다(패널·캔버스 번호와 같게) */
+  const buildIssuesNow = () => {
+    const blockOrderById = new Map<number, number>();
+    const countBySection = new Map<number, number>();
+    for (const block of blocks) {
+      const order = (countBySection.get(block.sectionId) ?? 0) + 1;
+      countBySection.set(block.sectionId, order);
+      blockOrderById.set(block.id, order);
+    }
+    return buildN5ReviewIssues({
+      sections,
+      blocks: readLatestBlocks(),
+      sectionStatusById,
+      blockTaskFailuresById,
+      failedDraftBlockIds: new Set(),
+      blockOrderById,
+    });
+  };
 
   async function handleConfirmClick() {
     // ① 같은 tick 의 연속 클릭·강제 이벤트도 막도록 ref 로 다시 확인한다
