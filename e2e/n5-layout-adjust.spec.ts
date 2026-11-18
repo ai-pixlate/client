@@ -103,10 +103,10 @@ test('move — 조작 직후 PATCH 0 · 재렌더 없음 → [저장하러 가�
   expect(body.trans1).toBe('Instant effect guaranteed');
   expect(Object.keys(body.layoutAdjust!)).toEqual(['box']);
   const box = body.layoutAdjust!.box!;
-  // 옮기기 = 위치만. 폭은 원본 그대로, 높이는 조작 직전 화면의 Auto Height 높이(서버 h=80 이 아니다), 좌표는 섹션 로컬 원본 px
+  // 옮기기 = 위치만. 폭·높이는 옮긴 박스(선택 테두리 = 서버 박스) 그대로다 — 글 높이로 잰 Auto Height 표시 높이를 저장하지 않는다. 좌표는 섹션 로컬 원본 px
   expect(box.w).toBe(ORIGINAL_9112.w);
   expect(Math.abs(box.h - (before.height * ORIGINAL_9112.w) / before.width)).toBeLessThan(0.01);
-  expect(box.h).not.toBe(ORIGINAL_9112.h);
+  expect(box.h).toBe(ORIGINAL_9112.h);
   expect(box.x).toBeGreaterThan(ORIGINAL_9112.x);
   expect(Math.abs(after.left / after.width - box.x / box.w)).toBeLessThan(0.001);
   const response = await responseOf(sent[0]);
@@ -450,7 +450,7 @@ test.describe('PR #116 대비 — legacy 적용 box', () => {
     await saveAll(page);
     const [move] = layoutPatches(patches);
     const moved = move.body.layoutAdjust!.box!;
-    // 옮기기는 legacy box 폭 그대로(시작값이 원본 bbox 였다면 w=500 이 나간다) · 높이는 화면의 Auto Height 높이
+    // 옮기기는 legacy box 폭·높이 그대로(시작값이 원본 bbox 였다면 w=500 이 나간다) — Auto Height 표시 높이를 저장하지 않는다
     expect(moved.w).toBe(LEGACY_9112.w);
     expect(Math.abs(moved.h - (shownBefore.height * LEGACY_9112.w) / shownBefore.width)).toBeLessThan(0.01);
     expect(moved.x).toBeGreaterThan(LEGACY_9112.x);

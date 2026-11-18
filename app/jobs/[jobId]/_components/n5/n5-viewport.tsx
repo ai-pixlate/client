@@ -1232,17 +1232,19 @@ export function N5Viewport({
 
   // 손잡이·본체 끌기로 바꾼 bbox(위치·크기 전부) — 세션 local 초안이다(use-n5-edit-session.ts). 저장 계약이 없어 서버로
   // 보내지 않고, 새로고침하면 사라진다. F-CFM-15 조정은 「번역 후」 화면의 것이라 「번역 전」에는 원본 bbox를 보인다.
-  const { layoutBoxes, setBboxDraft, commitBoxEdit, setLayoutDragging, isEditLocked, fitAutoHeight } = editSession;
-  // 「번역 후」 박스 = 사용자 초안 > Auto Height 표시 박스(layoutBoxes) > 저장 입력(renderInput 적용 박스) > 원본 bbox
+  const { layoutBoxes, bboxDrafts, setBboxDraft, commitBoxEdit, setLayoutDragging, isEditLocked, fitAutoHeight } = editSession;
+  // 「번역 후」 선택·클릭 박스 = 사용자 배치 초안 > 저장 입력(renderInput 적용 박스) > 저장 layoutAdjust > 원본 bbox.
+  // 선택 테두리는 서버 박스를 보여 주는 영역이다 — 글 높이로 잰 Auto Height 표시 박스(layoutBoxes)는 글자 조판(typesetModelsBySection)에만 쓰고
+  // 여기에는 쓰지 않는다. 그래야 블록마다 조판 가능 여부(역할·글꼴·측정기)에 따라 테두리가 글자에 붙었다 떨어졌다 하지 않는다.
   const blocks = useMemo(
     () =>
       viewMode !== 'translated'
         ? serverBlocks
         : serverBlocks.map((block) => {
-            const box = layoutBoxes.get(block.id) ?? getTranslatedBaseBox(block);
+            const box = bboxDrafts.get(block.id) ?? getTranslatedBaseBox(block);
             return box === block.bbox ? block : { ...block, bbox: box };
           }),
-    [serverBlocks, layoutBoxes, viewMode],
+    [serverBlocks, bboxDrafts, viewMode],
   );
 
   const blocksBySection = useMemo(() => {

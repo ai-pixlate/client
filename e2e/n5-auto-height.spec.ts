@@ -6,7 +6,8 @@ import { reachN5 } from './helpers/reach-n5';
 // ─────────────────────────────────────────────────────────────────
 // N5 Auto Height(Figma Text의 Auto height)와 Mock 조판 미리보기(?qaTypeset=1).
 // 폭을 바꾸면 조판 규칙대로 다시 줄바꿈되고, 그 줄 수에 맞춰 박스 높이가 따라온다. 글자를 줄이거나 자르지 않는다.
-// 값 비교는 overlay 의 section-local style(표시 px)로 한다. zoom 1 이라 화면 글 높이와 바로 비교할 수 있다.
+// 값 비교는 조판 글 박스(Auto Height 표시 박스)의 section-local 표시 px 로 한다. zoom 1 이라 화면 글 높이와 바로 비교할 수 있다.
+// 선택 테두리·클릭 영역(overlay)은 Auto Height 를 따르지 않고 서버 박스(사용자 배치 초안이 있으면 그 박스)를 그린다.
 // ─────────────────────────────────────────────────────────────────
 
 test.skip(({ browserName }) => browserName !== 'chromium', '조판 검증은 Chromium 기준이다');
@@ -18,7 +19,17 @@ const QA_URL = `/jobs/${MOCK_JOB_ID}?qaTypeset=1`;
 const BLOCK = 9102; // 501 body, 폭 900 × 높이 200
 type Box = { left: number; top: number; width: number; height: number };
 
+/** Auto Height 표시 박스(조판 글 박스) — section-local 표시 px. 선택 테두리(overlay)는 서버 박스라 여기서 읽지 않는다 */
 const boxOf = (page: Page, id = BLOCK) =>
+  page.locator(`[data-typeset-render="${id}"]`).evaluate((el): Box => {
+    const node = el as HTMLElement;
+    const scale = Number(/scale\(([^)]+)\)/.exec(node.parentElement?.style.transform ?? '')?.[1] ?? 1);
+    const { left, top, width, height } = node.style;
+    return { left: parseFloat(left) * scale, top: parseFloat(top) * scale, width: parseFloat(width) * scale, height: parseFloat(height) * scale };
+  });
+
+/** 선택 테두리·클릭 영역(overlay) — 서버 박스(사용자 배치 초안이 있으면 그 박스). Auto Height 를 따르지 않는다 */
+const overlayBoxOf = (page: Page, id = BLOCK) =>
   page.getByTestId(`n5-block-overlay-${id}`).evaluate((el): Box => {
     const { left, top, width, height } = (el as HTMLElement).style;
     return { left: parseFloat(left), top: parseFloat(top), width: parseFloat(width), height: parseFloat(height) };
@@ -176,10 +187,13 @@ test.describe('Auto Height', () => {
     const redo = page.getByTestId('n5-redo');
     await expect(page.getByTestId('n5-block-handle-s')).toHaveCSS('cursor', 'ns-resize');
 
-    // s — 아래 변만 내려간다
+    // s — 아래 변만 내려간다. 손잡이는 선택 테두리(서버 박스) 아래 끝에 있어 그 높이에서 늘어난다
+    const frame = await overlayBoxOf(page);
+    expect(frame.height).toBeGreaterThan(start.height); // 테두리는 Auto Height 로 줄지 않는다
     await dragHandle(page, 's', 0, 40);
     const tall = await boxOf(page);
-    near(tall.height, start.height + 40, 's height', 1);
+    near(tall.height, frame.height + 40, 's height', 1);
+    sameBox(await overlayBoxOf(page), tall); // 사용자가 정한 높이는 테두리와 글 박스가 같다
     near(tall.top, start.top, 's top');
     near(tall.width, start.width, 's width');
     await expect(selection).toHaveAttribute('data-manual-height', 'true');
@@ -307,7 +321,7 @@ const bottoms = (page: Page, id = BLOCK) =>
     const text = document.querySelector(`[data-typeset-render="${blockId}"]`)!;
     const range = document.createRange();
     range.selectNodeContents(text);
-    const overlay = document.querySelector(`[data-testid="n5-block-overlay-${blockId}"]`)!;
+    const overlay = document.querySelector(`[data-typeset-render="${blockId}"]`)!; // Auto Height 표시 박스
     return { text: range.getBoundingClientRect().bottom, box: overlay.getBoundingClientRect().bottom };
   }, id);
 
@@ -347,9 +361,14 @@ test.describe('최초 진입 Auto Height', () => {
     for (const id of [9101, BLOCK, 9103]) await expectWrapsText(page, id);
     const normalized = await boxOf(page);
 
+    // 선택 테두리·클릭 영역은 Auto Height 를 따르지 않고 서버 박스 그대로다
+    const frame = await overlayBoxOf(page);
+    expect(frame.height).not.toBeCloseTo(normalized.height, 0);
+
     // 「번역 전」(원본 bbox)과 비교 — Auto Height 는 높이만 바꾼다
     await page.getByTestId('n5-view-mode-original').click();
-    const original = await boxOf(page);
+    const original = await overlayBoxOf(page);
+    sameBox(frame, original);
     near(normalized.left, original.left, 'left', 0.02);
     near(normalized.top, original.top, 'top', 0.02);
     near(normalized.width, original.width, 'width', 0.02);

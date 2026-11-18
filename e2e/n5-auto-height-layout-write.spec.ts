@@ -14,10 +14,13 @@ const QA_URL = `/jobs/${MOCK_JOB_ID}?qaTypeset=1`;
 const ORIGINAL_9112 = { x: 40, y: 300, w: 500, h: 80 };
 type Box = { left: number; top: number; width: number; height: number };
 
+/** Auto Height 표시 박스(조판 글 박스) — section-local 표시 px. 선택 테두리(overlay)는 서버 박스라 여기서 읽지 않는다 */
 const boxOf = (page: Page, id: number) =>
-  page.getByTestId(`n5-block-overlay-${id}`).evaluate((el): Box => {
-    const { left, top, width, height } = (el as HTMLElement).style;
-    return { left: parseFloat(left), top: parseFloat(top), width: parseFloat(width), height: parseFloat(height) };
+  page.locator(`[data-typeset-render="${id}"]`).evaluate((el): Box => {
+    const node = el as HTMLElement;
+    const scale = Number(/scale\(([^)]+)\)/.exec(node.parentElement?.style.transform ?? '')?.[1] ?? 1);
+    const { left, top, width, height } = node.style;
+    return { left: parseFloat(left) * scale, top: parseFloat(top) * scale, width: parseFloat(width) * scale, height: parseFloat(height) * scale };
   });
 const textHeight = (page: Page, id: number) =>
   page.locator(`[data-typeset-render="${id}"]`).evaluate((el) => {
@@ -35,7 +38,7 @@ const bottoms = (page: Page, id: number) =>
   page.evaluate((blockId) => {
     const range = document.createRange();
     range.selectNodeContents(document.querySelector(`[data-typeset-render="${blockId}"]`)!);
-    const overlay = document.querySelector(`[data-testid="n5-block-overlay-${blockId}"]`)!;
+    const overlay = document.querySelector(`[data-typeset-render="${blockId}"]`)!; // Auto Height 표시 박스
     return { text: range.getBoundingClientRect().bottom, box: overlay.getBoundingClientRect().bottom };
   }, id);
 
@@ -104,7 +107,7 @@ test('G·H·A·B·D. 기본 Mock 진입만으로 긴·짧은·서버 style 번�
   await expect(page.getByTestId('n5-redo')).toBeDisabled();
 });
 
-test('I·J. move·Undo·Redo 는 local 만 바꾸고(PATCH 0) Undo 화면은 다시 Auto Height · [저장하러 가기]는 화면 박스(Auto Height)를 저장한다', async ({ page }) => {
+test('I·J. move·Undo·Redo 는 local 만 바꾸고(PATCH 0) Undo 화면은 다시 Auto Height · [저장하러 가기]는 옮긴 박스(서버 높이)를 저장하고 Auto Height 높이는 저장하지 않는다', async ({ page }) => {
   const patches = trackPatches(page);
   await open(page);
   await expectWrapsText(page, 9112);
@@ -131,7 +134,9 @@ test('I·J. move·Undo·Redo 는 local 만 바꾸고(PATCH 0) Undo 화면은 다
   expect(patches).toHaveLength(1);
   const moved = patches[0].body.layoutAdjust!.box!;
   expect(moved.w).toBe(ORIGINAL_9112.w);
-  expect(Math.abs(moved.h - (shown.height * ORIGINAL_9112.w) / shown.width)).toBeLessThan(0.01);
+  // 높이는 옮긴 박스(서버 h=80) 그대로 — 화면의 Auto Height 표시 높이(shown)는 저장하지 않는다
+  expect(moved.h).toBe(ORIGINAL_9112.h);
+  expect(Math.abs(moved.h - (shown.height * ORIGINAL_9112.w) / shown.width)).toBeGreaterThan(1);
   expect(moved.x).toBeGreaterThan(ORIGINAL_9112.x);
   expect(await responseLayout(patches[0])).toEqual({ box: moved, fontScale: null });
 });
