@@ -80,6 +80,39 @@ test.describe('N5 섹션 제외·되돌리기 — 서버 저장', () => {
     await expect(page.getByTestId('n5-section-restore-501')).toBeVisible();
   });
 
+  test('제외 효과는 그 섹션에만 — 섹션 크기의 반투명 회색·블러, 다른 섹션·미리보기 전체에는 없음(Figma 1725:11707)', async ({ page }) => {
+    await page.getByTestId('n5-section-exclude-501').click();
+    const overlay = page.getByTestId('n5-section-excluded-501');
+    await expect(overlay).toBeVisible();
+    const style = await overlay.evaluate((el) => {
+      const css = getComputedStyle(el);
+      return { bg: css.backgroundColor, backdrop: css.backdropFilter, filter: css.filter, opacity: css.opacity };
+    });
+    expect(style).toEqual({ bg: 'rgba(245, 245, 245, 0.4)', backdrop: 'blur(3px)', filter: 'none', opacity: '1' });
+    await expect(overlay).toContainText('저장 시 제외됨 · 위아래가 붙습니다');
+    // 크기·위치 = 제외된 섹션(slice) 그대로
+    const slice = (await page.getByTestId('n5-slice-translated-501').boundingBox())!;
+    const box = (await overlay.boundingBox())!;
+    for (const key of ['x', 'y', 'width', 'height'] as const) expect(Math.abs(box[key] - slice[key])).toBeLessThanOrEqual(1);
+    // 포함 섹션(502)·미리보기 전체에는 흐림·불투명 처리가 없다
+    await expect(page.getByTestId('n5-section-excluded-502')).toHaveCount(0);
+    const others = await page.evaluate(() => {
+      const ids = ['n5-slice-translated-502', 'n5-viewport'];
+      return ids.map((id) => {
+        let el = document.querySelector(`[data-testid="${id}"]`) as HTMLElement | null;
+        const found = el != null;
+        const blurred: string[] = [];
+        while (el) {
+          const css = getComputedStyle(el);
+          if (css.filter !== 'none' || css.backdropFilter !== 'none' || Number(css.opacity) < 1) blurred.push(el.dataset.testid ?? el.tagName);
+          el = el.parentElement;
+        }
+        return { id, found, blurred };
+      });
+    });
+    expect(others.find((o) => o.id === 'n5-slice-translated-502')).toEqual({ id: 'n5-slice-translated-502', found: true, blurred: [] });
+  });
+
   test('N5에서 제외된 섹션 되돌리기 → SEC-03 restore 저장 → 포함 상태 복구', async ({ page }) => {
     const patches = trackSectionPatches(page);
 

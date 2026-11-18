@@ -1043,13 +1043,17 @@ function ImageLayer({
             {isExcluded ? (
               // F-CFM-14: slice의 height/width는 절대 건드리지 않는다 — 오버레이는
               // 같은 slice 내부에 absolute로 얹을 뿐이라, 스택 재배치가 일어나지 않는다.
+              // Figma 1725:11707 「제외된 섹션 오버레이」 — 아래 결과 이미지는 Layer Blur 6(CSS blur 3px)으로 흐리게 남기고
+              // 그 위에 BG/subtle(#F5F5F5) 40% 를 얹는다. 결과 이미지를 가리는 불투명 판이 아니다. 범위는 섹션 하나(slice) 그대로다
               <div
                 data-testid={`n5-section-excluded-${slice.sectionId}`}
-                className="absolute inset-0 flex items-center justify-center"
-                style={{ backgroundColor: 'rgba(23, 23, 23, 0.55)' }}
+                className="absolute inset-0 flex flex-col items-center justify-center gap-2 overflow-hidden"
+                style={{ backgroundColor: 'rgba(245, 245, 245, 0.4)', backdropFilter: 'blur(3px)', WebkitBackdropFilter: 'blur(3px)' }}
               >
+                <p className="text-[14px] leading-[normal] tracking-[-0.14px] whitespace-nowrap text-[#171717]">저장 시 제외됨 · 위아래가 붙습니다</p>
                 {/* N3 에서 제외된 섹션은 N5 에서 되살리지 않는다(SEC-03: 409 INVALID_STATE) — 버튼을 내지 않는다 */}
                 {slice.canRestore && (
+                  // Figma Button Secondary · XS(57:1440)
                   <button
                     type="button"
                     data-testid={`n5-section-restore-${slice.sectionId}`}
@@ -1059,7 +1063,7 @@ function ImageLayer({
                       e.stopPropagation();
                       onRestoreSection(slice.sectionId);
                     }}
-                    className="rounded-full bg-white px-3 py-1.5 text-[12px] font-medium text-[#171717] shadow-[2px_2px_24px_0px_rgba(0,0,0,0.06)] hover:bg-gray-50 disabled:cursor-not-allowed disabled:hover:bg-white"
+                    className="rounded-[4px] border border-[#eaeaea] bg-white px-3 py-[5px] text-[12px] leading-[normal] tracking-[-0.24px] text-[#171717] hover:bg-[#f5f5f5] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-white"
                   >
                     되돌리기
                   </button>
