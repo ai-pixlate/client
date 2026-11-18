@@ -97,7 +97,7 @@ export function buildMockRenderInput(section: { id: number; width: number; heigh
       id: section.id,
       width: section.width,
       height: section.height,
-      background: { url: `${SECTION_IMG_BASE}/${section.id}-background.png`, source: section.id === 505 ? 'original' : 'inpaint', sha256: null },
+      background: { url: `${SECTION_IMG_BASE}/${section.id}-background.png`, source: section.id === 505 ? 'original' : 'inpaint', sha256: `mock-background-${section.id}` },
     },
     blocks: blocks.filter((block) => block.sectionId === section.id && isRenderTarget(block)).map((block) => toRenderBlock(block, section.width)),
   };

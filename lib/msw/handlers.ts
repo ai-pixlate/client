@@ -495,6 +495,33 @@ function buildMockN5PreviewWithRender(referrer: string) {
   return { preview: { ...preview, renderer: MOCK_N5_RENDERER, sections }, blockFingerprintBySection };
 }
 
+// ?mockPresign=rotate — 실제 BE 처럼 같은 S3 객체도 /preview 조회마다 새 presigned URL(쿼리 문자열만 다름)을 낸다.
+// 객체(asset)는 그대로다 — background.sha256·render.result 는 바뀌지 않는다. 지문(B·C)은 이 쿼리 전에 계산한 값이라 영향이 없다.
+let mockPresignSeq = 0;
+function withMockPresignRotation<T extends { sections: Array<Record<string, unknown>> }>(preview: T, referrer: string): T {
+  try {
+    if (new URL(referrer).searchParams.get('mockPresign') !== 'rotate') return preview;
+  } catch {
+    return preview;
+  }
+  const seq = ++mockPresignSeq;
+  const sign = (url: unknown) => (typeof url === 'string' ? `${url}?X-Amz-Date=mock${seq}` : url);
+  return {
+    ...preview,
+    sections: preview.sections.map((section) => {
+      const renderInput = section.renderInput as { section: { background: { url: string } } } | null | undefined;
+      return {
+        ...section,
+        originalUrl: sign(section.originalUrl),
+        renderedUrl: sign(section.renderedUrl),
+        ...(renderInput
+          ? { renderInput: { ...renderInput, section: { ...renderInput.section, background: { ...renderInput.section.background, url: sign(renderInput.section.background.url) } } } }
+          : {}),
+      };
+    }),
+  };
+}
+
 /** /blocks 응답 블록 — 그 순간의 섹션 입력 지문(A)을 붙인다. 제외·입력 오류·준비 중 섹션은 null */
 function withSectionInputFingerprint(blocks: ApiTextBlock[], referrer: string): ApiTextBlock[] {
   const { blockFingerprintBySection } = buildMockN5PreviewWithRender(referrer);
@@ -1414,7 +1441,7 @@ export const handlers = [
         sections: preview.sections.map((s) => (s.id === 502 ? { ...s, signals: [{ code: 'logo_match_failed', reason: '정품 로고 매칭에 실패했습니다' }] } : s)),
       });
     }
-    return HttpResponse.json(preview);
+    return HttpResponse.json(withMockPresignRotation(preview, request.referrer));
   }),
 
   // ──────────────────────────────────────────
