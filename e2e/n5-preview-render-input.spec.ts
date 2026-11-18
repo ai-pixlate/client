@@ -120,8 +120,8 @@ test('정렬 기준점 — left·center·right 가 [+] 에서 각각 왼쪽·가
 test('번역 저장 — 글만 PATCH 하고, 재렌더 동안은 이전 결과(최신 아님)·넘침 없음, 끝나면 다시 최신 조판이다', async ({ page }) => {
   const writes = recordWrites(page);
   await open(page);
-  // 최신 결과의 넘침만 정본 — 9104 는 넘침
-  await expect(page.getByTestId('n5-block-row-9104').getByTestId('n5-cell-failure-overflow')).toBeVisible();
+  // 9104 는 서버 넘침이지만 일반 넘침 안내는 보이지 않는다(팀 QA 결정)
+  await expect(page.getByTestId('n5-block-row-9104').getByTestId('n5-cell-failure-overflow')).toHaveCount(0);
   const editor = page.getByTestId('n5-block-editor-9112');
   await editor.fill('Visible effect');
   // 저장 전 초안이 바로 조판에 보인다
@@ -135,7 +135,7 @@ test('번역 저장 — 글만 PATCH 하고, 재렌더 동안은 이전 결과(�
   await expect(slice(page, 502)).toHaveAttribute('data-preview-display', 'local-typeset', { timeout: 15_000 });
   await expect(page.getByTestId(`${status2}-notice`)).toHaveCount(0);
   await expect(render(page, 9112)).toHaveText('Visible effect');
-  await expect(page.getByTestId('n5-block-row-9104').getByTestId('n5-cell-failure-overflow')).toBeVisible();
+  await expect(page.getByTestId('n5-block-row-9104').getByTestId('n5-cell-failure-overflow')).toHaveCount(0);
   expect(writes.map((w) => w.path)).toEqual([`PATCH /jobs/${MOCK_JOB_ID}/blocks/9112`]);
   expect(Object.keys(writes[0].body as object).sort()).toEqual(['revision', 'trans1']);
 });

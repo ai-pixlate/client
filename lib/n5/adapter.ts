@@ -104,11 +104,20 @@ export interface RetryTarget {
   retryable: boolean;
 }
 
-/** 번역문 칸 안의 실패 문구로 표시하는 signal(Figma 1244:8238). 나머지는 번호 아래 [라벨] 사유 행으로 표시한다(1244:8031) */
+/**
+ * 번역문 칸 안의 실패 문구로 표시하는 signal(Figma 1244:8238). 나머지는 번호 아래 [라벨] 사유 행으로 표시한다(1244:8031).
+ * width_overflow 는 사용자에게 수정 요구로 보이지 않는다(팀 QA 결정 — 일반 넘침 안내 제거). 데이터는 그대로 두고 표시만 하지 않는다
+ */
 const CELL_SIGNAL_CODES: ReadonlySet<ApiSignalCode> = new Set<ApiSignalCode>(['translation_failed', 'width_overflow']);
+const HIDDEN_SIGNAL_CODES: ReadonlySet<ApiSignalCode> = new Set<ApiSignalCode>(['width_overflow']);
 
 export function getSignalRows(badges: SignalBadge[]): SignalBadge[] {
   return badges.filter((badge) => !CELL_SIGNAL_CODES.has(badge.code));
+}
+
+/** 사용자 화면에 행으로 보이는 signal — 일반 넘침(width_overflow)은 빼고 나머지(금지 표현·필수 문구 등)는 그대로 */
+export function getVisibleSignals(badges: SignalBadge[]): SignalBadge[] {
+  return badges.filter((badge) => !HIDDEN_SIGNAL_CODES.has(badge.code));
 }
 
 export function hasWidthOverflowSignal(badges: SignalBadge[]): boolean {
@@ -233,7 +242,7 @@ export function buildSectionStatus(
     restoredInN3: section?.exclusionReason === 'restored_by_user',
     verdictLabels: [...new Set(labels)],
     warningLabel: section?.warningBadge ? SECTION_WARNING_LABELS[section.warningBadge] : null,
-    signals,
+    signals: getVisibleSignals(signals),
     progressLabel: isLegacy ? getSectionProgressLabel(sectionId, items, renderStatus, render != null) : preview.labels.progressLabel,
     previewNotice: isLegacy ? null : preview.labels.notice,
     previewInputErrorCode: isLegacy ? null : preview.input.errorCode,

@@ -12,7 +12,6 @@ import {
   getSignalRows,
   getTranslationFailure,
   hasSectionStatus,
-  hasWidthOverflowSignal,
   isAllSectionsExcludedError,
   isInvalidStateError,
   parseApiError,
@@ -216,35 +215,16 @@ function AlertGlyph() {
   );
 }
 
-function InfoGlyph() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" className="shrink-0">
-      <path
-        d="M8.00039 13.5999C11.0932 13.5999 13.6004 11.0927 13.6004 7.9999C13.6004 4.90711 11.0932 2.3999 8.00039 2.3999C4.9076 2.3999 2.40039 4.90711 2.40039 7.9999C2.40039 11.0927 4.9076 13.5999 8.00039 13.5999Z"
-        stroke="#707070"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <path d="M8 11.333L8 7.07372M7.99993 5.33301L7.99993 4.99967" stroke="#707070" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
 /** Figma 「N5 실패문구」 variant(1244:8238) — 번역문 칸 안의 실패·안내 한 줄 */
-function CellFailureMessage({ kind }: { kind: 'translate' | 'verify' | 'preview' | 'overflow' }) {
-  const isInfo = kind === 'overflow';
+function CellFailureMessage({ kind }: { kind: 'translate' | 'verify' | 'preview' }) {
   const text = {
     translate: '번역하지 못했습니다',
     verify: '검사하지 못했습니다',
     preview: '미리보기를 갱신하지 못했습니다',
-    overflow: '글자가 넘칩니다 — 짧은 표현이 필요합니다',
   }[kind];
   return (
-    <p
-      data-testid={`n5-cell-failure-${kind}`}
-      className={`flex items-center gap-1 text-[12px] leading-[normal] ${isInfo ? 'text-[#707070]' : 'text-[#ff6a38]'}`}
-    >
-      {isInfo ? <InfoGlyph /> : <AlertGlyph />}
+    <p data-testid={`n5-cell-failure-${kind}`} className="flex items-center gap-1 text-[12px] leading-[normal] text-[#ff6a38]">
+      <AlertGlyph />
       {text}
     </p>
   );
@@ -358,16 +338,14 @@ function TranslationEditor({
     : isRerendering
       ? null
       : taskFailures.previewFailure;
-  // 넘침 정본은 최신 서버 결과(isCurrent=true)의 overflow 다. 최신이 아니면 내지 않는다. 이번 계약 키가 없는 응답만 기존 signal 을 쓴다.
-  // 입력 중(dirty)에도 직전 서버 결과를 그대로 보인다 — FE 가 초안으로 넘침을 다시 계산하지 않는다(PM 확정).
-  const serverOverflow = block.serverOverflow === 'legacy' ? hasWidthOverflowSignal(block.badges) : block.serverOverflow === true;
-  const showOverflow = serverOverflow && !isRerendering;
+  // 일반 넘침(서버 render.result.overflow · width_overflow)은 사용자에게 「짧은 표현이 필요합니다」로 알리지 않는다(팀 QA 결정).
+  // 서버 넘침 값(block.serverOverflow)은 그대로 받아 두고 이 칸에 표시만 하지 않는다.
   // 서버 저장값과 달라지는 순간부터(입력 중·칸을 벗어난 뒤 모두) 「저장하지 않은 수정」을 보인다.
   // 저장 중([확인] → 저장 중…)·저장 실패(409 충돌 · 오류 문구)는 각자의 표시가 우선이라 함께 내지 않는다
   const showUnsaved = isDirty && !isSaving && !saveError && !conflictLatest;
-  // 지금 보이는 검사 결과(넘침·금지 표현 등 signal·검사 실패)는 입력 중인 초안이 아니라 마지막 저장값의 서버 결과다 — 그 기준을 함께 알린다
-  const hasServerChecks = showOverflow || taskFailures.verifyFailed || getSignalRows(block.badges).length > 0;
-  const hasFailureMessage = translationFailure != null || taskFailures.verifyFailed || previewFailure != null || showOverflow;
+  // 지금 보이는 검사 결과(금지 표현 등 signal·검사 실패)는 입력 중인 초안이 아니라 마지막 저장값의 서버 결과다 — 그 기준을 함께 알린다
+  const hasServerChecks = taskFailures.verifyFailed || getSignalRows(block.badges).length > 0;
+  const hasFailureMessage = translationFailure != null || taskFailures.verifyFailed || previewFailure != null;
 
   async function handleSave() {
     if (isSaving) return; // 저장 중 중복 PATCH 방지(다른 서버 저장 중이면 saveTranslation 이 시작하지 않는다)
@@ -444,7 +422,6 @@ function TranslationEditor({
             {translationFailure && <CellFailureMessage kind="translate" />}
             {taskFailures.verifyFailed && <CellFailureMessage kind="verify" />}
             {previewFailure && <CellFailureMessage kind="preview" />}
-            {showOverflow && <CellFailureMessage kind="overflow" />}
           </div>
         )}
         <div className="mt-[60px] flex items-center justify-end gap-2">

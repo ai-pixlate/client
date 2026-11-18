@@ -66,8 +66,7 @@ for (const c of CASES) {
     // 실패는 기존 「실행 실패」 행 하나 + 기존 다시 시도 버튼(입력 오류·결과 없음은 실패가 아니다)
     await expect(page.getByTestId(`${status2}-failed`)).toHaveCount(c.failedRow ? 1 : 0);
     await expect(page.getByTestId(`${status2}-render-retry`)).toHaveCount(c.failedRow ? 1 : 0);
-    // 넘침은 최신 결과에서만(J) — 그 밖에는 내지 않는다(I 포함)
-    if (c.render === 'current') await expect(overflow9104(page)).toBeVisible();
-    else await expect(overflow9104(page)).toHaveCount(0);
+    // 일반 넘침 안내는 어느 상태에서도 보이지 않는다(팀 QA 결정 — 서버 넘침 값은 그대로 받는다)
+    await expect(overflow9104(page)).toHaveCount(0);
   });
 }

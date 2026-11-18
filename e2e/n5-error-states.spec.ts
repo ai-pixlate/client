@@ -35,10 +35,11 @@ test('오류 종합 — section·signal·번역문 칸 실패가 함께 보이�
   await expect(retry).toHaveText('다시 시도');
   expect((await retry.boundingBox())!.height).toBe(24);
 
-  // 미리보기·넘침 칸
+  // 미리보기 칸 — 9103 은 서버 넘침(width_overflow)이 있지만 일반 넘침 안내는 보이지 않는다(팀 QA 결정)
   const preview = page.getByTestId('n5-block-row-9103');
   await expect(preview.getByTestId('n5-cell-failure-preview')).toHaveText('미리보기를 갱신하지 못했습니다');
-  await expect(preview.getByTestId('n5-cell-failure-overflow')).toHaveText('글자가 넘칩니다 — 짧은 표현이 필요합니다');
+  await expect(preview.getByTestId('n5-cell-failure-overflow')).toHaveCount(0);
+  await expect(preview).not.toContainText('글자가 넘칩니다');
   await expect(preview.getByTestId('n5-block-preview-retry-9103')).toHaveText('미리보기 다시 시도');
 
   // section 상태 — block 목록 위, block signal과 분리
@@ -120,11 +121,12 @@ test('오류 종합 — section·signal·번역문 칸 실패가 함께 보이�
   await expect(failed.getByTestId('n5-cell-failure-translate')).toBeVisible();
   expect(posts).toEqual([]);
 
-  // 입력 중에도 넘침 안내는 직전 서버 결과를 유지한다([확인] 뒤 새 결과가 와야 바뀐다 — PM 확정)
+  // 입력 중 — 검사 결과(미리보기 실패 등)는 직전 서버 결과를 유지하고, 일반 넘침 안내는 여전히 없다
   const editor = page.getByTestId('n5-block-editor-9103');
   const original = await editor.inputValue();
   await editor.fill('Short');
-  await expect(preview.getByTestId('n5-cell-failure-overflow')).toBeVisible();
+  await expect(preview.getByTestId('n5-cell-failure-preview')).toBeVisible();
+  await expect(preview.getByTestId('n5-cell-failure-overflow')).toHaveCount(0);
   // 서버값과 달라지는 순간부터(입력 중에도) 「저장하지 않은 수정」 — 보이는 검사 결과는 마지막 저장값 기준임을 함께 알린다
   const unsaved = page.getByTestId('n5-block-unsaved-9103');
   await expect(editor).toBeFocused();
@@ -171,7 +173,8 @@ test('기본 화면 — signal 사유가 바로 읽히고 하단 중앙 도구�
   await expect(page.getByTestId('n5-block-signal-9112-prohibited_expression')).toContainText('금지 표현');
   await expect(page.getByTestId('n5-placement-toolbar')).toHaveCount(0);
   await expect(page.getByTestId('n5-undo-redo')).toBeVisible();
-  await expect(page.getByTestId('n5-block-failures-9104')).toContainText('글자가 넘칩니다');
+  // 9104 는 서버 넘침이지만 일반 넘침 안내는 보이지 않는다(팀 QA 결정)
+  await expect(page.getByTestId('n5-block-row-9104')).not.toContainText('글자가 넘칩니다');
   // 기본 fixture에는 실패 상태가 없고(렌더 대기·제외 문구만), 이미지도 정상 위치(y156)에서 시작한다
   await expect(page.locator('[data-testid$="-failed"]')).toHaveCount(0);
   await expect(page.getByTestId('n5-section-status-1')).toHaveCount(0);
