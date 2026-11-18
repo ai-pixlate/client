@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from 'react';
-import { useQueries, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { notifyManager, useQueries, useQuery, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
 
 import {
   createJob,
@@ -318,10 +318,60 @@ export function usePatchN5BlockMutation(jobId: string) {
       const updated = response.block;
       if (!updated) return;
       queryClient.setQueryData<ApiTextBlock[]>(pixlateKeys.n5Blocks(jobId), (prev) =>
-        prev ? prev.map((b) => (b.id === updated.id ? updated : b)) : prev,
+        prev ? prev.map((b) => (b.id === updated.id ? mergePatchedBlockIntoSnapshot(b, updated) : b)) : prev,
       );
     },
   });
+}
+
+/**
+ * PATCH 응답 block 을 화면 /blocks 캐시에 넣는다 — 번역문·revision·signals·layoutAdjust 등 block 값은 응답 그대로 쓰고,
+ * sectionInputFingerprint(지문 A)만 캐시에 있던 값을 둔다.
+ * 응답의 A 는 그 저장 직후 섹션 입력이다. 이 한 block 에만 새 A 를 넣으면 같은 섹션의 다른 block(이전 A)과 섞여 섹션 A 가
+ * inconsistent 가 되고, 화면이 local-typeset 에서 이전 서버 이미지로 바뀐다. 새 A 는 /blocks·/preview 를 함께 다시 받은 snapshot
+ * (publishN5Snapshot)으로만 넘어간다. FE 가 지문을 계산하거나 만들지 않는다 — 서버가 준 이전 값을 화면 snapshot 동안 유지할 뿐이다.
+ * 저장 장벽 판정은 이 캐시가 아니라 새로 받은 /blocks·/preview 와 PATCH 응답 block 을 쓴다(n5-panel.tsx).
+ */
+export function mergePatchedBlockIntoSnapshot(cached: ApiTextBlock, patched: ApiTextBlock): ApiTextBlock {
+  if (!('sectionInputFingerprint' in cached)) return patched;
+  return { ...patched, sectionInputFingerprint: cached.sectionInputFingerprint };
+}
+
+/** N5 화면 snapshot — 같은 시점에 받은 /blocks·/preview 한 쌍. seq 는 받기 시작한 순서(늦게 시작한 쌍이 더 새 값이다) */
+export interface N5Snapshot {
+  blocks: Awaited<ReturnType<typeof getN5Blocks>>;
+  preview: Awaited<ReturnType<typeof getN5Preview>>;
+  seq: number;
+}
+
+let n5SnapshotSeq = 0;
+const publishedN5SnapshotSeq = new Map<string, number>();
+
+/** /blocks·/preview 를 함께 받는다(캐시는 바꾸지 않는다) */
+export async function fetchN5Snapshot(jobId: string): Promise<N5Snapshot> {
+  const seq = ++n5SnapshotSeq;
+  const [blocks, preview] = await Promise.all([getN5Blocks(jobId), getN5Preview(jobId)]);
+  return { blocks, preview, seq };
+}
+
+/**
+ * 받은 한 쌍을 화면 캐시에 한 번에 넣는다 — 「새 blocks + 이전 preview」 같은 중간 조합을 화면이 그리지 않게 한 batch 로 알린다.
+ * 동기로 끝난다(넣은 직후 캐시를 읽어도 이 값이다). 이미 더 늦게 시작한 쌍을 넣었으면 이 쌍은 넣지 않는다(false) —
+ * 먼저 시작했지만 늦게 끝난 응답이 새 화면을 이전 값으로 되돌리지 않게 한다.
+ */
+export function publishN5Snapshot(queryClient: QueryClient, jobId: string, snapshot: N5Snapshot): boolean {
+  if (snapshot.seq < (publishedN5SnapshotSeq.get(jobId) ?? 0)) return false;
+  publishedN5SnapshotSeq.set(jobId, snapshot.seq);
+  notifyManager.batch(() => {
+    queryClient.setQueryData(pixlateKeys.n5Blocks(jobId), snapshot.blocks);
+    queryClient.setQueryData(pixlateKeys.n5Preview(jobId), snapshot.preview);
+  });
+  return true;
+}
+
+/** 재렌더 완료 등으로 화면 snapshot 을 새로 받는다 — /blocks·/preview 를 함께 받아 한 번에 넣는다 */
+export async function refreshN5Snapshot(queryClient: QueryClient, jobId: string): Promise<void> {
+  publishN5Snapshot(queryClient, jobId, await fetchN5Snapshot(jobId));
 }
 
 /**

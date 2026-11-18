@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
-import { ApiRequestError, getN5Blocks, getN5Preview } from '@/lib/api/pixlate';
+import { ApiRequestError } from '@/lib/api/pixlate';
 import type { ApiTextBlock } from '@/lib/api/n5-schema';
 import {
   areAllSectionsExcluded,
@@ -38,7 +38,9 @@ import {
 } from '@/lib/n5/failed-drafts';
 import { useModalDialog } from '@/app/_components/use-modal-dialog';
 import {
+  fetchN5Snapshot,
   pixlateKeys,
+  publishN5Snapshot,
   useN5TaskStatusQuery,
   useConfirmN5Mutation,
 } from '@/lib/queries/pixlate';
@@ -345,31 +347,9 @@ function TranslationEditor({
     ? isSectionPreviewInProgress(previewSection)
     : rerenderTaskId != null && activeTaskItem?.status !== 'done' && activeTaskItem?.status !== 'failed' && activeTaskItem?.status !== 'cancelled';
   const rerenderFailed = activeTaskItem?.status === 'failed';
-  // 대체를 알게 된 순간 섹션 현재 상태를 한 번 새로 받는다(캐시가 대체 전 시도를 들고 있을 수 있다)
-  useEffect(() => {
-    if (supersededTaskId == null) return;
-    void queryClient.invalidateQueries({ queryKey: pixlateKeys.n5Preview(jobId) });
-  }, [supersededTaskId, jobId, queryClient]);
-
-  // invalidateQueries는 실제 네트워크 재조회를 트리거하는 부수효과라 effect에
-  // 남긴다 — 다만 그 결과로 파생되는 표시값(isRerendering/rerenderFailed 위)은
-  // 이 effect가 아니라 render 중 activeTaskItem에서 직접 계산한다. handledTaskIdRef는
-  // 같은 완료된 task를 두 번 invalidate하지 않기 위한 가드일 뿐 React state가
-  // 아니라서(재렌더를 유발하지 않는다) set-state-in-effect 대상이 아니다.
-  const handledTaskIdRef = useRef<number | null>(null);
-  useEffect(() => {
-    if (!activeTaskItem) return;
-    if (activeTaskItem.status !== 'done' && activeTaskItem.status !== 'failed' && activeTaskItem.status !== 'cancelled') {
-      return;
-    }
-    if (handledTaskIdRef.current === activeTaskItem.taskId) return;
-    handledTaskIdRef.current = activeTaskItem.taskId ?? null;
-    if (activeTaskItem.status === 'done') {
-      queryClient.invalidateQueries({ queryKey: pixlateKeys.n5Blocks(jobId) });
-      queryClient.invalidateQueries({ queryKey: pixlateKeys.n5Preview(jobId) });
-      queryClient.invalidateQueries({ queryKey: pixlateKeys.tasks(jobId) }); // 이전 재렌더 실패 표시를 지운다
-    }
-  }, [activeTaskItem, jobId, queryClient]);
+  // 재렌더 완료·대체 뒤 /blocks·/preview 재조회는 이 칸이 하지 않는다 — use-n5-preview-sync.ts 한 곳이 같은 task 를 보고
+  // 한 쌍으로 다시 받는다(같은 task 의 중복 재조회 · 번역 전/후 전환으로 이 칸이 다시 mount 될 때의 재조회를 만들지 않는다).
+  // 이 칸은 위 activeTaskItem 으로 「재렌더링 중…」 종료·실패 표시만 바꾼다.
 
   const translationFailure = getTranslationFailure(block.badges);
   // 이 저장의 재렌더 실패를 우선하고, 없으면 서버 목록(JOB-05)의 실패를 본다
@@ -393,7 +373,6 @@ function TranslationEditor({
     if (isSaving) return; // 저장 중 중복 PATCH 방지(다른 서버 저장 중이면 saveTranslation 이 시작하지 않는다)
     setSaveError(null);
     setSaveConflict(null);
-    handledTaskIdRef.current = null; // 새 저장 사이클이므로 이전 task 완료 처리 기록을 리셋
     const sentText = draft;
     setIsSaving(true);
     // 저장 경로는 [저장하러 가기]의 미저장 초안 저장과 같다(use-n5-edit-session.ts saveTranslation)
@@ -751,6 +730,8 @@ export function N5Panel({
   //      완료 조건은 revision 까지 본다 — 저장마다 PATCH 응답 block(서버 정본)의 revision 을 기록하고, 섹션별로 저장한 모든 block 이
   //      /blocks 와 /preview renderInput 에서 그 revision 그대로일 때만 완료다(빈 번역 등 렌더 대상이 아닌 저장은 renderInput 에서 빠져 있어야 정상).
   //      더 큰 revision 은 내 저장 뒤 다른 저장(다른 탭 등) — 정상 완료로 보지 않고 확정하지 않는다(lib/n5/confirm-preview-barrier.ts)
+  //      ③ 의 polling 응답은 판정에만 쓴다 — 기다리는 중(waiting)에는 화면 캐시를 바꾸지 않고, 판정이 끝났을 때(완료·충돌·실패·확인 불가)만
+  //      받은 /blocks·/preview 한 쌍을 화면에 한 번에 넣는다(publishN5Snapshot)
   //   ④ /blocks·/preview 정본으로 확인 항목과 acknowledgedWarnings 를 만든다. 확정 직전(확인창을 거친 경우 포함)에 /blocks·/preview 를 한 번 더
   //      받아 같은 revision 조건을 다시 확인하고 곧바로 confirm 한다
   // 저장 대상을 정한 뒤 생긴 local 수정이 confirm 에서 빠지지 않도록, ②~확정 동안 편집 세션을 잠근다(beginFinalizationLock — 번역 입력·[확인]·
@@ -788,19 +769,17 @@ export function N5Panel({
   const previewOnlySectionIdsRef = useRef(new Set<number>());
 
   /**
-   * /blocks·/preview 정본을 함께 새로 받아 저장 장벽을 판정한다 — 캐시도 그 값으로 바꿔 화면이 같은 값을 본다.
-   * query 의 fetch 를 함께 쓰지 않는다(화면 쪽 invalidate 가 진행 중 fetch 를 취소하면 장벽이 안내 없이 끊긴다)
+   * 장벽 판정용으로 /blocks·/preview 를 함께 새로 받는다. query 의 fetch 를 함께 쓰지 않는다(화면 쪽 invalidate 가 진행 중 fetch 를 취소하면 장벽이 안내 없이 끊긴다).
+   * 기다리는 중(waiting)이면 화면 캐시를 바꾸지 않는다 — 그 응답은 판정에만 쓴다. 판정이 끝났으면 받은 한 쌍을 화면에 한 번에 넣는다
    */
   async function fetchAndJudgeServerState(): Promise<{ result: ConfirmSaveBarrierResult; sections: PreviewSectionViewModel[] }> {
-    const [latestBlocks, preview] = await Promise.all([getN5Blocks(jobId), getN5Preview(jobId)]);
-    queryClient.setQueryData(pixlateKeys.n5Blocks(jobId), latestBlocks);
-    queryClient.setQueryData(pixlateKeys.n5Preview(jobId), preview);
-    const sections = toPreviewViewModel(preview).sections;
+    const snapshot = await fetchN5Snapshot(jobId);
+    const sections = toPreviewViewModel(snapshot.preview).sections;
     const result = judgeConfirmSaveBarrier({
       sections,
       expectedBySection: groupExpectedBySection(expectedSavedRef.current.values()),
       previewOnlySectionIds: previewOnlySectionIdsRef.current,
-      latestBlocks: latestBlocks.flatMap((block) =>
+      latestBlocks: snapshot.blocks.flatMap((block) =>
         typeof block.id === 'number'
           ? [
               {
@@ -814,6 +793,7 @@ export function N5Panel({
           : [],
       ),
     });
+    if (result.state !== 'waiting') publishN5Snapshot(queryClient, jobId, snapshot);
     return { result, sections };
   }
 
@@ -896,11 +876,8 @@ export function N5Panel({
       return true;
     }
 
-    // ④ 저장할 것이 없었다 — 확인 항목을 만들 최신 서버 정본만 다시 받는다
-    await Promise.all([
-      queryClient.refetchQueries({ queryKey: pixlateKeys.n5Blocks(jobId), exact: true }),
-      queryClient.refetchQueries({ queryKey: pixlateKeys.n5Preview(jobId), exact: true }),
-    ]);
+    // ④ 저장할 것이 없었다 — 확인 항목을 만들 최신 서버 정본만 다시 받는다(/blocks·/preview 를 한 쌍으로 넣는다)
+    publishN5Snapshot(queryClient, jobId, await fetchN5Snapshot(jobId));
     return mountedRef.current;
   }
 

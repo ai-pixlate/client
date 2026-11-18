@@ -93,8 +93,6 @@ function N5Loaded({
   /** 섹션별 지문 A/B 일치 — 같은 저장 입력으로 연결된 섹션만 renderInput 조판을 쓴다 */
   syncBySection: ReadonlyMap<number, SectionInputSync>;
 }) {
-  // 재조회 계기(진행 중인 시도 추적·d/e/g·A≠B)는 여기 한 곳에서 맡는다
-  useN5PreviewSync(jobId, preview, syncBySection);
   // 서버 style 글꼴 준비 확인 — 준비 전에는 HTML 조판·서버 style 측정을 하지 않는다
   const isFontReady = useTypesetFontGate(blocks.flatMap((block) => (block.renderBinding ? [block.renderBinding.style] : [])));
 
@@ -162,6 +160,13 @@ function N5Loaded({
     onSelectSection: handleSelectSectionFromHistory,
     onSectionExcluded: handleSectionExcluded,
   });
+  // 재조회 계기(진행 중인 시도·이 화면 저장의 재렌더 task 완료·d/e/g·A≠B)는 여기 한 곳에서 맡는다
+  useN5PreviewSync(
+    jobId,
+    preview,
+    syncBySection,
+    [...editSession.rerenderTaskByBlock.values()].flatMap((task) => (task.taskId != null ? [task.taskId] : [])),
+  );
 
   return (
     <div className="flex h-full w-full bg-white">
