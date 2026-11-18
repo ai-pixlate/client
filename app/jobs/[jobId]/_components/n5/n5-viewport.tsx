@@ -10,6 +10,7 @@ import { canRestoreSectionInN5, getBaseFontScale, getSectionCanvasHeaderHeight, 
 import type { SectionInputSync } from '@/lib/n5/adapter';
 import { resolvePreviewSectionDisplay, type PreviewSectionDisplaySource } from '@/lib/n5/preview-state';
 import type { TypesetFontGate } from './use-typeset-font-gate';
+import { sectionImageKind, useStableSectionImages, type SectionImageRequest } from './use-stable-section-images';
 import { computeBlockOverlaps, type BlockOverlap } from '@/lib/n5/overlap';
 import { JobMetaTags } from '../job-meta-tags';
 import type { BlockViewModel, JobMetaViewModel, PreviewSectionViewModel, PreviewViewModel, SectionStatusViewModel } from '@/lib/n5/adapter';
@@ -145,6 +146,9 @@ interface CanvasSlice {
   renderedUrl: string | null;
   /** renderInput 배경(글자 없는 바탕) */
   background: PreviewSectionViewModel['background'];
+  /** 표시할 수 있는 서버 결과(taskId·지문 C) — 결과 이미지 asset 구분용(presigned URL 문자열은 조회마다 바뀐다) */
+  renderResult: PreviewSectionViewModel['renderState']['result'];
+  sourceImageId: number;
   /** 「번역 후」 표시 소스(lib/n5/preview-state.ts resolvePreviewSectionDisplay) — renderedUrl·renderInput·isCurrent 를 여기서 다시 판단하지 않는다 */
   display: PreviewSectionDisplaySource;
   /** 서버 bucket/excludedStage 파생(render.status==='excluded') — 제외 여부의 정본 */
@@ -173,6 +177,8 @@ function buildSectionSlices(
     render: section.render,
     renderedUrl: section.renderedUrl,
     background: section.background,
+    renderResult: section.renderState.result,
+    sourceImageId: section.sourceImageId,
     display: displayOf(section),
     isExcluded: section.render.status === 'excluded',
     canRestore: canRestoreSectionInN5(section),
@@ -802,6 +808,38 @@ function OverlapDiagnosticLayer({
   );
 }
 
+/**
+ * 섹션 면에 그릴 이미지와 그 asset 구분 값. URL 은 presigned 라 조회마다 바뀌므로 구분은 서버의 안정적인 값으로 한다
+ * — 바탕 background.sha256 · 결과 이미지 render.result(taskId + 지문 C) · 원본 섹션·sourceImageId. 그런 값이 없으면 URL 그대로(기존과 같다).
+ */
+function sectionImageOf(
+  slice: CanvasSlice,
+  mode: N5ViewMode,
+  options: { renderFailed: boolean; isQaFallback: boolean },
+): { identity: string; url: string | null } {
+  const byUrl = (url: string | null) => ({ identity: url ? `url:${url}` : 'none:', url });
+  const original = { identity: slice.originalUrl ? `orig:${slice.sectionId}:${slice.sourceImageId}` : 'none:', url: slice.originalUrl };
+  if (mode === 'original') return original;
+  const { display } = slice;
+  // 「번역 후」 표시 — 소스는 resolvePreviewSectionDisplay 한 곳에서 정한다
+  // - local-typeset: renderInput 배경 + HTML 글자(글자가 구워진 renderedUrl 과 겹치지 않는다)
+  // - current/previous-rendered-image: 서버 결과 이미지(새 번역문 HTML 을 얹지 않는다) / original-image: 결과 없음 → 원본
+  // - legacy: 이번 계약 키가 없는 응답 — 기존 renderedUrl 기준. 렌더링 실패 섹션은 원본 그대로 결과물에 들어간다(PRD N4 부분 실패)
+  if (options.isQaFallback) return byUrl(null);
+  if (display === 'local-typeset') {
+    const url = slice.background?.url ?? null;
+    if (!url) return byUrl(null);
+    return { identity: `bg:${slice.background?.sha256 ?? `url:${url}`}`, url };
+  }
+  if (display === 'current-rendered-image' || display === 'previous-rendered-image') {
+    const result = slice.renderResult;
+    if (!slice.renderedUrl) return byUrl(null);
+    return result ? { identity: `render:${result.taskId}:${result.inputFingerprint}`, url: slice.renderedUrl } : byUrl(slice.renderedUrl);
+  }
+  if (display === 'original-image') return original;
+  return byUrl(slice.render.status === 'ready' ? slice.render.url : options.renderFailed ? slice.originalUrl : null);
+}
+
 function ImageLayer({
   slices,
   blocksBySection,
@@ -867,6 +905,16 @@ function ImageLayer({
   onSelectBlock: (block: BlockViewModel) => void;
   onSelectSection: (sectionId: number) => void;
 }) {
+  // 섹션 × 보기(번역 후·번역 전)마다 마지막으로 받은 이미지를 둔다 — 같은 asset 의 새 presigned URL 로는 다시 받지 않는다
+  const imageOptionsOf = (slice: CanvasSlice) => {
+    const renderFailed = sectionStatusById.get(slice.sectionId)?.failedStages.includes('render') ?? false;
+    const hasTypesetModels = !slice.isExcluded && typesetModelsBySection.has(slice.sectionId);
+    return { renderFailed, isQaFallback: isTypesetQaMode && hasTypesetModels && slice.display !== 'local-typeset' };
+  };
+  const imageRequests: SectionImageRequest[] = slices.flatMap((slice) =>
+    (['translated', 'original'] as const).map((slot) => ({ key: `${slice.sectionId}:${slot}`, ...sectionImageOf(slice, slot, imageOptionsOf(slice)) })),
+  );
+  const shownImages = useStableSectionImages(imageRequests);
   return (
     <>
       {slices.map((slice, sliceIndex) => {
@@ -875,27 +923,15 @@ function ImageLayer({
         const renderFailed = status?.failedStages.includes('render') ?? false;
         const isExcluded = slice.isExcluded;
         const { display } = slice;
-        const typesetModels = mode === 'translated' && !isExcluded ? typesetModelsBySection.get(slice.sectionId) ?? null : null;
+        const typesetModelsCandidate = mode === 'translated' && !isExcluded ? typesetModelsBySection.get(slice.sectionId) ?? null : null;
         // QA 진단 — renderInput 조판이 아닌 섹션을 역할 기본값으로 흰 면 위에 그린다
-        const isQaFallback = isTypesetQaMode && typesetModels !== null && display !== 'local-typeset';
-        // 「번역 후」 표시 — 소스는 resolvePreviewSectionDisplay 한 곳에서 정한다
-        // - local-typeset: renderInput 배경 + HTML 글자(글자가 구워진 renderedUrl 과 겹치지 않는다)
-        // - current/previous-rendered-image: 서버 결과 이미지(새 번역문 HTML 을 얹지 않는다) / original-image: 결과 없음 → 원본
-        // - legacy: 이번 계약 키가 없는 응답 — 기존 renderedUrl 기준. 렌더링 실패 섹션은 원본 그대로 결과물에 들어간다(PRD N4 부분 실패)
-        const translatedUrl = isQaFallback
-          ? null
-          : display === 'local-typeset'
-            ? (slice.background?.url ?? null)
-            : display === 'current-rendered-image' || display === 'previous-rendered-image'
-              ? slice.renderedUrl
-              : display === 'original-image'
-                ? slice.originalUrl
-                : slice.render.status === 'ready'
-                  ? slice.render.url
-                  : renderFailed
-                    ? slice.originalUrl
-                    : null;
-        const url = mode === 'original' ? slice.originalUrl : translatedUrl;
+        const isQaFallback = isTypesetQaMode && typesetModelsCandidate !== null && display !== 'local-typeset';
+        // 보일 이미지 — 같은 asset 이면 지금 보이는 URL 그대로, 새 asset 은 받은 뒤에 바뀐다(sectionImageOf · useStableSectionImages)
+        const shownImage = shownImages.get(`${slice.sectionId}:${mode}`);
+        const url = shownImage?.url ?? null;
+        // HTML 글자는 바탕(글자 없는 면)이 보일 때만 얹는다 — 새 바탕을 받는 동안 글자가 구워진 이전 결과 이미지 위에 겹치지 않게 한다
+        const typesetModels =
+          display === 'local-typeset' && sectionImageKind(shownImage?.identity) !== 'bg' ? null : typesetModelsCandidate;
         const isSaving = pendingSectionIds.has(slice.sectionId);
         // 이번 계약 키가 없는(legacy) 응답만 — 결과 없이 진행 중이면 빈 면에 진행 문구를 보인다(기존 표시)
         const isPending = mode === 'translated' && !isQaFallback && !isExcluded && display === 'legacy' && slice.render.status === 'unresolved' && !renderFailed;
