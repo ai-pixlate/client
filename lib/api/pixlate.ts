@@ -2,7 +2,7 @@ import { ensureBackendSession } from '@/lib/api/session';
 import { fetchWithSessionRecovery } from '@/lib/auth/authorized-request';
 import { getAuthMode } from '@/lib/auth/capability';
 import { getAccessToken, setAccessToken } from '@/lib/auth/session-store';
-import type { ApiBlockPatch, ApiBlockPatchResponse, ApiConfirmRequest, ApiJob, ApiJobTaskStatus, ApiReviewPreview, ApiTextBlock } from '@/lib/api/n5-schema';
+import type { ApiBlockPatch, ApiBlockPatchResponse, ApiConfirmRequest, ApiJob, ApiJobAsyncTaskItem, ApiJobTaskStatus, ApiReviewPreview, ApiTextBlock } from '@/lib/api/n5-schema';
 import type { ApiAcceptedTask, ApiJobPatch, ApiSourceImageUploadResult } from '@/lib/api/job-schema';
 import type { ApiSection, ApiSectionList, ApiSectionPatch, ApiSourceImage } from '@/lib/api/n3-schema';
 import type {
@@ -310,6 +310,14 @@ export async function patchN5Block(
  * (currentStep/userFacingStatus)이 이 하나의 엔드포인트를 공유한다 — 오늘(N1→N6
  * happy path) 작업에서 job 전체 공용으로 승격했다.
  */
+/**
+ * 실패 작업 재시도 (API-JOB-06). translate·render 의 failed 만 받는다(그 밖 409 RETRY_NOT_ALLOWED). 응답은 새 시도의 JobAsyncTaskItem —
+ * 서버는 재시도를 새 시도 행으로 만들어 응답 taskId 가 새 시도다. 그 taskId 를 /tasks 로 추적한다.
+ */
+export function retryJobTask(jobId: string, taskId: number): Promise<ApiJobAsyncTaskItem> {
+  return apiFetch<ApiJobAsyncTaskItem>(`/jobs/${jobId}/tasks/${taskId}/retry`, { method: 'POST' });
+}
+
 export async function getJobTasks(jobId: string): Promise<ApiJobTaskStatus> {
   // HTTP status 를 보존한다 — 미소유·없는 작업의 404 는 query 재시도·polling 을 멈추는 근거다(lib/queries/pixlate.ts). 문구는 기존과 같다
   const res = await authorizedFetch(`/jobs/${jobId}/tasks`);

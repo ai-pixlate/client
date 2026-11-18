@@ -25,6 +25,7 @@ import {
   applyN5ErrorBlocks,
   applyN5OverlapBlock,
   getN5ErrorFailedItems,
+  n5ErrorTranslationRecovered,
   getProcessingErrorScenarioStep,
   isN3CardVariantsScenario,
   isN5CleanScenario,
@@ -365,6 +366,17 @@ let n5TaskIdCounter = 90000;
 const n5TaskState = new Map<number, { blockId: number; pollCount: number; createdAt?: number }>();
 
 // ─────────────────────────────────────────────
+// 실패 작업 재시도(API-JOB-06 POST /jobs/{jobId}/tasks/{taskId}/retry) — 실제 BE 처럼 새 시도 행(새 taskId)을 만든다.
+// 재시도한 원래 실패 task 는 이력이 되어 /tasks·시나리오 실패에 다시 나오지 않는다. 재시도 시도는 「실패유도」 규칙을 타지 않고 끝난다.
+// ─────────────────────────────────────────────
+/** 재시도된 원래 실패 task */
+const n5RetriedTaskIds = new Set<number>();
+/** 재시도로 만든 render 시도 — 「실패유도」 번역문이어도 성공으로 끝난다 */
+const n5RenderRetryTaskIds = new Set<number>();
+/** 재시도로 만든 translate 시도(taskId → blockId·진행) */
+const n5TranslateRetryState = new Map<number, { blockId: number; pollCount: number }>();
+
+// ─────────────────────────────────────────────
 // N5 /preview 렌더 입력·시도·결과(server PR #108 계약 모양, lib/mock-api/n5-preview-render.ts)
 // 섹션마다 현재 시도(attempt)와 채택 결과(result)를 둔다. 블록 저장이 시도를 만들고, /tasks 의 그 task 가 끝나면 결과로 채택한다.
 // ─────────────────────────────────────────────
@@ -457,7 +469,8 @@ function settleMockSectionRender(sectionId: number, referrer: string): MockN5Sec
   let next: MockN5SectionRender = render;
   if (task.pollCount === 0) next = { ...render, attempt: { ...render.attempt, status: 'pending' } };
   else if (task.pollCount < 2) next = { ...render, attempt: { ...render.attempt, status: 'running' } };
-  else if (block?.trans1?.includes('실패유도')) next = { ...render, attempt: { ...render.attempt, status: 'failed', errorCode: 'PREVIEW_FAILED', retryable: true } };
+  else if (block?.trans1?.includes('실패유도') && !n5RenderRetryTaskIds.has(render.attempt.taskId))
+    next = { ...render, attempt: { ...render.attempt, status: 'failed', errorCode: 'PREVIEW_FAILED', retryable: true } };
   else if (section) {
     next = {
       attempt: { ...render.attempt, status: 'done' },
@@ -485,9 +498,9 @@ function buildMockN5PreviewWithRender(referrer: string) {
       ({ render, preparing, inputError, blockFingerprint } = { ...getMockPreviewScenarioState(scenario, render) });
     }
     // n5-errors — JOB-05 실패 item 과 같은 시도(501 실패·이전 결과 있음 / 504 진행 중 / 505 실패·결과 없음)
-    if (errorScenario && section.id === 501) render = { ...render, attempt: { taskId: 80001, status: 'failed', errorCode: 'MOCK_FAILED', retryable: true } };
+    if (errorScenario && section.id === 501 && !n5RetriedTaskIds.has(80001)) render = { ...render, attempt: { taskId: 80001, status: 'failed', errorCode: 'MOCK_FAILED', retryable: true } };
     if (errorScenario && section.id === 504) render = { ...render, attempt: { taskId: 80006, status: 'running', errorCode: null, retryable: false } };
-    if (errorScenario && section.id === 505) render = { result: null, attempt: { taskId: 80007, status: 'failed', errorCode: 'MOCK_FAILED', retryable: true } };
+    if (errorScenario && section.id === 505 && !n5RetriedTaskIds.has(80007)) render = { result: null, attempt: { taskId: 80007, status: 'failed', errorCode: 'MOCK_FAILED', retryable: true } };
     const fields = buildMockPreviewRenderFields(section, blocks, render, { preparing, inputError });
     blockFingerprintBySection.set(section.id, blockFingerprint ?? fields.inputFingerprint);
     return { ...section, ...fields, revision: 1 };
@@ -1558,6 +1571,49 @@ export const handlers = [
   // jobState를 그대로 반영한다 — FE(page.tsx)가 이 값으로만 다음 화면을
   // 고른다(별도 계산 없음).
   // ──────────────────────────────────────────
+  // ──────────────────────────────────────────
+  // JOB-06 실패 작업 재시도 — translate·render 의 failed 만. 새 시도 행(새 taskId)을 만들고 그 JobAsyncTaskItem 을 돌려준다.
+  // 그 밖(이미 재시도함·실패가 아님·모르는 task)은 409 RETRY_NOT_ALLOWED
+  // ──────────────────────────────────────────
+  http.post('/jobs/:jobId/tasks/:taskId/retry', ({ params, request }) => {
+    const jobId = params.jobId as string;
+    if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
+    const taskId = Number(params.taskId);
+    const notAllowed = () => n5LayoutError(409, 'RETRY_NOT_ALLOWED', '다시 시도할 수 없는 작업입니다', null);
+    if (n5RetriedTaskIds.has(taskId)) return notAllowed();
+
+    // 시나리오 실패 task(n5-errors) 또는 이 화면 저장의 재렌더 실패 시도
+    const scenarioItem = isN5ErrorScenario(request.referrer) ? getN5ErrorFailedItems().find((item) => item.taskId === taskId) : undefined;
+    const ownFailedSection = [...n5SectionRenderState.entries()].find(
+      ([, render]) => render.attempt?.taskId === taskId && render.attempt.status === 'failed',
+    )?.[0];
+    const failed = scenarioItem && scenarioItem.status === 'failed' && scenarioItem.retryable ? scenarioItem : null;
+    if (!failed && ownFailedSection == null) return notAllowed();
+
+    const newTaskId = ++n5TaskIdCounter;
+    n5RetriedTaskIds.add(taskId);
+    if (failed?.taskType === 'translate') {
+      n5TranslateRetryState.set(newTaskId, { blockId: failed.unitId as number, pollCount: 0 });
+      return HttpResponse.json({
+        taskId: newTaskId, taskType: 'translate', unitType: 'text_block', unitId: failed.unitId, status: 'pending', uiStatus: 'retrying',
+        retryCount: 1, maxRetry: 3, retryable: false, errorCode: null, revision: null,
+      });
+    }
+    if (failed && failed.taskType !== 'render') return notAllowed();
+    const sectionId =
+      ownFailedSection ??
+      (failed!.unitType === 'section' ? (failed!.unitId as number) : (n5BlockState.get(failed!.unitId as number)?.sectionId as number));
+    const blockId = [...n5BlockState.values()].find((block) => block.sectionId === sectionId)?.id as number;
+    n5TaskState.set(newTaskId, { blockId, pollCount: 0, createdAt: Date.now() });
+    n5RenderRetryTaskIds.add(newTaskId);
+    const current = n5SectionRenderState.get(sectionId) ?? { result: null, attempt: null };
+    n5SectionRenderState.set(sectionId, { ...current, attempt: { taskId: newTaskId, status: 'pending', errorCode: null, retryable: false } });
+    return HttpResponse.json({
+      taskId: newTaskId, taskType: 'render', unitType: 'section', unitId: sectionId, status: 'pending', uiStatus: 'retrying',
+      retryCount: 1, maxRetry: 3, retryable: false, errorCode: null, revision: null,
+    });
+  }),
+
   http.get('/jobs/:jobId/tasks', ({ params, request }) => {
     const jobId = params.jobId as string;
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
@@ -1586,7 +1642,7 @@ export const handlers = [
     const items: ApiJobAsyncTaskItem[] = [];
 
     if (isN5ErrorScenario(request.referrer) && jobState.currentStep === 'N5') {
-      items.push(...getN5ErrorFailedItems());
+      items.push(...getN5ErrorFailedItems().filter((item) => !n5RetriedTaskIds.has(item.taskId as number)));
     }
 
     let n6RenderProgress: number | null = null;
@@ -1634,12 +1690,37 @@ export const handlers = [
       });
     }
 
+    // 번역 재시도 — 조회 2번째에 끝나며 그 블록에 번역문이 생긴다(translation_failed 해제)
+    for (const [taskId, state] of n5TranslateRetryState.entries()) {
+      state.pollCount += 1;
+      const done = state.pollCount >= 2;
+      if (done && !n5ErrorTranslationRecovered.has(state.blockId)) {
+        const block = n5BlockState.get(state.blockId);
+        if (block) n5BlockState.set(state.blockId, { ...block, trans1: block.trans1 || 'Certified authentic', revision: (block.revision ?? 1) + 1 });
+        n5ErrorTranslationRecovered.add(state.blockId);
+      }
+      items.push({
+        taskId,
+        taskType: 'translate',
+        unitType: 'text_block',
+        unitId: state.blockId,
+        status: done ? 'done' : 'running',
+        uiStatus: done ? 'done' : 'retrying',
+        retryCount: 1,
+        maxRetry: 3,
+        retryable: false,
+        errorCode: null,
+        revision: null,
+      });
+    }
+
     for (const [taskId, state] of n5TaskState.entries()) {
+      if (n5RetriedTaskIds.has(taskId)) continue; // 재시도된 실패 시도는 이력이다 — 현재 목록에 다시 내지 않는다
       advanceMockTask(state, request.referrer);
       const block = n5BlockState.get(state.blockId);
       // "실패유도"를 trans1에 넣으면 이 task가 실패로 끝난다 — 실패/polling
       // 종료 경로를 mock에서도 재현하기 위한 테스트 전용 hook이다.
-      const forceFail = block?.trans1?.includes('실패유도') ?? false;
+      const forceFail = (block?.trans1?.includes('실패유도') ?? false) && !n5RenderRetryTaskIds.has(taskId);
 
       if (state.pollCount < 2) {
         items.push({

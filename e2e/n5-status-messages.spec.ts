@@ -9,7 +9,7 @@ import { reachN5 } from './helpers/reach-n5';
 //   C 미리보기 실패 : 이 칸 저장의 재렌더 task failed (Mock 은 번역문에 「실패유도」가 있으면 재렌더가 실패한다)
 //   D 일반 넘침  : 서버 overflow=true 여도 문구 없음(팀 QA 결정 — e2e/n5-overflow-server-source.spec.ts)
 //   E 자동 조정  : 블록 autoAdjust 가 오면 표시(Mock fixture 9104 — 현재 서버는 2차에 이 값을 만들지 않는다)
-// 다시 시도 버튼은 아직 재시도 API(JOB-06)에 연결되지 않아 비활성으로 보인다. Mock 이다.
+// 다시 시도 버튼은 서버 retryable 이면 활성이다(재시도 흐름은 e2e/n5-task-retry.spec.ts). Mock 이다.
 // ─────────────────────────────────────────────────────────────────
 
 test.skip(({ browserName }) => browserName !== 'chromium', 'Chromium 기준이다');
@@ -38,7 +38,7 @@ test('A 번역 실패 — translation_failed signal 이면 「번역하지 못�
   await reachN5(page, { mockScenario: 'n5-errors' });
   await expect(row(page, 9111).getByTestId('n5-cell-failure-translate')).toHaveText('번역하지 못했습니다');
   await expect(page.getByTestId('n5-block-editor-9111')).toHaveAttribute('placeholder', '번역문을 직접 입력하세요');
-  await expect(page.getByTestId('n5-block-translate-retry-9111')).toBeDisabled();
+  await expect(page.getByTestId('n5-block-translate-retry-9111')).toBeEnabled(); // signal 의 retryable=true
 });
 
 test('B 검사 실패 — 블록 check.state=failed 면 「검사하지 못했습니다」, settled 면 없음', async ({ page }) => {
@@ -56,14 +56,14 @@ test('B 검사 정상 — check.state=settled 면 검사 실패 문구 없음', 
   await expect(row(page, 9101).getByTestId('n5-cell-failure-verify')).toHaveCount(0);
 });
 
-test('C 미리보기 실패 — 이 칸 저장의 재렌더가 실패하면 「미리보기를 갱신하지 못했습니다」·다시 시도(비활성)', async ({ page }) => {
+test('C 미리보기 실패 — 이 칸 저장의 재렌더가 실패하면 「미리보기를 갱신하지 못했습니다」·다시 시도', async ({ page }) => {
   await reachN5(page);
   const editor = page.getByTestId('n5-block-editor-9102');
   await editor.scrollIntoViewIfNeeded();
   await editor.fill('실패유도 문장');
   await page.getByTestId('n5-block-save-9102').click();
   await expect(row(page, 9102).getByTestId('n5-cell-failure-preview')).toHaveText('미리보기를 갱신하지 못했습니다', { timeout: 20_000 });
-  await expect(page.getByTestId('n5-block-preview-retry-9102')).toBeDisabled();
+  await expect(page.getByTestId('n5-block-preview-retry-9102')).toBeEnabled(); // 재렌더 task 의 retryable=true
 });
 
 test('D·E — 일반 넘침 문구는 없고(서버 overflow=true), 받은 autoAdjust 는 「자동 글자 크기 조정 적용됨」으로 보인다', async ({ page }) => {

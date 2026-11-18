@@ -36,6 +36,7 @@ import { N5Viewport } from './n5-viewport';
 import { N5Panel, type N5PanelRevealRequest } from './n5-panel';
 import { useN5EditSession } from './use-n5-edit-session';
 import { useN5CheckSync } from './use-n5-check-sync';
+import { N5TaskRetryProvider } from './n5-task-retry';
 import { useN5PreviewSync } from './use-n5-preview-sync';
 import { useTypesetFontGate } from './use-typeset-font-gate';
 
@@ -299,14 +300,16 @@ export function N5View({ jobId }: { jobId: string }) {
 
 
   return (
-    <N5Loaded
-      jobId={jobId}
-      preview={preview}
-      blocks={blocks}
-      jobMeta={jobMeta}
-      sectionStatusById={sectionStatusById}
-      blockTaskFailuresById={blockTaskFailuresById}
-      syncBySection={syncBySection}
-    />
+    <N5TaskRetryProvider jobId={jobId}>
+      <N5Loaded
+        jobId={jobId}
+        preview={preview}
+        blocks={blocks}
+        jobMeta={jobMeta}
+        sectionStatusById={sectionStatusById}
+        blockTaskFailuresById={blockTaskFailuresById}
+        syncBySection={syncBySection}
+      />
+    </N5TaskRetryProvider>
   );
 }

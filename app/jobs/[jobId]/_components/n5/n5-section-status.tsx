@@ -2,12 +2,13 @@
 
 import { getSignalTone } from '@/lib/n5/adapter';
 import type { SectionStatusViewModel, SignalBadge, SignalTone } from '@/lib/n5/adapter';
+import { TaskRetryButton } from './n5-task-retry';
 
 // ─────────────────────────────────────────────────────────────────
 // N5 오류 표시 공용 조각(Figma 388:3814). 상태 정의는 lib/n5/adapter.ts가 맡고 여기는 그리기만 한다.
 // - SignalRows: block 번호 아래 [라벨] 사유 행(1244:8031)
 // - PanelSectionStatus / CanvasSectionStatus: Section 태그 아래 상태(1244:8444)
-// - RetryButton: 다시 시도 버튼. 디자인만 있고 호출은 없다(아래 주석)
+// - 다시 시도 버튼: n5-task-retry.tsx TaskRetryButton(API-JOB-06 연결)
 // block signal과 section 상태는 위치와 데이터가 달라 섞지 않는다.
 // ─────────────────────────────────────────────────────────────────
 
@@ -48,20 +49,6 @@ function VerdictBadge({ label }: { label: string }) {
  * 다시 시도 버튼(Figma Button h24). API-JOB-06(/tasks/{taskId}/retry)의 공개 계약은 x-screen이 N2·N4라 N5에서 호출할 수
  * 있다고 단정할 수 없다 — BE 계약이 확인될 때까지 비활성으로 두고 요청을 보내지 않는다.
  */
-export function RetryButton({ label, testId }: { label: string; testId: string }) {
-  return (
-    <button
-      type="button"
-      data-testid={testId}
-      disabled
-      title="아직 다시 시도할 수 없습니다."
-      className="flex h-6 shrink-0 cursor-not-allowed items-center justify-center rounded-[4px] border border-[#eaeaea] bg-white px-3 text-[12px] leading-[normal] tracking-[-0.02em] whitespace-nowrap text-[#999]"
-    >
-      {label}
-    </button>
-  );
-}
-
 export function SignalRows({ badges, testIdPrefix }: { badges: SignalBadge[]; testIdPrefix: string }) {
   if (badges.length === 0) return null;
   return (
@@ -123,7 +110,9 @@ function SectionStatusRows({
             </span>
           ))}
           {/* 인페인팅은 재시도 계약이 없어 버튼을 내지 않는다 */}
-          {status.failedStages.includes('render') && <RetryButton label="렌더링 다시 시도" testId={`${testIdPrefix}-render-retry`} />}
+          {status.failedStages.includes('render') && (
+            <TaskRetryButton label="렌더링 다시 시도" testId={`${testIdPrefix}-render-retry`} target={status.renderRetry} />
+          )}
         </div>
       )}
       {hasTagRow && (

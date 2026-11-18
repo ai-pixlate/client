@@ -135,7 +135,7 @@ test('렌더 진행·실패·제외 section도 우측에 각자 상태가 보이
   const failed = page.getByTestId('n5-section-status-5-failed');
   await expect(failed).toContainText('실행 실패');
   await expect(failed).toContainText('렌더링');
-  await expect(page.getByTestId('n5-section-status-5-render-retry')).toBeDisabled();
+  await expect(page.getByTestId('n5-section-status-5-render-retry')).toBeEnabled(); // retryable=true 실패 — API-JOB-06 으로 다시 시도할 수 있다
   await expect(page.getByTestId('n5-slice-translated-505')).toHaveCSS('background-image', /505-original/);
 
   await click(503);

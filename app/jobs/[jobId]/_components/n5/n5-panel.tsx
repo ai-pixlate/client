@@ -20,7 +20,8 @@ import {
   toPreviewViewModel,
 } from '@/lib/n5/adapter';
 import type { BlockTaskFailures, BlockViewModel, PreviewSectionViewModel, RetryTarget, SectionStatusViewModel } from '@/lib/n5/adapter';
-import { PanelSectionStatus, RetryButton, SignalRows } from './n5-section-status';
+import { PanelSectionStatus, SignalRows } from './n5-section-status';
+import { TaskRetryButton } from './n5-task-retry';
 import {
   groupExpectedBySection,
   isConfirmPreviewSettling,
@@ -483,11 +484,25 @@ function TranslationEditor({
           </div>
         )}
       </div>
-      {/* Figma 1244:8238·8641 — 재시도 버튼은 번역문 칸 아래에 둔다(RetryButton 주석: 호출 없음) */}
+      {/* Figma 1244:8238·8641 — 재시도 버튼은 번역문 칸 아래에 둔다. 서버가 준 taskId·retryable 로 API-JOB-06 을 부른다(n5-task-retry.tsx) */}
       {(translationFailure || previewFailure) && (
         <div className="flex flex-wrap items-center gap-2">
-          {translationFailure && <RetryButton label="다시 시도" testId={`n5-block-translate-retry-${block.id}`} />}
-          {previewFailure && <RetryButton label="미리보기 다시 시도" testId={`n5-block-preview-retry-${block.id}`} />}
+          {translationFailure && (
+            <TaskRetryButton label="다시 시도" testId={`n5-block-translate-retry-${block.id}`} target={translationFailure.retry} />
+          )}
+          {previewFailure && (
+            <TaskRetryButton
+              label="미리보기 다시 시도"
+              testId={`n5-block-preview-retry-${block.id}`}
+              target={previewFailure}
+              // 새 재렌더 시도를 이 칸의 재렌더로 이어 추적한다(「재렌더링 중…」 → 끝나면 미리보기 재조회)
+              onRetried={(task) => {
+                if (task.taskId != null) {
+                  editSession.setRerenderTask(block.id, task.taskId, editSession.rerenderTaskByBlock.get(block.id)?.reason ?? 'translation');
+                }
+              }}
+            />
+          )}
         </div>
       )}
     </div>

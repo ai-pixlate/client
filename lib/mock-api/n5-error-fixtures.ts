@@ -95,9 +95,17 @@ export function recheckMockTextSignals(signals: ApiTextBlock['signals'], trans1:
   return (signals ?? []).filter((signal) => signal.code !== 'prohibited_expression' || stillProhibited);
 }
 
+/** n5-errors — 번역 재시도(JOB-06)가 끝나 번역문이 생긴 블록. 이 블록에는 translation_failed 를 다시 싣지 않는다(Mock 전용 상태) */
+export const n5ErrorTranslationRecovered = new Set<number>();
+
 export function applyN5ErrorBlocks(block: ApiTextBlock): ApiTextBlock {
-  const fixed = SIGNALS_BY_BLOCK[block.id as number];
-  if (!fixed) return block;
+  const scenarioSignals = SIGNALS_BY_BLOCK[block.id as number];
+  if (!scenarioSignals) return block;
+  if (n5ErrorTranslationRecovered.has(block.id as number)) {
+    const rest = scenarioSignals.filter((s) => s.code !== 'translation_failed');
+    return { ...block, signals: recheckMockTextSignals(rest, block.trans1 ?? '') };
+  }
+  const fixed = scenarioSignals;
   const failedTranslation = fixed.some((s) => s.code === 'translation_failed');
   // 번역이 생성되지 않은 칸(사용자가 직접 저장하면 그 값을 보여 준다)
   const isUntouched = (block.revision ?? 1) <= 1;

@@ -109,17 +109,11 @@ test('오류 종합 — section·signal·번역문 칸 실패가 함께 보이�
   expect(Math.abs(nw.y + nw.height / 2 - (overlay.y - 12))).toBeLessThanOrEqual(1);
   await page.screenshot({ path: test.info().outputPath('n5-errors-canvas.png') });
 
-  // 재시도 — N5 호출 계약이 확인되기 전이라 버튼은 비활성이고 요청을 보내지 않는다
-  const posts: string[] = [];
-  page.on('request', (r) => {
-    if (r.method() !== 'GET' && new URL(r.url()).pathname.startsWith('/jobs')) posts.push(`${r.method()} ${new URL(r.url()).pathname}`);
-  });
+  // 재시도 — 서버가 retryable=true 로 준 실패라 버튼이 활성이다(누른 뒤 흐름은 e2e/n5-task-retry.spec.ts)
   for (const button of [retry, preview.getByTestId('n5-block-preview-retry-9103'), page.getByTestId('n5-section-status-1-render-retry')]) {
-    await expect(button).toBeDisabled();
-    await button.click({ force: true });
+    await expect(button).toBeEnabled();
   }
   await expect(failed.getByTestId('n5-cell-failure-translate')).toBeVisible();
-  expect(posts).toEqual([]);
 
   // 입력 중 — 검사 결과(미리보기 실패 등)는 직전 서버 결과를 유지하고, 일반 넘침 안내는 여전히 없다
   const editor = page.getByTestId('n5-block-editor-9103');
