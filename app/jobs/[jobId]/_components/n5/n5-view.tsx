@@ -35,6 +35,7 @@ import type { N5ViewMode } from '@/lib/n5/viewport';
 import { N5Viewport } from './n5-viewport';
 import { N5Panel, type N5PanelRevealRequest } from './n5-panel';
 import { useN5EditSession } from './use-n5-edit-session';
+import { useN5CheckSync } from './use-n5-check-sync';
 import { useN5PreviewSync } from './use-n5-preview-sync';
 import { useTypesetFontGate } from './use-typeset-font-gate';
 
@@ -231,6 +232,9 @@ export function N5View({ jobId }: { jobId: string }) {
   const channelSpecsQuery = useMasterChannelSpecsQuery();
   // 실패 상태 표시용. 받지 못해도 검수는 막지 않고 그 표시만 비워 둔다
   const reviewTasksQuery = useN5ReviewTasksQuery(jobId);
+  // 보이는 블록 중 규칙 검사가 진행 중(check.state=in_progress)이면 끝날 때까지 추적한다(use-n5-check-sync.ts)
+  const checkInProgress = (blocksQuery.data ?? []).some((block) => isN5VisibleBlock(block) && block.check?.state === 'in_progress');
+  useN5CheckSync(jobId, checkInProgress);
   const sectionDtoById = useN5SectionStatusQuery(jobId);
 
   const isLoading = jobQuery.isLoading || blocksQuery.isLoading || previewQuery.isLoading;
@@ -292,6 +296,7 @@ export function N5View({ jobId }: { jobId: string }) {
   const blockTaskFailuresById = new Map(
     blocks.map((block) => [block.id, getBlockTaskFailures(taskItems, block.id, checkByBlockId.get(block.id))]),
   );
+
 
   return (
     <N5Loaded

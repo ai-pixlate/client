@@ -13,6 +13,7 @@ import {
   getTranslationFailure,
   hasSectionStatus,
   isAllSectionsExcludedError,
+  isCheckNotSettledError,
   isInvalidStateError,
   parseApiError,
   toBlockViewModel,
@@ -40,6 +41,7 @@ import {
   fetchN5Snapshot,
   pixlateKeys,
   publishN5Snapshot,
+  refreshN5Snapshot,
   useN5TaskStatusQuery,
   useConfirmN5Mutation,
 } from '@/lib/queries/pixlate';
@@ -426,6 +428,17 @@ function TranslationEditor({
         )}
         <div className="mt-[60px] flex items-center justify-end gap-2">
           {isRerendering && isTranslationRerender && <span className="text-[11px] text-[#999]">재렌더링 중…</span>}
+          {/* 규칙 검사 상태(BlockCheck) — 진행 표시는 「재렌더링 중…」과 같은 작은 회색 글로 둔다. 실패는 위 「검사하지 못했습니다」 */}
+          {taskFailures.checkState === 'in_progress' && (
+            <span data-testid={`n5-block-check-${block.id}`} data-check-state="in_progress" className="text-[11px] text-[#999]">
+              검사 중…
+            </span>
+          )}
+          {(taskFailures.checkState === 'missing' || taskFailures.checkState === 'outdated') && (
+            <span data-testid={`n5-block-check-${block.id}`} data-check-state={taskFailures.checkState} className="text-[11px] text-[#999]">
+              검사 준비 중
+            </span>
+          )}
           {showUnsaved && (
             <span role="status" data-testid={`n5-block-unsaved-${block.id}`} className="text-[11px] text-[#999]">
               저장하지 않은 수정
@@ -636,7 +649,7 @@ function groupBlocksBySection(
     .filter((group) => group.blocks.length > 0 || hasSectionStatus(sectionStatusById.get(group.sectionId)));
 }
 
-const NO_TASK_FAILURES: BlockTaskFailures = { verifyFailed: false, previewFailure: null };
+const NO_TASK_FAILURES: BlockTaskFailures = { verifyFailed: false, checkState: null, previewFailure: null };
 
 /**
  * 패널 자동 이동 요청(n5-view.tsx 소유) — selection 값과 별개인 일회성 이벤트다. seq 가 바뀔 때만 한 번 처리한다.
@@ -733,7 +746,13 @@ export function N5Panel({
   const [reviewIssues, setReviewIssues] = useState<N5ReviewIssue[] | null>(null);
   const confirmButtonRef = useRef<HTMLButtonElement>(null);
   const closeReviewDialog = useCallback(() => setReviewIssues(null), []);
-  const isConfirmBlocked = allSectionsExcluded || confirmMutation.isPending || isFinalizing || isServerSaving;
+  // 포함 섹션 블록의 규칙 검사가 진행 중(check.state=in_progress)이면 확정하지 않는다(confirmReview 「규칙 검사 연결」 — 버튼 비활성).
+  // missing·outdated 는 버튼을 막지 않는다 — 확정 요청이 서버의 보조 복구 경로다(409 check_not_settled 로 답한다)
+  const includedSectionIds = new Set(sections.filter((section) => section.bucket !== 'exclude').map((section) => section.id));
+  const isCheckInProgress = blocks.some(
+    (block) => includedSectionIds.has(block.sectionId) && blockTaskFailuresById.get(block.id)?.checkState === 'in_progress',
+  );
+  const isConfirmBlocked = allSectionsExcluded || confirmMutation.isPending || isFinalizing || isServerSaving || isCheckInProgress;
 
   /** 최신 /blocks 캐시(서버 정본) — 클릭 시점 closure 의 blocks 가 아니라 재조회 뒤의 값을 쓴다 */
   function readLatestBlocks(): BlockViewModel[] {
@@ -973,6 +992,15 @@ export function N5Panel({
           setConfirmError(parsed.message);
           return;
         }
+        if (parsed && isCheckNotSettledError(parsed)) {
+          // 검사가 끝나지 않은 블록이 있다 — 서버가 필요한 검사를 등록했다(registeredBlockIds). 확정하지 않고 N5 에 남아
+          // 블록 검사 상태를 다시 받는다(in_progress 가 되면 버튼이 비활성이 되고 끝날 때까지 추적한다)
+          setConfirmError('번역문 검사가 아직 끝나지 않아 다음 단계로 넘어가지 않았습니다. 검사가 끝나면 다시 저장해 주세요.');
+          await refreshN5Snapshot(queryClient, jobId).catch(() => {
+            void queryClient.invalidateQueries({ queryKey: pixlateKeys.n5Blocks(jobId) });
+          });
+          return;
+        }
         if (parsed && isInvalidStateError(parsed)) {
           setConfirmError(parsed.message);
           // 내가 보낸 경고 집합이 서버의 현재 집합과 달랐다는 뜻이다 — block
@@ -1146,13 +1174,24 @@ export function N5Panel({
             모든 섹션이 제외되어 있어 저장할 수 없습니다. 최소 1개 섹션을 포함해 주세요.
           </p>
         )}
+        {!confirmError && !allSectionsExcluded && isCheckInProgress && (
+          <p data-testid="n5-confirm-check-notice" className="mb-2 text-[12px] text-[#707070]">
+            번역문 검사가 끝나면 저장할 수 있습니다.
+          </p>
+        )}
         {/* 저장하지 못한 번역문은 disabled 조건에 넣지 않는다(PM 확정) — 확인창으로만 알린다 */}
         <button
           ref={confirmButtonRef}
           type="button"
           data-testid="n5-confirm-button"
           disabled={isConfirmBlocked}
-          title={allSectionsExcluded ? '모든 섹션이 제외되어 있어 확정할 수 없습니다.' : undefined}
+          title={
+            allSectionsExcluded
+              ? '모든 섹션이 제외되어 있어 확정할 수 없습니다.'
+              : isCheckInProgress
+                ? '번역문 검사가 끝나면 저장할 수 있습니다.'
+                : undefined
+          }
           onClick={() => void handleConfirmClick()}
           className="flex h-[45px] w-full items-center justify-center rounded-md bg-[#171717] px-8 text-[14px] font-medium tracking-[-0.42px] text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
         >

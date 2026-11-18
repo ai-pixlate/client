@@ -150,9 +150,17 @@ function findFailedItem(
   );
 }
 
+/** 블록 규칙 검사 상태(TextBlock.check.state — BlockCheck 계약 enum 그대로). 검사 대상이 아니면 null */
+export type N5CheckState = NonNullable<ApiTextBlock['check']>['state'];
+
 export interface BlockTaskFailures {
   /** 검사 실패 — 칸의 "검사하지 못했습니다". 정본은 블록 check.state=failed(BlockCheck, 계약 확정 FE 11-03) */
   verifyFailed: boolean;
+  /**
+   * 블록 check.state. in_progress = 「검사 중」·[저장하러 가기] 비활성 / missing·outdated = 「검사 준비 중」(버튼은 활성 — 확정 요청이 보조 복구 경로) /
+   * failed = 「검사하지 못했습니다」(확정 통과) / settled = 결과(signals). 검사 대상 밖·키 없음 = null
+   */
+  checkState: N5CheckState | null;
   /** 블록 재렌더(render · text_block) 실패 — 칸의 "미리보기를 갱신하지 못했습니다" */
   previewFailure: RetryTarget | null;
 }
@@ -164,11 +172,12 @@ export interface BlockTaskFailures {
 export function getBlockTaskFailures(
   items: readonly ApiJobAsyncTaskItem[],
   blockId: number,
-  check?: { state?: string | null } | null,
+  check?: { state?: N5CheckState | null } | null,
 ): BlockTaskFailures {
   const preview = findFailedItem(items, 'render', 'text_block', blockId);
   return {
     verifyFailed: check?.state === 'failed' || findFailedItem(items, 'verify', 'text_block', blockId) != null,
+    checkState: check?.state ?? null,
     previewFailure: preview ? toRetryTarget(preview) : null,
   };
 }
@@ -811,6 +820,11 @@ export function isAllSectionsExcludedError(error: ApiErrorInfo): boolean {
 }
 
 /** POST /jobs/{jobId}/confirm — acknowledgedWarnings 불일치로 거절된 응답인지 */
+/** 409 INVALID_STATE · details.reason=check_not_settled — 검사가 끝나지 않은 블록이 있어 확정을 거절했다(confirmReview 「확정 조건」) */
+export function isCheckNotSettledError(error: ApiErrorInfo): boolean {
+  return error.code === 'INVALID_STATE' && error.details?.reason === 'check_not_settled';
+}
+
 export function isInvalidStateError(error: ApiErrorInfo): boolean {
   return error.code === 'INVALID_STATE';
 }
