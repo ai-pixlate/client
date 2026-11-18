@@ -151,16 +151,24 @@ function findFailedItem(
 }
 
 export interface BlockTaskFailures {
-  /** 검사(verify) 실패 — 칸의 "검사하지 못했습니다" */
+  /** 검사 실패 — 칸의 "검사하지 못했습니다". 정본은 블록 check.state=failed(BlockCheck, 계약 확정 FE 11-03) */
   verifyFailed: boolean;
   /** 블록 재렌더(render · text_block) 실패 — 칸의 "미리보기를 갱신하지 못했습니다" */
   previewFailure: RetryTarget | null;
 }
 
-export function getBlockTaskFailures(items: readonly ApiJobAsyncTaskItem[], blockId: number): BlockTaskFailures {
+/**
+ * @param check 이 블록의 /blocks `check`(BlockCheck). state=failed = 현재 입력 검사 최종 실패(재시도 소진) — 「⚠ 검사하지 못했습니다」.
+ *   검사 task 는 섹션 단위(taskType=verify · unitType=section)라 /tasks 로는 블록을 가리킬 수 없다. 블록 단위 verify 실패 항목은 이전 표현으로 함께 본다
+ */
+export function getBlockTaskFailures(
+  items: readonly ApiJobAsyncTaskItem[],
+  blockId: number,
+  check?: { state?: string | null } | null,
+): BlockTaskFailures {
   const preview = findFailedItem(items, 'render', 'text_block', blockId);
   return {
-    verifyFailed: findFailedItem(items, 'verify', 'text_block', blockId) != null,
+    verifyFailed: check?.state === 'failed' || findFailedItem(items, 'verify', 'text_block', blockId) != null,
     previewFailure: preview ? toRetryTarget(preview) : null,
   };
 }
