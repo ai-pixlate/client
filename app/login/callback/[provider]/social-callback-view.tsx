@@ -45,6 +45,8 @@ export function SocialCallbackView({
       if (result.kind === 'success') router.replace(AUTH_HOME_PATH);
       // 완료 여부를 알 수 없음(응답 전 새로고침·login_in_progress 등) — G1 에서 안내하고 새 start 를 기다린다
       else if (result.error === 'callback-unconfirmed') router.replace(AUTH_LOGIN_PATH);
+      // 허용되지 않은 계정 — 로그인 화면으로 돌아가 그 이유를 보인다(lib/auth/login-notice.ts)
+      else if (result.error === 'account-not-allowed') router.replace(AUTH_LOGIN_PATH);
       else setView({ kind: 'error', error: result.error });
     });
     return () => {

@@ -2,6 +2,7 @@ import { postSocialComplete, postSocialStart } from '../api/auth.ts';
 import { clearCallbackState, markCallbackInFlight, markCallbackUnconfirmed, readCallbackState } from './callback-state.ts';
 import type { SocialProvider } from './constants.ts';
 import { classifySocialCompleteFailure, classifySocialStartFailure, type SocialLoginErrorKind } from './errors.ts';
+import { clearLoginNotice, markLoginNotice } from './login-notice.ts';
 import { clearLogoutPending } from './logout-pending.ts';
 import { getAuthChannel } from './runtime.ts';
 import { setAuthenticated } from './session-store.ts';
@@ -40,8 +41,9 @@ export async function startSocialLogin(provider: SocialProvider, deps: SocialSta
     startLocked = false;
     return { kind: 'error', error: classifySocialStartFailure(result.error) };
   }
-  // 새 로그인 흐름이 시작됐다 — 이전 callback 의 「완료 여부 모름」 차단을 푼다
+  // 새 로그인 흐름이 시작됐다 — 이전 callback 의 「완료 여부 모름」 차단과 G1 안내(허용되지 않은 계정)를 푼다
   clearCallbackState();
+  clearLoginNotice();
   deps.redirect(result.data.authorizeUrl);
   return { kind: 'redirecting' };
 }
@@ -120,5 +122,7 @@ async function runCompletion(params: { provider: SocialProvider; code: string; s
   }
   // 서버가 이번 시도를 거절했다(로그인되지 않음이 확정) — 차단할 이유가 없다
   clearCallbackState();
+  // 허용 목록 밖 계정 — 계정·세션이 만들어지지 않았다. G1 에서 이유를 보인다
+  if (kind === 'account-not-allowed') markLoginNotice('account-not-allowed');
   return { kind: 'error', error: kind };
 }

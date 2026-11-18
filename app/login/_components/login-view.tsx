@@ -5,6 +5,7 @@
 import { type CSSProperties, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 
 import { readCallbackState } from '@/lib/auth/callback-state';
+import { readLoginNotice } from '@/lib/auth/login-notice';
 import { isSocialLoginEnabled } from '@/lib/auth/capability';
 import type { SocialProvider } from '@/lib/auth/constants';
 import { socialLoginErrorMessage, type SocialLoginErrorKind } from '@/lib/auth/errors';
@@ -94,6 +95,8 @@ function useSocialLoginButtons() {
   // 이전 callback 의 완료 여부를 알 수 없으면(lib/auth/callback-state.ts) 다시 로그인하도록 안내한다. 새 start 성공 때 기록이 지워진다.
   // sessionStorage 값이라 서버 렌더에서는 false 로 두고 hydration 뒤에 읽는다
   const callbackUnconfirmed = useSyncExternalStore(subscribeNothing, () => readCallbackState() === 'unconfirmed', () => false);
+  // 허용 목록 밖 계정으로 로그인·세션 복구가 거절됐다(lib/auth/login-notice.ts) — 새 로그인 시작 전까지 G1 에 이유를 보인다
+  const accountNotAllowed = useSyncExternalStore(subscribeNothing, () => readLoginNotice() === 'account-not-allowed', () => false);
 
   // 제공자 화면에서 뒤로 가기 → bfcache 복원이면 진행 중 표시와 시작 잠금을 푼다
   useEffect(() => {
@@ -125,7 +128,12 @@ function useSocialLoginButtons() {
       onClick: () => void start(provider),
     }) as const;
 
-  return { buttonProps, error: error ?? (callbackUnconfirmed ? ('callback-unconfirmed' as const) : null) };
+  return {
+    buttonProps,
+    error:
+      error ??
+      (accountNotAllowed ? ('account-not-allowed' as const) : callbackUnconfirmed ? ('callback-unconfirmed' as const) : null),
+  };
 }
 
 function SocialButtons({ buttonProps }: { buttonProps: ReturnType<typeof useSocialLoginButtons>['buttonProps'] }) {

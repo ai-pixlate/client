@@ -6,6 +6,7 @@ import { isLogoutPending } from './logout-pending.ts';
 import { createSessionRecovery, type RecoveryDeps, type RecoveryOutcome, type SessionRecovery } from './refresh.ts';
 import { clearAuth, getAccessToken, getAuthSnapshot, setAuthNotice, stopRecovery, switchAccount } from './session-store.ts';
 import { createAuthLock, type AuthLock } from './tab-lock.ts';
+import { markLoginNotice } from './login-notice.ts';
 
 /**
  * 인증 실행부 — 복구 결과와 다른 탭 알림을 화면 동작(이동·캐시 정리·탭 알림)으로 바꾼다.
@@ -96,6 +97,12 @@ export function applyRecoveryOutcome(outcome: RecoveryOutcome): void {
       hooks.navigate(AUTH_HOME_PATH);
       return;
     case 'session-ended':
+      endSessionLocally();
+      getAuthChannel().post({ type: 'logout' });
+      return;
+    case 'account-not-allowed':
+      // 서버가 세션을 폐기하고 refresh 쿠키를 지웠다 — 자동 복구를 더 하지 않고 G1 에서 이유를 보인다(다른 탭도 같은 쿠키라 로그아웃)
+      markLoginNotice('account-not-allowed');
       endSessionLocally();
       getAuthChannel().post({ type: 'logout' });
       return;

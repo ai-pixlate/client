@@ -10,6 +10,7 @@ import type { AuthApiResult, AuthSeller } from './types.ts';
  *
  *   refresh(탭 잠금 안) ─ 성공 → access 메모리 반영 → refresh-complete 알림 → GET /auth/me → 계정 비교
  *                       ├ refresh_rotated → 다른 탭 refresh-complete 를 최대 2초 기다린 뒤 한 번 더(사건당 refresh 최대 2회)
+ *                       ├ account_not_allowed → 허용되지 않은 계정(세션 종료 · 다시 refresh 하지 않음 · G1 안내)
  *                       ├ refresh_reused·refresh_invalid → 세션 종료
  *                       ├ 503·네트워크 → 일시 오류(세션 유지, 자동 반복 없음)
  *                       └ origin_not_allowed·422 → 실패(세션 유지, 자동 재시도 없음)
@@ -23,6 +24,8 @@ import type { AuthApiResult, AuthSeller } from './types.ts';
  */
 export type RecoveryOutcome =
   | { kind: 'same-account' }
+  /** 허용 목록 밖 계정(401 account_not_allowed) — 서버가 세션을 폐기했다. 다시 refresh 하지 않는다 */
+  | { kind: 'account-not-allowed' }
   | { kind: 'account-changed'; seller: AuthSeller }
   | { kind: 'session-ended' }
   /** 소셜 callback 완료 여부를 모름 — 남은 refresh 쿠키가 이전 계정일 수 있어 복원하지 않는다(lib/auth/callback-state.ts) */
@@ -86,6 +89,7 @@ export function createSessionRecovery(deps: RecoveryDeps): SessionRecovery {
         await deps.channel.waitFor('refresh-complete', eventWaitMs);
         continue;
       }
+      if (kind === 'account-not-allowed') return { ok: false, outcome: { kind: 'account-not-allowed' } };
       if (kind === 'session-ended') return { ok: false, outcome: { kind: 'session-ended' } };
       if (kind === 'unavailable') return { ok: false, outcome: { kind: 'unavailable' } };
       return { ok: false, outcome: { kind: 'failed' } };

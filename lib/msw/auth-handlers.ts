@@ -64,6 +64,8 @@ export const authHandlers = [
     if (scenario.complete === 'login_in_progress') return authError(409, 'DUPLICATE', 'login_in_progress', '같은 로그인이 진행 중입니다');
     if (scenario.complete === 'provider_unavailable') return authError(503, 'SERVICE_UNAVAILABLE', 'provider_unavailable');
     if (scenario.complete === 'provider_auth_failed') return authError(401, 'UNAUTHORIZED', 'provider_auth_failed');
+    // 허용 목록 밖 계정 — 계정·세션을 만들지 않는다
+    if (scenario.complete === 'account_not_allowed') return authError(401, 'UNAUTHORIZED', 'account_not_allowed');
     if (!body || !isSocialProvider(body.provider) || typeof body.code !== 'string' || typeof body.state !== 'string') {
       return authError(422, 'VALIDATION_ERROR', null, 'provider·code·state 가 필요합니다');
     }
@@ -87,6 +89,11 @@ export const authHandlers = [
       return authError(401, 'UNAUTHORIZED', 'refresh_reused');
     }
     if (step === 'invalid') return authError(401, 'UNAUTHORIZED', 'refresh_invalid');
+    if (step === 'account_not_allowed') {
+      // 허용 목록 밖 계정 — 서버가 세션을 폐기하고 refresh 쿠키를 지운다(이후 refresh 는 쿠키 없음)
+      writeMockAuthServer({ ...readMockAuthServer(), sellerId: null });
+      return authError(401, 'UNAUTHORIZED', 'account_not_allowed');
+    }
     if (step === 'unavailable') return unavailable();
     if (step === 'origin_not_allowed') return authError(401, 'UNAUTHORIZED', 'origin_not_allowed');
     const server = readMockAuthServer();

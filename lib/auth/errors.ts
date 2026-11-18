@@ -17,17 +17,20 @@ export const NETWORK_ERROR: AuthErrorInfo = { status: 0, code: null, reason: nul
 
 /**
  * refresh 실패 분류.
+ * - account-not-allowed: 401 + account_not_allowed — 허용 목록 밖 계정. 서버가 세션을 폐기하고 refresh 쿠키를 지웠다 →
+ *   다시 refresh 하지 않고 G1 에서 「허용되지 않은 계정입니다」(일반 토큰 오류가 아니다)
  * - rotated: 직전 refresh 가 30초 안에 다시 옴. 서버 세션은 살아 있다 → 다른 탭 완료를 기다려 다시 시도
  * - session-ended: refresh_reused·refresh_invalid, 판매자 없음(404). 세션이 끝났다 → G1
  * - unavailable: 503·네트워크·5xx. 세션 만료가 아니다 → 상태를 지우지 않고 자동 반복만 멈춘다
  * - failed: origin_not_allowed·422 등 설정·요청 오류. 자동 재시도하지 않고 세션도 지우지 않는다
  * reason 없는 401 은 쿠키가 없거나 이전 서버(무상태 refresh)의 거절이라 세션 종료로 본다.
  */
-export type RefreshFailureKind = 'rotated' | 'session-ended' | 'unavailable' | 'failed';
+export type RefreshFailureKind = 'account-not-allowed' | 'rotated' | 'session-ended' | 'unavailable' | 'failed';
 
 export function classifyRefreshFailure(error: AuthErrorInfo): RefreshFailureKind {
   if (error.status === 0 || error.status >= 500) return 'unavailable';
   if (error.status === 401) {
+    if (error.reason === 'account_not_allowed') return 'account-not-allowed';
     if (error.reason === 'refresh_rotated') return 'rotated';
     if (error.reason === 'origin_not_allowed') return 'failed';
     return 'session-ended';
@@ -52,9 +55,18 @@ export function classifySocialStartFailure(error: AuthErrorInfo): SocialStartFai
  * in-progress(409 DUPLICATE + login_in_progress)는 BE 후보 계약이다. 같은 document 안의 중복은 요청 전에 막으므로(social-login.ts)
  * 이 응답은 새로고침 등 다른 document 가 같은 시도를 다시 보냈을 때만 온다 — 먼저 시작된 요청의 결과를 받을 계약이 없어 다시 로그인하도록 안내한다.
  */
-export type SocialCompleteFailureKind = 'state-invalid' | 'provider-auth-failed' | 'provider-unavailable' | 'in-progress' | 'unavailable' | 'failed';
+export type SocialCompleteFailureKind =
+  | 'account-not-allowed'
+  | 'state-invalid'
+  | 'provider-auth-failed'
+  | 'provider-unavailable'
+  | 'in-progress'
+  | 'unavailable'
+  | 'failed';
 
 export function classifySocialCompleteFailure(error: AuthErrorInfo): SocialCompleteFailureKind {
+  // 401 + account_not_allowed — 허용 목록 밖 계정. 서버는 계정·세션을 만들지 않았다(provider_auth_failed 와 구분)
+  if (error.status === 401 && error.reason === 'account_not_allowed') return 'account-not-allowed';
   if (error.reason === 'state_invalid') return 'state-invalid';
   if (error.reason === 'provider_auth_failed') return 'provider-auth-failed';
   if (error.reason === 'provider_unavailable') return 'provider-unavailable';
@@ -69,6 +81,8 @@ export type SocialLoginErrorKind = SocialStartFailureKind | SocialCompleteFailur
 
 export function socialLoginErrorMessage(kind: SocialLoginErrorKind): string {
   switch (kind) {
+    case 'account-not-allowed':
+      return '허용되지 않은 계정입니다';
     case 'callback-unconfirmed':
       return '로그인 완료 여부를 확인할 수 없습니다. 다시 로그인해 주세요.';
     case 'not-available':

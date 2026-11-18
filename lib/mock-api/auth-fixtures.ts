@@ -54,7 +54,7 @@ export function writeMockAuthServer(state: MockAuthServerState): void {
 
 export interface MockAuthScenario {
   start?: 'not_found' | 'unavailable' | 'origin_not_allowed';
-  complete?: 'state_invalid' | 'provider_auth_failed' | 'provider_unavailable' | 'login_in_progress';
+  complete?: 'state_invalid' | 'provider_auth_failed' | 'provider_unavailable' | 'login_in_progress' | 'account_not_allowed';
   refresh?: string[];
   logout?: string[];
   expireOnce?: boolean;
