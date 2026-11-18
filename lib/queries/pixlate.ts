@@ -557,8 +557,20 @@ export function useValidationQuery(jobId: string, options: { enabled?: boolean }
 
 export function useExportMutation(jobId: string) {
   return useMutation({
-    mutationFn: (payload: ApiExportRequest) => createExport(jobId, payload),
+    mutationFn: async (payload: ApiExportRequest) => {
+      const created = await createExport(jobId, payload);
+      // 다운로드 조회(FIN-05)에 쓸 artifactId 가 없으면 내보내기가 끝난 것으로 보지 않는다
+      if (created.artifactId == null) throw new Error('내보내기 산출물이 만들어지지 않았습니다');
+      return created;
+    },
   });
+}
+
+/** presigned URL 이 없는 다운로드 응답은 실패로 본다 — 빈 링크로 다운로드를 시작하지 않는다 */
+async function getExportDownloadWithUrl(jobId: string, artifactId: number) {
+  const download = await getExportDownload(jobId, artifactId);
+  if (!download.url) throw new Error('다운로드 주소가 없습니다');
+  return download;
 }
 
 // ─────────────────────────────────────────────
@@ -570,7 +582,7 @@ export function useExportMutation(jobId: string) {
 
 export function useExportDownloadMutation(jobId: string) {
   return useMutation({
-    mutationFn: (artifactId: number) => getExportDownload(jobId, artifactId),
+    mutationFn: (artifactId: number) => getExportDownloadWithUrl(jobId, artifactId),
   });
 }
 
@@ -586,7 +598,7 @@ export function useExportComponentDownloadMutation(jobId: string) {
     mutationFn: async (artifactType: ApiExportArtifactType) => {
       const created = await createExport(jobId, { components: [artifactType as string] });
       if (created.artifactId == null) throw new Error('내보내기 산출물이 만들어지지 않았습니다');
-      return getExportDownload(jobId, created.artifactId);
+      return getExportDownloadWithUrl(jobId, created.artifactId);
     },
   });
 }
