@@ -12,6 +12,7 @@ import {
   useN5ReviewTasksQuery,
   useN5SectionStatusQuery,
   useN5PreviewQuery,
+  useN5SnapshotFocusRefresh,
 } from '@/lib/queries/pixlate';
 import {
   buildSectionStatus,
@@ -227,6 +228,8 @@ export function N5View({ jobId }: { jobId: string }) {
   const jobQuery = useJobQuery(jobId);
   const blocksQuery = useN5BlocksQuery(jobId);
   const previewQuery = useN5PreviewQuery(jobId);
+  // 탭 복귀·재연결 재조회는 /blocks·/preview 한 쌍으로(지문 A·B 중간 조합을 그리지 않는다)
+  useN5SnapshotFocusRefresh(jobId);
   // 상단 정보의 표시 이름용. 받지 못해도 검수는 막지 않고 그 항목만 비워 둔다
   const countriesQuery = useMasterCountriesQuery();
   const categoriesQuery = useMasterCategoriesQuery();

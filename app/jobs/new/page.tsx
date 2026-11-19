@@ -30,6 +30,7 @@ import { N1_SIZE_CHANGE_BLOCK_LINES, getN1SubmitBlockMessages, isN1Ready, resolv
 import { INITIAL_SIZE_SELECTION, sizeSelectionReducer } from './_lib/size-selection';
 import { useSourceImageUploads } from './_lib/use-source-image-uploads';
 import { S0Rail } from '../_components/s0-rail';
+import { TooltipArrow } from '@/app/_components/tooltip-arrow';
 
 // ─────────────────────────────────────────────────────────────────
 // UI용 임시 상수 — 실제 백엔드 연결 시 API 데이터로 교체할 것
@@ -169,15 +170,6 @@ function CheckIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
       <path d="M3.6 8.2L6.6 11.1L12.4 4.9" stroke="#ff6a38" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function TooltipArrow({ className }: { className: string }) {
-  return (
-    <svg width="12" height="11" viewBox="0 0 12 11" fill="none" aria-hidden="true" className={`absolute top-[calc(100%-1px)] ${className}`}>
-      <path d="M0.5 0.5L6 10L11.5 0.5" fill="white" stroke="#ff6a38" />
-      <path d="M1 0H11" stroke="white" strokeWidth="1.5" />
     </svg>
   );
 }

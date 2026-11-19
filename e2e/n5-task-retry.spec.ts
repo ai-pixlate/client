@@ -33,10 +33,25 @@ test('번역 실패 [다시 시도] — 12월 범위: 보이지만 비활성 · 
   await expect(button).toHaveText('다시 시도');
   await expect(button).toHaveAttribute('aria-disabled', 'true');
   await expect(button).toHaveCSS('cursor', 'not-allowed');
+  // Figma Button Secondary · XS · Disabled(57:1450) — BG/subtle 면 · 선 없음 · 24 높이 그대로. hover 해도 활성 모양이 되지 않는다
+  await expect(button).toHaveCSS('background-color', 'rgb(245, 245, 245)');
+  await expect(button).toHaveCSS('border-top-color', 'rgba(0, 0, 0, 0)');
+  expect((await button.boundingBox())!.height).toBe(24);
   const tooltip = page.getByTestId('n5-block-translate-retry-9111-tooltip');
   await expect(tooltip).toBeHidden();
-  await button.hover();
+  // 키보드 focus 로도 안내가 보인다
+  await button.focus();
   await expect(tooltip).toBeVisible();
+  await expect(tooltip).toHaveText('다시 시도는 12월 구현 예정입니다.');
+  await button.blur();
+  await expect(tooltip).toBeHidden();
+  await button.hover();
+  await expect(button).toHaveCSS('background-color', 'rgb(245, 245, 245)');
+  await expect(tooltip).toBeVisible();
+  // 말풍선은 Figma 1090:10048 모양(흰 면 · #ff6a38 선 · radius 8)
+  await expect(tooltip).toHaveCSS('border-top-color', 'rgb(255, 106, 56)');
+  await expect(tooltip).toHaveCSS('border-top-left-radius', '8px');
+  expect((await tooltip.boundingBox())!.y + (await tooltip.boundingBox())!.height).toBeLessThanOrEqual((await button.boundingBox())!.y);
   await expect(tooltip).toHaveText('다시 시도는 12월 구현 예정입니다.');
   await expect(button).toHaveAttribute('aria-describedby', (await tooltip.getAttribute('id'))!);
   // aria-disabled 라 Playwright 기본 클릭은 기다린다 — 실제로 눌러도 요청이 없는지 force 로 확인한다
@@ -62,6 +77,9 @@ test('미리보기 갱신 실패 [미리보기 다시 시도] — 재렌더 재�
   const row = page.getByTestId('n5-block-row-9102');
   await expect(row.getByTestId('n5-cell-failure-preview')).toBeVisible({ timeout: 20_000 });
 
+  // 같은 task 를 칸이 보이는 동안 섹션 안내에는 [미리보기 다시 시도]를 다시 내지 않는다(활성 버튼은 칸 하나)
+  await expect(page.getByTestId('n5-block-preview-retry-9102')).toBeEnabled();
+  await expect(page.locator('[data-testid$="-preview-retry"]')).toHaveCount(0);
   await page.getByTestId('n5-block-preview-retry-9102').click();
   expect(posts).toHaveLength(1);
   await expect(row.getByTestId('n5-cell-failure-preview')).toHaveCount(0, { timeout: 20_000 });

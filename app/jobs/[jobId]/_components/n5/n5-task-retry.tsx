@@ -6,6 +6,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { retryJobTask } from '@/lib/api/pixlate';
 import type { ApiJobAsyncTaskItem } from '@/lib/api/n5-schema';
 import type { RetryTarget } from '@/lib/n5/adapter';
+import { TooltipArrow } from '@/app/_components/tooltip-arrow';
 import { pixlateKeys, refreshN5Snapshot, useN5TaskStatusQuery } from '@/lib/queries/pixlate';
 
 // ─────────────────────────────────────────────────────────────────
@@ -66,8 +67,12 @@ function useN5TaskRetry(target: RetryTarget | null, onRetried?: (task: ApiJobAsy
   return { canRetry, busy, retry, failed: mutation.isError };
 }
 
+/** Figma Button Style=Secondary · Size=XS(57:1440) — 24 높이 · 좌우 12 · radius 4 · #eaeaea 선 · 12px Regular #171717 */
 const RETRY_BUTTON_CLASS =
-  'flex h-6 shrink-0 items-center justify-center rounded-[4px] border border-[#eaeaea] bg-white px-3 text-[12px] leading-[normal] tracking-[-0.02em] whitespace-nowrap text-[#171717]';
+  'flex h-6 shrink-0 items-center justify-center rounded-[4px] border px-3 text-[12px] leading-[normal] tracking-[-0.02em] whitespace-nowrap text-[#171717]';
+const RETRY_BUTTON_ENABLED_CLASS = 'border-[#eaeaea] bg-white hover:bg-[#f5f5f5]';
+/** Figma Button Style=Secondary · Size=XS · State=Disabled(57:1450) — BG/subtle #f5f5f5 면 · 선 없음(높이 유지를 위해 투명 선) · 글자 그대로 · hover 없음 */
+const RETRY_BUTTON_DISABLED_CLASS = 'cursor-not-allowed border-transparent bg-[#f5f5f5]';
 
 const UPCOMING_RETRY_TOOLTIP = '다시 시도는 12월 구현 예정입니다.';
 
@@ -92,21 +97,20 @@ export function UpcomingRetryButton({ label, testId }: { label: string; testId: 
         onKeyDown={(e) => {
           if (e.key === 'Escape') e.currentTarget.blur();
         }}
-        className={`peer ${RETRY_BUTTON_CLASS} cursor-not-allowed text-[#999] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ff6a38]`}
+        className={`peer ${RETRY_BUTTON_CLASS} ${RETRY_BUTTON_DISABLED_CLASS} focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ff6a38]`}
       >
         {label}
       </button>
+      {/* 말풍선은 Figma 1090:10048(N1 인증 마크 안내) 그대로 — 흰 면 · #ff6a38 선 · radius 8 · padding 10 · 12px Light · 아래 화살표.
+          24px 버튼 글자를 가리지 않게 화살표 끝이 버튼 위 가장자리에 닿도록 둔다(버튼 위 11px) */}
       <span
         id={tooltipId}
         role="tooltip"
         data-testid={`${testId}-tooltip`}
-        className="pointer-events-none invisible absolute bottom-full left-0 z-40 mb-[10px] rounded-[8px] border border-[#ff6a38] bg-white p-2.5 text-[12px] leading-[normal] font-light tracking-[-0.04em] whitespace-nowrap text-[#ff6a38] peer-hover:visible peer-focus:visible"
+        className="pointer-events-none invisible absolute bottom-[calc(100%+11px)] left-0 z-40 rounded-[8px] border border-[#ff6a38] bg-white p-2.5 text-[12px] leading-[normal] font-light tracking-[-0.04em] whitespace-nowrap text-[#ff6a38] peer-hover:visible peer-focus:visible"
       >
         {UPCOMING_RETRY_TOOLTIP}
-        <span
-          aria-hidden="true"
-          className="absolute top-full left-5 size-2.5 -translate-x-1/2 -translate-y-1/2 rotate-45 border-r border-b border-[#ff6a38] bg-white"
-        />
+        <TooltipArrow className="left-5" />
       </span>
     </span>
   );
@@ -139,7 +143,7 @@ export function TaskRetryButton({
         e.stopPropagation();
         retry();
       }}
-      className={`${RETRY_BUTTON_CLASS} hover:bg-[#f5f5f5] disabled:cursor-not-allowed disabled:text-[#999] disabled:hover:bg-white`}
+      className={`${RETRY_BUTTON_CLASS} ${canRetry ? RETRY_BUTTON_ENABLED_CLASS : RETRY_BUTTON_DISABLED_CLASS}`}
     >
       {busy ? '다시 시도하는 중…' : label}
     </button>

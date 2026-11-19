@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo } from 'react';
-import { notifyManager, useQueries, useQuery, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useEffect, useMemo } from 'react';
+import { focusManager, notifyManager, onlineManager, useQueries, useQuery, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
 
 import {
   createJob,
@@ -282,11 +282,16 @@ export function useJobQuery(jobId: string) {
   });
 }
 
+// /blocks·/preview 는 지문 A·B 를 맞춰 보는 한 쌍이다. 탭 복귀(focus)·재연결 때 두 query 가 따로 다시 받으면 새 /blocks 가 먼저 와
+// 「새 blocks + 이전 preview」(A≠B) 중간 조합이 그려진다 — 재렌더 중이면 편집한 섹션이 수정 전 서버 이미지로 잠깐 바뀐다.
+// 그래서 두 query 의 자동 focus·재연결 재조회는 끄고, useN5SnapshotFocusRefresh 가 한 쌍으로 다시 받는다(refreshN5Snapshot)
 export function useN5BlocksQuery(jobId: string) {
   return useQuery({
     queryKey: pixlateKeys.n5Blocks(jobId),
     queryFn: () => getN5Blocks(jobId),
     enabled: !!jobId,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 }
 
@@ -295,7 +300,44 @@ export function useN5PreviewQuery(jobId: string) {
     queryKey: pixlateKeys.n5Preview(jobId),
     queryFn: () => getN5Preview(jobId),
     enabled: !!jobId,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
+}
+
+/**
+ * 탭 복귀(focus)·재연결 때 /blocks·/preview 를 한 쌍으로 다시 받는다. 기존 자동 재조회와 같은 조건(기본 staleTime 이 지난 경우)에서만
+ * 부르고, 받은 쌍은 publishN5Snapshot 이 한 번에 넣는다(그 사이 저장이 성공했으면 넣지 않는다).
+ */
+export function useN5SnapshotFocusRefresh(jobId: string) {
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    if (!jobId) return;
+    const refreshIfStale = () => {
+      const staleTime = queryClient.getDefaultOptions().queries?.staleTime;
+      const staleMs = typeof staleTime === 'number' ? staleTime : 0;
+      const updatedAt = Math.min(
+        queryClient.getQueryState(pixlateKeys.n5Blocks(jobId))?.dataUpdatedAt ?? 0,
+        queryClient.getQueryState(pixlateKeys.n5Preview(jobId))?.dataUpdatedAt ?? 0,
+      );
+      if (updatedAt === 0 || Date.now() - updatedAt < staleMs) return;
+      void refreshN5Snapshot(queryClient, jobId).catch(() => {
+        // 실패하면 기존 자동 재조회처럼 다시 받는다(화면 캐시는 그대로 두고 다음 계기를 기다리지 않는다)
+        void queryClient.invalidateQueries({ queryKey: pixlateKeys.n5Preview(jobId) });
+        void queryClient.invalidateQueries({ queryKey: pixlateKeys.n5Blocks(jobId) });
+      });
+    };
+    const offFocus = focusManager.subscribe((focused) => {
+      if (focused) refreshIfStale();
+    });
+    const offOnline = onlineManager.subscribe((online) => {
+      if (online) refreshIfStale();
+    });
+    return () => {
+      offFocus();
+      offOnline();
+    };
+  }, [jobId, queryClient]);
 }
 
 // ─────────────────────────────────────────────
