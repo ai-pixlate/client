@@ -192,6 +192,19 @@ export function clampPan(pan: Point, canvas: Size, zoom: number, usable: Size): 
   };
 }
 
+/**
+ * 캔버스가 화면보다 클 때 스크롤 표시 막대의 크기·위치(0~1 비율). 화면 안에 다 들어오면 null.
+ * pan 범위는 clampPanAxis와 같다. 표시 전용이라 pan·zoom 계산에는 쓰지 않는다.
+ */
+export function computeScrollThumb(pan: number, scaledSize: number, usableSize: number): { start: number; size: number } | null {
+  if (scaledSize <= usableSize || usableSize <= 0) return null;
+  const size = Math.max(usableSize / scaledSize, 0.05);
+  const max = usableSize / 2;
+  const min = usableSize / 2 - scaledSize;
+  const progress = Math.min(1, Math.max(0, (max - pan) / (max - min)));
+  return { start: progress * (1 - size), size };
+}
+
 // ─────────────────────────────────────────────────────────────────
 // 배율 직접 입력
 // ─────────────────────────────────────────────────────────────────
@@ -214,4 +227,70 @@ export function parseZoomPercentInput(raw: string): number | null {
   const percent = Number(cleaned);
   if (!Number.isFinite(percent) || percent <= 0) return null;
   return clampZoom(percent / 100);
+}
+
+// ─────────────────────────────────────────────────────────────────
+// 선택 대상 최소 reveal(scrollIntoView 'nearest'에 가까운 동작)
+// ─────────────────────────────────────────────────────────────────
+
+/** reveal 후 대상과 usable 가장자리 사이에 남기는 여백(화면 px). 보이게만 하는 용도라 작게 둔다 */
+export const REVEAL_MARGIN = 16;
+
+/**
+ * 한 축에서 대상이 이만큼(비율)까지 잘려 있으면 「현재 위치에서 식별·작업 가능」으로 보고 움직이지 않는다.
+ * 기준 길이는 min(대상 크기, usable 크기) — viewport 보다 큰 대상은 화면을 얼마나 채우는지로 본다.
+ */
+export const REVEAL_CLIP_TOLERANCE_RATIO = 0.25;
+
+/** 화면 좌표(usable 영역 기준, pan·zoom 적용 후) 한 축 구간 */
+interface AxisSpan {
+  start: number;
+  end: number;
+}
+
+/**
+ * 한 축의 최소 이동량. 0 이면 그 축은 움직이지 않는다.
+ *
+ * 1. 숨은 길이가 기준 길이의 REVEAL_CLIP_TOLERANCE_RATIO 이하 → 0(이미 보이거나 조금만 잘림)
+ * 2. 대상이 margin 을 포함해 화면에 들어가는 크기 → 벗어난 쪽 가장자리만 margin 안쪽까지 이동
+ * 3. 대상이 화면보다 큼 → 현재 위치에서 가까운 쪽 가장자리를 margin 위치에 맞춘다(전체를 가운데로 보내지 않는다)
+ */
+function computeRevealDeltaAxis(span: AxisSpan, usableSize: number, margin: number): number {
+  const size = span.end - span.start;
+  if (usableSize <= 0 || size <= 0) return 0;
+  const visible = Math.max(0, Math.min(span.end, usableSize) - Math.max(span.start, 0));
+  const reference = Math.min(size, usableSize);
+  if (reference - visible <= reference * REVEAL_CLIP_TOLERANCE_RATIO) return 0;
+
+  const lo = margin;
+  const hi = usableSize - margin;
+  if (size <= hi - lo) {
+    if (span.start < lo) return lo - span.start;
+    if (span.end > hi) return hi - span.end;
+    return 0;
+  }
+  // 대상이 화면보다 크다 — 화면 안쪽으로 들어온 가장자리(또는 더 가까운 가장자리)를 margin 에 맞춘다
+  const startGap = Math.abs(span.start - lo);
+  const endGap = Math.abs(span.end - hi);
+  return startGap <= endGap ? lo - span.start : hi - span.end;
+}
+
+/**
+ * 선택 대상(canvas 좌표 rect)이 보이도록 하는 최소 pan. zoom 은 바꾸지 않는다.
+ * 충분히 보이면 현재 pan 을 그대로(같은 객체) 돌려준다 — 호출부는 참조 비교로 이동 여부를 알 수 있다.
+ * 결과는 호출부가 clampPan 으로 경계 안에 넣는다.
+ */
+export function computeMinimalRevealPan(
+  pan: Point,
+  zoom: number,
+  target: { left: number; top: number; width: number; height: number },
+  usable: Size,
+  margin: number = REVEAL_MARGIN,
+): Point {
+  const left = pan.x + target.left * zoom;
+  const top = pan.y + target.top * zoom;
+  const dx = computeRevealDeltaAxis({ start: left, end: left + target.width * zoom }, usable.width, margin);
+  const dy = computeRevealDeltaAxis({ start: top, end: top + target.height * zoom }, usable.height, margin);
+  if (dx === 0 && dy === 0) return pan;
+  return { x: pan.x + dx, y: pan.y + dy };
 }

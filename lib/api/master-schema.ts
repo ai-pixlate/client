@@ -12,3 +12,9 @@ export type ApiCountry = components['schemas']['Country'];
 
 /** GET /master/languages 원소 (API-MST-02) */
 export type ApiLanguage = components['schemas']['Language'];
+
+/** GET /master/channel-specs 원소(masterChannelSpecs) — 규격(판매 채널). Job.channelSpecId 가 id 를 가리킨다 */
+export type ApiChannelSpec = components['schemas']['ChannelSpec'];
+
+/** GET /master/categories 원소 (API-MST-04) — category_master 평면 노드. 트리는 parentId로 잇는다 */
+export type ApiCategory = components['schemas']['Category'];

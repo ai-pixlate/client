@@ -13,8 +13,11 @@ import { reachN5 } from './reach-n5';
  * 조회까지 끝난 뒤에만 뜬다(2초 polling 2회 안쪽, 10초 타임아웃 안에 끝난다).
  */
 export async function reachN6(page: Page): Promise<void> {
-  await reachN5(page);
+  // 저장 전 확인 항목이 없는 상태로 지나간다(확인창 자체는 e2e/n5-review-dialog.spec.ts가 본다)
+  await reachN5(page, { mockScenario: 'n5-clean' });
 
   await page.getByTestId('n5-confirm-button').click();
   await expect(page.getByText('번역이 완료되었습니다.')).toBeVisible({ timeout: 10_000 });
+  // N6 이후 spec이 주소를 그대로 검사한다 — N5 시나리오 표시를 지운다
+  await page.evaluate(() => history.replaceState(history.state, '', location.pathname));
 }

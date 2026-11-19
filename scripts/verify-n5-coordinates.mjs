@@ -8,6 +8,14 @@
  */
 
 import {
+  getFontScaleToolbarLeft,
+  FONT_HANDLE_CENTER_TOP_PX,
+  overlapsFontHandleHitArea,
+  COMPACT_RESIZE_HEIGHT_PX,
+  COMPACT_RIGHT_RESIZE_HALF_PX,
+  isCompactResizeHeight,
+  getCompactRightResizeZone,
+  screenDeltaToBboxDelta,
   computeSectionDisplayTops,
   getBlockDisplayRect,
   getBlockHitRect,
@@ -287,6 +295,61 @@ console.log('\n[7] block hit rect — visual rect는 그대로, 클릭 영역만
 
   const edge = getBlockHitRect({ left: 2, top: 590, width: 50, height: 8 }, opts);
   check('section 밖으로 나가지 않는다', edge.left === 0 && edge.top + edge.height === 600, JSON.stringify(edge));
+}
+
+console.log('\nscreenDeltaToBboxDelta');
+{
+  const d = screenDeltaToBboxDelta({ x: 40, y: -20 }, 0.4, 2);
+  check('scale·zoom을 모두 나눈다', d.x === 50 && d.y === -25, JSON.stringify(d));
+  const rect = getBlockDisplayRect({ x: 0, y: 0, width: d.x, height: 0 }, 0, 0.4);
+  check('다시 scale·zoom을 곱하면 화면 이동량이다', Math.abs(rect.width * 2 - 40) < 1e-9, String(rect.width));
+}
+
+console.log('\ngetFontScaleToolbarLeft');
+{
+  const base = { toolbarWidth: 119, gap: 25, maxRight: 1000 };
+  const left = (blockLeft, blockRight) => getFontScaleToolbarLeft({ ...base, blockLeft, blockRight });
+  check('자리가 있으면 block 오른쪽 25', left(100, 300) === 325, String(left(100, 300)));
+  check('workspace에 딱 맞으면 밀지 않는다', left(700, 856) === 881, String(left(700, 856)));
+  check('workspace를 넘으면 필요한 만큼만 왼쪽으로 민다', left(700, 900) === 881, String(left(700, 900)));
+  check('끝에 붙은 좁은 block도 workspace 안에 남는다', left(970, 990) === 881, String(left(970, 990)));
+  check('오른쪽 변이 workspace 밖이어도 block이 보이면 안에 남는다', left(500, 1400) === 881, String(left(500, 1400)));
+  check('block이 완전히 나가면 block과 함께 움직인다', left(1200, 1400) === 1081, String(left(1200, 1400)));
+  check('왼쪽으로 나간 block은 뒤집지 않고 그대로 오른쪽이다', left(-500, -300) === -275, String(left(-500, -300)));
+}
+
+console.log('\n[글자크기 손잡이] 위치는 고정, 누르는 영역만 나눈다');
+{
+  check('중심은 block 위에서 18', FONT_HANDLE_CENTER_TOP_PX === 18);
+  check('높은 block(높이 80)의 e(40)는 겹치지 않는다', !overlapsFontHandleHitArea(40));
+  check('높이 36의 e(18)는 정확히 포개진다', overlapsFontHandleHitArea(18));
+  check('높이 60의 e(30)는 일부 겹친다', overlapsFontHandleHitArea(30));
+  check('높이 66의 e(33)는 경계라 겹치지 않는다', !overlapsFontHandleHitArea(33));
+  check('위 모서리 ne(0)는 겹치지 않는다', !overlapsFontHandleHitArea(0));
+  check('높이 20의 se(20)는 겹친다', overlapsFontHandleHitArea(20));
+}
+
+console.log('\n[compact resize] 보이는 높이 48 미만은 오른쪽 변 전체가 가로 resize');
+{
+  check('경계값은 48', COMPACT_RESIZE_HEIGHT_PX === 48);
+  for (const h of [60, 50, 48]) check(`보이는 높이 ${h}은 기존 방식`, !isCompactResizeHeight(h));
+  for (const h of [47.99, 47.5, 47, 36, 24, 14]) check(`보이는 높이 ${h}은 compact`, isCompactResizeHeight(h));
+  // 같은 48이 계산 경로에 따라 47.99999…가 되어도 흔들리지 않는다
+  check('부동소수 오차로 47.999999999가 된 48은 기존 방식', !isCompactResizeHeight(48 - 1e-9));
+  check('bbox 높이 100 × scale 0.5 × zoom 0.8 = 40은 compact', isCompactResizeHeight(100 * 0.5 * 0.8));
+  check('같은 block을 zoom 1.2로 보면(60) 기존 방식', !isCompactResizeHeight(100 * 0.5 * 1.2));
+
+  const rect = { left: 100, top: 50, width: 200, height: 14 };
+  const z1 = getCompactRightResizeZone(rect, 1);
+  const half = COMPACT_RIGHT_RESIZE_HALF_PX;
+  check('zoom 1 — 오른쪽 변 중심 ±8', z1.left === 300 - half && z1.width === half * 2, JSON.stringify(z1));
+  check('zoom 1 — 위·아래로 8씩 넓혀 ne·se 자리를 덮는다', z1.top === 50 - half && z1.height === 14 + half * 2, JSON.stringify(z1));
+  const z2 = getCompactRightResizeZone(rect, 2);
+  check('zoom 2 — 화면 폭은 그대로(canvas 폭은 절반)', z2.width * 2 === half * 2 && z2.left === 300 - half / 2, JSON.stringify(z2));
+  check('zoom 2 — 세로는 block 높이 + 화면 8씩', z2.top === 50 - half / 2 && z2.height === 14 + half, JSON.stringify(z2));
+  // 36 높이 — font(18)와 e(18) 중심이 같아도 font는 보이는 12만 받으므로, 영역 안 font 바깥(18±6 밖)이 남는다
+  const z36 = getCompactRightResizeZone({ left: 0, top: 0, width: 100, height: 36 }, 1);
+  check('36 — font 위쪽(0~12)과 아래쪽(24~36)이 resize 영역 안', z36.top <= 0 && z36.top + z36.height >= 36);
 }
 
 console.log(`\n결과: PASS ${pass} / FAIL ${fail}\n`);

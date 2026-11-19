@@ -1,5 +1,6 @@
 import Link from 'next/link';
 
+import type { NewJobEntry } from '@/lib/brand/m2-adapter';
 import type { LibraryCardViewModel } from '@/lib/library/adapter';
 import { formatSavedDate, getSpecTypeLabel } from '@/lib/library/view';
 
@@ -129,10 +130,11 @@ export function LibraryCard({
  *   내부 세로 gap 20: Icon Button Circle 40(Plus 16) / 제목(16 Medium, -0.48)·보조(12 Regular, -0.12) gap 8 /
  *   Button Primary MD 107×37(px 20, label px 8, 14 Medium, -0.42)
  *
- * N1(/jobs/new)은 brandId 쿼리가 있어야 제출할 수 있는데, M1에서 넘길 brandId 계약이 없어
- * 쿼리 없이 연결한다(임의 brandId를 만들지 않는다).
+ * 갈 곳은 GET /brands 로 정한다(resolveNewJobEntry — 0개 등록 · 1개 N1?brandId · 2개 이상 /brand). 임의 brandId 를 만들지 않는다.
+ * 목록을 받는 동안은 버튼을 잠그고, 받지 못하면 brandId 없이 N1 으로 보내지 않고 안내만 한다.
  */
-export function LibraryAddCard() {
+export function LibraryAddCard({ entry }: { entry: NewJobEntry | 'loading' | 'error' }) {
+  const href = typeof entry === 'object' ? entry.href : null;
   return (
     <div
       data-testid="library-add-card"
@@ -144,17 +146,39 @@ export function LibraryAddCard() {
         </div>
         <div className="flex flex-col items-center gap-2 leading-[normal] whitespace-nowrap">
           <p className="text-[16px] font-medium tracking-[-0.48px] text-[#171717]">이미지 추가 생성하기</p>
-          <p className="text-[12px] tracking-[-0.12px] text-[#707070]">생성하러 가기</p>
+          {entry === 'error' ? (
+            <p role="alert" data-testid="library-add-card-error" className="text-[12px] tracking-[-0.12px] text-red-500">
+              브랜드 정보를 불러오지 못해 작업을 시작할 수 없습니다.
+            </p>
+          ) : (
+            <p className="text-[12px] tracking-[-0.12px] text-[#707070]">생성하러 가기</p>
+          )}
         </div>
-        <Link
-          href="/jobs/new"
-          data-testid="library-add-card-link"
-          className="flex h-[37px] w-[107px] items-center justify-center rounded-[6px] bg-[#171717] px-5 py-2.5 hover:opacity-90"
-        >
-          <span className="px-2 text-[14px] leading-[17px] font-medium tracking-[-0.42px] whitespace-nowrap text-white">
-            이미지 생성
-          </span>
-        </Link>
+        {href ? (
+          <Link
+            href={href}
+            data-testid="library-add-card-link"
+            data-entry={typeof entry === 'object' ? entry.kind : undefined}
+            className="flex h-[37px] w-[107px] items-center justify-center rounded-[6px] bg-[#171717] px-5 py-2.5 hover:opacity-90"
+          >
+            <span className="px-2 text-[14px] leading-[17px] font-medium tracking-[-0.42px] whitespace-nowrap text-white">
+              이미지 생성
+            </span>
+          </Link>
+        ) : (
+          // 목록 조회 중·실패 — 같은 자리·모습의 잠긴 버튼(새 레이아웃 없음)
+          <button
+            type="button"
+            disabled
+            aria-busy={entry === 'loading' || undefined}
+            data-testid="library-add-card-link"
+            className="flex h-[37px] w-[107px] cursor-not-allowed items-center justify-center rounded-[6px] bg-[#171717] px-5 py-2.5 opacity-40"
+          >
+            <span className="px-2 text-[14px] leading-[17px] font-medium tracking-[-0.42px] whitespace-nowrap text-white">
+              이미지 생성
+            </span>
+          </button>
+        )}
       </div>
     </div>
   );
