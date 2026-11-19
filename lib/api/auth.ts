@@ -6,8 +6,10 @@ import type { AuthApiResult, AuthSeller } from '../auth/types.ts';
  * 인증 API adapter. 일반 API 의 authorizedFetch(401 → refresh → 재시도)를 거치지 않는다 —
  * refresh·logout 이 다시 refresh 를 부르는 재귀를 막기 위해서다. 실패는 throw 하지 않고 AuthApiResult 로 돌려준다.
  *
- * 계약 출처: /auth/refresh·/auth/logout·/auth/me = server#124(공개 OpenAPI v3.5.10 위에 세션 규칙 추가, 배포 대기).
- * /auth/social/{provider}/start·POST /auth/social = FE↔BE 인증 합의. 공개 OpenAPI 의 /auth/social 은 아직 이전 stub 이다.
+ * 계약 출처: server release/1.1.0 OpenAPI(v3.5.10) — authRefresh·authLogout·authMe·authSocialStart·authSocial(로그인 허용 목록 포함).
+ * 브라우저는 상대경로 /auth/... 만 부르고 Next rewrite 가 BE /v1/auth/... 로 넘긴다(next.config.ts). /v1 을 여기서 붙이지 않는다.
+ * 인증 응답 타입은 lib/auth/types.ts · 이 파일의 parser 가 정본이다 — lib/api/generated/openapi.d.ts 는 쓰지 않는다
+ * (그 파일은 공개 문서 사이트 기준 생성본이라 /auth/social 이 이전 stub 으로 남아 있다).
  */
 
 function csrfHeaders(extra?: Record<string, string>): Headers {
@@ -48,7 +50,7 @@ export function parseSeller(body: unknown): AuthSeller | null {
   };
 }
 
-/** POST /auth/refresh — 쿠키로 새 access 를 받는다. 응답에 계정 정보가 없다(server#124) */
+/** POST /auth/refresh — 쿠키로 새 access 를 받는다. 응답에 계정 정보가 없다(TokenResponse) */
 export function postAuthRefresh(): Promise<AuthApiResult<{ accessToken: string }>> {
   return request('/auth/refresh', { method: 'POST', credentials: 'include', headers: csrfHeaders() }, parseAccessToken);
 }
@@ -60,7 +62,7 @@ export function getAuthMe(accessToken: string): Promise<AuthApiResult<AuthSeller
 
 /**
  * POST /auth/logout. accessToken 이 있으면 Bearer 로 함께 보낸다(만료됐어도 사전 refresh 없이 그대로).
- * accessToken 이 없으면 쿠키만으로 보낸다(유효한 refresh 쿠키만으로 로그아웃 — FE↔BE 합의·server#124).
+ * accessToken 이 없으면 쿠키만으로 보낸다(유효한 refresh 쿠키만으로 로그아웃 — authLogout).
  */
 export function postAuthLogout(options: { accessToken?: string | null } = {}): Promise<AuthApiResult<true>> {
   const headers = csrfHeaders();

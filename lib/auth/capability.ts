@@ -10,8 +10,9 @@ import { isApiMockingEnabled } from '../api/session.ts';
  * 'session'   = 메모리 access + 401 → refresh(single-flight·탭 잠금) → /auth/me → 원 요청 1회 재시도
  * 'dev-login' = 기존 개발용 이메일 간이 로그인(/auth/login)으로 받고, 401 이면 다시 간이 로그인. access 는 메모리에만 둔다
  *
- * TODO(AUTH-CONTRACT): server#124(세션·refresh 회전) 배포와 소셜 로그인 서버 구현이 끝나면 실서버 기본값도 'session' 으로 바꾸고
- * 개발용 간이 로그인(lib/api/session.ts ensureBackendSession)을 제거한다.
+ * 세션·refresh 회전과 소셜 로그인 서버는 release/1.1.0 에 들어 있다. 실서버에서 session 을 쓰려면 NEXT_PUBLIC_AUTH_MODE=session 으로 빌드한다.
+ * TODO(AUTH-CONTRACT): 실서버 기본값을 'session' 으로 바꾸고 개발용 간이 로그인(lib/api/session.ts ensureBackendSession)을 없애는 것은
+ * 배포 결정이 나면 한다(지금 기본값은 dev-login 그대로).
  */
 export type AuthMode = 'session' | 'dev-login';
 
@@ -31,7 +32,7 @@ export function getAuthMode(): AuthMode {
 
 /**
  * G1 소셜 로그인 버튼·콜백 완료 요청 허용 여부.
- * TODO(AUTH-CONTRACT): 실제 카카오·Google OAuth 서버(POST /auth/social/{provider}/start, POST /auth/social)가 배포되면 실서버도 연다.
+ * 실서버는 NEXT_PUBLIC_AUTH_MODE=session 빌드에서만 연다(서버 authSocialStart·authSocial — release/1.1.0).
  */
 export function isSocialLoginEnabled(): boolean {
   return isApiMockingEnabled() || isSessionAuthConfigured();
@@ -40,7 +41,7 @@ export function isSocialLoginEnabled(): boolean {
 /**
  * 앱 진입 때 「서버 로그아웃 미완료」 기록이 있으면 로그인 복원보다 로그아웃(쿠키만)을 먼저 다시 보내는 동작.
  * 계약(쿠키만으로 로그아웃 204·끝낼 세션 없음 204·검증 불가 쿠키 refresh_invalid)은 확정됐다. 서버 세션 방식('session')에서만 켠다.
- * TODO(AUTH-CONTRACT): server#124 최신 로그아웃 계약 배포 뒤 실서버가 'session' 모드로 바뀌면 함께 켜진다.
+ * 실서버는 NEXT_PUBLIC_AUTH_MODE=session 빌드에서 함께 켜진다.
  */
 export function isLogoutPendingRetryEnabled(): boolean {
   return getAuthMode() === 'session';

@@ -17,7 +17,7 @@ import type { AuthApiResult, AuthErrorInfo } from './types.ts';
  *   401 origin_not_allowed · 422 · 503 · 그 밖 → 서버 로그아웃 미완료 → logout pending 유지. 자동 반복 없음
  *
  * 횟수·시간으로 대기를 끝내지 않는다 — 끝내는 근거는 204 와 refresh_invalid 계약뿐이다.
- * refresh_invalid 계약은 FE↔BE 최신 합의다(server#124 명세에는 아직 「미결」로 남아 있다 — 반영 대기).
+ * refresh_invalid 계약은 server release/1.1.0 OpenAPI authLogout 정의(쿠키만 · 검증할 수 없는 쿠키 → 401 refresh_invalid + 쿠키 삭제)를 따른다.
  */
 export type LogoutResult =
   | { kind: 'done'; serverConfirmed: true }

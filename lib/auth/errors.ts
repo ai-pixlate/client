@@ -2,7 +2,7 @@ import type { AuthErrorInfo } from './types.ts';
 
 /**
  * 인증 API 오류 해석. 공통 Error `{ error: { code, message, retryable, details?, traceId } }` 에서 code 와 details.reason 만 꺼낸다.
- * reason 이름은 server#124 명세(배포 대기)를 따른다. 공개 OpenAPI v3.5.10 에는 아직 없다.
+ * reason 이름은 server release/1.1.0 OpenAPI(v3.5.10)의 authRefresh·authLogout·authSocialStart·authSocial 정의를 따른다.
  */
 export function readAuthError(status: number, body: unknown): AuthErrorInfo {
   const error = body && typeof body === 'object' ? (body as { error?: { code?: unknown; details?: { reason?: unknown } | null } }).error : undefined;
@@ -17,8 +17,9 @@ export const NETWORK_ERROR: AuthErrorInfo = { status: 0, code: null, reason: nul
 
 /**
  * refresh 실패 분류.
- * - account-not-allowed: 401 + account_not_allowed — 허용 목록 밖 계정. 서버가 세션을 폐기하고 refresh 쿠키를 지웠다 →
- *   다시 refresh 하지 않고 G1 에서 「허용되지 않은 계정입니다」(일반 토큰 오류가 아니다)
+ * - account-not-allowed: 401 + account_not_allowed — 허용 목록 밖 계정. 서버는 그 세션을 폐기하고 새 Set-Cookie 를 보내지 않는다
+ *   (거절 응답이라 쿠키를 지우지도 않는다 — 브라우저에 남은 같은 쿠키로 다시 refresh 하면 refresh_invalid). →
+ *   다시 refresh 하지 않고 인증 상태를 지운 뒤 G1 에서 「허용되지 않은 계정입니다」(일반 토큰 오류가 아니다)
  * - rotated: 직전 refresh 가 30초 안에 다시 옴. 서버 세션은 살아 있다 → 다른 탭 완료를 기다려 다시 시도
  * - session-ended: refresh_reused·refresh_invalid, 판매자 없음(404). 세션이 끝났다 → G1
  * - unavailable: 503·네트워크·5xx. 세션 만료가 아니다 → 상태를 지우지 않고 자동 반복만 멈춘다
