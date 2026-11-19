@@ -51,7 +51,11 @@ test.describe('unset — 기본 production(dev-login)', () => {
     await page.goto('/login');
     await expect(page.getByTestId('g1-social')).toBeVisible();
     for (const provider of ['kakao', 'google'] as const) {
-      await expect(page.getByTestId(`g1-social-${provider}`)).toHaveAttribute('aria-disabled', 'true');
+      const button = page.getByTestId(`g1-social-${provider}`);
+      await expect(button).toBeVisible();
+      await expect(button).toHaveAttribute('aria-disabled', 'true');
+      await expect(button).toHaveCSS('cursor', 'not-allowed');
+      await expect(button).toHaveCSS('opacity', '0.4');
       await page.getByTestId(`g1-social-${provider}`).click({ force: true });
     }
     await page.waitForTimeout(500);
@@ -80,6 +84,9 @@ test.describe('session — NEXT_PUBLIC_AUTH_MODE=session production', () => {
       const button = page.getByTestId(`g1-social-${provider}`);
       await expect(button).toBeVisible();
       await expect(button).not.toHaveAttribute('aria-disabled', 'true');
+      await button.hover();
+      await expect(button).toHaveCSS('cursor', 'pointer');
+      await expect(button).toHaveCSS('opacity', '1');
       await button.click();
       await expect.poll(() => calls.filter((c) => c === `POST /auth/social/${provider}/start`).length).toBe(1);
       expect(calls).not.toContain('POST /auth/login');

@@ -79,6 +79,11 @@ function BrandLayer() {
 }
 
 const FOCUS_RING = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ff6a38]';
+/**
+ * 소셜 버튼 상태. 누를 수 있으면 pointer, aria-disabled(dev-login 의 미제공·시작 진행 중)면 인증 영역 버튼(account-logout-button)과 같은
+ * not-allowed·opacity-40 으로 비활성을 보인다. Figma(835:6511)에 비활성 상태가 없어 기존 패턴을 따른다. hover 디자인은 Figma 에 없어 두지 않는다.
+ */
+const SOCIAL_BUTTON_STATE = 'cursor-pointer aria-disabled:cursor-not-allowed aria-disabled:opacity-40';
 
 /**
  * 소셜 로그인 버튼 동작. 켜짐 여부는 lib/auth/capability.ts isSocialLoginEnabled() 가 정한다 — Mock 과 NEXT_PUBLIC_AUTH_MODE=session 으로
@@ -142,7 +147,7 @@ function SocialButtons({ buttonProps }: { buttonProps: ReturnType<typeof useSoci
       <button
         {...buttonProps('kakao')}
         data-testid="g1-social-kakao"
-        className={`box-border flex h-[45px] w-full cursor-default items-center justify-center gap-2 rounded-[6px] bg-[#fee500] text-[16px] leading-[19px] tracking-[-0.48px] text-black/85 ${FOCUS_RING}`}
+        className={`box-border flex h-[45px] w-full items-center justify-center gap-2 rounded-[6px] bg-[#fee500] text-[16px] leading-[19px] tracking-[-0.48px] text-black/85 ${SOCIAL_BUTTON_STATE} ${FOCUS_RING}`}
       >
         <img alt="" src="/auth/kakao-logo-18.svg" className="block size-[18px] max-w-none" />
         카카오로 시작하기
@@ -150,7 +155,7 @@ function SocialButtons({ buttonProps }: { buttonProps: ReturnType<typeof useSoci
       <button
         {...buttonProps('google')}
         data-testid="g1-social-google"
-        className={`box-border flex h-[45px] w-full cursor-default items-center justify-center gap-2 rounded-[6px] border border-[#eaeaea] bg-white text-[16px] leading-[19px] tracking-[-0.48px] text-black/85 ${FOCUS_RING}`}
+        className={`box-border flex h-[45px] w-full items-center justify-center gap-2 rounded-[6px] border border-[#eaeaea] bg-white text-[16px] leading-[19px] tracking-[-0.48px] text-black/85 ${SOCIAL_BUTTON_STATE} ${FOCUS_RING}`}
       >
         <span className="relative block size-6 shrink-0 overflow-hidden">
           <img alt="" src="/auth/google-mark.svg" className="absolute inset-[10.18%_10.42%_10.19%_11.54%] block max-w-none" />

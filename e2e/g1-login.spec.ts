@@ -538,6 +538,7 @@ test('화면을 열기만 해서는 인증 요청이 없고, 소셜 버튼은 �
     await expect(button).toHaveAttribute('aria-disabled', 'false');
     await expect(button).toHaveCSS('opacity', '1');
     await expect(button).toHaveCSS('filter', 'none');
+    await expect(button).toHaveCSS('cursor', 'pointer');
   }
   await expect(page.getByTestId('g1-auth-panel').locator('[role="alert"], [role="status"]')).toHaveCount(0);
   const saved = await page.evaluate(() => [JSON.stringify(localStorage), JSON.stringify(sessionStorage), document.cookie].join('|'));

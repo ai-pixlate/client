@@ -28,7 +28,14 @@ test('/login 은 Mock 이 꺼져 있어도 자동 로그인·소셜 로그인 �
   await page.goto('/login');
   await expect(page.getByTestId('g1-social')).toBeVisible();
   // 실서버에는 소셜 OAuth 가 아직 없어 버튼은 비활성 의미(aria-disabled)이고 눌러도 요청이 없다(lib/auth/capability.ts)
-  await expect(page.getByTestId('g1-social-kakao')).toHaveAttribute('aria-disabled', 'true');
+  for (const provider of ['kakao', 'google'] as const) {
+    const button = page.getByTestId(`g1-social-${provider}`);
+    await expect(button).toBeVisible();
+    await expect(button).toHaveAttribute('aria-disabled', 'true');
+    // 누를 수 없는 버튼은 pointer 가 아니고 시각적으로도 비활성이다(인증 영역 버튼과 같은 not-allowed·opacity-40)
+    await expect(button).toHaveCSS('cursor', 'not-allowed');
+    await expect(button).toHaveCSS('opacity', '0.4');
+  }
   await page.getByTestId('g1-social-kakao').click({ force: true });
   await page.getByTestId('g1-social-google').click({ force: true });
   await page.waitForTimeout(500);
