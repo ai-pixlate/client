@@ -7,7 +7,7 @@ import { BLOCK_ROLE_LABELS } from '@/lib/api/labels';
 
 // ─────────────────────────────────────────────────────────────────
 // N5 — TextBlock 편집기
-// n5-review-view.tsx에서 사용. perf harness(app/perf/long-page)에서도 재사용.
+// 지금은 perf harness(app/perf/long-page)에서만 쓴다. 실제 N5 화면은 _components/n5/ 를 쓴다(예전 n5-review-view.tsx 는 삭제됨).
 // ─────────────────────────────────────────────────────────────────
 export function TextBlockEditor({
   block,
