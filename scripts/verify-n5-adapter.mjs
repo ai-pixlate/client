@@ -429,6 +429,10 @@ console.log('\nN5 오류 상태');
   check('미리보기 안내만 있으면 canvas 공간 0', getSectionCanvasHeaderHeight({ ...running, previewNotice: '이전 결과' }) === 0);
   check('우측 패널 행 수에는 미리보기 안내가 그대로 들어간다', getSectionStatusRowCount(withNotice) === getSectionStatusRowCount(status) + 1);
   check('warningBadge로 렌더 실패를 판별하지 않는다', buildSectionStatus(30, [], [], { warningBadge: 'processing_failed' }).failedStages.length === 0);
+  const inpaintFailed = buildSectionStatus(10, [], items, { warningBadge: 'processing_failed', verdicts: [] });
+  check('인페인팅 실행 실패 + processing_failed → 실행 실패 행 하나로만(품질 행 중복 없음)', inpaintFailed.failedStages.includes('inpaint') && inpaintFailed.warningLabel === null);
+  check('인페인팅 실패 행이 없으면 processing_failed 배지는 남긴다', buildSectionStatus(30, [], [], { warningBadge: 'processing_failed', verdicts: [] }).warningLabel === '인페인팅 처리 실패');
+  check('품질 주의는 인페인팅 실패와 함께여도 품질 행으로 남는다', status.failedStages.includes('inpaint') && status.warningLabel === '품질 주의');
 }
 
 console.log(`\n총 ${pass + fail}건 — PASS ${pass} / FAIL ${fail}`);

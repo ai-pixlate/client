@@ -258,7 +258,12 @@ export function buildSectionStatus(
     renderRetry,
     restoredInN3: section?.exclusionReason === 'restored_by_user',
     verdictLabels: [...new Set(labels)],
-    warningLabel: section?.warningBadge ? SECTION_WARNING_LABELS[section.warningBadge] : null,
+    // 서버는 인페인팅 실행 실패 때 warningBadge=processing_failed 를 함께 둔다(downstream ⑥). 그 실패는 「실행 실패 · 인페인팅」 행이
+    // 이미 보이므로 품질 행에 같은 실패를 다시 내지 않는다 — 실행 실패와 품질 경고를 섞지 않는다. /tasks 에 실패 항목이 없을 때만 배지로 남긴다
+    warningLabel:
+      section?.warningBadge && !(section.warningBadge === 'processing_failed' && inpaint)
+        ? SECTION_WARNING_LABELS[section.warningBadge]
+        : null,
     signals: getVisibleSignals(signals),
     progressLabel: isLegacy ? getSectionProgressLabel(sectionId, items, renderStatus, render != null) : preview.labels.progressLabel,
     previewNotice: isLegacy ? null : preview.labels.notice,
