@@ -335,12 +335,10 @@ function TranslationEditor({
   // 이 칸은 위 activeTaskItem 으로 「재렌더링 중…」 종료·실패 표시만 바꾼다.
 
   const translationFailure = getTranslationFailure(block.badges);
-  // 이 저장의 재렌더 실패를 우선하고, 없으면 서버 목록(JOB-05)의 실패를 본다
+  // 이 칸이 저장해 받은 재렌더 task(섹션 render)의 실패만 칸에 보인다 — 서버는 블록 단위 render task 를 만들지 않는다
   const previewFailure: RetryTarget | null = rerenderFailed
     ? { taskId: rerenderTaskId as number, retryable: activeTaskItem?.retryable === true }
-    : isRerendering
-      ? null
-      : taskFailures.previewFailure;
+    : null;
   // 일반 넘침(서버 render.result.overflow · width_overflow)은 사용자에게 「짧은 표현이 필요합니다」로 알리지 않는다(팀 QA 결정).
   // 서버 넘침 값(block.serverOverflow)은 그대로 받아 두고 이 칸에 표시만 하지 않는다.
   // 서버 저장값과 달라지는 순간부터(입력 중·칸을 벗어난 뒤 모두) 「저장하지 않은 수정」을 보인다.
@@ -664,7 +662,7 @@ function groupBlocksBySection(
     .filter((group) => group.blocks.length > 0 || hasSectionStatus(sectionStatusById.get(group.sectionId)));
 }
 
-const NO_TASK_FAILURES: BlockTaskFailures = { verifyFailed: false, checkState: null, previewFailure: null };
+const NO_TASK_FAILURES: BlockTaskFailures = { verifyFailed: false, checkState: null };
 
 /**
  * 패널 자동 이동 요청(n5-view.tsx 소유) — selection 값과 별개인 일회성 이벤트다. seq 가 바뀔 때만 한 번 처리한다.

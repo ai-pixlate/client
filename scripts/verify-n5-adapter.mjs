@@ -400,10 +400,11 @@ console.log('\nN5 오류 상태');
     { taskId: 5, taskType: 'render', unitType: 'text_block', unitId: 100, status: 'failed', retryable: true },
     { taskId: 6, taskType: 'verify', unitType: 'job', unitId: 100, status: 'failed' },
   ];
-  const blockFail = getBlockTaskFailures(items, 100);
-  check('block 실패는 text_block 단위만 본다', blockFail.verifyFailed && blockFail.previewFailure?.taskId === 5);
-  const other = getBlockTaskFailures(items, 200);
-  check('다른 block은 실패가 없다', !other.verifyFailed && other.previewFailure === null);
+  // 서버는 render·verify 를 섹션 단위로만 만든다 — 블록 실패는 /tasks 의 text_block 항목으로 보지 않는다(위 items 의 4·5 는 무시된다)
+  check('검사 실패는 block.check.state=failed 로만 본다', getBlockTaskFailures({ state: 'failed' }).verifyFailed === true);
+  check('/tasks verify·text_block 실패가 있어도 check 가 없으면 검사 실패가 아니다', getBlockTaskFailures(undefined).verifyFailed === false);
+  check('settled 는 검사 실패가 아니다', getBlockTaskFailures({ state: 'settled' }).verifyFailed === false && getBlockTaskFailures({ state: 'settled' }).checkState === 'settled');
+  check('BlockTaskFailures 에 /tasks 기반 미리보기 실패가 없다', !('previewFailure' in getBlockTaskFailures({ state: 'failed' })));
 
   const status = buildSectionStatus(10, [], items, {
     exclusionReason: 'restored_by_user',

@@ -161,24 +161,20 @@ export interface BlockTaskFailures {
    * failed = 「검사하지 못했습니다」(확정 통과) / settled = 결과(signals). 검사 대상 밖·키 없음 = null
    */
   checkState: N5CheckState | null;
-  /** 블록 재렌더(render · text_block) 실패 — 칸의 "미리보기를 갱신하지 못했습니다" */
-  previewFailure: RetryTarget | null;
 }
 
 /**
- * @param check 이 블록의 /blocks `check`(BlockCheck). state=failed = 현재 입력 검사 최종 실패(재시도 소진) — 「⚠ 검사하지 못했습니다」.
- *   검사 task 는 섹션 단위(taskType=verify · unitType=section)라 /tasks 로는 블록을 가리킬 수 없다. 블록 단위 verify 실패 항목은 이전 표현으로 함께 본다
+ * 블록 단위 실패 상태는 /blocks 값으로만 본다. 서버는 render·verify task 를 섹션 단위(unitType=section)로만 만든다 —
+ * /tasks 의 text_block 항목은 번역(translate)뿐이라 블록 검사·미리보기 실패를 /tasks 로 찾지 않는다.
+ * - 검사 실패: 블록 check.state=failed(BlockCheck) — 「⚠ 검사하지 못했습니다」
+ * - 미리보기 갱신 실패: 이 화면에서 저장해 받은 rerenderTaskId(섹션 render task)를 칸이 추적해 본다(n5-panel.tsx).
+ *   새로고침 뒤에는 /preview 의 섹션 시도(update-failed)로 섹션 안내에 보인다(buildSectionStatus previewUpdateRetry)
+ * @param check 이 블록의 /blocks `check`(BlockCheck)
  */
-export function getBlockTaskFailures(
-  items: readonly ApiJobAsyncTaskItem[],
-  blockId: number,
-  check?: { state?: N5CheckState | null } | null,
-): BlockTaskFailures {
-  const preview = findFailedItem(items, 'render', 'text_block', blockId);
+export function getBlockTaskFailures(check?: { state?: N5CheckState | null } | null): BlockTaskFailures {
   return {
-    verifyFailed: check?.state === 'failed' || findFailedItem(items, 'verify', 'text_block', blockId) != null,
+    verifyFailed: check?.state === 'failed',
     checkState: check?.state ?? null,
-    previewFailure: preview ? toRetryTarget(preview) : null,
   };
 }
 

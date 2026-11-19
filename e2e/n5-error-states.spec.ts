@@ -35,12 +35,15 @@ test('오류 종합 — section·signal·번역문 칸 실패가 함께 보이�
   await expect(retry).toHaveText('다시 시도');
   expect((await retry.boundingBox())!.height).toBe(24);
 
-  // 미리보기 칸 — 9103 은 서버 넘침(width_overflow)이 있지만 일반 넘침 안내는 보이지 않는다(팀 QA 결정)
+  // 9103 — 서버 넘침(width_overflow)이 있지만 일반 넘침 안내는 보이지 않는다(팀 QA 결정). 검사 실패는 block.check.state=failed 다.
+  // 블록 「미리보기를 갱신하지 못했습니다」는 이 화면에서 저장한 재렌더(섹션 render task)가 실패할 때만 칸에 보인다 —
+  // 서버는 블록 단위 render task 를 만들지 않으므로 처음 열 때는 없다(그 흐름은 n5-task-retry.spec.ts)
   const preview = page.getByTestId('n5-block-row-9103');
-  await expect(preview.getByTestId('n5-cell-failure-preview')).toHaveText('미리보기를 갱신하지 못했습니다');
+  await expect(preview.getByTestId('n5-cell-failure-verify')).toHaveText('검사하지 못했습니다');
+  await expect(preview.getByTestId('n5-cell-failure-preview')).toHaveCount(0);
+  await expect(preview.getByTestId('n5-block-preview-retry-9103')).toHaveCount(0);
   await expect(preview.getByTestId('n5-cell-failure-overflow')).toHaveCount(0);
   await expect(preview).not.toContainText('글자가 넘칩니다');
-  await expect(preview.getByTestId('n5-block-preview-retry-9103')).toHaveText('미리보기 다시 시도');
 
   // section 상태 — block 목록 위, block signal과 분리
   const section = page.getByTestId('n5-section-status-1');
@@ -111,17 +114,15 @@ test('오류 종합 — section·signal·번역문 칸 실패가 함께 보이�
 
   // 재시도 — 미리보기 갱신 실패·섹션 렌더 실패는 서버가 retryable=true 로 준 실패라 활성이다(누른 뒤 흐름은 e2e/n5-task-retry.spec.ts).
   // 번역 실패 [다시 시도]는 12월 범위라 retryable=true 여도 비활성이다
-  for (const button of [preview.getByTestId('n5-block-preview-retry-9103'), page.getByTestId('n5-section-status-1-render-retry')]) {
-    await expect(button).toBeEnabled();
-  }
+  await expect(page.getByTestId('n5-section-status-1-render-retry')).toBeEnabled();
   await expect(retry).toHaveAttribute('aria-disabled', 'true');
   await expect(failed.getByTestId('n5-cell-failure-translate')).toBeVisible();
 
-  // 입력 중 — 검사 결과(미리보기 실패 등)는 직전 서버 결과를 유지하고, 일반 넘침 안내는 여전히 없다
+  // 입력 중 — 검사 결과(검사 실패 등)는 직전 서버 결과를 유지하고, 일반 넘침 안내는 여전히 없다
   const editor = page.getByTestId('n5-block-editor-9103');
   const original = await editor.inputValue();
   await editor.fill('Short');
-  await expect(preview.getByTestId('n5-cell-failure-preview')).toBeVisible();
+  await expect(preview.getByTestId('n5-cell-failure-verify')).toBeVisible();
   await expect(preview.getByTestId('n5-cell-failure-overflow')).toHaveCount(0);
   // 서버값과 달라지는 순간부터(입력 중에도) 「저장하지 않은 수정」 — 보이는 검사 결과는 마지막 저장값 기준임을 함께 알린다
   const unsaved = page.getByTestId('n5-block-unsaved-9103');

@@ -98,7 +98,18 @@ export function recheckMockTextSignals(signals: ApiTextBlock['signals'], trans1:
 /** n5-errors — 번역 재시도(JOB-06)가 끝나 번역문이 생긴 블록. 이 블록에는 translation_failed 를 다시 싣지 않는다(Mock 전용 상태) */
 export const n5ErrorTranslationRecovered = new Set<number>();
 
+/** n5-errors — 검사가 최종 실패한 블록(BlockCheck.state=failed). 저장해 번역문이 바뀌면 Mock 재검사가 이 값을 바꾼다 */
+const CHECK_FAILED_BLOCK_IDS: ReadonlySet<number> = new Set([9111, 9103]);
+
 export function applyN5ErrorBlocks(block: ApiTextBlock): ApiTextBlock {
+  const withCheck =
+    CHECK_FAILED_BLOCK_IDS.has(block.id as number) && (block.revision ?? 1) <= 1
+      ? { ...block, check: { inputKey: `mock-check-${block.id}`, state: 'failed' as const } }
+      : block;
+  return applyN5ErrorSignals(withCheck);
+}
+
+function applyN5ErrorSignals(block: ApiTextBlock): ApiTextBlock {
   const scenarioSignals = SIGNALS_BY_BLOCK[block.id as number];
   if (!scenarioSignals) return block;
   if (n5ErrorTranslationRecovered.has(block.id as number)) {
@@ -139,10 +150,9 @@ function failedItem(
 const FAILED_ITEMS: ApiJobAsyncTaskItem[] = [
   failedItem(80001, 'render', 'section', 501, true),
   failedItem(80002, 'inpaint', 'section', 501, false),
+  // 서버는 render·verify task 를 섹션 단위로만 만든다 — 블록 단위 항목은 번역(translate)뿐이다.
+  // 블록 검사 실패는 /blocks check.state=failed 로 싣는다(applyN5ErrorBlocks · CHECK_FAILED_BLOCK_IDS)
   failedItem(TRANSLATE_TASK_ID, 'translate', 'text_block', 9111, true),
-  failedItem(80003, 'verify', 'text_block', 9111, false),
-  failedItem(80004, 'verify', 'text_block', 9103, false),
-  failedItem(80005, 'render', 'text_block', 9103, true),
   failedItem(80007, 'render', 'section', 505, true),
   { ...failedItem(80006, 'render', 'section', 504, false), status: 'running', uiStatus: 'running', errorCode: null },
 ];

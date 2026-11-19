@@ -295,7 +295,7 @@ export function N5View({ jobId }: { jobId: string }) {
   // 검사 실패는 블록 check.state 가 정본이다 — raw /blocks 의 check 를 함께 넘긴다
   const checkByBlockId = new Map(blocksQuery.data.map((block) => [block.id, block.check ?? null]));
   const blockTaskFailuresById = new Map(
-    blocks.map((block) => [block.id, getBlockTaskFailures(taskItems, block.id, checkByBlockId.get(block.id))]),
+    blocks.map((block) => [block.id, getBlockTaskFailures(checkByBlockId.get(block.id))]),
   );
 
 
