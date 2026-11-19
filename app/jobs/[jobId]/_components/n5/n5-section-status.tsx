@@ -73,11 +73,23 @@ export function SignalRows({ badges, testIdPrefix }: { badges: SignalBadge[]; te
 
 const STAGE_LABELS = { render: '렌더링', inpaint: '인페인팅' } as const;
 
-function PreviewNotice({ status, testIdPrefix }: { status: SectionStatusViewModel; testIdPrefix: string }) {
+function PreviewNotice({
+  status,
+  testIdPrefix,
+  showUpdateRetry,
+}: {
+  status: SectionStatusViewModel;
+  testIdPrefix: string;
+  /** N5 재렌더 실패의 [미리보기 다시 시도] — 같은 task 를 이 섹션의 블록 칸이 이미 보이면 false(버튼을 두 번 내지 않는다) */
+  showUpdateRetry: boolean;
+}) {
   if (!status.previewNotice) return null;
   return (
-    <div data-testid={`${testIdPrefix}-notice`} data-input-error-code={status.previewInputErrorCode ?? undefined} className="flex">
+    <div data-testid={`${testIdPrefix}-notice`} data-input-error-code={status.previewInputErrorCode ?? undefined} className="flex items-center gap-2">
       <StatusTag tone="neutral">{status.previewNotice}</StatusTag>
+      {showUpdateRetry && status.previewUpdateRetry && (
+        <TaskRetryButton label="미리보기 다시 시도" testId={`${testIdPrefix}-preview-retry`} target={status.previewUpdateRetry} />
+      )}
     </div>
   );
 }
@@ -91,10 +103,12 @@ function SectionStatusRows({
   status,
   variant,
   testIdPrefix,
+  trackedRerenderTaskIds,
 }: {
   status: SectionStatusViewModel;
   variant: 'canvas' | 'panel';
   testIdPrefix: string;
+  trackedRerenderTaskIds?: ReadonlySet<number>;
 }) {
   const hasTagRow = status.restoredInN3 || status.verdictLabels.length > 0;
   return (
@@ -130,13 +144,28 @@ function SectionStatusRows({
       )}
       {/* 미리보기 안내(최신 아님·없음·입력 오류·다시 불러오는 중) — 기존 중립 태그 행을 그대로 쓴다(Figma 에 이 문구 표본은 없다).
           입력 오류 원래 코드는 화면 문구가 아니라 data 속성으로만 남긴다. canvas 는 이 행 대신 N5PreviewStatusSlot 에 보인다 */}
-      {variant === 'panel' && <PreviewNotice status={status} testIdPrefix={testIdPrefix} />}
+      {variant === 'panel' && (
+        <PreviewNotice
+          status={status}
+          testIdPrefix={testIdPrefix}
+          showUpdateRetry={status.previewUpdateRetry != null && !trackedRerenderTaskIds?.has(status.previewUpdateRetry.taskId)}
+        />
+      )}
     </>
   );
 }
 
 /** 우측 패널 — Section 태그 아래(16), block 목록 시작 전(28). 행 간격 4 */
-export function PanelSectionStatus({ sectionOrder, status }: { sectionOrder: number; status: SectionStatusViewModel }) {
+export function PanelSectionStatus({
+  sectionOrder,
+  status,
+  trackedRerenderTaskIds,
+}: {
+  sectionOrder: number;
+  status: SectionStatusViewModel;
+  /** 이 화면에서 저장해 블록 칸이 추적 중인 재렌더 task — 그 칸이 실패 문구와 [미리보기 다시 시도]를 보인다 */
+  trackedRerenderTaskIds?: ReadonlySet<number>;
+}) {
   const prefix = `n5-section-status-${sectionOrder}`;
   return (
     <div data-testid={prefix} className="flex w-full flex-col gap-1">
@@ -145,7 +174,7 @@ export function PanelSectionStatus({ sectionOrder, status }: { sectionOrder: num
           <StatusTag tone="neutral">{status.progressLabel}</StatusTag>
         </div>
       )}
-      <SectionStatusRows status={status} variant="panel" testIdPrefix={prefix} />
+      <SectionStatusRows status={status} variant="panel" testIdPrefix={prefix} trackedRerenderTaskIds={trackedRerenderTaskIds} />
       <SignalRows badges={status.signals} testIdPrefix={`${prefix}-signal`} />
     </div>
   );
@@ -172,7 +201,8 @@ export function N5PreviewStatusSlot({ sectionId, status }: { sectionId: number; 
       data-testid={`n5-preview-status-slot-${sectionId}`}
       className="pointer-events-none absolute bottom-2 left-2 z-10 flex max-w-[calc(100%-16px)] flex-col items-start gap-1"
     >
-      {status && <PreviewNotice status={status} testIdPrefix="n5-canvas-section-status" />}
+      {/* 클릭을 아래로 넘기는 자리라 버튼은 두지 않는다 — 재시도는 우측 패널 안내 행·블록 칸에 있다 */}
+      {status && <PreviewNotice status={status} testIdPrefix="n5-canvas-section-status" showUpdateRetry={false} />}
     </div>
   );
 }

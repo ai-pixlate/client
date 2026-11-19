@@ -347,21 +347,29 @@ export function resolvePreviewSectionSemantic(input: PreviewInputState, render: 
   };
 }
 
-/** 섹션 상태 문구 — 진행(progress)·안내(notice)·실패를 따로 둔다. 실패는 기존 「실행 실패」 행 하나로만 보인다 */
+/**
+ * 섹션 상태 문구 — 진행(progress)·안내(notice)·실패를 따로 둔다.
+ * 두 렌더 실패를 섞지 않는다(PRD F-CFM-05 ⑪·⑮ · 계약 confirmReview 「섹션 실행 실패의 출력」):
+ * - renderFailed: 표시 결과 없이 렌더 시도가 실패한 섹션(N4 최초 생성 실패와 같은 표시) — 「실행 실패 · 렌더링」 · 원본 표시
+ * - updateFailed: 이전 성공 결과가 있는 섹션의 새 시도 실패(N5 에서 고친 뒤 재렌더 실패) — 이전 결과 유지 · 「미리보기를 갱신하지 못했습니다」
+ * 서버 /tasks 에서는 두 시도가 같은 모양(render · section · failed)이라 이전 결과 유무(render.result)로 나눈다.
+ */
 export interface PreviewSectionLabels {
   progressLabel: string | null;
   notice: string | null;
   renderFailed: boolean;
+  updateFailed: boolean;
 }
 
-const NO_LABELS: PreviewSectionLabels = { progressLabel: null, notice: null, renderFailed: false };
+const NO_LABELS: PreviewSectionLabels = { progressLabel: null, notice: null, renderFailed: false, updateFailed: false };
 
 /** 의미 상태 → 임시 문구(preview-copy.ts). 디자인이 오면 문구 표만 바꾼다 */
 export function resolvePreviewSectionLabels(semantic: PreviewSectionSemantic | null): PreviewSectionLabels {
   if (!semantic) return NO_LABELS;
   const { input, render, attemptStatus, syncing } = semantic;
   const hasPrevious = render === 'current' || render === 'stale' || render === 'updating' || render === 'update-failed';
-  const renderFailed = render === 'failed' || render === 'update-failed';
+  const renderFailed = render === 'failed';
+  const updateFailed = render === 'update-failed';
   const progressKey =
     render === 'waiting' || render === 'running'
       ? render
@@ -369,7 +377,7 @@ export function resolvePreviewSectionLabels(semantic: PreviewSectionSemantic | n
         ? attemptStatus === 'running'
           ? 'running'
           : 'waiting'
-        : input === 'preparing' && !renderFailed && !hasPrevious
+        : input === 'preparing' && !renderFailed && !updateFailed && !hasPrevious
           ? 'preparing'
           : null;
   const noticeKey =
@@ -377,7 +385,9 @@ export function resolvePreviewSectionLabels(semantic: PreviewSectionSemantic | n
       ? 'input-error'
       : syncing
         ? 'syncing'
-        : hasPrevious && render !== 'current'
+        : updateFailed
+          ? 'update-failed'
+          : hasPrevious && render !== 'current'
           ? 'previous-result'
           : render === 'missing' && input === 'ready'
             ? 'missing'
@@ -386,5 +396,6 @@ export function resolvePreviewSectionLabels(semantic: PreviewSectionSemantic | n
     progressLabel: progressKey ? N5_PREVIEW_PROGRESS_COPY[progressKey] : null,
     notice: noticeKey ? N5_PREVIEW_NOTICE_COPY[noticeKey] : null,
     renderFailed,
+    updateFailed,
   };
 }

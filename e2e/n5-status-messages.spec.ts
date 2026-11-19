@@ -38,7 +38,8 @@ test('A 번역 실패 — translation_failed signal 이면 「번역하지 못�
   await reachN5(page, { mockScenario: 'n5-errors' });
   await expect(row(page, 9111).getByTestId('n5-cell-failure-translate')).toHaveText('번역하지 못했습니다');
   await expect(page.getByTestId('n5-block-editor-9111')).toHaveAttribute('placeholder', '번역문을 직접 입력하세요');
-  await expect(page.getByTestId('n5-block-translate-retry-9111')).toBeEnabled(); // signal 의 retryable=true
+  // 번역 실패 [다시 시도]는 12월 범위 — signal 의 retryable=true 여도 비활성이다(n5-task-retry.spec.ts 가 요청 0회를 본다)
+  await expect(page.getByTestId('n5-block-translate-retry-9111')).toHaveAttribute('aria-disabled', 'true');
 });
 
 test('B 검사 실패 — 블록 check.state=failed 면 「검사하지 못했습니다」, settled 면 없음', async ({ page }) => {

@@ -6,7 +6,7 @@ import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 // ─────────────────────────────────────────────────────────────────
 // N5 실패 작업 [다시 시도] — API-JOB-06 POST /jobs/{jobId}/tasks/{taskId}/retry(n5-task-retry.tsx).
 // 실패 상태가 서버에서 받은 taskId 로 요청하고, 응답의 새 taskId 를 /tasks 로 추적해 끝나면 /blocks·/preview 를 다시 받는다.
-//   번역 실패(n5-errors 9111 · translate 80101) → translation_failed 해제 · 번역문 반영
+//   번역 실패(n5-errors 9111 · translate 80101) → 12월 범위: [다시 시도]는 비활성 · 12월 안내 · 요청 없음(taskId 는 데이터로만 남는다)
 //   미리보기 갱신 실패(이 칸 저장의 재렌더 실패 — 「실패유도」) → 실패 표시 해제 · 최신 미리보기
 //   섹션 렌더 실패(n5-errors 섹션 501 · render 80001) → 실행 실패 행 해제
 // Mock 재시도 시도는 「실패유도」 규칙을 타지 않고 끝난다(lib/msw/handlers.ts). Mock 이다.
@@ -23,17 +23,33 @@ function trackRetries(page: Page): string[] {
   return posts;
 }
 
-test('번역 실패 [다시 시도] — 서버 taskId 로 재시도 → 진행 중 비활성 → 끝나면 번역 실패 해제·번역문 반영', async ({ page }) => {
+test('번역 실패 [다시 시도] — 12월 범위: 보이지만 비활성 · 12월 안내 · 눌러도 재시도 요청 0회 · 직접 입력 가능', async ({ page }) => {
   const posts = trackRetries(page);
   await reachN5(page, { mockScenario: 'n5-errors' });
   const row = page.getByTestId('n5-block-row-9111');
-  await expect(row.getByTestId('n5-cell-failure-translate')).toBeVisible();
+  await expect(row.getByTestId('n5-cell-failure-translate')).toHaveText('번역하지 못했습니다');
   const button = page.getByTestId('n5-block-translate-retry-9111');
-  await expect(button).toBeEnabled();
-  await button.click();
-  expect(posts).toEqual([`/jobs/${MOCK_JOB_ID}/tasks/80101/retry`]);
-  await expect(row.getByTestId('n5-cell-failure-translate')).toHaveCount(0, { timeout: 20_000 });
-  await expect(page.getByTestId('n5-block-editor-9111')).not.toHaveValue('');
+  await expect(button).toBeVisible();
+  await expect(button).toHaveText('다시 시도');
+  await expect(button).toHaveAttribute('aria-disabled', 'true');
+  await expect(button).toHaveCSS('cursor', 'not-allowed');
+  const tooltip = page.getByTestId('n5-block-translate-retry-9111-tooltip');
+  await expect(tooltip).toBeHidden();
+  await button.hover();
+  await expect(tooltip).toBeVisible();
+  await expect(tooltip).toHaveText('다시 시도는 12월 구현 예정입니다.');
+  await expect(button).toHaveAttribute('aria-describedby', (await tooltip.getAttribute('id'))!);
+  // aria-disabled 라 Playwright 기본 클릭은 기다린다 — 실제로 눌러도 요청이 없는지 force 로 확인한다
+  await button.click({ force: true });
+  await button.press('Enter');
+  await page.waitForTimeout(1_000);
+  expect(posts).toEqual([]);
+  await expect(row.getByTestId('n5-cell-failure-translate')).toBeVisible();
+  // 번역문은 직접 입력할 수 있다
+  const editor = page.getByTestId('n5-block-editor-9111');
+  await expect(editor).toBeEditable();
+  await editor.fill('직접 입력한 번역문');
+  await expect(editor).toHaveValue('직접 입력한 번역문');
 });
 
 test('미리보기 갱신 실패 [미리보기 다시 시도] — 재렌더 재시도 → 「재렌더링 중…」 → 끝나면 실패 해제·최신 미리보기', async ({ page }) => {
@@ -83,9 +99,10 @@ test('재시도 요청이 거절되면(409 RETRY_NOT_ALLOWED) 실패 상태가 �
       return original(input, init);
     };
   });
-  const row = page.getByTestId('n5-block-row-9111');
-  await page.getByTestId('n5-block-translate-retry-9111').click();
-  await expect(page.getByTestId('n5-block-translate-retry-9111')).toHaveAttribute('data-retry-state', 'request-failed');
+  // 번역 실패 재시도는 12월 범위라 섹션 렌더 실패 [렌더링 다시 시도]로 확인한다
+  const failedRow = page.getByTestId('n5-section-status-1-failed');
+  await page.getByTestId('n5-section-status-1-render-retry').click();
+  await expect(page.getByTestId('n5-section-status-1-render-retry')).toHaveAttribute('data-retry-state', 'request-failed');
   await page.waitForTimeout(1_000);
-  await expect(row.getByTestId('n5-cell-failure-translate')).toBeVisible();
+  await expect(failedRow).toContainText('렌더링');
 });

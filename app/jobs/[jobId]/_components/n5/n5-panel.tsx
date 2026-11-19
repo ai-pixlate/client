@@ -21,7 +21,7 @@ import {
 } from '@/lib/n5/adapter';
 import type { BlockTaskFailures, BlockViewModel, PreviewSectionViewModel, RetryTarget, SectionStatusViewModel } from '@/lib/n5/adapter';
 import { PanelSectionStatus, SignalRows } from './n5-section-status';
-import { TaskRetryButton } from './n5-task-retry';
+import { TaskRetryButton, UpcomingRetryButton } from './n5-task-retry';
 import {
   groupExpectedBySection,
   isConfirmPreviewSettling,
@@ -487,9 +487,9 @@ function TranslationEditor({
       {/* Figma 1244:8238·8641 — 재시도 버튼은 번역문 칸 아래에 둔다. 서버가 준 taskId·retryable 로 API-JOB-06 을 부른다(n5-task-retry.tsx) */}
       {(translationFailure || previewFailure) && (
         <div className="flex flex-wrap items-center gap-2">
-          {translationFailure && (
-            <TaskRetryButton label="다시 시도" testId={`n5-block-translate-retry-${block.id}`} target={translationFailure.retry} />
-          )}
+          {/* 번역 실패의 [다시 시도]·부분 재실행은 12월 범위(PRD F-CFM-05) — 버튼은 보이되 비활성이고 재시도 요청을 보내지 않는다.
+              서버가 준 taskId·retryable(translationFailure.retry)은 그대로 둔다(12월 연결 때 TaskRetryButton 으로 바꾼다) */}
+          {translationFailure && <UpcomingRetryButton label="다시 시도" testId={`n5-block-translate-retry-${block.id}`} />}
           {previewFailure && (
             <TaskRetryButton
               label="미리보기 다시 시도"
@@ -707,6 +707,11 @@ export function N5Panel({
 }) {
   const groups = useMemo(() => groupBlocksBySection(sections, blocks, sectionStatusById), [sections, blocks, sectionStatusById]);
   const previewSectionById = useMemo(() => new Map(sections.map((section) => [section.id, section])), [sections]);
+  // 블록 칸이 추적 중인 재렌더 task — 그 칸이 실패 문구·[미리보기 다시 시도]를 보이므로 섹션 안내에는 같은 버튼을 다시 내지 않는다
+  const trackedRerenderTaskIds = useMemo(
+    () => new Set([...editSession.rerenderTaskByBlock.values()].flatMap((task) => (task.taskId != null ? [task.taskId] : []))),
+    [editSession.rerenderTaskByBlock],
+  );
   const firstGroupHasStatus = groups.length > 0 && getSectionStatusRowCount(sectionStatusById.get(groups[0].sectionId)) > 0;
 
   const confirmMutation = useConfirmN5Mutation(jobId);
@@ -1130,6 +1135,7 @@ export function N5Panel({
                 <PanelSectionStatus
                   sectionOrder={group.sectionOrder}
                   status={sectionStatusById.get(group.sectionId) as SectionStatusViewModel}
+                  trackedRerenderTaskIds={trackedRerenderTaskIds}
                 />
               )}
               {/* 9/23 디테일 보정 — block 카드 사이 간격을 이전 gap-4(16px)에서

@@ -185,8 +185,13 @@ export function getBlockTaskFailures(
 export interface SectionStatusViewModel {
   /** 실행 실패 단계. JOB-05 items 기준(섹션 렌더 실패는 warningBadge로 판별하지 않는다) */
   failedStages: ('render' | 'inpaint')[];
-  /** 렌더 실패 task. 인페인팅은 재시도 계약(translate·render만)이 없어 대상이 아니다 */
+  /** 섹션 렌더 실행 실패 task. 인페인팅은 재시도 계약(translate·render만)이 없어 대상이 아니다 */
   renderRetry: RetryTarget | null;
+  /**
+   * N5 에서 고친 뒤 재렌더가 실패했다(이전 성공 결과 유지 — /preview update-failed). 섹션 실행 실패가 아니라 미리보기 갱신 실패다:
+   * 「실행 실패」 행·확정 확인 항목에 넣지 않고, 이전 결과를 그대로 보이며 「미리보기를 갱신하지 못했습니다」 안내와 재시도만 둔다
+   */
+  previewUpdateRetry: RetryTarget | null;
   /** N3에서 사용자가 되살린 섹션(Section.exclusionReason) */
   restoredInN3: boolean;
   /** 판정 배지 문구(Section.verdicts[].verdictType) */
@@ -247,15 +252,24 @@ export function buildSectionStatus(
   const render = findFailedItem(items, 'render', 'section', sectionId);
   const inpaint = findFailedItem(items, 'inpaint', 'section', sectionId);
   const labels = (section?.verdicts ?? []).flatMap((verdict) => (verdict.verdictType ? [VERDICT_BADGE_LABELS[verdict.verdictType]] : []));
-  // /tasks 실패와 /preview 시도 실패는 같은 「실행 실패 · 렌더링」 행 하나로 보인다(경고를 두 번 내지 않는다)
-  // 재렌더 실패(failed·update-failed)의 다시 시도 대상은 기존 task retry 계약(attempt.taskId·retryable)이다
-  const attemptRetry = preview?.labels.renderFailed === true ? preview.semantic.retry : null;
-  const attemptFailed = attemptRetry != null;
-  const renderRetry = render ? toRetryTarget(render) : attemptRetry;
   const isLegacy = preview == null || renderStatus === 'excluded';
+  // 서버는 N4 최초 생성과 N5 수정 뒤 재렌더를 같은 섹션 시도(render · section)로 만든다 — /tasks 만으로는 둘을 나눌 수 없다.
+  // 이번 계약(/preview render)이 있으면 그 섹션의 현재 시도와 이전 결과 유무로 나눈다(preview-state.ts resolvePreviewSectionLabels):
+  // - failed(이전 결과 없음) = 섹션 렌더 실행 실패 → 「실행 실패 · 렌더링」 · 원본 표시 · 확정 확인 항목
+  // - update-failed(이전 결과 있음) = 미리보기 갱신 실패 → 이전 결과 유지 · 안내만(실행 실패 아님)
+  // 같은 task 가 /tasks 에도 실패로 있으므로 이 경우 /tasks 실패 항목으로 따로 판정하지 않는다(경고를 두 번 내지 않는다).
+  // 계약 키가 없는(legacy) 응답은 기존대로 /tasks 실패 항목으로 본다
+  const sectionRenderFailed = isLegacy ? render != null : preview.labels.renderFailed;
+  const renderRetry = !sectionRenderFailed
+    ? null
+    : isLegacy
+      ? toRetryTarget(render as ApiJobAsyncTaskItem)
+      : (preview.semantic.retry ?? (render ? toRetryTarget(render) : null));
+  const previewUpdateRetry = !isLegacy && preview.labels.updateFailed ? preview.semantic.retry : null;
   return {
-    failedStages: [...(render || attemptFailed ? (['render'] as const) : []), ...(inpaint ? (['inpaint'] as const) : [])],
+    failedStages: [...(sectionRenderFailed ? (['render'] as const) : []), ...(inpaint ? (['inpaint'] as const) : [])],
     renderRetry,
+    previewUpdateRetry,
     restoredInN3: section?.exclusionReason === 'restored_by_user',
     verdictLabels: [...new Set(labels)],
     // 서버는 인페인팅 실행 실패 때 warningBadge=processing_failed 를 함께 둔다(downstream ⑥). 그 실패는 「실행 실패 · 인페인팅」 행이

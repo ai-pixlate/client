@@ -157,7 +157,7 @@ console.log('\n[표시 소스 · 의미 상태] 시나리오 A–J (N5 「번역
   check('D 재렌더 실패 + 이전 결과 → previous-rendered-image', disp(d) === 'previous-rendered-image');
   check('D 의미 상태 update-failed(failed 와 구분)', semOf(d).render === 'update-failed');
   check('D retry 의미 = taskId·retryable', semOf(d).retry?.taskId === 8 && semOf(d).retry?.retryable === true);
-  check('D 실패 행 유지', labelsOf(d).renderFailed === true);
+  check('D 재렌더 실패는 섹션 실행 실패가 아니다(updateFailed · 「미리보기를 갱신하지 못했습니다」)', labelsOf(d).renderFailed === false && labelsOf(d).updateFailed === true && labelsOf(d).notice === N5_PREVIEW_NOTICE_COPY['update-failed']);
   check('D retryable=false 도 그대로 전달(버튼 활성 여부는 서버 값)', semOf(section({ render: { attempt: attempt('failed', 8, false), result: prev(), isCurrent: false } })).retry?.retryable === false);
 
   // E 이전 결과 없는 pending/running
@@ -227,11 +227,11 @@ console.log('\n[문구 분리] 판정과 화면 문구가 1:1 로 묶이지 않�
 {
   const keys = new Set(Object.keys(N5_PREVIEW_NOTICE_COPY).concat(Object.keys(N5_PREVIEW_PROGRESS_COPY)));
   check('문구 표는 preview-copy.ts 한 곳', ['input-error', 'syncing', 'previous-result', 'missing', 'waiting', 'running', 'preparing'].every((k) => keys.has(k)));
-  check('stale·updating·update-failed 가 같은 임시 안내를 공유(의미 상태는 다르다)', [
+  check('stale·updating 은 같은 임시 안내를 공유(의미 상태는 다르다)', [
     section({ render: { attempt: null, result: prev(), isCurrent: false } }),
     section({ render: { attempt: attempt('running', 8), result: prev(), isCurrent: false } }),
-    section({ render: { attempt: attempt('failed', 8), result: prev(), isCurrent: false } }),
   ].every((x) => labelsOf(x).notice === N5_PREVIEW_NOTICE_COPY['previous-result']));
+  check('update-failed 는 미리보기 갱신 실패 안내', labelsOf(section({ render: { attempt: attempt('failed', 8), result: prev(), isCurrent: false } })).notice === '미리보기를 갱신하지 못했습니다');
   check('running + 이전 결과 → 렌더링 중', labelsOf(section({ render: { attempt: attempt('running', 8), result: prev(), isCurrent: false } })).progressLabel === '렌더링 중');
   check('pending + 이전 결과 → 렌더 대기 중', labelsOf(section({ render: { attempt: attempt('pending', 8), result: prev(), isCurrent: false } })).progressLabel === '렌더 대기 중');
 }
@@ -243,7 +243,13 @@ console.log('\n[ViewModel] buildSectionStatus 에 의미 상태·다시 시도 �
     return buildSectionStatus(1, [], [], undefined, pv.render.status, toPreviewStatusInput(pv, match));
   };
   const d = vmOf(section({ render: { attempt: attempt('failed', 8, true), result: prev(), isCurrent: false } }));
-  check('update-failed → previewState · renderRetry(taskId 8)', d.previewState?.render === 'update-failed' && d.renderRetry?.taskId === 8 && d.failedStages.includes('render'));
+  check('update-failed → 실행 실패 아님 · previewUpdateRetry(taskId 8)', d.previewState?.render === 'update-failed' && d.renderRetry === null && d.previewUpdateRetry?.taskId === 8 && !d.failedStages.includes('render'));
+  const b = vmOf(section({ renderedUrl: null, render: { attempt: attempt('failed', 9, true), result: null, isCurrent: false } }));
+  check('failed(이전 결과 없음) → 섹션 렌더 실행 실패 · renderRetry(taskId 9) · 갱신 실패 아님', b.failedStages.includes('render') && b.renderRetry?.taskId === 9 && b.previewUpdateRetry === null);
+  // 실 서버는 N5 재렌더 실패도 /tasks 에 render · section · failed 로 둔다 — 이번 계약이 있으면 그것으로 실행 실패를 만들지 않는다
+  const pvD = toPreviewViewModel({ maxOriginalWidth: 1000, renderer: RENDERER, sections: [section({ render: { attempt: attempt('failed', 8, true), result: prev(), isCurrent: false } })] }).sections[0];
+  const dWithTask = buildSectionStatus(1, [], [{ taskId: 8, taskType: 'render', unitType: 'section', unitId: 1, status: 'failed', retryable: true }], undefined, pvD.render.status, toPreviewStatusInput(pvD, 'match'));
+  check('update-failed + /tasks render·section failed → 실행 실패 행 없음', dWithTask.failedStages.length === 0 && dWithTask.previewUpdateRetry?.taskId === 8);
   const f = vmOf(section({ ...ERR, render: { attempt: null, result: null, isCurrent: false } }), 'incomparable');
   check('input-error → 실패 행·retry 없음', f.previewState?.input === 'input-error' && f.renderRetry === null && f.failedStages.length === 0);
   const legacy = section();

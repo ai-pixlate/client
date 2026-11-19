@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useId, useState, type ReactNode } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { retryJobTask } from '@/lib/api/pixlate';
@@ -15,7 +15,8 @@ import { pixlateKeys, refreshN5Snapshot, useN5TaskStatusQuery } from '@/lib/quer
 //   누름 → 재시도 요청(버튼 비활성·「다시 시도하는 중…」) → 응답의 새 taskId 를 기존 2초 task 조회로 추적
 //   → 끝나면(done·failed·cancelled·목록에서 사라짐) /blocks·/preview 를 한 쌍으로 다시 받고 /tasks 를 갱신한다
 //   요청 실패(409 등)·재시도 실패 → 서버가 주는 실패 상태가 그대로 남는다
-// 번역 실패·미리보기 갱신 실패·섹션 렌더 실패는 각자의 자리와 상태를 그대로 두고 이 버튼만 같이 쓴다.
+// 미리보기 갱신 실패·섹션 렌더 실패는 각자의 자리와 상태를 그대로 두고 이 버튼만 같이 쓴다.
+// 번역 실패 [다시 시도]는 12월 범위라 UpcomingRetryButton(비활성·요청 없음)을 쓴다. 인페인팅은 재시도 계약이 없어 버튼이 없다.
 // ─────────────────────────────────────────────────────────────────
 
 const N5JobIdContext = createContext<string | null>(null);
@@ -65,6 +66,52 @@ function useN5TaskRetry(target: RetryTarget | null, onRetried?: (task: ApiJobAsy
   return { canRetry, busy, retry, failed: mutation.isError };
 }
 
+const RETRY_BUTTON_CLASS =
+  'flex h-6 shrink-0 items-center justify-center rounded-[4px] border border-[#eaeaea] bg-white px-3 text-[12px] leading-[normal] tracking-[-0.02em] whitespace-nowrap text-[#171717]';
+
+const UPCOMING_RETRY_TOOLTIP = '다시 시도는 12월 구현 예정입니다.';
+
+/**
+ * 제품 범위가 12월인 [다시 시도](번역 실패 부분 재실행 — PRD F-CFM-05). 모양은 비활성 [다시 시도] 그대로이고 어떤 요청도 보내지 않는다.
+ * 이유는 단계 이동(step-nav)·N1 인증 마크와 같은 말풍선으로 hover·focus 때 알린다. 안내가 보이도록 disabled 대신 aria-disabled 를 쓴다.
+ */
+export function UpcomingRetryButton({ label, testId }: { label: string; testId: string }) {
+  const tooltipId = useId();
+  return (
+    <span className="relative inline-flex shrink-0">
+      <button
+        type="button"
+        data-testid={testId}
+        aria-disabled="true"
+        aria-describedby={tooltipId}
+        // Safari 는 클릭해도 버튼에 포커스를 주지 않는다 — 눌렀을 때 안내가 남도록 직접 옮긴다(step-nav 와 같다)
+        onClick={(e) => {
+          e.stopPropagation();
+          e.currentTarget.focus();
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') e.currentTarget.blur();
+        }}
+        className={`peer ${RETRY_BUTTON_CLASS} cursor-not-allowed text-[#999] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ff6a38]`}
+      >
+        {label}
+      </button>
+      <span
+        id={tooltipId}
+        role="tooltip"
+        data-testid={`${testId}-tooltip`}
+        className="pointer-events-none invisible absolute bottom-full left-0 z-40 mb-[10px] rounded-[8px] border border-[#ff6a38] bg-white p-2.5 text-[12px] leading-[normal] font-light tracking-[-0.04em] whitespace-nowrap text-[#ff6a38] peer-hover:visible peer-focus:visible"
+      >
+        {UPCOMING_RETRY_TOOLTIP}
+        <span
+          aria-hidden="true"
+          className="absolute top-full left-5 size-2.5 -translate-x-1/2 -translate-y-1/2 rotate-45 border-r border-b border-[#ff6a38] bg-white"
+        />
+      </span>
+    </span>
+  );
+}
+
 /** Figma 1244:8238·8444 의 [다시 시도] 버튼 모양 그대로 — 재시도할 수 없으면 비활성 */
 export function TaskRetryButton({
   label,
@@ -92,7 +139,7 @@ export function TaskRetryButton({
         e.stopPropagation();
         retry();
       }}
-      className="flex h-6 shrink-0 items-center justify-center rounded-[4px] border border-[#eaeaea] bg-white px-3 text-[12px] leading-[normal] tracking-[-0.02em] whitespace-nowrap text-[#171717] hover:bg-[#f5f5f5] disabled:cursor-not-allowed disabled:text-[#999] disabled:hover:bg-white"
+      className={`${RETRY_BUTTON_CLASS} hover:bg-[#f5f5f5] disabled:cursor-not-allowed disabled:text-[#999] disabled:hover:bg-white`}
     >
       {busy ? '다시 시도하는 중…' : label}
     </button>

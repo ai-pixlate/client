@@ -17,10 +17,11 @@ export const N5_PREVIEW_PROGRESS_COPY = {
   preparing: '렌더 대기 중',
 } as const;
 
-/** 안내 문구 — previous-result 는 stale·updating·update-failed 공통 */
+/** 안내 문구 — previous-result 는 stale·updating 공통. update-failed 는 N5 재렌더 실패(F-CFM-05 ⑮ 문구 — 이전 결과는 그대로 보인다) */
 export const N5_PREVIEW_NOTICE_COPY = {
   'input-error': '미리보기 입력 오류',
   syncing: '최신 내용을 불러오는 중',
+  'update-failed': '미리보기를 갱신하지 못했습니다',
   'previous-result': '최신 미리보기 아님',
   missing: '미리보기 없음',
 } as const;

@@ -497,8 +497,9 @@ function buildMockN5PreviewWithRender(referrer: string) {
     if (scenario && section.id === N5_PREVIEW_SCENARIO_SECTION_ID) {
       ({ render, preparing, inputError, blockFingerprint } = { ...getMockPreviewScenarioState(scenario, render) });
     }
-    // n5-errors — JOB-05 실패 item 과 같은 시도(501 실패·이전 결과 있음 / 504 진행 중 / 505 실패·결과 없음)
-    if (errorScenario && section.id === 501 && !n5RetriedTaskIds.has(80001)) render = { ...render, attempt: { taskId: 80001, status: 'failed', errorCode: 'MOCK_FAILED', retryable: true } };
+    // n5-errors — JOB-05 실패 item 과 같은 시도(501·505 섹션 렌더 실행 실패 — N4 최초 생성 실패라 이전 결과 없음 / 504 진행 중).
+    // 이전 결과가 있는 실패는 N5 재렌더 실패(미리보기 갱신 실패)라 ?mockScenario=n5-preview-update-failed 가 따로 맡는다
+    if (errorScenario && section.id === 501 && !n5RetriedTaskIds.has(80001)) render = { result: null, attempt: { taskId: 80001, status: 'failed', errorCode: 'MOCK_FAILED', retryable: true } };
     if (errorScenario && section.id === 504) render = { ...render, attempt: { taskId: 80006, status: 'running', errorCode: null, retryable: false } };
     if (errorScenario && section.id === 505 && !n5RetriedTaskIds.has(80007)) render = { result: null, attempt: { taskId: 80007, status: 'failed', errorCode: 'MOCK_FAILED', retryable: true } };
     const fields = buildMockPreviewRenderFields(section, blocks, render, { preparing, inputError });

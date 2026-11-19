@@ -109,10 +109,12 @@ test('오류 종합 — section·signal·번역문 칸 실패가 함께 보이�
   expect(Math.abs(nw.y + nw.height / 2 - (overlay.y - 12))).toBeLessThanOrEqual(1);
   await page.screenshot({ path: test.info().outputPath('n5-errors-canvas.png') });
 
-  // 재시도 — 서버가 retryable=true 로 준 실패라 버튼이 활성이다(누른 뒤 흐름은 e2e/n5-task-retry.spec.ts)
-  for (const button of [retry, preview.getByTestId('n5-block-preview-retry-9103'), page.getByTestId('n5-section-status-1-render-retry')]) {
+  // 재시도 — 미리보기 갱신 실패·섹션 렌더 실패는 서버가 retryable=true 로 준 실패라 활성이다(누른 뒤 흐름은 e2e/n5-task-retry.spec.ts).
+  // 번역 실패 [다시 시도]는 12월 범위라 retryable=true 여도 비활성이다
+  for (const button of [preview.getByTestId('n5-block-preview-retry-9103'), page.getByTestId('n5-section-status-1-render-retry')]) {
     await expect(button).toBeEnabled();
   }
+  await expect(retry).toHaveAttribute('aria-disabled', 'true');
   await expect(failed.getByTestId('n5-cell-failure-translate')).toBeVisible();
 
   // 입력 중 — 검사 결과(미리보기 실패 등)는 직전 서버 결과를 유지하고, 일반 넘침 안내는 여전히 없다

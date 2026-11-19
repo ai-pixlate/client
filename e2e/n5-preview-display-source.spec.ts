@@ -39,7 +39,8 @@ const CASES: {
   { name: 'A', title: 'current → 배경 + HTML', display: 'local-typeset', background: /502-background/, input: 'ready', render: 'current', failedRow: false },
   { name: 'B', title: '최초 생성 실패(결과 없음) → 원본, HTML 없음', scenario: 'failed', display: 'original-image', background: /502-original/, input: 'ready', render: 'failed', failedRow: true },
   { name: 'C', title: '재렌더 진행 + 이전 결과 → 이전 renderedUrl, 새 HTML 없음', scenario: 'updating', display: 'previous-rendered-image', background: /502-translated/, input: 'ready', render: 'updating', failedRow: false },
-  { name: 'D', title: '재렌더 실패 + 이전 결과 → 이전 renderedUrl, 새 HTML 없음, retry', scenario: 'update-failed', display: 'previous-rendered-image', background: /502-translated/, input: 'ready', render: 'update-failed', failedRow: true },
+  // D 는 N5 재렌더 실패(미리보기 갱신 실패)라 섹션 「실행 실패」 행이 아니다 — 안내·재시도는 아래 별도 테스트
+  { name: 'D', title: '재렌더 실패 + 이전 결과 → 이전 renderedUrl, 새 HTML 없음, 실행 실패 아님', scenario: 'update-failed', display: 'previous-rendered-image', background: /502-translated/, input: 'ready', render: 'update-failed', failedRow: false },
   { name: 'E', title: 'pending · 이전 결과 없음 → 원본', scenario: 'pending', display: 'original-image', background: /502-original/, input: 'ready', render: 'waiting', failedRow: false },
   { name: 'F', title: '입력 오류 → 렌더 실패와 별도', scenario: 'input-error', display: 'original-image', background: /502-original/, input: 'input-error', render: 'missing', failedRow: false },
   { name: 'G1', title: '결과 없음 + attempt null → missing', scenario: 'missing', display: 'original-image', background: /502-original/, input: 'ready', render: 'missing', failedRow: false },
@@ -70,3 +71,24 @@ for (const c of CASES) {
     await expect(overflow9104(page)).toHaveCount(0);
   });
 }
+
+// 섹션 렌더 실행 실패(N4 최초 생성 · 이전 결과 없음)와 N5 재렌더 실패(이전 결과 있음)를 섞지 않는다(PRD F-CFM-05 ⑪·⑮)
+test('섹션 렌더 실행 실패 → 원본 · 「실행 실패 · 렌더링」 · [렌더링 다시 시도], 다른 섹션은 그대로', async ({ page }) => {
+  await open(page, 'failed');
+  await expect(slice(page, 502)).toHaveAttribute('data-preview-display', 'original-image');
+  await expect(slice(page, 502)).toHaveCSS('background-image', /502-original/);
+  await expect(page.getByTestId(`${status2}-failed`)).toContainText('렌더링');
+  await expect(page.getByTestId(`${status2}-render-retry`)).toBeVisible();
+  await expect(page.getByTestId(status2)).not.toContainText('미리보기를 갱신하지 못했습니다');
+  // 실패 섹션 때문에 정상 섹션이 원본으로 바뀌지 않는다
+  await expect(slice(page, 501)).toHaveAttribute('data-preview-display', 'local-typeset');
+});
+
+test('N5 재렌더 실패 → 이전 결과 유지 · 「미리보기를 갱신하지 못했습니다」 · [미리보기 다시 시도], 실행 실패 행 없음', async ({ page }) => {
+  await open(page, 'update-failed');
+  await expect(slice(page, 502)).toHaveAttribute('data-preview-display', 'previous-rendered-image');
+  await expect(page.getByTestId(`${status2}-failed`)).toHaveCount(0);
+  await expect(page.getByTestId(`${status2}-notice`)).toContainText('미리보기를 갱신하지 못했습니다');
+  await expect(page.getByTestId(`${status2}-preview-retry`)).toBeVisible();
+  await expect(slice(page, 501)).toHaveAttribute('data-preview-display', 'local-typeset');
+});
