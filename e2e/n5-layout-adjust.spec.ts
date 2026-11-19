@@ -117,22 +117,44 @@ test('move — 조작 직후 PATCH 0 · 재렌더 없음 → [저장하러 가�
 
 test('저장 뒤 미리보기 안내는 section 위 상태 자리에 보이고, viewer·section 위치는 움직이지 않는다', async ({ page }) => {
   await open(page);
+  // 섹션끼리의 위치 — viewer 스크롤과 무관하게 안내가 section 을 밀어내는지만 본다(제외 버튼을 누르려고 스크롤한다)
   const tops = () =>
-    page.evaluate(() => [501, 502, 503, 504, 505].map((id) => document.querySelector(`[data-testid="n5-slice-translated-${id}"]`)!.getBoundingClientRect().top));
+    page.evaluate(() => {
+      const top = (id: number) => document.querySelector(`[data-testid="n5-slice-translated-${id}"]`)!.getBoundingClientRect().top;
+      return [502, 503, 504, 505].map((id) => top(id) - top(501));
+    });
   const before = await tops();
   const slot = page.getByTestId('n5-preview-status-slot-502');
   await expect(slot).toBeAttached();
   await expect(slot).toBeEmpty();
 
+  // 재렌더를 running 에 붙잡는다(?mockRenderHold=502 — 주소에서 빼면 끝난다)
+  const setHold = (value: string | null) =>
+    page.evaluate((value) => {
+      const next = new URL(location.href);
+      if (value == null) next.searchParams.delete('mockRenderHold');
+      else next.searchParams.set('mockRenderHold', value);
+      history.replaceState(history.state, '', next);
+    }, value);
+  await setHold('502');
   await page.getByTestId('n5-block-editor-9112').fill('Visible effect');
   await page.getByTestId('n5-block-save-9112').click();
   // 번역문 [확인] 저장 + 재검사 — 이 칸에는 「재렌더링 중…」이 보인다
   await expect(page.getByTestId('n5-block-row-9112').getByText('재렌더링 중…')).toBeVisible();
-  // 재렌더 동안 — 안내가 상태 자리에 보이고, 이미지 위 공간(헤더)은 생기지 않는다
-  await expect(slot.getByTestId('n5-canvas-section-status-notice')).toBeVisible();
+  // 저장 직후에는 /preview 를 다시 받지 않는다(재렌더 task 완료 때 /blocks·/preview 를 한 쌍으로 — f0b6d8c). 그래서 안내도 아직 없다
+  await expect(slot).toBeEmpty();
+  // 재렌더 중 /preview 를 다시 받는 계기(다른 섹션 N5 제외 — SEC-03 재조회)로 「최신 미리보기 아님」(이전 결과 + 진행 중 시도)을 받는다
+  await page.getByTestId('n5-slice-translated-505').hover();
+  await page.getByTestId('n5-section-exclude-505').click();
+  await expect(page.getByTestId('n5-section-excluded-505')).toBeVisible();
+  // 안내는 상태 자리에 보이고, 이미지 위 공간(헤더)은 생기지 않으며 viewer·section 위치가 그대로다(제외도 자리·높이를 유지한다)
+  await expect(slot.getByTestId('n5-canvas-section-status-notice')).toHaveText('최신 미리보기 아님');
   await expect(page.getByTestId('n5-section-header-2')).toHaveCount(0);
   expect(await tops()).toEqual(before);
   await expect(page.getByTestId('n5-section-status-2-notice')).toBeVisible();
+  // 편집한 섹션은 재렌더 중에도 이전 서버 이미지로 돌아가지 않는다(ad69843)
+  await expect(slice(page, 502)).toHaveAttribute('data-preview-display', 'local-typeset');
+  await setHold(null);
   await expect(slot).toBeEmpty({ timeout: 20_000 });
   expect(await tops()).toEqual(before);
 });
