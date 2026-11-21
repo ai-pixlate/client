@@ -6,7 +6,10 @@
 #  - NEXT_PUBLIC_API_MOCKING: client 번들에 문자열로 치환된다.
 #  - NEXT_PUBLIC_AUTH_MODE: client 번들에 문자열로 치환된다. `session`이면 실서버 session/social 인증을 켜고,
 #    비우면(기본) 기존 dev-login을 쓴다. 인증 방식을 바꾸려면 다시 빌드해야 한다.
+#  - NEXT_PUBLIC_PIXLATE_FE_REVISION: 빌드 대상 commit 의 전체 40자 SHA. 내부 렌더 경로(/internal/typeset-render)가
+#    <html data-fe-revision> 으로 노출해 BE 가 bundleId(fe-<SHA>)와 대조한다. 예: --build-arg NEXT_PUBLIC_PIXLATE_FE_REVISION=$(git rev-parse HEAD)
 # secret은 넣지 않는다. (이 값들은 공개 가능한 설정값이다.)
+# 내부 렌더 토큰 PIXLATE_INTERNAL_RENDER_TOKEN 은 secret 이므로 ARG/ENV 로 두지 않는다 — 컨테이너 실행 시 runtime env 로만 주입한다.
 
 FROM node:22-alpine AS deps
 WORKDIR /app
@@ -18,9 +21,11 @@ WORKDIR /app
 ARG BACKEND_ORIGIN
 ARG NEXT_PUBLIC_API_MOCKING=disabled
 ARG NEXT_PUBLIC_AUTH_MODE
+ARG NEXT_PUBLIC_PIXLATE_FE_REVISION
 ENV BACKEND_ORIGIN=${BACKEND_ORIGIN} \
     NEXT_PUBLIC_API_MOCKING=${NEXT_PUBLIC_API_MOCKING} \
     NEXT_PUBLIC_AUTH_MODE=${NEXT_PUBLIC_AUTH_MODE} \
+    NEXT_PUBLIC_PIXLATE_FE_REVISION=${NEXT_PUBLIC_PIXLATE_FE_REVISION} \
     NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
