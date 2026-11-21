@@ -1,11 +1,18 @@
 /**
- * 내부 렌더 경로 접근 판정(lib/internal-render/access.ts) 검증 — 순수 함수.
+ * 내부 렌더 경로 접근 판정(proxy.ts isInternalRenderRequestAllowed) 검증 — 순수 함수.
  * 실제 서버 응답(proxy 404·page 200)은 scripts/verify-internal-render-route.mjs 가 production 빌드로 확인한다.
  *
- * 실행: npm run verify:internal-render-access
+ * 실행: node --experimental-strip-types scripts/verify-internal-render-access.mjs
  */
 
-import { isInternalRenderRequestAllowed, INTERNAL_RENDER_TOKEN_HEADER, ALB_TRACE_HEADER } from '../lib/internal-render/access.ts';
+import { register } from 'node:module';
+
+// proxy.ts 는 'next/server' 를 import 한다. Next 번들러 밖(Node ESM)에서는 확장자 없는 경로를 못 찾으므로 이 스크립트에서만 next/server.js 로 잇는다
+register(
+  'data:text/javascript,' +
+    encodeURIComponent("export async function resolve(s, c, n) { return n(s === 'next/server' ? 'next/server.js' : s, c); }"),
+);
+const { isInternalRenderRequestAllowed, INTERNAL_RENDER_TOKEN_HEADER, ALB_TRACE_HEADER } = await import('../proxy.ts');
 
 let pass = 0;
 let fail = 0;

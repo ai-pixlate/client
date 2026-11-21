@@ -5,7 +5,6 @@ import { flushSync } from 'react-dom';
 
 import { TypesetBlock } from '@/app/_components/typeset/typeset-block';
 import type { ApiPreviewRenderBlock } from '@/lib/api/n5-schema';
-import { apiBboxToBoundingBox } from '@/lib/n5/adapter';
 import { toTypesetServerStyle } from '@/lib/n5/preview-state';
 import {
   type TypesetFontReadiness,
@@ -104,6 +103,8 @@ function validateInput(raw: unknown): { ok: true; input: InternalRenderInput } |
   return { ok: true, input: raw as unknown as InternalRenderInput };
 }
 
+const FULL_SHA = /^[0-9a-f]{40}$/;
+
 const errorText = (error: unknown) => (error instanceof Error ? `${error.name}: ${error.message}` : String(error));
 
 export function RenderHost() {
@@ -142,7 +143,8 @@ export function RenderHost() {
           text: block.text,
           // 서버 style 이 있으면 역할은 그리기에 쓰이지 않는다(N5 와 같은 값)
           role: 'body',
-          originalBBox: apiBboxToBoundingBox(block.box),
+          // renderInput box{x,y,w,h} → BoundingBox. 값은 위에서 유한수로 검증했고 소수를 자르지 않는다(lib/n5/adapter.ts 와 같은 변환)
+          originalBBox: { x: block.box.x, y: block.box.y, width: block.box.w, height: block.box.h },
           adjustedBBox: null,
           sourceImageWidth: input.width,
           userFontScale: serverStyle.fontScale,
@@ -229,8 +231,9 @@ export function RenderHost() {
       },
     };
     const root = document.documentElement;
+    // 빌드 commit 전체 SHA(소문자 40자)만 노출한다. 짧은 SHA·태그는 노출하지 않아 BE 대조에서 불일치로 드러나게 한다
     const revision = process.env.NEXT_PUBLIC_PIXLATE_FE_REVISION;
-    if (revision) root.dataset.feRevision = revision;
+    if (revision && FULL_SHA.test(revision)) root.dataset.feRevision = revision;
     root.dataset.internalRender = 'ready';
 
     return () => {

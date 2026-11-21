@@ -403,7 +403,7 @@ export interface BlockViewModel {
  * 군데라도 이 변환은 여기 한 곳에서만 하고, 그 아래(coordinates.ts, 컴포넌트)는
  * 전부 BoundingBox만 본다 — 반복 변환하지 않는다.
  */
-export function apiBboxToBoundingBox(bbox: ApiBbox): BoundingBox {
+function apiBboxToBoundingBox(bbox: ApiBbox): BoundingBox {
   return { x: bbox.x ?? 0, y: bbox.y ?? 0, width: bbox.w ?? 0, height: bbox.h ?? 0 };
 }
 

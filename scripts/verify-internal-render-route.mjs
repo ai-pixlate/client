@@ -6,7 +6,7 @@
  *  3) .next/static(client 번들)에 env 이름 PIXLATE_INTERNAL_RENDER_TOKEN 이 0건, 검증용 토큰 값은 .next 전체에 0건
  *
  * 토큰은 매 실행 무작위로 만들고 출력하지 않는다. 실제 secret 을 쓰지 않는다.
- * 실행: npm run build && npm run verify:internal-render-route
+ * 실행: NEXT_PUBLIC_PIXLATE_FE_REVISION=$(git rev-parse HEAD) npm run build && NEXT_PUBLIC_PIXLATE_FE_REVISION=$(git rev-parse HEAD) node scripts/verify-internal-render-route.mjs
  */
 
 import { spawn } from 'node:child_process';

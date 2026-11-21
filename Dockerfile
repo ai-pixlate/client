@@ -22,6 +22,9 @@ ARG BACKEND_ORIGIN
 ARG NEXT_PUBLIC_API_MOCKING=disabled
 ARG NEXT_PUBLIC_AUTH_MODE
 ARG NEXT_PUBLIC_PIXLATE_FE_REVISION
+# 비어 있으면 data-fe-revision 을 노출하지 않는다(내부 렌더 대조 불가). 값이 있으면 소문자 전체 40자 SHA 가 아니면 빌드를 멈춘다(짧은 SHA·태그 금지)
+RUN if [ -n "$NEXT_PUBLIC_PIXLATE_FE_REVISION" ] && ! echo "$NEXT_PUBLIC_PIXLATE_FE_REVISION" | grep -Eq '^[0-9a-f]{40}$'; then \
+      echo "NEXT_PUBLIC_PIXLATE_FE_REVISION must be a full lowercase 40-char commit SHA" >&2; exit 1; fi
 ENV BACKEND_ORIGIN=${BACKEND_ORIGIN} \
     NEXT_PUBLIC_API_MOCKING=${NEXT_PUBLIC_API_MOCKING} \
     NEXT_PUBLIC_AUTH_MODE=${NEXT_PUBLIC_AUTH_MODE} \
