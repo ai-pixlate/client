@@ -48,7 +48,7 @@ cp .env.example .env.local
 | `NEXT_PUBLIC_API_MOCKING` | `enabled` / 미설정(또는 그 외 값) | `enabled`면 MSW(Mock Service Worker)를 사용합니다. 미설정 또는 그 외 값이면 실제 backend를 사용합니다(`NODE_ENV`와는 무관합니다). |
 | `NEXT_PUBLIC_DEV_SELLER_EMAIL` | 이메일 문자열 | 실백엔드 개발 세션 로그인용 이메일입니다. 미설정 시 코드 기본값을 사용합니다. |
 | `NEXT_PUBLIC_AUTH_MODE` | `session` / 미설정 | 실백엔드 세션 인증 opt-in 스위치입니다. `session`이면 Mock을 끈 실백엔드에서도 세션 인증·소셜 로그인·로그아웃 재시도를 켭니다. `next dev`와 production build 모두 적용됩니다. 미설정(또는 `session`이 아닌 값)이면 실백엔드는 기존 개발용 간이 로그인(dev-login)을 씁니다. client 번들에 들어가는 build 시점 값이라 production에서는 runtime env만 바꿔서 전환할 수 없고 다시 빌드해야 합니다. |
-| `NEXT_PUBLIC_PIXLATE_FE_REVISION` | 전체 40자 commit SHA | 빌드 대상 commit. 내부 렌더 경로가 `<html data-fe-revision>`으로 노출하고 BE가 `bundleId`(`fe-<SHA>`)와 대조합니다. build 시점 값입니다. |
+| `NEXT_PUBLIC_PIXLATE_FE_REVISION` | 전체 40자 commit SHA | 빌드 대상 commit(소문자 전체 40자, 짧은 SHA·태그 불가 — Docker 빌드에서 형식이 다르면 실패). 내부 렌더 경로가 `<html data-fe-revision>`으로 노출하고 BE가 `bundleId`(`fe-<SHA>`)와 대조합니다. build 시점 값입니다. |
 | `PIXLATE_INTERNAL_RENDER_TOKEN` | 비밀 문자열 | **서버 runtime env 전용 secret.** 내부 렌더 경로(`/internal/typeset-render`)의 `x-pixlate-internal-render` 헤더와 비교합니다. 비어 있으면 경로가 항상 404입니다. `NEXT_PUBLIC_` 접두어·Docker build arg·`.env` 커밋 금지 — 컨테이너 실행 때만 주입합니다. |
 
 인증 모드(`lib/auth/capability.ts`):
@@ -119,8 +119,8 @@ Secret(JWT, access token, password 등)은 절대 Git에 커밋하지 않습니�
 | `npm run verify:login-form` | G1 로그인 보조 문구 GIF 대비 판별(주황 판별·글자 전환 기준·cover 좌표), 개발용 자동 로그인 제외 경로 순수 함수 자동 검증 (브라우저 불필요) |
 | `npm run verify:auth-session` | 인증 세션 FE 로직 자동 검증 — refresh single-flight·`/auth/me` 계정 확인·`refresh_rotated` 복구 상한·503과 세션 종료 구분·탭 사이 알림(토큰 미포함)·소셜 시작/콜백 중복 방어·로그아웃 전용 처리와 logout pending (브라우저 불필요) |
 | `npm run verify:auth-n5-switch` | N5 섹션 제외/복원 저장 중 계정 전환 검증 — 이전 계정의 늦은 응답·rollback·invalidate 가 새 계정 캐시에 반영되지 않음, 401 뒤 계정이 바뀌면 원 요청을 새 토큰으로 다시 보내지 않음, 같은 계정으로 다시 들어오면 서버 정본을 조회 (실제 QueryClient·인증 실행부, 서버는 fetch 대역, 브라우저 불필요) |
-| `npm run verify:internal-render-access` | 내부 렌더 경로 접근 판정(토큰 일치·없음·틀림·env 없음·`X-Amzn-Trace-Id` 차단) 순수 함수 자동 검증 (브라우저 불필요) |
-| `NEXT_PUBLIC_PIXLATE_FE_REVISION=$(git rev-parse HEAD) npm run build && NEXT_PUBLIC_PIXLATE_FE_REVISION=$(git rev-parse HEAD) npm run verify:internal-render-route` | 내부 렌더 경로 production 검증 — `next start`를 runtime 토큰 있음/없음으로 띄워 200·404 확인, `.next/static`에 토큰 env 이름 0건·검증 토큰 값 0건, client 번들에 FE revision 포함 (무작위 토큰 사용, 출력하지 않음) |
+| `node --experimental-strip-types scripts/verify-internal-render-access.mjs` | 내부 렌더 경로 접근 판정(토큰 일치·없음·틀림·env 없음·`X-Amzn-Trace-Id` 차단) 순수 함수 자동 검증 (브라우저 불필요) |
+| `NEXT_PUBLIC_PIXLATE_FE_REVISION=$(git rev-parse HEAD) npm run build && NEXT_PUBLIC_PIXLATE_FE_REVISION=$(git rev-parse HEAD) node scripts/verify-internal-render-route.mjs` | 내부 렌더 경로 production 검증 — `next start`를 runtime 토큰 있음/없음으로 띄워 200·404 확인, `.next/static`에 토큰 env 이름 0건·검증 토큰 값 0건, client 번들에 FE revision 포함 (무작위 토큰 사용, 출력하지 않음) |
 | `PIXLATE_INTERNAL_RENDER_TOKEN=<임의 값> NEXT_PUBLIC_PIXLATE_FE_REVISION=$(git rev-parse HEAD) npx playwright test e2e/internal-typeset-render.spec.ts --project=chromium` | 내부 렌더러 검증 — 접근 200/404, `data-internal-render`·`data-fe-revision`, `render()` 성공·실패 이유(`invalid-input`·`style-invalid`·`font-not-ready`·`background-failed`·`measurer-failed`·`busy`), N5 측정 경로와 줄 수·줄 글자·fontPx·overflow·글 높이 동일(영어 200/320/480px·CJK 공백 없음). 같은 env 로 띄운 dev 서버 필요(조판 동일성은 dev harness 사용). 토큰 env 가 없으면 건너뜀 |
 | `npx playwright test e2e/g1-login.spec.ts --project=chromium` | G1 로그인 화면(`/login`) 검증 — Figma 835:6511 위치, GIF 로드, 동의 고지, 키보드, 화면 진입 시 인증 요청 0건 (Chromium, dev 서버 필요) |
 | `npx playwright test e2e/g1-social-auth.spec.ts --project=chromium` | Mock 소셜 로그인·세션 흐름 검증 — start→콜백→M1, 콜백 완료 1회(Strict Mode·새로고침), 시작/완료 오류, 401→refresh→`/auth/me`, 여러 탭 logout·계정 전환, logoutPending 앱 진입(refresh·보호 API 0회)·G1 미완료 안내와 [다시 시도], 임시 로그아웃 진입점 미노출 (Chromium, Mock dev 서버 필요) |
