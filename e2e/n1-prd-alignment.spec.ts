@@ -330,14 +330,13 @@ test.describe('규제 분류 · OTC 종류', () => {
       await expect(otcGroup(page).getByRole('radio')).toHaveText([
         '선크림 (Sunscreen)',
         '여드름 (Acne)',
-        '비듬·지루성 피부염·건선 (Dandruff · Seborrheic Dermatitis · Psoriasis)',
+        '비듬 · 지루성 피부염 · 건선 (Dandruff · Seborrheic Dermatitis · Psoriasis)',
         '피부보호제 (Skin Protectant)',
       ]);
     }
-    // 복합만 PRD 한계 고지, OTC 의약품에는 없다
+    // 복합만 한계 고지(Figma 1170:7877), OTC 의약품에는 없다
     const helper = page.getByTestId('n1-regulatory-helper');
-    await expect(helper).toContainText('복합 제품은 고른 OTC 종류와 같은 기준으로 검사합니다(화장품 규칙 포함).');
-    await expect(helper).toContainText('제품이 그 OTC 기준(성분 · 함량 · 시험)을 실제로 충족하는지는 확인하지 않습니다.');
+    await expect(helper).toHaveText('선택한 OTC 종류의 기준과 화장품 규칙을 함께 적용해 검사합니다.성분·함량·시험 요건의 실제 충족 여부는 확인하지 않습니다.');
     await pickRegulatoryClass(page, 'OTC 의약품');
     await expect(helper).toHaveCount(0);
   });
@@ -370,9 +369,6 @@ test.describe('규제 분류 · OTC 종류', () => {
     await pickCategory(page, ['선케어', '선크림']);
     await page.getByRole('checkbox', { name: CONSENT }).check();
     await expect(nextButton(page)).toBeDisabled();
-    await expect(page.getByTestId('n1-otc-type-notice')).toHaveText(
-      'OTC 종류는 아직 작업에 저장되지 않습니다. 저장 기능이 준비되면 반영됩니다.',
-    );
 
     await otcGroup(page).getByRole('radio', { name: '선크림 (Sunscreen)' }).click();
     await expect(nextButton(page)).toBeEnabled();

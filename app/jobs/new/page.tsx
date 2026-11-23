@@ -76,26 +76,25 @@ const REGULATORY_CLASS_OPTIONS: RegulatoryClassOption[] = (['cosmetic', 'otc', '
 }));
 
 /**
- * 선택값별 검사 기준 안내 (helper text). 복합 문구는 PRD v3.5.10 F-LNG-03 한계 고지(★초안) 그대로다 —
- * PRD는 이 고지를 복합에만 두고 OTC 의약품에는 두지 않는다. Figma(525:3023) 문구와 다르면 PRD를 따른다.
+ * 선택값별 검사 기준 안내 (helper text). PRD F-LNG-03 의 복합 한계 고지는 ★초안이라 화면 문구는 Figma
+ * (1170:7877 Field / 규제 분류) 를 따른다. PRD 는 이 고지를 복합에만 두고 OTC 의약품·화장품·잘 모름에는 두지 않는다.
  */
 const REGULATORY_CLASS_HELPER: Partial<Record<ApiRegulatoryClass, string[]>> = {
-  unknown: ['잘 모름을 선택하면 화장품 기준으로 검사됩니다.'],
   combination: [
-    '복합 제품은 고른 OTC 종류와 같은 기준으로 검사합니다(화장품 규칙 포함).',
-    '제품이 그 OTC 기준(성분 · 함량 · 시험)을 실제로 충족하는지는 확인하지 않습니다.',
+    '선택한 OTC 종류의 기준과 화장품 규칙을 함께 적용해 검사합니다.',
+    '성분·함량·시험 요건의 실제 충족 여부는 확인하지 않습니다.',
   ],
 };
 
 /**
  * OTC 종류 — PRD v3.5.10 F-LNG-03 · 용어집 「OTC 종류(monograph_key)」 미국 4종. 값은 용어집의 열쇠,
- * 라벨은 Figma(525:3023) 태그 표기(한글 이름은 PRD v3.5.10 「비듬·지루성 피부염·건선」).
- * BLOCKED — DATA CONTRACT: OpenAPI v3.4.2 JobPatch에 OTC 종류 필드가 없어 화면 선택만 하고 서버로 보내지 않는다.
+ * 라벨은 Figma(1170:7877) 태그 표기 — 한글명과 영문명을 함께 보인다.
+ * BLOCKED — DATA CONTRACT: OpenAPI(v3.5.10) JobPatch에 OTC 종류 필드가 없어 화면 선택(진행 조건)만 하고 서버로 보내지 않는다.
  */
 const OTC_TYPE_OPTIONS = [
   { value: 'M020', label: '선크림 (Sunscreen)' },
   { value: 'M006', label: '여드름 (Acne)' },
-  { value: 'M032', label: '비듬·지루성 피부염·건선 (Dandruff · Seborrheic Dermatitis · Psoriasis)' },
+  { value: 'M032', label: '비듬 · 지루성 피부염 · 건선 (Dandruff · Seborrheic Dermatitis · Psoriasis)' },
   { value: 'M016', label: '피부보호제 (Skin Protectant)' },
 ];
 
@@ -1134,31 +1133,26 @@ function NewJobPageInner() {
                   </div>
 
                   {/* OTC 종류 — OTC 의약품·복합일 때만(PRD F-LNG-03). Tag / flexible(406:6648) 단일 선택 —
-                      Selected는 orange border·text. 서버 저장 필드가 없어 아래 안내로 알린다. */}
+                      Selected는 orange border·text. 서버 저장 필드가 아직 없어 진행 조건으로만 쓴다(OTC_TYPE_OPTIONS 주석). */}
                   {requiresOtcType(regulatoryClass) && (
-                    <div className="flex flex-col gap-2">
-                      <div role="radiogroup" aria-label="OTC 종류" className="flex flex-wrap gap-1" data-testid="n1-otc-type">
-                        {OTC_TYPE_OPTIONS.map((o) => {
-                          const selected = otcType === o.value;
-                          return (
-                            <button
-                              key={o.value}
-                              type="button"
-                              role="radio"
-                              aria-checked={selected}
-                              onClick={() => setOtcType(o.value)}
-                              className={`flex h-7 items-center justify-center rounded-[6px] border bg-white px-2 text-[12px] leading-[14px] transition-colors ${
-                                selected ? 'border-[#ff6a38] text-[#ff6a38]' : 'border-[#eaeaea] text-[#171717] hover:bg-gray-50'
-                              }`}
-                            >
-                              {o.label}
-                            </button>
-                          );
-                        })}
-                      </div>
-                      <p data-testid="n1-otc-type-notice" className="text-[12px] font-light tracking-[-0.04em] text-[#999]">
-                        OTC 종류는 아직 작업에 저장되지 않습니다. 저장 기능이 준비되면 반영됩니다.
-                      </p>
+                    <div role="radiogroup" aria-label="OTC 종류" className="flex flex-wrap gap-1" data-testid="n1-otc-type">
+                      {OTC_TYPE_OPTIONS.map((o) => {
+                        const selected = otcType === o.value;
+                        return (
+                          <button
+                            key={o.value}
+                            type="button"
+                            role="radio"
+                            aria-checked={selected}
+                            onClick={() => setOtcType(o.value)}
+                            className={`flex h-7 items-center justify-center rounded-[6px] border bg-white px-2 text-[12px] leading-[14px] transition-colors ${
+                              selected ? 'border-[#ff6a38] text-[#ff6a38]' : 'border-[#eaeaea] text-[#171717] hover:bg-gray-50'
+                            }`}
+                          >
+                            {o.label}
+                          </button>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
