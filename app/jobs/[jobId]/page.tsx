@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { S0Rail } from '@/app/jobs/_components/s0-rail';
 import type { StepNavStep } from '@/app/jobs/_components/step-nav';
 import { isJobNotFoundError } from '@/lib/api/pixlate';
-import { useJobTasksQuery } from '@/lib/queries/pixlate';
+import { useJobQuery, useJobTasksQuery } from '@/lib/queries/pixlate';
 import type { ApiJobTaskStatus } from '@/lib/api/job-schema';
 import { COMPLETION_PRESENTATION_MS } from '@/lib/processing/displayed-progress';
 import { N2AnalysisView } from './_components/n2-analysis-view';
@@ -96,6 +96,12 @@ export default function Page({
   const isN2Failed = !completion && currentStep === 'N2' && tasksQuery.data?.jobStatus === 'failed';
   // N4 전체 실패도 같은 기준이다. items 에 실패가 있어도 job 이 진행 중이면 부분 실패다
   const isN4Failed = !completion && currentStep === 'N4' && tasksQuery.data?.jobStatus === 'failed';
+  // N6 ✕ — 저장 여부의 정본은 서버 job.isSaved 다(API-FIN-06 저장 성공 = is_saved=true). N6 에서만 조회하고(N1~N5 는 요청을 늘리지 않는다),
+  // 저장 성공 시 useSaveJobMutation 이 같은 key 의 cache 를 이동보다 먼저 isSaved=true 로 바꾸므로 그 값이 바로 rail 에 반영된다.
+  // 조회 중·실패·false 는 저장 완료로 추정하지 않는다(기존 작업 취소 확인창 유지).
+  const isN6 = displayStep === 'N6';
+  const jobQuery = useJobQuery(jobId, { enabled: isN6 });
+  const isSavedJob = isN6 && jobQuery.data?.isSaved === true;
   const meta = (displayStep && STEP_META[displayStep]) || STEP_META_FALLBACK;
   const hasScreen = SCREEN_STEPS.includes(displayStep);
 
@@ -123,7 +129,7 @@ export default function Page({
       {/* S0 rail 은 단계 화면 밖에 한 번만 그린다 — 자동 전환에도 작업 취소 확인창과 요청이 유지된다(S0Rail 주석).
           화면이 없는 동안(상태 조회 중·실패·N1)은 겹쳐 놓아 본문 위치를 바꾸지 않는다. */}
       <div className={`flex min-h-0 flex-1 ${hasScreen ? 'bg-white' : ''}`}>
-        <S0Rail currentStep={toStepNavStep(displayStep)} jobId={jobId} overlay={!hasScreen} />
+        <S0Rail currentStep={toStepNavStep(displayStep)} jobId={jobId} isSaved={isSavedJob} overlay={!hasScreen} />
 
         {/* 본문. 상태를 모르는 동안 헤더 높이를 비워 두어 안내 문구가 기존 위치에 있게 한다 */}
         <div className={`flex min-w-0 flex-1 flex-col overflow-hidden ${displayStep ? '' : 'pt-14'}`}>

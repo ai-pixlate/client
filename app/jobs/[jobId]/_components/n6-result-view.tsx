@@ -667,7 +667,7 @@ function PendingExportPanel() {
             data-testid="n6-pending-save"
             className="w-full cursor-not-allowed rounded-[6px] border border-[#eaeaea] bg-white px-8 py-3.5 text-[14px] font-medium tracking-[-0.03em] text-[#999]"
           >
-            보관함에 저장하기
+            저장하고 보관함으로 가기
           </button>
         </div>
       </div>
@@ -818,7 +818,7 @@ function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeli
             </p>
           )}
 
-          {/* [보관함에 저장] — 서버 저장 성공(200) 뒤에만 보관함(M1 '/')으로 이동한다. 실패하면 N6 에 남아 오류를 보이고 다시 누를 수 있다.
+          {/* [저장하고 보관함으로 가기] — 서버 저장 성공(200) 뒤에만 보관함(M1 '/')으로 이동한다. 실패하면 N6 에 남아 오류를 보이고 다시 누를 수 있다.
               성공 뒤 이동하는 동안에도 다시 누르지 못하게 둔다. 저장 완료 상태 글자(디자인에 없는 초록 「보관함에 저장됨」)는 두지 않는다 */}
           <button
             type="button"
@@ -827,7 +827,7 @@ function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeli
             disabled={saveMutation.isPending || saveMutation.isSuccess}
             className="w-full rounded-[6px] border border-[#eaeaea] bg-white px-8 py-3.5 text-[14px] font-medium tracking-[-0.03em] text-[#171717] transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {saveMutation.isPending || saveMutation.isSuccess ? '저장하는 중…' : '보관함에 저장'}
+            {saveMutation.isPending || saveMutation.isSuccess ? '저장하는 중…' : '저장하고 보관함으로 가기'}
           </button>
           {saveMutation.isError && (
             <p className="text-[12px] text-red-500" data-testid="n6-save-error">
