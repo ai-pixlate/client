@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo } from 'react';
 import { focusManager, notifyManager, onlineManager, useQueries, useQuery, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { getAuthEpoch } from '@/lib/auth/session-store';
 
 import {
   createJob,
@@ -386,6 +387,8 @@ export interface N5Snapshot {
   blocks: Awaited<ReturnType<typeof getN5Blocks>>;
   preview: Awaited<ReturnType<typeof getN5Preview>>;
   seq: number;
+  /** 받기 시작할 때의 인증 세대 — 그 사이 계정·세션이 바뀌었으면 화면 캐시에 넣지 않는다 */
+  epoch: number;
 }
 
 let n5SnapshotSeq = 0;
@@ -405,8 +408,9 @@ export function markN5SnapshotBoundary(jobId: string): void {
 /** /blocks·/preview 를 함께 받는다(캐시는 바꾸지 않는다) */
 export async function fetchN5Snapshot(jobId: string): Promise<N5Snapshot> {
   const seq = ++n5SnapshotSeq;
+  const epoch = getAuthEpoch();
   const [blocks, preview] = await Promise.all([getN5Blocks(jobId), getN5Preview(jobId)]);
-  return { blocks, preview, seq };
+  return { blocks, preview, seq, epoch };
 }
 
 /**
@@ -414,9 +418,11 @@ export async function fetchN5Snapshot(jobId: string): Promise<N5Snapshot> {
  * 동기로 끝난다(넣은 직후 캐시를 읽어도 이 값이다). 넣지 않는 경우(false) — 먼저 시작했지만 늦게 끝난 응답이 새 화면을 이전 값으로 되돌리지 않게 한다:
  * - 이미 더 늦게 시작한 쌍을 넣었다
  * - 이 쌍을 받기 시작한 뒤 block 저장이 성공했다(markN5SnapshotBoundary)
+ * - 이 쌍을 받기 시작한 뒤 계정·세션이 바뀌었다 — 이전 계정 응답을 새 세션 캐시에 쓰지 않는다(F-ACC-01)
  * 화면에 넣지 않을 뿐이다 — 저장 장벽은 받은 쌍으로 판정을 그대로 한다(n5-panel.tsx).
  */
 export function publishN5Snapshot(queryClient: QueryClient, jobId: string, snapshot: N5Snapshot): boolean {
+  if (snapshot.epoch !== getAuthEpoch()) return false;
   const floor = Math.max(publishedN5SnapshotSeq.get(jobId) ?? 0, n5SnapshotBoundarySeq.get(jobId) ?? 0);
   if (snapshot.seq < floor) return false;
   publishedN5SnapshotSeq.set(jobId, snapshot.seq);

@@ -69,8 +69,11 @@ async function authorizedFetch(url: string, init?: RequestInit): Promise<Respons
     return res;
   }
 
-  // 'session' 모드 — 401 이면 refresh → /auth/me 로 같은 계정임을 확인한 뒤에만 원 요청을 다시 보낸다(최대 1회)
-  return fetchWithSessionRecovery(() => fetch(url, withProxyHeader(init)));
+  // 'session' 모드 — 401 이면 refresh → /auth/me 로 같은 계정임을 확인한 뒤에만 원 요청을 다시 보낸다(최대 1회).
+  // signal = 보낼 때 인증 세대의 AbortSignal. 계정 전환·로그아웃으로 세대가 바뀌면 이 요청이 끊긴다(lib/auth/authorized-request.ts)
+  return fetchWithSessionRecovery((signal) =>
+    fetch(url, withProxyHeader({ ...init, signal: init?.signal ? AbortSignal.any([init.signal, signal]) : signal })),
+  );
 }
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
