@@ -17,9 +17,11 @@ export function isApiMockingEnabled(): boolean {
 
 /**
  * 앱 시작 때 개발용 자동 로그인을 실행할 화면인지 판단한다. G1 과 소셜 콜백(/login/callback/*)은 서버 인증 요청을 따로 다루므로 제외한다.
+ * 내부 렌더 경로(/internal/*)는 BE 렌더러 전용이라 API 를 부르지 않으므로 로그인 요청을 보내지 않는다.
  * 다른 화면의 동작은 그대로이고, 로그인 화면에서 넘어가도 첫 API 호출 때 authorizedFetch 가 세션을 만든다.
  */
 export function shouldBootstrapBackendSession(pathname: string): boolean {
+  if (pathname === '/internal' || pathname.startsWith('/internal/')) return false;
   return pathname !== '/login' && !pathname.startsWith('/login/');
 }
 

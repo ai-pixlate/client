@@ -30,8 +30,9 @@ function check(name, condition, detail = '') {
 }
 
 console.log('\n[1] 개발용 자동 로그인 제외 경로');
-check('/login 만 제외', shouldBootstrapBackendSession('/login') === false);
-for (const path of ['/', '/brand', '/jobs/new', '/jobs/1', '/login-help']) {
+check('/login 제외', shouldBootstrapBackendSession('/login') === false);
+check('/internal/typeset-render 제외(BE 렌더러 전용)', shouldBootstrapBackendSession('/internal/typeset-render') === false);
+for (const path of ['/', '/brand', '/jobs/new', '/jobs/1', '/login-help', '/internals']) {
   check(`${path} 는 유지`, shouldBootstrapBackendSession(path) === true);
 }
 
