@@ -21,7 +21,7 @@ import {
 } from '@/lib/n5/adapter';
 import type { BlockTaskFailures, BlockViewModel, PreviewSectionViewModel, RetryTarget, SectionStatusViewModel } from '@/lib/n5/adapter';
 import { PanelSectionStatus, SignalRows } from './n5-section-status';
-import { TaskRetryButton, UpcomingRetryButton } from './n5-task-retry';
+import { TaskRetryButton } from './n5-task-retry';
 import {
   groupExpectedBySection,
   isConfirmPreviewSettling,
@@ -482,25 +482,22 @@ function TranslationEditor({
           </div>
         )}
       </div>
-      {/* Figma 1244:8238·8641 — 재시도 버튼은 번역문 칸 아래에 둔다. 서버가 준 taskId·retryable 로 API-JOB-06 을 부른다(n5-task-retry.tsx) */}
-      {(translationFailure || previewFailure) && (
+      {/* 미리보기 갱신 실패의 [미리보기 다시 시도] — 번역문 칸 아래에 둔다. 서버가 준 taskId·retryable 로 API-JOB-06 을 부른다(n5-task-retry.tsx).
+          번역 실패 칸에는 재시도 버튼을 두지 않는다 — 번역 실패 재시도는 이후 기능이다(PM). Figma 1244:8238 오류 셀도 실패 문구와 [확인]만 둔다.
+          서버가 준 taskId·retryable(getTranslationFailure().retry)은 adapter 에 그대로 둔다 */}
+      {previewFailure && (
         <div className="flex flex-wrap items-center gap-2">
-          {/* 번역 실패의 [다시 시도]·부분 재실행은 12월 범위(PRD F-CFM-05) — 버튼은 보이되 비활성이고 재시도 요청을 보내지 않는다.
-              서버가 준 taskId·retryable(translationFailure.retry)은 그대로 둔다(12월 연결 때 TaskRetryButton 으로 바꾼다) */}
-          {translationFailure && <UpcomingRetryButton label="다시 시도" testId={`n5-block-translate-retry-${block.id}`} />}
-          {previewFailure && (
-            <TaskRetryButton
-              label="미리보기 다시 시도"
-              testId={`n5-block-preview-retry-${block.id}`}
-              target={previewFailure}
-              // 새 재렌더 시도를 이 칸의 재렌더로 이어 추적한다(「재렌더링 중…」 → 끝나면 미리보기 재조회)
-              onRetried={(task) => {
-                if (task.taskId != null) {
-                  editSession.setRerenderTask(block.id, task.taskId, editSession.rerenderTaskByBlock.get(block.id)?.reason ?? 'translation');
-                }
-              }}
-            />
-          )}
+          <TaskRetryButton
+            label="미리보기 다시 시도"
+            testId={`n5-block-preview-retry-${block.id}`}
+            target={previewFailure}
+            // 새 재렌더 시도를 이 칸의 재렌더로 이어 추적한다(「재렌더링 중…」 → 끝나면 미리보기 재조회)
+            onRetried={(task) => {
+              if (task.taskId != null) {
+                editSession.setRerenderTask(block.id, task.taskId, editSession.rerenderTaskByBlock.get(block.id)?.reason ?? 'translation');
+              }
+            }}
+          />
         </div>
       )}
     </div>
