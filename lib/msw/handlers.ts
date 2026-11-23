@@ -12,9 +12,54 @@ import {
   mockN6Components,
   mockN6Validation,
 } from '@/lib/mock-api/fixtures';
-import { mockN5Job, mockN5Blocks, mockN5PreviewSections, buildMockN5Preview } from '@/lib/mock-api/n5-fixtures';
+import {
+  mockN5Job,
+  mockN5Blocks,
+  mockN5PreviewSections,
+  buildMockN5Preview,
+  type MockN5PreviewSection,
+} from '@/lib/mock-api/n5-fixtures';
+import {
+  applyN3CardVariant,
+  applyN5CleanBlock,
+  applyN5ErrorBlocks,
+  applyN5OverlapBlock,
+  getN5ErrorFailedItems,
+  n5ErrorTranslationRecovered,
+  getProcessingErrorScenarioStep,
+  isN3CardVariantsScenario,
+  isN5CleanScenario,
+  isN5ErrorScenario,
+  isN5OverlapScenario,
+  n5ErrorRestoredSectionDetail,
+  n5ErrorRestoredSectionListItem,
+  recheckMockTextSignals,
+} from '@/lib/mock-api/n5-error-fixtures';
+import { isTypesetQaUrl } from '@/lib/n5/typeset-render-model';
+import {
+  MOCK_N5_PREPARING_SECTION_IDS,
+  MOCK_N5_RENDERER,
+  N5_PREVIEW_SCENARIO_SECTION_ID,
+  buildMockPreviewRenderFields,
+  buildMockRenderInput,
+  getMockPreviewScenarioState,
+  getN5PreviewScenario,
+  mockInputFingerprint,
+  type MockN5SectionRender,
+} from '@/lib/mock-api/n5-preview-render';
 import { mockLibraryCards } from '@/lib/mock-api/library-fixtures';
-import { mockMasterCountries, mockMasterLanguages } from '@/lib/mock-api/master-fixtures';
+import { mockMasterChannelSpecs, mockMasterCountries, mockMasterLanguages } from '@/lib/mock-api/master-fixtures';
+import {
+  applyMockLayoutPatch,
+  clearsMockLegacyBox,
+  isMockBoxInSection,
+  isSameMockLayout,
+  parseMockLayoutPatch,
+  withMockLegacyBox,
+} from '@/lib/mock-api/n5-layout-adjust';
+import { mockMasterCategories } from '@/lib/mock-api/category-fixtures';
+import { authHandlers } from './auth-handlers';
+import { m2BrandHandlers } from './m2-brand-handlers';
 import type { ApiJob, ApiJobAsyncTaskItem, ApiTextBlock } from '@/lib/api/n5-schema';
 import type { ApiAcceptedTask, ApiAnalysisProgress, ApiJobPatch, ApiSourceImageUploadResult } from '@/lib/api/job-schema';
 import type {
@@ -54,6 +99,35 @@ const sectionState = new Map<string, {
     { bucket: s.bucket, exclusionReason: s.exclusionReason, excludedStage: s.excludedStage },
   ])
 );
+
+/**
+ * N5 프리뷰 섹션의 현재 bucket/excludedStage — SEC-03(N3·N5 공용 PATCH)이 숫자 id 501~505
+ * 를 받으면 이 목록을 바꾸고, GET /preview 와 confirm 의 전 섹션 제외 검사가 이 목록을 읽는다.
+ * 위 sectionState(N3 fixture, 1~5)와 id 가 겹치지 않아 서로 영향을 주지 않는다.
+ */
+let n5PreviewSectionState: MockN5PreviewSection[] = mockN5PreviewSections.map((s) => ({ ...s }));
+
+/** N5 프리뷰 섹션 → SEC-03 응답 Section. 이 fixture 에 없는 판정·bbox 정보는 null/빈 배열로 둔다. */
+function toWireN5Section(section: MockN5PreviewSection): ApiSection {
+  const displayTop = buildMockN5Preview(n5PreviewSectionState).sections.find((s) => s.id === section.id)?.displayTop ?? null;
+  return {
+    id: section.id,
+    sectionOrder: section.sectionOrder,
+    sourceImageId: section.sourceImageId,
+    topOffset: null,
+    displayTop,
+    height: section.height,
+    bbox: null,
+    category: null,
+    bucket: section.bucket,
+    exclusionReason: null,
+    excludedStage: section.excludedStage,
+    inpaintStatus: null,
+    warningBadge: null,
+    verdicts: [],
+    signals: [],
+  };
+}
 
 /**
  * 2단계(API 계약 정합화): fixture 내부 문자열 id('sec_01', 'src_mock_001')를
@@ -182,8 +256,10 @@ function resetJobState() {
   n4PollIndex = 0;
   n6LatestRenderTaskId = null;
   n6RenderTaskState.clear();
+  n6RenderSnapshots.clear();
   n6ExportArtifactState.clear();
   mockJobSavedAt = null;
+  n5PreviewSectionState = mockN5PreviewSections.map((s) => ({ ...s }));
 }
 
 /**
@@ -215,14 +291,13 @@ const n5BlockState = new Map<number, ApiTextBlock>(mockN5Blocks.map((b) => [b.id
 /**
  * 현재 미해결 경고 집합 — 모든 block의 signals[]를 {blockId, code}로 펼친
  * 것. confirm의 acknowledgedWarnings와 정확히 같아야 한다(달라지면 409
- * INVALID_STATE). PATCH가 signals를 갱신하지 않으므로(계약에 없음) 이 목록은
- * job 생애주기 동안 고정이다 — FE의 buildAcknowledgedWarnings가 매 확정
- * 시점에 같은 소스(로드된 block.signals)에서 다시 계산해 보내므로 정상
- * 흐름에서는 항상 일치한다.
+ * INVALID_STATE). 번역문 PATCH 는 새 번역문으로 글 기반 signal 을 다시 검사한다(recheckMockTextSignals —
+ * 실서버 PATCH 응답 block 이 해결된 signal 을 빼는 것과 같은 의미). FE의 buildAcknowledgedWarnings가 매 확정
+ * 시점에 같은 소스(최신 block.signals)에서 다시 계산해 보내므로 정상 흐름에서는 항상 일치한다.
  */
-function computeCurrentN5Warnings(): { blockId: number; code: string }[] {
+function computeCurrentN5Warnings(blocks: Iterable<ApiTextBlock> = n5BlockState.values()): { blockId: number; code: string }[] {
   const warnings: { blockId: number; code: string }[] = [];
-  for (const block of n5BlockState.values()) {
+  for (const block of blocks) {
     for (const signal of block.signals ?? []) {
       if (block.id != null && signal.code != null) {
         warnings.push({ blockId: block.id, code: signal.code });
@@ -244,8 +319,39 @@ function n5WarningSetsMatch(
   return true;
 }
 
-function getN5BlocksFromState(sectionId?: number): ApiTextBlock[] {
-  const all = [...n5BlockState.values()];
+/**
+ * ?mockScenario=n5-layout-legacy — 9112 는 layoutAdjust null 이지만 렌더 입력에 legacy 박스가 적용된 상태로 시작한다(server PR #116 대비).
+ * legacy 박스는 Mock 내부 상태다. /blocks 에는 싣지 않고 /preview renderInput·지문 계산에만 쓴다(lib/mock-api/n5-layout-adjust.ts).
+ */
+const N5_LEGACY_LAYOUT_SEED: ReadonlyMap<number, { x: number; y: number; w: number; h: number }> = new Map([[9112, { x: 120, y: 340, w: 420, h: 80 }]]);
+const n5LegacyLayoutBox = new Map<number, { x: number; y: number; w: number; h: number }>();
+let n5LegacyLayoutSeeded = false;
+function seedN5LegacyLayout(referrer: string) {
+  if (n5LegacyLayoutSeeded) return;
+  try {
+    if (new URL(referrer).searchParams.get('mockScenario') !== 'n5-layout-legacy') return;
+  } catch {
+    return;
+  }
+  n5LegacyLayoutSeeded = true;
+  for (const [blockId, box] of N5_LEGACY_LAYOUT_SEED) n5LegacyLayoutBox.set(blockId, box);
+}
+
+/** 렌더 입력 계산용 블록 — legacy 박스가 남아 있으면 적용값으로 얹는다 */
+function getN5RenderBlocksFromState(referrer = ''): ApiTextBlock[] {
+  return getN5BlocksFromState(undefined, referrer).map((block) => withMockLegacyBox(block, n5LegacyLayoutBox.get(block.id as number)));
+}
+
+function getN5BlocksFromState(sectionId?: number, referrer = ''): ApiTextBlock[] {
+  seedN5LegacyLayout(referrer);
+  const overlay = isN5ErrorScenario(referrer)
+    ? applyN5ErrorBlocks
+    : isN5OverlapScenario(referrer)
+      ? applyN5OverlapBlock
+      : isN5CleanScenario(referrer)
+        ? applyN5CleanBlock
+        : null;
+  const all = [...n5BlockState.values()].map((b) => (overlay ? overlay(b) : b));
   return sectionId != null ? all.filter((b) => b.sectionId === sectionId) : all;
 }
 
@@ -257,7 +363,206 @@ function getN5BlocksFromState(sectionId?: number): ApiTextBlock[] {
  * 전까지는 이전 값을 유지).
  */
 let n5TaskIdCounter = 90000;
-const n5TaskState = new Map<number, { blockId: number; pollCount: number }>();
+const n5TaskState = new Map<number, { blockId: number; pollCount: number; createdAt?: number }>();
+
+// ─────────────────────────────────────────────
+// 실패 작업 재시도(API-JOB-06 POST /jobs/{jobId}/tasks/{taskId}/retry) — 실제 BE 처럼 새 시도 행(새 taskId)을 만든다.
+// 재시도한 원래 실패 task 는 이력이 되어 /tasks·시나리오 실패에 다시 나오지 않는다. 재시도 시도는 「실패유도」 규칙을 타지 않고 끝난다.
+// ─────────────────────────────────────────────
+/** 재시도된 원래 실패 task */
+const n5RetriedTaskIds = new Set<number>();
+/** 재시도로 만든 render 시도 — 「실패유도」 번역문이어도 성공으로 끝난다 */
+const n5RenderRetryTaskIds = new Set<number>();
+/** 재시도로 만든 translate 시도(taskId → blockId·진행) */
+const n5TranslateRetryState = new Map<number, { blockId: number; pollCount: number }>();
+
+// ─────────────────────────────────────────────
+// N5 /preview 렌더 입력·시도·결과(server PR #108 계약 모양, lib/mock-api/n5-preview-render.ts)
+// 섹션마다 현재 시도(attempt)와 채택 결과(result)를 둔다. 블록 저장이 시도를 만들고, /tasks 의 그 task 가 끝나면 결과로 채택한다.
+// ─────────────────────────────────────────────
+
+/** 입력 준비 중 — 504 는 번역이 빈 블록(번역 재시도 대기)이 남아 있는 동안 준비 중이다 */
+function isMockSectionPreparing(sectionId: number): boolean {
+  if (!MOCK_N5_PREPARING_SECTION_IDS.has(sectionId)) return false;
+  return [...n5BlockState.values()].some((b) => b.sectionId === sectionId && b.sourceKo && !b.trans1);
+}
+
+function mockSectionFingerprint(section: { id: number; width: number; height: number }, referrer = ''): string {
+  return mockInputFingerprint(buildMockRenderInput(section, getN5RenderBlocksFromState(referrer)));
+}
+
+const n5SectionRenderState = new Map<number, MockN5SectionRender>(
+  mockN5PreviewSections.map((section) => {
+    if (section.bucket === 'exclude' || isMockSectionPreparing(section.id) || section.renderedUrl == null) {
+      return [section.id, { result: null, attempt: null }];
+    }
+    const taskId = 81000 + section.id;
+    return [
+      section.id,
+      {
+        result: { taskId, inputFingerprint: '', rendererId: MOCK_N5_RENDERER.rendererId },
+        attempt: { taskId, status: 'done', errorCode: null, retryable: false },
+      },
+    ];
+  }),
+);
+
+// ─────────────────────────────────────────────
+// ?mockRender=supersede|supersede-cancelled — 실제 BE 처럼 같은 섹션의 새 저장이 진행 중인 앞선 미리보기 시도를 대체한다.
+//   supersede           앞선 task 는 /tasks 에서 사라진다(계약: JOB-05 는 cancelled 항목 제외)
+//   supersede-cancelled 앞선 task 는 /tasks 에 cancelled 로 남는다
+// 이 모드에서는 시도가 조회 횟수가 아니라 경과 시간으로 진행한다(서버 시간 흐름 흉내) — /tasks 를 polling 하지 않아도
+// /preview 조회만으로 끝난 시도를 볼 수 있고, 이어지는 같은 섹션 저장이 아직 진행 중인 앞선 시도를 실제로 대체한다.
+// ?mockRenderHold=<sectionId,...> — 그 섹션의 현재 시도를 running 에 붙잡는다(주소에서 빼면 이어서 끝난다).
+// 기본 Mock 동작은 바꾸지 않는다 — 회귀 시나리오에서만 켠다.
+// ─────────────────────────────────────────────
+type MockRenderMode = { supersede: 'remove' | 'cancel' | null; holdSectionIds: ReadonlySet<number> };
+function getMockRenderMode(referrer: string): MockRenderMode {
+  try {
+    const params = new URL(referrer).searchParams;
+    const value = params.get('mockRender');
+    const hold = (params.get('mockRenderHold') ?? '').split(',').map(Number).filter((id) => Number.isInteger(id) && id > 0);
+    return { supersede: value === 'supersede' ? 'remove' : value === 'supersede-cancelled' ? 'cancel' : null, holdSectionIds: new Set(hold) };
+  } catch {
+    return { supersede: null, holdSectionIds: new Set() };
+  }
+}
+/** supersede-cancelled 로 대체된 앞선 task(taskId → blockId) */
+const n5CancelledTaskState = new Map<number, number>();
+
+function isMockRenderHeld(blockId: number, referrer: string): boolean {
+  const sectionId = n5BlockState.get(blockId)?.sectionId;
+  return sectionId != null && getMockRenderMode(referrer).holdSectionIds.has(sectionId);
+}
+
+/** supersede 모드의 시도 진행 시간(ms) — 이만큼 지나면 running, 다음 값이 지나면 끝난다 */
+const MOCK_SUPERSEDE_RUNNING_MS = 600;
+const MOCK_SUPERSEDE_DONE_MS = 2_500;
+
+/** task 한 걸음 진행 — 기본은 조회 1회당 1, supersede 모드는 경과 시간. 붙잡은 섹션은 running(1)에 머문다 */
+function advanceMockTask(task: { blockId: number; pollCount: number; createdAt?: number }, referrer: string) {
+  const next = getMockRenderMode(referrer).supersede
+    ? (() => {
+        const elapsed = Date.now() - (task.createdAt ?? 0);
+        return elapsed >= MOCK_SUPERSEDE_DONE_MS ? 2 : elapsed >= MOCK_SUPERSEDE_RUNNING_MS ? 1 : 0;
+      })()
+    : task.pollCount + 1;
+  task.pollCount = isMockRenderHeld(task.blockId, referrer) ? Math.min(next, 1) : next;
+}
+
+/** supersede 모드 — /preview 조회만으로도 각 섹션 현재 시도가 진행된다 */
+function advanceMockPreviewAttempts(referrer: string) {
+  if (!getMockRenderMode(referrer).supersede) return;
+  for (const render of n5SectionRenderState.values()) {
+    const task = render.attempt ? n5TaskState.get(render.attempt.taskId) : undefined;
+    if (task) advanceMockTask(task, referrer);
+  }
+}
+
+/** 시도의 task 상태를 반영하고, 끝났으면 그때의 입력으로 결과를 채택한다 */
+function settleMockSectionRender(sectionId: number, referrer: string): MockN5SectionRender {
+  const render = n5SectionRenderState.get(sectionId) ?? { result: null, attempt: null };
+  const task = render.attempt ? n5TaskState.get(render.attempt.taskId) : undefined;
+  if (!render.attempt || !task || render.attempt.status === 'done' || render.attempt.status === 'failed') return render;
+  const block = n5BlockState.get(task.blockId);
+  const section = n5PreviewSectionState.find((s) => s.id === sectionId);
+  let next: MockN5SectionRender = render;
+  if (task.pollCount === 0) next = { ...render, attempt: { ...render.attempt, status: 'pending' } };
+  else if (task.pollCount < 2) next = { ...render, attempt: { ...render.attempt, status: 'running' } };
+  else if (block?.trans1?.includes('실패유도') && !n5RenderRetryTaskIds.has(render.attempt.taskId))
+    next = { ...render, attempt: { ...render.attempt, status: 'failed', errorCode: 'PREVIEW_FAILED', retryable: true } };
+  else if (section) {
+    next = {
+      attempt: { ...render.attempt, status: 'done' },
+      result: { taskId: render.attempt.taskId, inputFingerprint: mockSectionFingerprint(section, referrer), rendererId: MOCK_N5_RENDERER.rendererId },
+    };
+  }
+  n5SectionRenderState.set(sectionId, next);
+  return next;
+}
+
+/** /preview sections 와 같은 시점의 지문 — /blocks 의 sectionInputFingerprint(A)도 이 값을 쓴다 */
+function buildMockN5PreviewWithRender(referrer: string) {
+  const preview = buildMockN5Preview(n5PreviewSectionState);
+  const scenario = getN5PreviewScenario(referrer);
+  // 시나리오가 덮은 블록(겹침·signal 등)도 그 응답의 저장 입력으로 본다. legacy 적용 박스도 여기서만 얹는다
+  const blocks = getN5RenderBlocksFromState(referrer);
+  const errorScenario = isN5ErrorScenario(referrer);
+  const blockFingerprintBySection = new Map<number, string | null>();
+  const sections = preview.sections.map((section) => {
+    let render = settleMockSectionRender(section.id, referrer);
+    let preparing = isMockSectionPreparing(section.id);
+    let inputError: { code: string; blockIds: number[] } | null = null;
+    let blockFingerprint: string | undefined;
+    if (scenario && section.id === N5_PREVIEW_SCENARIO_SECTION_ID) {
+      ({ render, preparing, inputError, blockFingerprint } = { ...getMockPreviewScenarioState(scenario, render) });
+    }
+    // n5-errors — JOB-05 실패 item 과 같은 시도(501·505 섹션 렌더 실행 실패 — N4 최초 생성 실패라 이전 결과 없음 / 504 진행 중).
+    // 이전 결과가 있는 실패는 N5 재렌더 실패(미리보기 갱신 실패)라 ?mockScenario=n5-preview-update-failed 가 따로 맡는다
+    if (errorScenario && section.id === 501 && !n5RetriedTaskIds.has(80001)) render = { result: null, attempt: { taskId: 80001, status: 'failed', errorCode: 'MOCK_FAILED', retryable: true } };
+    if (errorScenario && section.id === 504) render = { ...render, attempt: { taskId: 80006, status: 'running', errorCode: null, retryable: false } };
+    if (errorScenario && section.id === 505 && !n5RetriedTaskIds.has(80007)) render = { result: null, attempt: { taskId: 80007, status: 'failed', errorCode: 'MOCK_FAILED', retryable: true } };
+    const fields = buildMockPreviewRenderFields(section, blocks, render, { preparing, inputError });
+    blockFingerprintBySection.set(section.id, blockFingerprint ?? fields.inputFingerprint);
+    return { ...section, ...fields, revision: 1 };
+  });
+  return { preview: { ...preview, renderer: MOCK_N5_RENDERER, sections }, blockFingerprintBySection };
+}
+
+// ?mockPresign=rotate — 실제 BE 처럼 같은 S3 객체도 /preview 조회마다 새 presigned URL(쿼리 문자열만 다름)을 낸다.
+// 객체(asset)는 그대로다 — background.sha256·render.result 는 바뀌지 않는다. 지문(B·C)은 이 쿼리 전에 계산한 값이라 영향이 없다.
+let mockPresignSeq = 0;
+function withMockPresignRotation<T extends { sections: Array<Record<string, unknown>> }>(preview: T, referrer: string): T {
+  try {
+    if (new URL(referrer).searchParams.get('mockPresign') !== 'rotate') return preview;
+  } catch {
+    return preview;
+  }
+  const seq = ++mockPresignSeq;
+  const sign = (url: unknown) => (typeof url === 'string' ? `${url}?X-Amz-Date=mock${seq}` : url);
+  return {
+    ...preview,
+    sections: preview.sections.map((section) => {
+      const renderInput = section.renderInput as { section: { background: { url: string } } } | null | undefined;
+      return {
+        ...section,
+        originalUrl: sign(section.originalUrl),
+        renderedUrl: sign(section.renderedUrl),
+        ...(renderInput
+          ? { renderInput: { ...renderInput, section: { ...renderInput.section, background: { ...renderInput.section.background, url: sign(renderInput.section.background.url) } } } }
+          : {}),
+      };
+    }),
+  };
+}
+
+/** /blocks 응답 블록 — 그 순간의 섹션 입력 지문(A)을 붙인다. 제외·입력 오류·준비 중 섹션은 null */
+function withSectionInputFingerprint(blocks: ApiTextBlock[], referrer: string): ApiTextBlock[] {
+  const { blockFingerprintBySection } = buildMockN5PreviewWithRender(referrer);
+  // layoutAdjust 키는 항상 낸다(Mock = 계약 구현 뒤 모양). 저장 조정이 없으면 null
+  return blocks.map((block) => ({
+    ...block,
+    layoutAdjust: block.layoutAdjust ?? null,
+    sectionInputFingerprint: blockFingerprintBySection.get(block.sectionId as number) ?? null,
+  }));
+}
+
+
+/** ?mockScenario=n5-layout-fail(배치 저장 500) · n5-layout-conflict(첫 배치 저장 409 REVISION_CONFLICT) */
+function getN5LayoutScenario(referrer: string): 'fail' | 'conflict' | null {
+  try {
+    const value = new URL(referrer).searchParams.get('mockScenario');
+    return value === 'n5-layout-fail' ? 'fail' : value === 'n5-layout-conflict' ? 'conflict' : null;
+  } catch {
+    return null;
+  }
+}
+let n5LayoutConflictFired = false;
+
+/** 공통 Error 계약 모양 — details 포함(400 fields · 409 reason) */
+function n5LayoutError(status: number, code: string, message: string, details: Record<string, unknown> | null) {
+  return HttpResponse.json({ error: { code, message, retryable: status >= 500, details, traceId: `mock-trace-${Date.now()}` } }, { status });
+}
 
 function n5RevisionConflictResponse(current: ApiTextBlock) {
   return HttpResponse.json(
@@ -286,6 +591,8 @@ function n5RevisionConflictResponse(current: ApiTextBlock) {
 let n6RenderTaskIdCounter = 80000;
 let n6LatestRenderTaskId: number | null = null;
 const n6RenderTaskState = new Map<number, { pollCount: number }>();
+/** N6 렌더 Mock이 끝나는 폴링 횟수 — 진행 모달을 실제로 볼 수 있는 길이다(production과 무관) */
+const N6_RENDER_DONE_POLLS = 3;
 
 function registerOrReuseN6RenderTask(): number {
   if (n6LatestRenderTaskId != null) {
@@ -294,13 +601,73 @@ function registerOrReuseN6RenderTask(): number {
   }
   const taskId = n6RenderTaskIdCounter++;
   n6RenderTaskState.set(taskId, { pollCount: 0 });
+  n6RenderSnapshots.set(taskId, snapshotN5BlocksForFinalRender());
   n6LatestRenderTaskId = taskId;
   return taskId;
 }
 
+/**
+ * 최종 렌더 입력 snapshot — 새 최종 렌더를 등록하는 순간(confirm·POST render)의 서버 block 상태(trans1·revision·layoutAdjust).
+ * 실서버 final render 가 confirm 시점의 block revision/trans1 과 저장된 배치(box·font_scale)를 manifest 에 담는 것과 같은 의미다
+ * (BE tests/test_block_layout_adjust.py test_final_render_uses_same_box_scale_and_updates_overflow). N6 결과 이미지는 이 값으로 만든다
+ * (FE 화면 상태가 아니라 Mock 서버 상태를 snapshot 한다).
+ */
+interface N6RenderSnapshotBlock {
+  blockId: number;
+  sectionId: number;
+  revision: number | null;
+  trans1: string;
+  /** confirm 시점에 저장된 셀러 배치(정규화 후). 없으면 null — 원본 bbox · 배율 1.0 */
+  layoutAdjust: { box: { x: number; y: number; w: number; h: number } | null; fontScale: number | null } | null;
+}
+const n6RenderSnapshots = new Map<number, N6RenderSnapshotBlock[]>();
+
+function snapshotN5BlocksForFinalRender(): N6RenderSnapshotBlock[] {
+  const included = new Set(n5PreviewSectionState.filter((section) => section.bucket === 'include').map((section) => section.id));
+  return [...n5BlockState.values()]
+    .filter((block) => block.sectionId != null && included.has(block.sectionId) && block.isExcluded !== true && (block.trans1 ?? '') !== '')
+    .map((block) => ({
+      blockId: block.id as number,
+      sectionId: block.sectionId as number,
+      revision: block.revision ?? null,
+      trans1: block.trans1 as string,
+      layoutAdjust: (block.layoutAdjust as N6RenderSnapshotBlock['layoutAdjust'] | undefined) ?? null,
+    }));
+}
+
+/** Mock 산출물 순서 ↔ 섹션(mockN6Deliverables 의 501·502 번역 이미지) */
+const MOCK_N6_DELIVERABLE_SECTION_IDS = [501, 502];
+
+const escapeXml = (text: string) => text.replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' })[c] as string);
+
+/**
+ * snapshot 으로 만든 결정적 Mock 결과 이미지(SVG data URL). 이미지 품질이 아니라 「confirm 시점 서버 번역문이 결과에 들어갔는지」를
+ * 확인하기 위한 것이다 — 각 block 의 trans1 을 글자로 그리고, 같은 값을 <desc> JSON(renderTaskId·blocks)으로도 싣는다.
+ */
+function buildMockFinalRenderImage(renderTaskId: number, sectionId: number, snapshot: N6RenderSnapshotBlock[]): string {
+  const blocks = snapshot.filter((block) => block.sectionId === sectionId);
+  const height = 120 + blocks.length * 48;
+  const lines = blocks
+    .map((block, index) => `<text x="40" y="${100 + index * 48}" font-family="Pretendard, sans-serif" font-size="24" fill="#171717" data-block-id="${block.blockId}">${escapeXml(block.trans1)}</text>`)
+    .join('');
+  const meta = escapeXml(JSON.stringify({ renderTaskId, sectionId, blocks }));
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="${height}" viewBox="0 0 1000 ${height}"><desc>${meta}</desc><rect width="1000" height="${height}" fill="#f7f1e8"/><text x="40" y="52" font-family="Pretendard, sans-serif" font-size="18" fill="#707070">Section ${sectionId} · render ${renderTaskId}</text>${lines}</svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+function mockN6DeliverablesFromSnapshot(): ApiDeliverableList['deliverables'] {
+  const taskId = n6LatestRenderTaskId;
+  const snapshot = taskId != null ? n6RenderSnapshots.get(taskId) : undefined;
+  if (taskId == null || !snapshot) return mockN6Deliverables;
+  return mockN6Deliverables.map((deliverable, index) => {
+    const sectionId = MOCK_N6_DELIVERABLE_SECTION_IDS[index];
+    return sectionId == null ? deliverable : { ...deliverable, imageUrl: buildMockFinalRenderImage(taskId, sectionId, snapshot) };
+  });
+}
+
 function isN6RenderDone(): boolean {
   if (n6LatestRenderTaskId == null) return false;
-  return (n6RenderTaskState.get(n6LatestRenderTaskId)?.pollCount ?? 0) >= 2;
+  return (n6RenderTaskState.get(n6LatestRenderTaskId)?.pollCount ?? 0) >= N6_RENDER_DONE_POLLS;
 }
 
 /**
@@ -694,6 +1061,7 @@ interface MockN1Draft {
 }
 
 let n1Draft: MockN1Draft | null = null;
+let mockJobCancelled = false;
 
 /** 계약: JPG·PNG만 허용 (그 외는 파일별 UNSUPPORTED_FORMAT 실패) */
 function isAcceptedSourceImage(file: File): boolean {
@@ -709,6 +1077,9 @@ function sortedDraftImages(draft: MockN1Draft): ApiSourceImage[] {
 // ─────────────────────────────────────────────
 
 export const handlers = [
+  // 인증(G1 소셜 로그인·세션 refresh·로그아웃) — 일반 API 의 access 만료 시나리오가 다른 handler 보다 먼저 봐야 해서 맨 앞에 둔다
+  ...authHandlers,
+
 
   // ── health (기존 유지). N1→N6 화면 흐름과 무관한 MSW 자체 점검용
   // 엔드포인트라 오늘 /api 경로 정리 대상이 아니다 — 실제 OpenAPI에도 대응
@@ -730,6 +1101,7 @@ export const handlers = [
     // (리셋 기준값이 N2인 이유는 위 jobState 선언부 주석 참고)
     resetJobState();
     n1Draft = { patch: {}, sourceImages: [], nextSourceImageId: 101, failedOnce: new Set() };
+    mockJobCancelled = false;
 
     const draft: ApiJob = {
       ...jobState,
@@ -827,7 +1199,8 @@ export const handlers = [
       productName: n1Draft.patch.productName ?? null,
       productCode: n1Draft.patch.productCode ?? null,
     };
-    const { productName, productCode, targetCountry, regulatoryClass, targetLanguage, specType, keywords, imageType } = n1Draft.patch;
+    const { productName, productCode, targetCountry, regulatoryClass, targetLanguage, specType, categoryId, keywords, imageType } =
+      n1Draft.patch;
     const response: ApiJob = {
       ...jobState,
       status: 'draft',
@@ -839,10 +1212,20 @@ export const handlers = [
       regulatoryClass: regulatoryClass ?? null,
       targetLanguage: targetLanguage ?? null,
       specType: specType ?? undefined,
+      categoryId: categoryId ?? null,
       keywords: keywords ?? [],
       imageType: imageType ?? null,
     };
     return HttpResponse.json(response);
+  }),
+
+  // 작업 취소 (API-JOB-04) — 204 본문 없음. 어느 단계의 작업이든 취소된다. 취소한 작업을 다시 취소하면 404 다.
+  http.delete('/jobs/:jobId', ({ params }) => {
+    const jobId = params.jobId as string;
+    if (jobId !== MOCK_JOB_ID || mockJobCancelled) return contractError(404, 'NOT_FOUND', `Job '${jobId}' not found`);
+    mockJobCancelled = true;
+    n1Draft = null;
+    return new HttpResponse(null, { status: 204 });
   }),
 
   // ──────────────────────────────────────────
@@ -875,25 +1258,55 @@ export const handlers = [
   // 계약처럼 보이게 했었다. 인메모리 bucket 상태(sectionState)는 그대로
   // 두고, 응답을 조립하는 시점에만 toWireSection으로 변환한다.
   // ──────────────────────────────────────────
-  http.get('/jobs/:jobId/sections', ({ params }) => {
+  http.get('/jobs/:jobId/sections', ({ params, request }) => {
     const jobId = params.jobId as string;
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
 
     const wireSections = mockSectionsResponse.sections.map((sec) => {
       const state = sectionState.get(sec.sectionId);
-      return toWireSection(
+      const wire = toWireSection(
         sec,
         state?.bucket ?? sec.bucket,
         state?.exclusionReason ?? sec.exclusionReason,
         state?.excludedStage ?? sec.excludedStage,
       );
+      return isN3CardVariantsScenario(request.referrer) ? applyN3CardVariant(wire) : wire;
     });
 
     const response: ApiSectionList = {
       exclude: wireSections.filter((s) => s.bucket === 'exclude'),
       include: wireSections.filter((s) => s.bucket === 'include'),
     };
+    if (isN5ErrorScenario(request.referrer) && jobState.currentStep === 'N5') {
+      response.include = [...(response.include ?? []), n5ErrorRestoredSectionListItem];
+    }
     return HttpResponse.json(response);
+  }),
+
+  // ──────────────────────────────────────────
+  // N3 — 섹션 상세(API-SEC-02). 계약상 판정 근거 전체를 준다. 목록과 같은
+  // 인메모리 bucket 상태로 조립한다.
+  // ──────────────────────────────────────────
+  http.get('/jobs/:jobId/sections/:sectionId', ({ params, request }) => {
+    const jobId = params.jobId as string;
+    if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
+
+    const sectionIdNum = Number(params.sectionId);
+    if (isN5ErrorScenario(request.referrer) && sectionIdNum === n5ErrorRestoredSectionDetail.id) {
+      return HttpResponse.json(n5ErrorRestoredSectionDetail);
+    }
+    const sec = mockSectionsResponse.sections.find((s) => toNumericId(s.sectionId) === sectionIdNum);
+    if (!sec) return notFound(`Section '${params.sectionId}' not found`);
+
+    const state = sectionState.get(sec.sectionId);
+    return HttpResponse.json(
+      toWireSection(
+        sec,
+        state?.bucket ?? sec.bucket,
+        state?.exclusionReason ?? sec.exclusionReason,
+        state?.excludedStage ?? sec.excludedStage,
+      ),
+    );
   }),
 
   // ──────────────────────────────────────────
@@ -911,6 +1324,25 @@ export const handlers = [
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
 
     const sectionIdNum = Number(params.sectionId);
+
+    // N5 프리뷰 섹션(501~505) — 계약: "N5에서 excludedStage=N3 조작 시 409 INVALID_STATE"
+    const n5Section = n5PreviewSectionState.find((s) => s.id === sectionIdNum);
+    if (n5Section) {
+      const n5Body = (await request.json()) as Record<string, unknown>;
+      if (n5Body.action !== 'restore' && n5Body.action !== 'exclude') {
+        return badRequest("action은 'restore' 또는 'exclude'여야 합니다");
+      }
+      if (jobState.currentStep === 'N5' && n5Section.excludedStage === 'N3') {
+        return contractError(409, 'INVALID_STATE', 'N3에서 제외된 섹션은 N5에서 변경할 수 없습니다');
+      }
+      const updated: MockN5PreviewSection =
+        n5Body.action === 'restore'
+          ? { ...n5Section, bucket: 'include', excludedStage: null }
+          : { ...n5Section, bucket: 'exclude', excludedStage: (jobState.currentStep as 'N3' | 'N5' | undefined) ?? null };
+      n5PreviewSectionState = n5PreviewSectionState.map((s) => (s.id === updated.id ? updated : s));
+      return HttpResponse.json(toWireN5Section(updated));
+    }
+
     const sec = mockSectionsResponse.sections.find((s) => toNumericId(s.sectionId) === sectionIdNum);
     if (!sec || !sectionState.has(sec.sectionId)) {
       return notFound(`Section '${params.sectionId}' not found`);
@@ -1008,13 +1440,22 @@ export const handlers = [
 
     const sectionIdParam = new URL(request.url).searchParams.get('sectionId');
     const sectionId = sectionIdParam != null ? Number(sectionIdParam) : undefined;
-    return HttpResponse.json(getN5BlocksFromState(sectionId));
+    return HttpResponse.json(withSectionInputFingerprint(getN5BlocksFromState(sectionId, request.referrer), request.referrer));
   }),
 
-  http.get('/jobs/:jobId/preview', ({ params }) => {
+  http.get('/jobs/:jobId/preview', ({ params, request }) => {
     const jobId = params.jobId as string;
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
-    return HttpResponse.json(buildMockN5Preview());
+    advanceMockPreviewAttempts(request.referrer);
+    const { preview } = buildMockN5PreviewWithRender(request.referrer);
+    if (isN5ErrorScenario(request.referrer)) {
+      return HttpResponse.json({
+        ...preview,
+        // 505 렌더링 실패는 render.attempt(failed)·result=null 로 이미 덮었다 — JOB-05 item과 함께 본다
+        sections: preview.sections.map((s) => (s.id === 502 ? { ...s, signals: [{ code: 'logo_match_failed', reason: '정품 로고 매칭에 실패했습니다' }] } : s)),
+      });
+    }
+    return HttpResponse.json(withMockPresignRotation(preview, request.referrer));
   }),
 
   // ──────────────────────────────────────────
@@ -1030,6 +1471,7 @@ export const handlers = [
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
 
     const blockId = Number(params.blockId);
+    seedN5LegacyLayout(request.referrer);
     const current = n5BlockState.get(blockId);
     if (!current) return notFound(`Block '${blockId}' not found`);
 
@@ -1038,8 +1480,53 @@ export const handlers = [
       return badRequest('trans1(string)과 revision(number)이 필요합니다');
     }
 
+    // ── 블록 배치(layoutAdjust, BE develop 구현 완료·dev 배포 확인 필요 — lib/mock-api/n5-layout-adjust.ts). 키가 있을 때만 다룬다
+    const hasLayout = 'layoutAdjust' in body;
+    const layoutScenario = getN5LayoutScenario(request.referrer);
+    const parsedLayout = hasLayout ? parseMockLayoutPatch(body.layoutAdjust) : null;
+    if (parsedLayout && !parsedLayout.ok) return n5LayoutError(422, 'VALIDATION_ERROR', parsedLayout.message, null);
+    // 다른 곳에서 먼저 저장한 상황(?mockScenario=n5-layout-conflict) — 첫 배치 저장 직전에 서버 revision 을 한 번 올린다
+    if (hasLayout && layoutScenario === 'conflict' && !n5LayoutConflictFired) {
+      n5LayoutConflictFired = true;
+      n5BlockState.set(blockId, { ...current, revision: (current.revision ?? 0) + 1 });
+      return n5RevisionConflictResponse(withSectionInputFingerprint([n5BlockState.get(blockId) as ApiTextBlock], request.referrer)[0]);
+    }
+
     if (body.revision !== current.revision) {
       return n5RevisionConflictResponse(current);
+    }
+
+    let nextLayout = current.layoutAdjust ?? null;
+    // legacy 적용 박스를 지우는 저장(box 지정·전부 해제)은 layoutAdjust 가 null → null 이어도 적용 박스가 바뀐다
+    const clearsLegacy = parsedLayout?.ok === true && n5LegacyLayoutBox.has(blockId) && clearsMockLegacyBox(parsedLayout.patch);
+    if (parsedLayout?.ok) {
+      if (layoutScenario === 'fail') return n5LayoutError(500, 'INTERNAL_ERROR', 'mock layout save failure', null);
+      // 렌더 대상만(라벨·로고·빈 원문·빈 번역문 제외 — 같은 요청의 trans1 이 번역문을 채우면 대상)
+      if (current.isExcluded === true || current.role === 'product_label' || !current.sourceKo || body.trans1.trim() === '') {
+        return n5LayoutError(409, 'INVALID_STATE', 'not a render target', { reason: 'not_render_target' });
+      }
+      const section = n5PreviewSectionState.find((candidate) => candidate.id === current.sectionId);
+      const box = parsedLayout.patch?.box;
+      if (box && section && !isMockBoxInSection(box, section)) {
+        return n5LayoutError(400, 'VALIDATION_ERROR', 'box is outside the section', { fields: [{ loc: ['body', 'layoutAdjust', 'box'], msg: 'outside section' }] });
+      }
+      nextLayout = applyMockLayoutPatch(current.layoutAdjust, parsedLayout.patch, current.bbox);
+      // 같은 값 저장 — 번역문·정규화한 배치·적용 박스(legacy)가 모두 지금과 같으면 변경 없음(revision 유지·rerenderTaskId null)
+      if (body.trans1 === current.trans1 && isSameMockLayout(current.layoutAdjust, nextLayout) && !clearsLegacy) {
+        const [unchanged] = withSectionInputFingerprint([current], request.referrer);
+        return HttpResponse.json({ block: unchanged, rerenderTaskId: null });
+      }
+    }
+    // 처음 fixture 결과는 저장 직전 입력으로 고정한다 — 이후 입력이 바뀌면 최신이 아니다
+    {
+      const sectionBase = n5PreviewSectionState.find((s) => s.id === current.sectionId);
+      const before = n5SectionRenderState.get(current.sectionId as number);
+      if (sectionBase && before?.result?.inputFingerprint === '') {
+        n5SectionRenderState.set(current.sectionId as number, {
+          ...before,
+          result: { ...before.result, inputFingerprint: mockSectionFingerprint(sectionBase, request.referrer) },
+        });
+      }
     }
 
     const updated: ApiTextBlock = {
@@ -1047,13 +1534,29 @@ export const handlers = [
       trans1: body.trans1,
       charCount: body.trans1.length,
       revision: current.revision + 1,
+      layoutAdjust: nextLayout,
+      // 번역문이 바뀌면 글 기반 검사를 새 번역문으로 — 해결된 signal 은 응답 block 에서 빠지고 이후 /blocks 에도 다시 나오지 않는다
+      signals: body.trans1 === current.trans1 ? current.signals : recheckMockTextSignals(current.signals, body.trans1),
     };
     n5BlockState.set(blockId, updated);
+    if (clearsLegacy) n5LegacyLayoutBox.delete(blockId);
 
     const rerenderTaskId = n5TaskIdCounter++;
-    n5TaskState.set(rerenderTaskId, { blockId, pollCount: 0 });
+    n5TaskState.set(rerenderTaskId, { blockId, pollCount: 0, createdAt: Date.now() });
+    // 저장이 섹션 미리보기 시도를 새로 만든다. 이전 성공 결과는 새 결과가 채택될 때까지 남는다
+    const sectionId = updated.sectionId as number;
+    const render = n5SectionRenderState.get(sectionId) ?? { result: null, attempt: null };
+    // ?mockRender=supersede* — 아직 끝나지 않은 앞선 시도는 이 시도로 대체된다(BE: cancelled/superseded)
+    const supersede = getMockRenderMode(request.referrer).supersede;
+    const previousTask = render.attempt ? n5TaskState.get(render.attempt.taskId) : undefined;
+    if (supersede && render.attempt && previousTask && render.attempt.status !== 'done' && render.attempt.status !== 'failed') {
+      n5TaskState.delete(render.attempt.taskId);
+      if (supersede === 'cancel') n5CancelledTaskState.set(render.attempt.taskId, previousTask.blockId);
+    }
+    n5SectionRenderState.set(sectionId, { ...render, attempt: { taskId: rerenderTaskId, status: 'pending', errorCode: null, retryable: false } });
 
-    return HttpResponse.json({ block: updated, rerenderTaskId });
+    const [withFingerprint] = withSectionInputFingerprint([updated], request.referrer);
+    return HttpResponse.json({ block: withFingerprint, rerenderTaskId });
   }),
 
   // ──────────────────────────────────────────
@@ -1069,17 +1572,87 @@ export const handlers = [
   // jobState를 그대로 반영한다 — FE(page.tsx)가 이 값으로만 다음 화면을
   // 고른다(별도 계산 없음).
   // ──────────────────────────────────────────
-  http.get('/jobs/:jobId/tasks', ({ params }) => {
+  // ──────────────────────────────────────────
+  // JOB-06 실패 작업 재시도 — translate·render 의 failed 만. 새 시도 행(새 taskId)을 만들고 그 JobAsyncTaskItem 을 돌려준다.
+  // 그 밖(이미 재시도함·실패가 아님·모르는 task)은 409 RETRY_NOT_ALLOWED
+  // ──────────────────────────────────────────
+  http.post('/jobs/:jobId/tasks/:taskId/retry', ({ params, request }) => {
+    const jobId = params.jobId as string;
+    if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
+    const taskId = Number(params.taskId);
+    const notAllowed = () => n5LayoutError(409, 'RETRY_NOT_ALLOWED', '다시 시도할 수 없는 작업입니다', null);
+    if (n5RetriedTaskIds.has(taskId)) return notAllowed();
+
+    // 시나리오 실패 task(n5-errors) 또는 이 화면 저장의 재렌더 실패 시도
+    const scenarioItem = isN5ErrorScenario(request.referrer) ? getN5ErrorFailedItems().find((item) => item.taskId === taskId) : undefined;
+    const ownFailedSection = [...n5SectionRenderState.entries()].find(
+      ([, render]) => render.attempt?.taskId === taskId && render.attempt.status === 'failed',
+    )?.[0];
+    const failed = scenarioItem && scenarioItem.status === 'failed' && scenarioItem.retryable ? scenarioItem : null;
+    if (!failed && ownFailedSection == null) return notAllowed();
+
+    const newTaskId = ++n5TaskIdCounter;
+    n5RetriedTaskIds.add(taskId);
+    if (failed?.taskType === 'translate') {
+      n5TranslateRetryState.set(newTaskId, { blockId: failed.unitId as number, pollCount: 0 });
+      return HttpResponse.json({
+        taskId: newTaskId, taskType: 'translate', unitType: 'text_block', unitId: failed.unitId, status: 'pending', uiStatus: 'retrying',
+        retryCount: 1, maxRetry: 3, retryable: false, errorCode: null, revision: null,
+      });
+    }
+    if (failed && failed.taskType !== 'render') return notAllowed();
+    const sectionId =
+      ownFailedSection ??
+      (failed!.unitType === 'section' ? (failed!.unitId as number) : (n5BlockState.get(failed!.unitId as number)?.sectionId as number));
+    const blockId = [...n5BlockState.values()].find((block) => block.sectionId === sectionId)?.id as number;
+    n5TaskState.set(newTaskId, { blockId, pollCount: 0, createdAt: Date.now() });
+    n5RenderRetryTaskIds.add(newTaskId);
+    const current = n5SectionRenderState.get(sectionId) ?? { result: null, attempt: null };
+    n5SectionRenderState.set(sectionId, { ...current, attempt: { taskId: newTaskId, status: 'pending', errorCode: null, retryable: false } });
+    return HttpResponse.json({
+      taskId: newTaskId, taskType: 'render', unitType: 'section', unitId: sectionId, status: 'pending', uiStatus: 'retrying',
+      retryCount: 1, maxRetry: 3, retryable: false, errorCode: null, revision: null,
+    });
+  }),
+
+  http.get('/jobs/:jobId/tasks', ({ params, request }) => {
     const jobId = params.jobId as string;
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
 
+    // ?scenario=n2-error·n4-error — 단계를 진행시키지 않고 전체 실패 화면에 고정한다
+    const errorScenarioStep = getProcessingErrorScenarioStep(request.referrer);
+    if (errorScenarioStep) {
+      return HttpResponse.json({
+        jobStatus: 'failed',
+        currentStep: errorScenarioStep,
+        userFacingStatus: 'failed',
+        progress: 0,
+        total: 0,
+        done: 0,
+        failedCount: 0,
+        stages: [],
+        items: [],
+      });
+    }
+
+    // ?qaTypeset=1 — Mock 조판 미리보기로 바로 들어간다. N5 이전 단계만 건너뛰고, 확정 뒤 N6 흐름은 그대로 둔다
+    if (isTypesetQaUrl(request.referrer) && ['N1', 'N2', 'N3', 'N4'].includes(jobState.currentStep ?? '')) {
+      jobState = { ...jobState, currentStep: N4_NEXT_STEP, userFacingStatus: N4_NEXT_USER_FACING_STATUS, status: 'review' };
+    }
+
     const items: ApiJobAsyncTaskItem[] = [];
 
+    if (isN5ErrorScenario(request.referrer) && jobState.currentStep === 'N5') {
+      items.push(...getN5ErrorFailedItems().filter((item) => !n5RetriedTaskIds.has(item.taskId as number)));
+    }
+
+    let n6RenderProgress: number | null = null;
     if (n6LatestRenderTaskId != null) {
       const state = n6RenderTaskState.get(n6LatestRenderTaskId);
       if (state) {
         state.pollCount += 1;
-        const done = state.pollCount >= 2;
+        const done = state.pollCount >= N6_RENDER_DONE_POLLS;
+        n6RenderProgress = done ? 1 : state.pollCount / N6_RENDER_DONE_POLLS;
         items.push({
           taskId: n6LatestRenderTaskId,
           taskType: 'render',
@@ -1102,12 +1675,53 @@ export const handlers = [
       }
     }
 
-    for (const [taskId, state] of n5TaskState.entries()) {
+    for (const [taskId, blockId] of n5CancelledTaskState.entries()) {
+      items.push({
+        taskId,
+        taskType: 'render',
+        unitType: 'text_block',
+        unitId: blockId,
+        // 계약상 /tasks 는 cancelled 항목을 빼지만, 남아 있는 경우도 견디는지 보는 방어 모드다(uiStatus 에는 cancelled 값이 없다)
+        status: 'cancelled',
+        retryCount: 0,
+        maxRetry: 3,
+        retryable: false,
+        errorCode: 'SUPERSEDED',
+        revision: null,
+      });
+    }
+
+    // 번역 재시도 — 조회 2번째에 끝나며 그 블록에 번역문이 생긴다(translation_failed 해제)
+    for (const [taskId, state] of n5TranslateRetryState.entries()) {
       state.pollCount += 1;
+      const done = state.pollCount >= 2;
+      if (done && !n5ErrorTranslationRecovered.has(state.blockId)) {
+        const block = n5BlockState.get(state.blockId);
+        if (block) n5BlockState.set(state.blockId, { ...block, trans1: block.trans1 || 'Certified authentic', revision: (block.revision ?? 1) + 1 });
+        n5ErrorTranslationRecovered.add(state.blockId);
+      }
+      items.push({
+        taskId,
+        taskType: 'translate',
+        unitType: 'text_block',
+        unitId: state.blockId,
+        status: done ? 'done' : 'running',
+        uiStatus: done ? 'done' : 'retrying',
+        retryCount: 1,
+        maxRetry: 3,
+        retryable: false,
+        errorCode: null,
+        revision: null,
+      });
+    }
+
+    for (const [taskId, state] of n5TaskState.entries()) {
+      if (n5RetriedTaskIds.has(taskId)) continue; // 재시도된 실패 시도는 이력이다 — 현재 목록에 다시 내지 않는다
+      advanceMockTask(state, request.referrer);
       const block = n5BlockState.get(state.blockId);
       // "실패유도"를 trans1에 넣으면 이 task가 실패로 끝난다 — 실패/polling
       // 종료 경로를 mock에서도 재현하기 위한 테스트 전용 hook이다.
-      const forceFail = block?.trans1?.includes('실패유도') ?? false;
+      const forceFail = (block?.trans1?.includes('실패유도') ?? false) && !n5RenderRetryTaskIds.has(taskId);
 
       if (state.pollCount < 2) {
         items.push({
@@ -1181,7 +1795,8 @@ export const handlers = [
       jobStatus: jobState.status,
       currentStep: jobState.currentStep,
       userFacingStatus: jobState.userFacingStatus,
-      progress: hasTaskItems ? items.filter((i) => i.status === 'done').length / items.length : jobProgress.progress,
+      progress:
+        n6RenderProgress ?? (hasTaskItems ? items.filter((i) => i.status === 'done').length / items.length : jobProgress.progress),
       total: hasTaskItems ? items.length : jobProgress.total,
       done: hasTaskItems ? items.filter((i) => i.status === 'done').length : jobProgress.done,
       failedCount: allItems.filter((i) => i.status === 'failed').length,
@@ -1206,7 +1821,7 @@ export const handlers = [
     const jobId = params.jobId as string;
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
 
-    const hasIncludedSection = mockN5PreviewSections.some((s) => s.bucket === 'include');
+    const hasIncludedSection = n5PreviewSectionState.some((s) => s.bucket === 'include');
     if (!hasIncludedSection) {
       return HttpResponse.json(
         {
@@ -1226,7 +1841,7 @@ export const handlers = [
       acknowledgedWarnings?: { blockId: number; code: string }[];
     };
     const acknowledged = body.acknowledgedWarnings ?? [];
-    const currentWarnings = computeCurrentN5Warnings();
+    const currentWarnings = computeCurrentN5Warnings(getN5BlocksFromState(undefined, request.referrer));
     if (!n5WarningSetsMatch(acknowledged, currentWarnings)) {
       return HttpResponse.json(
         {
@@ -1282,7 +1897,8 @@ export const handlers = [
 
     const renderDone = isN6RenderDone();
     const response: ApiDeliverableList = {
-      deliverables: renderDone ? mockN6Deliverables : [],
+      // 결과 이미지는 그 최종 렌더를 등록한 순간의 서버 block snapshot 으로 만든다(고정 fixture 가 아니다)
+      deliverables: renderDone ? mockN6DeliverablesFromSnapshot() : [],
       components: renderDone
         ? mockN6Components
         : mockN6Components.map((c) => ({ ...c, status: 'pending', isGenerated: false, isActive: false })),
@@ -1443,6 +2059,12 @@ export const handlers = [
   // ──────────────────────────────────────────
   http.get('/master/countries', () => HttpResponse.json(mockMasterCountries)),
   http.get('/master/languages', () => HttpResponse.json(mockMasterLanguages)),
+  http.get('/master/channel-specs', () => HttpResponse.json(mockMasterChannelSpecs)),
+  // N1 카테고리 트리 (API-MST-04) — 실서버와 같은 Category 평면 배열
+  http.get('/master/categories', () => HttpResponse.json(mockMasterCategories)),
+
+  // M2 — 브랜드 정보·로고 (lib/msw/m2-brand-handlers.ts)
+  ...m2BrandHandlers,
 
   // ──────────────────────────────────────────
   // presigned 다운로드 URL(mock) — 실제로는 S3 객체다. 위 download 응답의 url 이 이 경로를

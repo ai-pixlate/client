@@ -68,7 +68,7 @@ export async function recordProcessing(page: Page): Promise<ProcessingRecord> {
     const snap = () => {
       const h1 = document.querySelector('h1')?.textContent?.trim() ?? '';
       const bar = document.querySelector('[role="progressbar"]');
-      const rowEls = Array.from(document.querySelectorAll('p')).filter((p) => /^0[1-5]\s/.test(p.textContent ?? ''));
+      const rowEls = Array.from(document.querySelectorAll('[data-testid="processing-step-title"]'));
       const rows = rowEls.length === 5 ? rowEls.map((p) => code[(p.nextElementSibling?.textContent ?? '').trim()] ?? '?').join('') : '';
       const cap = Array.from(document.querySelectorAll('p')).find((p) => p.className.includes('text-[#ff6a38]'))?.textContent?.trim() ?? '';
       const line = document.querySelector('[data-testid="processing-log-description"]')?.textContent?.replace(/\s+/g, ' ').trim() ?? '';

@@ -6,7 +6,7 @@
  * 쓰는 코드값에 표시 이름을 붙이기 위한 최소 목록이다.
  */
 
-import type { ApiCountry, ApiLanguage } from '@/lib/api/master-schema';
+import type { ApiChannelSpec, ApiCountry, ApiLanguage } from '@/lib/api/master-schema';
 
 export const mockMasterCountries: ApiCountry[] = [
   { code: 'US', name: '미국', hasRegulatoryDictionary: true, release: null },
@@ -15,6 +15,12 @@ export const mockMasterCountries: ApiCountry[] = [
   { code: 'CN', name: '중국', hasRegulatoryDictionary: false, release: null },
   { code: 'DE', name: '독일', hasRegulatoryDictionary: false, release: null },
   { code: 'FR', name: '프랑스', hasRegulatoryDictionary: false, release: null },
+];
+
+/** GET /master/channel-specs — 기본 N5 job fixture(mockN5Job.channelSpecId = 1)의 판매 채널(Figma N3 표본 「아마존」) */
+export const MOCK_CHANNEL_SPEC_AMAZON_ID = 1;
+export const mockMasterChannelSpecs: ApiChannelSpec[] = [
+  { id: MOCK_CHANNEL_SPEC_AMAZON_ID, code: 'amazon', name: '아마존', specType: 'site', description: null, isActive: true, release: null },
 ];
 
 export const mockMasterLanguages: ApiLanguage[] = [

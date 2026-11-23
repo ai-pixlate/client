@@ -1,7 +1,6 @@
 import { test, expect } from '@playwright/test';
 
 import { reachN6 } from './helpers/reach-n6';
-import { disableDirectoryPicker } from './helpers/directory-picker';
 import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 
 // ─────────────────────────────────────────────────────────────────
@@ -14,13 +13,6 @@ import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 // (lib/msw/handlers.ts), 이 테스트는 수동 POST /render 호출 없이도 render가
 // done까지 진행되는 것을 확인한다.
 // ─────────────────────────────────────────────────────────────────
-
-// "선택 항목 내보내기"는 지원 환경(Chromium localhost = secure context)에서 폴더 선택 창을 연다.
-// 이 파일은 기존 다운로드 링크 흐름을 검증하므로 picker 를 없앤 미지원 환경으로 고정한다
-// (폴더 저장 흐름은 e2e/n6-folder-save.spec.ts).
-test.beforeEach(async ({ page }) => {
-  await disableDirectoryPicker(page);
-});
 
 test('render → deliverables → validation → export → download → save 전체 흐름이 새로고침 없이 이어진다', async ({
   page,
@@ -49,7 +41,7 @@ test('render → deliverables → validation → export → download → save �
 
   // ── StepNav + 헤더가 Figma대로 붙어 있다 ─────────────────────────
   await expect(page.getByRole('heading', { name: '저장 및 내보내기' })).toBeVisible();
-  await expect(page.getByRole('link', { name: '보관함으로 나가기' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '작업 취소' })).toBeVisible();
   await expect(page.getByRole('navigation', { name: '작업 진행 단계' })).toBeVisible();
 
   // ── deliverables / validation ────────────────────────────────
@@ -119,11 +111,13 @@ test('render → deliverables → validation → export → download → save �
       new URL(r.url()).pathname === `/jobs/${MOCK_JOB_ID}/export` &&
       new Set(JSON.parse(r.request().postData() ?? '{}').components ?? []).size === 2,
   );
+  // [선택 항목 내보내기] 한 번으로 export → download URL → 브라우저 다운로드까지 이어진다(두 번째 다운로드 버튼 없음)
+  const browserDownload = page.waitForEvent('download', { timeout: 10_000 });
   await page.getByTestId('n6-export-button').click();
   const bundleExportBody = await (await bundleExport).json();
   expect(bundleExportBody.artifactType).toBe('zip');
-
-  await expect(page.getByTestId('n6-download-link')).toBeVisible({ timeout: 10_000 });
+  const started = await browserDownload;
+  await expect(page.getByTestId('n6-download-link')).toHaveCount(0);
 
   // 행 다운로드가 먼저 POST /export 를 한 번 냈으므로, 묶음 내보내기는 그 다음 요청이다
   const exportReq = requests.filter((r) => r.method === 'POST' && r.path === `/jobs/${MOCK_JOB_ID}/export`)[1];
@@ -136,16 +130,16 @@ test('render → deliverables → validation → export → download → save �
     (r) => r.method === 'GET' && new RegExp(`^/jobs/${MOCK_JOB_ID}/exports/\\d+/download$`).test(r.path),
   );
   expect(downloadReq).toBeDefined();
-  const href = await page.getByTestId('n6-download-link').getAttribute('href');
+  const href = started.url();
   expect(href).toContain('mock-presigned');
   expect(href).toContain('export.zip');
 
-  // ── save 실행 ─────────────────────────────────────────────────
-  await page.getByTestId('n6-save-button').click();
-  await expect(page.getByTestId('n6-save-done')).toBeVisible({ timeout: 10_000 });
-  expect(requests.some((r) => r.method === 'POST' && r.path === `/jobs/${MOCK_JOB_ID}/save`)).toBe(true);
-
-  // ── 새로고침 없이 전체 흐름 유지 ────────────────────────────────
+  // ── 새로고침 없이 N6 까지 이어졌다 ──────────────────────────────
   await expect(page).toHaveURL(new RegExp(`/jobs/${MOCK_JOB_ID}$`));
   await expect(page.getByText('번역이 완료되었습니다.')).toBeVisible();
+
+  // ── save 실행 → 서버 저장 성공 뒤 보관함(M1 '/')으로 이동 ─────────
+  await page.getByTestId('n6-save-button').click();
+  await expect(page).toHaveURL(/\/$/, { timeout: 10_000 });
+  expect(requests.some((r) => r.method === 'POST' && r.path === `/jobs/${MOCK_JOB_ID}/save`)).toBe(true);
 });
