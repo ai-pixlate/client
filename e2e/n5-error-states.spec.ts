@@ -31,9 +31,8 @@ test('오류 종합 — section·signal·번역문 칸 실패가 함께 보이�
   await expect(page.getByTestId('n5-block-editor-9111')).toHaveAttribute('placeholder', '번역문을 직접 입력하세요');
   await expect(failed).toContainText('번역문이 생성되지 않아 번역 근거가 없습니다.');
   await expect(failed.getByTestId('n5-cell-failure-verify')).toHaveText('검사하지 못했습니다');
-  const retry = page.getByTestId('n5-block-translate-retry-9111');
-  await expect(retry).toHaveText('다시 시도');
-  expect((await retry.boundingBox())!.height).toBe(24);
+  // 번역 실패 재시도는 이후 기능이라 칸에 [다시 시도]가 없다(Figma 1244:8238 도 실패 문구와 [확인]만)
+  await expect(page.getByTestId('n5-block-translate-retry-9111')).toHaveCount(0);
 
   // 9103 — 서버 넘침(width_overflow)이 있지만 일반 넘침 안내는 보이지 않는다(팀 QA 결정). 검사 실패는 block.check.state=failed 다.
   // 블록 「미리보기를 갱신하지 못했습니다」는 이 화면에서 저장한 재렌더(섹션 render task)가 실패할 때만 칸에 보인다 —
@@ -113,9 +112,9 @@ test('오류 종합 — section·signal·번역문 칸 실패가 함께 보이�
   await page.screenshot({ path: test.info().outputPath('n5-errors-canvas.png') });
 
   // 재시도 — 미리보기 갱신 실패·섹션 렌더 실패는 서버가 retryable=true 로 준 실패라 활성이다(누른 뒤 흐름은 e2e/n5-task-retry.spec.ts).
-  // 번역 실패 [다시 시도]는 12월 범위라 retryable=true 여도 비활성이다
+  // 번역 실패 칸에는 retryable=true 여도 [다시 시도]가 없다(이후 기능)
   await expect(page.getByTestId('n5-section-status-1-render-retry')).toBeEnabled();
-  await expect(retry).toHaveAttribute('aria-disabled', 'true');
+  await expect(page.getByTestId('n5-block-translate-retry-9111')).toHaveCount(0);
   await expect(failed.getByTestId('n5-cell-failure-translate')).toBeVisible();
 
   // 입력 중 — 검사 결과(검사 실패 등)는 직전 서버 결과를 유지하고, 일반 넘침 안내는 여전히 없다
