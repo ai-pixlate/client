@@ -145,10 +145,11 @@ for (const zoomClicks of [0, 1]) {
     expect(Math.abs(kept.x)).toBeLessThanOrEqual(1);
     expect(Math.abs(kept.y)).toBeLessThanOrEqual(1);
 
-    // 번역문 없는 block(9105, 읽기 전용 · trans1=null)
-    await page.getByTestId('n5-block-row-9105').click();
-    await expect(page.getByTestId('n5-block-row-9105')).toContainText('번역문 (읽기 전용)'); // trans1=null
-    const q = probe(page, 9105, 502);
+    // 번역문 없는 block(9107 · 포함 섹션 504 · trans1=null — 번역 실패로 아직 글이 없다).
+    // 예전 대상 9105 는 fixture 원본부터 isExcluded=true(product_label)라 N5 패널·캔버스·끌기 어디에도 들어가지 않는다(n5-view isN5VisibleBlock)
+    await page.getByTestId('n5-block-row-9107').click();
+    await expect(page.getByTestId('n5-block-editor-9107')).toHaveValue('');
+    const q = probe(page, 9107, 504);
     await q.grab();
     await moveTo(page, q, 40, 40);
     await moveTo(page, q, 4, 40);
@@ -156,7 +157,7 @@ for (const zoomClicks of [0, 1]) {
     expect(Math.abs(emptyX.x)).toBeLessThanOrEqual(1);
     await expect(guideX(page)).toBeVisible();
     await page.mouse.up();
-    console.log(`SNAP ${label} unselected 9111 both ${both.x.toFixed(2)},${both.y.toFixed(2)} · empty 9105 X ${emptyX.x.toFixed(2)}`);
+    console.log(`SNAP ${label} unselected 9111 both ${both.x.toFixed(2)},${both.y.toFixed(2)} · empty 9107 X ${emptyX.x.toFixed(2)}`);
   });
 }
 
