@@ -5,7 +5,8 @@ import { MOCK_BRAND_ID, MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 import { reachN3 } from './helpers/reach-n3';
 
 // ─────────────────────────────────────────────────────────────────
-// S0 전역 프로세스 바(PRD F-NAV-01 · F-JOB-07, Figma 298:2872) — Chromium.
+// S0 전역 프로세스 바(PRD F-NAV-01 · F-JOB-07, Figma 525:3023 · 진행단계 instance 608:1440) — Chromium.
+// 진행단계 위치 상세·툴팁 없음·cursor·클릭 무동작(실행계획 v3.6.4)은 s0-steps-figma.spec.ts 가 맡는다.
 // N2~N6 은 폴링 응답의 currentStep 만 고정해 바로 연다. 각 화면 본문·전환은 화면별 spec 이 맡는다.
 // ─────────────────────────────────────────────────────────────────
 
@@ -15,7 +16,6 @@ test.use({ viewport: { width: 1920, height: 1080 } });
 const STEPS = ['N1', 'N2', 'N3', 'N4', 'N5', 'N6'] as const;
 const LABELS = ['정보 입력', '분석중', '섹션 확인', '번역 중', '검수', '저장'];
 const JOB_STEPS = ['N2', 'N3', 'N4', 'N5', 'N6'] as const;
-const TOOLTIP = '단계 이동은 12월 구현 예정입니다.';
 
 async function openStep(page: Page, step: (typeof STEPS)[number]) {
   if (step === 'N1') {
@@ -52,7 +52,6 @@ const nav = (page: Page) => page.getByRole('navigation', { name: '작업 진행 
 const stepButton = (page: Page, index: number) => nav(page).getByRole('button').nth(index);
 const exit = (page: Page) => page.getByTestId('s0-exit');
 const dialog = (page: Page) => page.getByTestId('s0-exit-dialog');
-const visibleTooltip = (page: Page) => nav(page).getByRole('tooltip');
 
 function recordWrites(page: Page) {
   const writes: string[] = [];
@@ -85,7 +84,7 @@ for (const step of STEPS) {
   test(`${step} — 1920×1080 위치와 단계 상태가 Figma 와 같다`, async ({ page }) => {
     await openStep(page, step);
     expect(await exit(page).boundingBox()).toEqual({ x: 40, y: 40, width: 40, height: 40 });
-    expect(await nav(page).boundingBox()).toEqual({ x: 36, y: 150, width: 44, height: 860 });
+    expect(await nav(page).boundingBox()).toEqual({ x: 48, y: 96, width: 44, height: 924 });
 
     const current = STEPS.indexOf(step);
     for (let i = 0; i < STEPS.length; i += 1) {
@@ -124,65 +123,6 @@ for (const [width, height] of [[1728, 885], [1512, 860], [1440, 900]] as const) 
     });
   }
 }
-
-test('단계는 hover·focus·click 에 안내하고 이동하지 않는다', async ({ page }) => {
-  const writes = recordWrites(page);
-  await openStep(page, 'N3');
-  const url = page.url();
-  await expect(visibleTooltip(page)).toHaveCount(0);
-
-  // hover
-  await stepButton(page, 0).hover();
-  await expect(visibleTooltip(page)).toHaveCount(1);
-  await expect(visibleTooltip(page)).toHaveText(TOOLTIP);
-  const hint = (await visibleTooltip(page).boundingBox())!;
-  const step = (await stepButton(page, 0).boundingBox())!;
-  expect(hint.x).toBeGreaterThanOrEqual(step.x + step.width);
-  expect(hint.x + hint.width).toBeLessThanOrEqual(1920);
-  await expect(visibleTooltip(page)).toHaveCSS('border-color', 'rgb(255, 106, 56)');
-  await expect(stepButton(page, 0)).toHaveAccessibleDescription(TOOLTIP);
-  await page.mouse.move(1000, 5);
-  await expect(visibleTooltip(page)).toHaveCount(0);
-
-  // 키보드 focus
-  await exit(page).focus();
-  await page.keyboard.press('Tab');
-  await expect(stepButton(page, 0)).toBeFocused();
-  await expect(visibleTooltip(page)).toHaveText(TOOLTIP);
-  await page.keyboard.press('Tab');
-  await page.keyboard.press('Tab');
-  await expect(stepButton(page, 2)).toBeFocused();
-  await expect(stepButton(page, 2).locator('..').getByRole('tooltip')).toHaveText(TOOLTIP);
-  await page.keyboard.press('Escape');
-  await expect(visibleTooltip(page)).toHaveCount(0);
-
-  // 완료 단계 click — 포인터가 벗어나도 포커스로 남는다
-  await stepButton(page, 0).click({ force: true });
-  await page.mouse.move(1000, 5);
-  await expect(stepButton(page, 0)).toBeFocused();
-  await expect(visibleTooltip(page)).toHaveText(TOOLTIP);
-  expect(page.url()).toBe(url);
-
-  // 현재 단계·미도달 단계도 같다
-  await stepButton(page, 2).click({ force: true });
-  await stepButton(page, 5).click({ force: true });
-  await page.waitForTimeout(200);
-  expect(page.url()).toBe(url);
-  await expect(stepButton(page, 2)).toHaveAttribute('aria-current', 'step');
-  expect(writes).toEqual([]);
-  await expect(dialog(page)).toHaveCount(0);
-  // 페이지 이동 링크가 아니다
-  await expect(nav(page).locator('a')).toHaveCount(0);
-});
-
-test('마지막 단계 안내도 화면 안에 있다', async ({ page }) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await openStep(page, 'N5');
-  await stepButton(page, 5).hover();
-  const hint = (await visibleTooltip(page).boundingBox())!;
-  expect(hint.y + hint.height).toBeLessThanOrEqual(900);
-  expect(hint.x + hint.width).toBeLessThanOrEqual(1440);
-});
 
 test('작업 없는 N1 ✕ — API 없이 나가기', async ({ page }) => {
   const writes = recordWrites(page);
