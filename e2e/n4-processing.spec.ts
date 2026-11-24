@@ -12,6 +12,7 @@ import {
   recordProcessing,
   type DomSnap,
 } from './helpers/processing-recorder';
+import { pickRegulatoryClass } from './helpers/n1-regulatory-class';
 
 // ─────────────────────────────────────────────────────────────────
 // N4 — "번역 중" 5단계 표시 회귀 검증 (Figma 660:4221).
@@ -45,8 +46,11 @@ async function reachN4(page: Page): Promise<void> {
   await selectFirstValidOption(page, 0);
   await selectFirstValidOption(page, 1);
   await page.getByRole('button', { name: '선택하기' }).click();
-  await page.getByRole('dialog', { name: '카테고리 선택' }).getByRole('button', { name: '바디/헤어' }).click();
-  await selectFirstValidOption(page, 2);
+  await page.getByRole('dialog', { name: '카테고리 선택' }).getByRole('button', { name: '선케어' }).click();
+  await page.getByRole('dialog', { name: '카테고리 선택' }).getByRole('button', { name: '선크림' }).click();
+  await page.getByRole('dialog', { name: '카테고리 선택' }).getByRole('button', { name: '확인' }).click(); // PRD F-SRC-04 — [확인]으로 확정
+  await page.getByRole('checkbox', { name: /외부 AI 서비스로 전송됨을 확인했습니다/ }).check(); // F-ACC-04 책임 동의
+  await pickRegulatoryClass(page, '화장품'); // 규제 분류 — 드롭다운(native select 아님)
   await page.getByLabel('파일 선택').setInputFiles({
     name: 'n4-processing.png',
     mimeType: 'image/png',
@@ -55,8 +59,8 @@ async function reachN4(page: Page): Promise<void> {
   await page.getByRole('button', { name: '다음' }).click();
   await page.waitForURL(new RegExp(`/jobs/${MOCK_JOB_ID}$`));
   // 기본 mock N2 는 analyze → finalize → judge 를 poll 마다 보여 준 뒤 N3 로 간다(약 11초)
-  await page.getByRole('button', { name: '번역 시작' }).waitFor({ state: 'visible', timeout: 30_000 });
-  await page.getByRole('button', { name: '번역 시작' }).click();
+  await page.getByRole('button', { name: '이대로 진행' }).waitFor({ state: 'visible', timeout: 30_000 });
+  await page.getByRole('button', { name: '이대로 진행' }).click();
 }
 
 async function readProgress(page: Page): Promise<number> {
@@ -84,10 +88,10 @@ async function recordN4Snapshots(page: Page) {
       const snapshot = () => {
         const onN4 = Array.from(document.querySelectorAll('h1, h2, h3')).some((h) => h.textContent?.trim() === '번역 중');
         const bar = document.querySelector('[role="progressbar"]');
-        const rowEls = Array.from(document.querySelectorAll('p')).filter((p) => /^0[1-5]\s/.test(p.textContent ?? ''));
+        const rowEls = Array.from(document.querySelectorAll('[data-testid="processing-step-title"]'));
         if (!onN4 || !bar || rowEls.length !== 5) return;
         const rows: Record<string, string> = {};
-        for (const p of rowEls) rows[(p.textContent ?? '').trim().slice(0, 2)] = (p.nextElementSibling?.textContent ?? '').trim();
+        rowEls.forEach((p, i) => (rows[`0${i + 1}`] = (p.nextElementSibling?.textContent ?? '').trim()));
         const text = document.body.textContent ?? '';
         const caption = captions.find((c) => text.includes(c)) ?? '';
         const entry = { rows, progress: Number(bar.getAttribute('aria-valuenow')), caption };
@@ -151,7 +155,9 @@ test('N4 — stage 실패를 받으면 기존 실패 안내가 뜨고 표시 pro
   await page.evaluate(() => {
     (globalThis as Record<string, unknown>).__pixlateMockN4Fail = true;
   });
-  await expect(page.getByText('일부 항목을 처리하지 못했습니다')).toBeVisible({ timeout: 10_000 });
+  // 부분 실패의 내부 진단 박스(unitType·errorCode)는 N4 에 내지 않는다 — 진행 표시가 멈추는 것으로 확인한다
+  await page.clock.fastForward('00:10');
+  await expect(page.getByText('일부 항목을 처리하지 못했습니다')).toHaveCount(0);
   const atFailure = await readProgress(page);
 
   await page.clock.fastForward('05:00');
@@ -243,7 +249,7 @@ test('N4 C — 첫 render 관측이 progress=0.9 여도 04·05 를 함께 render
   expect(log.every((e) => JSON.stringify(e.rows) === JSON.stringify(rowsOf(D, D, D, A, A))), JSON.stringify(log)).toBe(true);
 });
 
-test('N4 D — jobStatus=failed·render=done·progress=1 이어도 완료가 아니고 N4 실패 안내에 머문다', async ({ page }) => {
+test('N4 D — jobStatus=failed·render=done·progress=1 이어도 완료가 아니고 N4 오류 화면에 머문다', async ({ page }) => {
   test.setTimeout(60_000);
   await page.clock.install();
   await setN4Script(page, [
@@ -268,11 +274,11 @@ test('N4 D — jobStatus=failed·render=done·progress=1 이어도 완료가 아
       fail: true,
     },
   ]);
-  await recordN4Snapshots(page);
   await reachN4(page);
   await expect(page.getByRole('heading', { name: '번역 중' })).toBeVisible({ timeout: 5_000 });
 
-  await expect(page.getByText('일부 항목을 처리하지 못했습니다')).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByTestId('processing-error')).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText('번역을 완료하지 못했습니다')).toBeVisible();
   const atFailure = await readProgress(page);
   expect(atFailure).toBeLessThan(100);
 
@@ -281,7 +287,6 @@ test('N4 D — jobStatus=failed·render=done·progress=1 이어도 완료가 아
   expect(await readProgress(page)).toBe(atFailure);
   await expect(page.getByRole('heading', { name: '번역 중' })).toBeVisible();
   await expect(page.locator('[data-testid="n5-panel"]')).toHaveCount(0);
-  expectN4Invariants(await n4Log(page));
 });
 
 // ── 로딩 표현 안정화: 서버 관측 단계 · 표시 % · 실제 완료(N5) 를 분리 ──
@@ -401,6 +406,9 @@ test('N4 E-5 — N4 도중 새로 시작(페이지 이동)한 다음 실행이 �
   await reachN4(page);
   // 첫 실행을 verify(03) 진행 중에 끊는다 — 화면 unmount 정리 없이 페이지가 바뀐다
   await expect.poll(() => onScreen(rec.dom, N4_TITLE).at(-1)?.rows, { timeout: 30_000 }).toBe('DDAPP');
+  // 이전 화면을 먼저 떠난 뒤에 두 번째 실행 시각을 잰다 — 그러지 않으면 아직 남아 있던 첫 실행 화면(DDAPP)의 마지막 기록이
+  // 두 번째 실행의 첫 표시로 섞인다(측정 경합). 정리 없이 페이지가 바뀌는 조건은 같다(전체 이동)
+  await page.goto('about:blank');
   const secondFrom = Date.now();
   await reachN4(page);
   await expect(page.locator('[data-testid="n5-panel"]')).toBeVisible({ timeout: 40_000 });

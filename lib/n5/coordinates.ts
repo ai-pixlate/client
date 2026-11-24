@@ -180,3 +180,64 @@ export function getBlockHitRect(visual: DisplayRect, options: BlockHitRectOption
 
   return { left, top, width: Math.max(0, right - left), height: Math.max(0, bottom - top) };
 }
+
+/**
+ * 화면 px 이동량 → section-local 원본 px 이동량(getBlockDisplayRect의 역방향). pan·section 위치는
+ * 이동량에 영향을 주지 않아 배율(preview scale × 사용자 zoom)만 나눈다.
+ */
+export function screenDeltaToBboxDelta(
+  delta: { x: number; y: number },
+  scale: number,
+  zoom: number,
+): { x: number; y: number } {
+  return { x: delta.x / (scale * zoom), y: delta.y / (scale * zoom) };
+}
+
+/* ------------------------------------------------------------------ *
+ * 선택 block 글자크기 툴바 위치 (Figma 1512:23496)
+ * ------------------------------------------------------------------ */
+
+/**
+ * 글자크기 툴바의 가로 위치. 선택 테두리 위쪽, 테두리 왼쪽에서 조금 안쪽(preferredLeft)에 둔다. section 경계는 보지 않는다
+ * (툴바는 이미지가 아닌 편집 UI다). workspace 오른쪽 끝을 넘을 때만 왼쪽으로 필요한 만큼 민다.
+ * block이 workspace 밖으로 완전히 나가면 민 위치에 남지 않고 block과 함께 움직인다.
+ * 모든 값은 같은 화면 px 좌표계다.
+ */
+export function getFontScaleToolbarLeft(options: {
+  /** 밀리지 않았을 때의 툴바 왼쪽 */
+  preferredLeft: number;
+  /** 선택 테두리 왼쪽 — 이보다 왼쪽으로는 밀지 않는다 */
+  blockLeft: number;
+  toolbarWidth: number;
+  /** 툴바 오른쪽 끝이 넘지 않아야 할 위치 */
+  maxRight: number;
+}): number {
+  const { preferredLeft, blockLeft, toolbarWidth, maxRight } = options;
+  return Math.min(preferredLeft, Math.max(maxRight, blockLeft) - toolbarWidth);
+}
+
+/**
+ * 이보다 낮게 보이는(화면 px = preview scale × zoom 적용 후) Auto Height block은 compact resize를 쓴다. 오른쪽 손잡이(ne·e·se)가
+ * 몰려 정확한 점을 찾아 눌러야 하는 높이다. 위치는 Figma 그대로 두고 누르는 방식만 바꾼다 —
+ * 오른쪽 변 전체가 가로 resize 하나를 받는다. Figma에 낮은 block 표본이 없어 정한 UX 값이다.
+ */
+export const COMPACT_RESIZE_HEIGHT_PX = 48;
+/** 48로 계산된 값이 부동소수 오차로 47.9999…가 되어 경계에서 모드가 흔들리지 않게 하는 여유 */
+const COMPACT_RESIZE_EPSILON_PX = 0.001;
+
+/** @param displayHeight 사용자가 보는 block 높이(화면 px) */
+export function isCompactResizeHeight(displayHeight: number): boolean {
+  return displayHeight < COMPACT_RESIZE_HEIGHT_PX - COMPACT_RESIZE_EPSILON_PX;
+}
+
+/**
+ * compact 오른쪽 resize 영역의 절반 폭(화면 px). 보이지 않는 영역이며 block 테두리가 시각 기준이다. 위·아래로도 같은 만큼 넓혀
+ * 평소 ne·se 손잡이가 받던 자리까지 덮는다.
+ */
+export const COMPACT_RIGHT_RESIZE_HALF_PX = 8;
+
+/** compact 오른쪽 resize 영역 — canvas 좌표(zoom 전). 화면 크기는 zoom과 무관하게 같다 */
+export function getCompactRightResizeZone(rect: DisplayRect, zoom: number): DisplayRect {
+  const half = COMPACT_RIGHT_RESIZE_HALF_PX / zoom;
+  return { left: rect.left + rect.width - half, top: rect.top - half, width: half * 2, height: rect.height + half * 2 };
+}

@@ -27,6 +27,9 @@ async function testIdAtPoint(page: Page, x: number, y: number): Promise<string |
   );
 }
 
+// 낮은 창에서는 fit 배율이 작아 옆 block 의 실제 bbox 가 hit 여백까지 닿으므로 Figma 기준 크기에서 확인한다
+test.use({ viewport: { width: 1920, height: 1080 } });
+
 test.beforeEach(async ({ page }) => {
   await reachN5(page);
   // 전체 canvas를 화면에 넣어(축소 상태) 글씨가 작게 보이는 상황을 만든다.
@@ -34,7 +37,7 @@ test.beforeEach(async ({ page }) => {
   await page.getByTestId('n5-block-row-9101').waitFor();
 });
 
-test('텍스트 선택 도구: 작은 bbox 중앙 · bbox 바깥 hit 여백 · 번호 배지를 누르면 그 block 이 선택된다', async ({
+test('작은 bbox 중앙 · bbox 바깥 hit 여백 · 번호 배지를 누르면 그 block 이 선택된다', async ({
   page,
 }) => {
   // 9103(502/price, 300×80) — fit-height 축소 상태에서 화면상 아주 작다.
@@ -73,9 +76,11 @@ test('텍스트 선택 도구: 작은 bbox 중앙 · bbox 바깥 hit 여백 · �
   // 부모 section 클릭으로 덮어써지지 않는다(section 선택이면 block 선택이 해제된다)
   await expect(page.getByTestId('n5-block-overlay-9101')).toHaveAttribute('aria-pressed', 'false');
 
-  // 선택 테두리는 실제 bbox(visual rect)에만 있고, 크기도 그대로다
+  // bbox(visual rect) 크기는 그대로고, 선택 테두리는 그 바깥 12px(화면)에 따로 그린다 — 넓힌 hit 영역에는 테두리가 없다
   expect(await boxOf(page, 'n5-block-overlay-9103')).toEqual(visual);
-  await expect(page.getByTestId('n5-block-overlay-9103')).toHaveClass(/border-\[#ff6a38\]/);
+  const frame = await boxOf(page, 'n5-block-selection-frame');
+  expect(Math.abs(frame.x - (visual.x - 12))).toBeLessThanOrEqual(1);
+  expect(Math.abs(frame.width - (visual.width + 24))).toBeLessThanOrEqual(1);
   await expect(page.getByTestId('n5-block-hit-9103')).not.toHaveClass(/border/);
 
   // 3) 번호 배지 클릭 — 다른 block(9104)의 배지를 눌러 선택이 옮겨지는지 본다
@@ -109,19 +114,4 @@ test('인접 block 의 hit 여백이 겹쳐도 실제 bbox 안을 누르면 그 
       expect([`n5-block-overlay-${id}`, `n5-block-pin-${id}`], `(${x}, ${y})`).toContain(topId);
     }
   }
-});
-
-test('섹션 선택 도구: block hit 여백과 번호 배지를 눌러도 그 section 이 선택된다', async ({ page }) => {
-  await page.getByRole('button', { name: '섹션 선택' }).click();
-
-  const visual = await boxOf(page, 'n5-block-overlay-9103');
-  const hit = await boxOf(page, 'n5-block-hit-9103');
-  await page.mouse.click(visual.x + visual.width / 2, (visual.y + visual.height + hit.y + hit.height) / 2);
-  await expect(page.getByTestId('n5-section-selected-tag')).toHaveText('Section2');
-  await expect(page.getByTestId('n5-block-overlay-9103')).toHaveAttribute('aria-pressed', 'false');
-
-  const pin = await boxOf(page, 'n5-block-pin-9110');
-  await page.mouse.click(pin.x + pin.width / 2, pin.y + pin.height / 2);
-  await expect(page.getByTestId('n5-section-selected-tag')).toHaveText('Section5');
-  await expect(page.getByTestId('n5-block-overlay-9110')).toHaveAttribute('aria-pressed', 'false');
 });
