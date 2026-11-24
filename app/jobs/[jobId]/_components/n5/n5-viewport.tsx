@@ -155,6 +155,8 @@ interface CanvasSlice {
   isExcluded: boolean;
   /** N5 [되돌리기] 가능 여부. N3 에서 제외된 섹션은 false(canRestoreSectionInN5) */
   canRestore: boolean;
+  /** 서버가 기록한 제외 단계 — N5 에서 사용자가 제외한 섹션('N5')만 제외 전 이미지를 흐리게 남긴다 */
+  excludedStage: PreviewSectionViewModel['excludedStage'];
 }
 
 /**
@@ -182,6 +184,7 @@ function buildSectionSlices(
     display: displayOf(section),
     isExcluded: section.render.status === 'excluded',
     canRestore: canRestoreSectionInN5(section),
+    excludedStage: section.excludedStage,
   }));
 }
 
@@ -843,6 +846,9 @@ function sectionImageOf(
     return result ? { identity: `render:${result.taskId}:${result.inputFingerprint}`, url: slice.renderedUrl } : byUrl(slice.renderedUrl);
   }
   if (display === 'original-image') return original;
+  // N5 에서 사용자가 제외한 섹션 — 자리에 남아 제외 전 이미지를 흐리게 보인다(Figma 1821:49608). 계약상 N5 제외 섹션의 renderedUrl 은
+  // 「제외 전 이미지가 있으면 낸다」이고 없으면 원본이다. N3 제외(계약상 프리뷰에 오지 않는다)·단계 미기록 제외는 이전처럼 이미지를 되살리지 않는다
+  if (display === 'excluded') return slice.excludedStage === 'N5' ? byUrl(slice.renderedUrl ?? slice.originalUrl) : byUrl(null);
   return byUrl(slice.render.status === 'ready' ? slice.render.url : options.renderFailed ? slice.originalUrl : null);
 }
 
@@ -1043,12 +1049,12 @@ function ImageLayer({
             {isExcluded ? (
               // F-CFM-14: slice의 height/width는 절대 건드리지 않는다 — 오버레이는
               // 같은 slice 내부에 absolute로 얹을 뿐이라, 스택 재배치가 일어나지 않는다.
-              // Figma 1725:11707 「제외된 섹션 오버레이」 — 아래 결과 이미지는 Layer Blur 6(CSS blur 3px)으로 흐리게 남기고
-              // 그 위에 BG/subtle(#F5F5F5) 40% 를 얹는다. 결과 이미지를 가리는 불투명 판이 아니다. 범위는 섹션 하나(slice) 그대로다
+              // Figma 1821:49608 「N5 / 제외하기」 — 아래 이미지는 흐리게(CSS blur 4px) 그대로 두고 그 위에 #707070 24% 를 얹는다.
+              // 이미지 자체 opacity 는 낮추지 않는다. 결과 이미지를 가리는 불투명 판이 아니다. 범위는 섹션 하나(slice) 그대로다
               <div
                 data-testid={`n5-section-excluded-${slice.sectionId}`}
                 className="absolute inset-0 flex flex-col items-center justify-center gap-2 overflow-hidden"
-                style={{ backgroundColor: 'rgba(245, 245, 245, 0.4)', backdropFilter: 'blur(3px)', WebkitBackdropFilter: 'blur(3px)' }}
+                style={{ backgroundColor: 'rgba(112, 112, 112, 0.24)', backdropFilter: 'blur(4px)', WebkitBackdropFilter: 'blur(4px)' }}
               >
                 <p className="text-[14px] leading-[normal] tracking-[-0.14px] whitespace-nowrap text-[#171717]">저장 시 제외됨 · 위아래가 붙습니다</p>
                 {/* N3 에서 제외된 섹션은 N5 에서 되살리지 않는다(SEC-03: 409 INVALID_STATE) — 버튼을 내지 않는다 */}

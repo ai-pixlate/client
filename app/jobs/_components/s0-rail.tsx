@@ -16,6 +16,7 @@ import { StepNav, type StepNavStep } from './step-nav';
 // 남는 높이를 진행단계에 준다. 1080 공식을 그대로 옮기면 낮은 창에서 1단계가 ✕ 뒤로 들어간다.
 //
 // ✕ 동작: 서버 작업이 있으면(jobId) 작업 전체 취소, 아직 없는 N1 이면 저장 없이 나가기.
+// 이미 보관함에 저장된 작업(N6 · 서버 job.isSaved=true)이면 확인창·DELETE 없이 보관함으로 바로 이동한다 — 저장한 결과물을 취소로 지우지 않는다.
 // 취소는 단계가 아니라 작업 전체에 대한 동작이다. /jobs/[jobId] 에서는 페이지가 이 rail 을 한 번만 그려
 // N2→N3 · N4→N5 자동 전환에도 확인창과 진행 중인 DELETE 가 그대로 유지된다.
 // N2·N4 의 [중단](F-JOB-08)은 작업을 남기는 다른 동작이라 여기서 다루지 않는다.
@@ -24,6 +25,7 @@ import { StepNav, type StepNavStep } from './step-nav';
 export function S0Rail({
   currentStep,
   jobId = null,
+  isSaved = false,
   exitDisabled = false,
   overlay = false,
 }: {
@@ -31,6 +33,8 @@ export function S0Rail({
   currentStep: StepNavStep | null;
   /** 서버 작업 id. 없으면 작업이 아직 없는 N1 이다 */
   jobId?: string | null;
+  /** 서버 job.isSaved=true 로 확인된 저장 완료 작업. 모르면(조회 중·실패) false 로 넘긴다 — 추정하지 않는다 */
+  isSaved?: boolean;
   /** 눌러도 안 되는 동안(N1 POST /jobs 응답 전 — 나간 뒤 작업이 생겨 남는 것을 막는다) */
   exitDisabled?: boolean;
   /** 본문을 밀지 않고 왼쪽 위에 겹쳐 놓는다. 가장 가까운 positioned 조상이 화면 전체여야 한다 */
@@ -48,6 +52,16 @@ export function S0Rail({
     setIsDialogOpen(false);
     resetCancelJob();
   }, [isBusy, resetCancelJob]);
+
+  const handleExitClick = () => {
+    if (jobId && isSaved) {
+      if (isLeaving) return;
+      setIsLeaving(true);
+      router.push('/');
+      return;
+    }
+    setIsDialogOpen(true);
+  };
 
   const handleConfirm = () => {
     if (!jobId) {
@@ -73,9 +87,9 @@ export function S0Rail({
       <button
         ref={exitButtonRef}
         type="button"
-        onClick={() => setIsDialogOpen(true)}
+        onClick={handleExitClick}
         disabled={exitDisabled}
-        aria-label={jobId ? '작업 취소' : '보관함으로 나가기'}
+        aria-label={jobId && !isSaved ? '작업 취소' : '보관함으로 나가기'}
         data-testid="s0-exit"
         className="absolute top-10 left-1 z-20 flex size-10 shrink-0 items-center justify-center rounded-md border border-[#eaeaea] bg-white text-[#171717] transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
       >

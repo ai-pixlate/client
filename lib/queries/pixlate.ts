@@ -274,12 +274,15 @@ export function useSourceImagesQuery(jobId: string) {
 // N5 — 실제 계약(v3.4.2) 조회.
 // ─────────────────────────────────────────────
 
-/** N5 헤더(targetCountry/targetLanguage)용 job 조회 */
-export function useJobQuery(jobId: string) {
+/**
+ * N3·N5 헤더(targetCountry/targetLanguage)와 N6 ✕ 의 저장 여부(isSaved)용 job 조회.
+ * enabled=false 면 같은 key 의 cache 만 읽고 요청하지 않는다(페이지가 N6 에서만 켠다).
+ */
+export function useJobQuery(jobId: string, options: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: pixlateKeys.job(jobId),
     queryFn: () => getJob(jobId),
-    enabled: !!jobId,
+    enabled: !!jobId && (options.enabled ?? true),
   });
 }
 

@@ -507,16 +507,22 @@ function TranslationEditor({
   );
 }
 
-/** 번역문 아래 원문 참고 영역(Figma 1069:10267). 원문이 없으면 그리지 않는다 */
+/**
+ * 번역문 아래 원문 참고 카드(Figma 544:3168 → 1792:34883). 흰 바탕·#eaeaea 테두리 카드 안에 「원문」 라벨(12 Light #999)과
+ * 원문(14 Regular #707070)을 4px 간격으로 쌓는다. 원문이 없으면 그리지 않는다. testid 는 원문 텍스트 쪽에 둔다(라벨 제외)
+ */
 function SourceReference({ text }: { text: string }) {
   if (!text) return null;
   return (
-    <p
-      data-testid="n5-block-source-reference"
-      className="mt-1 rounded-[6px] bg-[#f5f5f5] p-5 text-[14px] leading-[normal] tracking-[-0.01em] text-[#707070]"
+    <div
+      data-testid="n5-block-source-reference-card"
+      className="mt-1 flex flex-col gap-1 rounded-[6px] border border-[#eaeaea] bg-white px-5 py-4 leading-[normal]"
     >
-      {text}
-    </p>
+      <p className="text-[12px] font-light tracking-[-0.04em] text-[#999]">원문</p>
+      <p data-testid="n5-block-source-reference" className="text-[14px] tracking-[-0.01em] text-[#707070]">
+        {text}
+      </p>
+    </div>
   );
 }
 
