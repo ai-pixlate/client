@@ -1,6 +1,6 @@
 import type { ApiJobTaskStatus } from '@/lib/api/job-schema';
 import { n4DisplayedProgressKey } from '@/lib/processing/displayed-progress-storage';
-import { ProcessingStageLayout, type ProcessingStep } from './processing/processing-stage-layout';
+import { ProcessingStageLayout, type ProcessingStageGroup, type ProcessingStepState } from './processing/processing-stage-layout';
 import { hasProcessingFailure, useDisplayedProgress } from './processing/use-displayed-progress';
 
 // ─────────────────────────────────────────────────────────────────
@@ -74,7 +74,7 @@ const N4_OBSERVED_STAGE_ORDER: readonly N4ObservedStage[] = ['inpaint', 'transla
 
 // render 는 04·05 두 행이 함께 설명한다(둘 다 진행 중). 처리 중에는 5행 전부 완료가 없다 — 그건 N5 응답 뒤
 // 완료 표시(ALL_DONE)뿐이다.
-const FIVE_STEP_STATES_BY_N4_STAGE: Record<N4ObservedStage, ProcessingStep['state'][]> = {
+const FIVE_STEP_STATES_BY_N4_STAGE: Record<N4ObservedStage, ProcessingStepState[]> = {
   inpaint: ['active', 'pending', 'pending', 'pending', 'pending'],
   translate: ['done', 'active', 'pending', 'pending', 'pending'],
   verify: ['done', 'done', 'active', 'pending', 'pending'],
@@ -122,7 +122,7 @@ const N4_COMPLETION_COPY = {
   logDescription: '번역과 이미지 적용이 완료되었습니다.',
   progressHint: '검수 화면으로 이동합니다.',
 };
-const ALL_DONE: ProcessingStep['state'][] = ['done', 'done', 'done', 'done', 'done'];
+const ALL_DONE: ProcessingStepState[] = ['done', 'done', 'done', 'done', 'done'];
 
 /**
  * API 계약값이 아니다 — 실제 inpaint/translate/verify/render stage가 하나도 없을 때만 쓰는
@@ -166,14 +166,14 @@ function resolveN4ObservedStage(stages: ApiJobTaskStatus['stages'], progress: nu
 function resolveN4Presentation(
   stages: ApiJobTaskStatus['stages'],
   progress: number | undefined,
-): { rows: ProcessingStep['state'][]; activeStages: N4ObservedStage[] } {
+): { rows: ProcessingStepState[]; activeStages: N4ObservedStage[] } {
   const statusOf = (key: N4ObservedStage) => stages?.find((s) => s.key?.toLowerCase() === key)?.status;
   const observed = N4_OBSERVED_STAGE_ORDER.filter((key) => statusOf(key) !== undefined);
   const running = observed.filter((key) => statusOf(key) === 'running');
 
   if (observed.length >= 2 && running.length > 0) {
     const firstRunningIndex = N4_OBSERVED_STAGE_ORDER.indexOf(running[0]);
-    const stateOf = (key: N4ObservedStage): ProcessingStep['state'] => {
+    const stateOf = (key: N4ObservedStage): ProcessingStepState => {
       const status = statusOf(key);
       if (status === 'running') return 'active';
       // 서버가 done 이라고 명시한 앞 단계만 완료다. 응답에 없는 단계(undefined)·pending·failed 는 대기, 가장 앞
@@ -192,8 +192,9 @@ function resolveN4Presentation(
 // 전체 실패 안내(Figma 795:4820). 서버 응답에 사용자용 문구가 없어(errorCode 뿐) 실패 단계를 추측하지 않고 이 문구를 쓴다
 const N4_ERROR = { sectionLabel: 'TRANSLATION STATUS', title: '번역을 완료하지 못했습니다', description: '번역 처리 중 오류가 발생했습니다.' };
 
-function buildFiveSteps(states: ProcessingStep['state'][]): ProcessingStep[] {
-  return FIVE_STEP_META.map((step, i) => ({ ...step, state: states[i] }));
+// 공통 레이아웃이 묶음 모델로 바뀌어 5행을 label 1줄짜리 묶음 5개로 그대로 옮긴다(N4 묶음 정합은 다음 변경)
+function buildFiveSteps(states: ProcessingStepState[]): ProcessingStageGroup[] {
+  return FIVE_STEP_META.map((step, i) => ({ no: step.no, labels: [step.label], state: states[i] }));
 }
 
 export function N4ProcessingView({

@@ -11,7 +11,7 @@ import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 // Node 쪽 배열에 쌓기 때문에 page.goto 로 다시 들어가도(같은 context 두 번 실행) 이어서 기록된다.
 // ─────────────────────────────────────────────────────────────────
 
-/** 5단계 행 상태를 한 글자씩 — A 진행 중 · D 완료 · P 대기 (예: 'DDDAA') */
+/** 사용자 단계 묶음 상태를 한 글자씩 — A 진행 중 · D 완료 · P 대기 (N2 3묶음 예: 'DAP' · N4 4묶음 예: 'DDAP') */
 export type RowCode = string;
 
 export interface DomSnap {
@@ -19,6 +19,8 @@ export interface DomSnap {
   h1: string;
   pct: number | null;
   rows: RowCode;
+  /** 화면 전체에서 글자가 정확히 「진행 중」인 요소 수 — 항상 최대 1개여야 한다 */
+  activeTexts: number;
   cap: string;
   /** 패널 좌상단 상태 태그(진행중·완료·분석 실패) */
   tag: string;
@@ -63,13 +65,14 @@ export async function recordProcessing(page: Page): Promise<ProcessingRecord> {
       __pixlateRecDom: (e: unknown) => void;
       __pixlateRecPoll: (e: unknown) => void;
     };
-    const code: Record<string, string> = { '진행 중': 'A', 완료: 'D', 대기: 'P' };
+    const code: Record<string, string> = { active: 'A', done: 'D', pending: 'P' };
     let last = '';
     const snap = () => {
       const h1 = document.querySelector('h1')?.textContent?.trim() ?? '';
       const bar = document.querySelector('[role="progressbar"]');
-      const rowEls = Array.from(document.querySelectorAll('[data-testid="processing-step-title"]'));
-      const rows = rowEls.length === 5 ? rowEls.map((p) => code[(p.nextElementSibling?.textContent ?? '').trim()] ?? '?').join('') : '';
+      const groupEls = Array.from(document.querySelectorAll('[data-testid="processing-step"]'));
+      const rows = groupEls.map((g) => code[g.getAttribute('data-state') ?? ''] ?? '?').join('');
+      const activeTexts = Array.from(document.querySelectorAll('p, span')).filter((el) => el.childElementCount === 0 && el.textContent?.trim() === '진행 중').length;
       const cap = Array.from(document.querySelectorAll('p')).find((p) => p.className.includes('text-[#ff6a38]'))?.textContent?.trim() ?? '';
       const line = document.querySelector('[data-testid="processing-log-description"]')?.textContent?.replace(/\s+/g, ' ').trim() ?? '';
       const tag = document.querySelector('div[class*="bg-[#f5f5f5]"] > p')?.textContent?.trim() ?? '';
@@ -78,7 +81,7 @@ export async function recordProcessing(page: Page): Promise<ProcessingRecord> {
       const visualDescription = headlineEl?.nextElementSibling?.textContent?.trim() ?? '';
       const heading = document.querySelector('h2')?.textContent?.trim() ?? '';
       const hint = bar?.nextElementSibling?.textContent?.trim() ?? '';
-      const entry = { h1, pct: bar ? Number(bar.getAttribute('aria-valuenow')) : null, rows, cap, tag, headline, visualDescription, heading, line, hint };
+      const entry = { h1, pct: bar ? Number(bar.getAttribute('aria-valuenow')) : null, rows, activeTexts, cap, tag, headline, visualDescription, heading, line, hint };
       const key = JSON.stringify(entry);
       if (key === last) return;
       last = key;
@@ -123,8 +126,16 @@ export async function recordProcessing(page: Page): Promise<ProcessingRecord> {
   return record;
 }
 
-/** 처리 화면(h1)이 떠 있고 5행이 그려진 기록 */
-export const onScreen = (dom: DomSnap[], title: string) => dom.filter((d) => d.h1 === title && d.rows.length === 5 && d.pct !== null);
+/** 처리 화면(h1)이 떠 있고 단계 묶음이 그려진 기록 */
+export const onScreen = (dom: DomSnap[], title: string) => dom.filter((d) => d.h1 === title && d.rows.length > 0 && d.pct !== null);
+
+/** 불변식 — 어느 기록에서도 진행 중 묶음·「진행 중」 글자는 최대 1개다 */
+export function expectSingleActive(snaps: DomSnap[], context: string) {
+  for (const d of snaps) {
+    expect((d.rows.match(/A/g) ?? []).length, `진행 중 묶음은 최대 1개\n${context}`).toBeLessThanOrEqual(1);
+    expect(d.activeTexts, `「진행 중」 글자는 최대 1개\n${context}`).toBeLessThanOrEqual(1);
+  }
+}
 
 /** 실제 완료(다음 step 응답) 전, 처리 중으로 그린 기록 */
 export function processingSnaps(rec: ProcessingRecord, title: string, nextStep: string, from = 0): DomSnap[] {
@@ -196,13 +207,13 @@ export function expectCompletionCopy(
     expect(d.tag, `완료 전 상태 태그\n${context}`).not.toBe('완료');
     expect(d.heading, `완료 전 LOG 제목\n${context}`).not.toBe(copy.heading);
     expect(d.headline, `완료 전 headline\n${context}`).not.toBe(copy.headline);
-    expect(d.rows, `완료 전 5행 전부 완료 금지\n${context}`).not.toBe('DDDDD');
+    expect(d.rows, `완료 전 모든 묶음 완료 금지\n${context}`).not.toMatch(/^D+$/);
   }
   const at100 = during.filter((d) => d.pct === 100);
   expect(at100.length, `완료 표시 중 100%\n${context}`).toBeGreaterThan(0);
   for (const d of during) {
     expect(d.tag, `완료 표시 중 상태 태그\n${context}`).toBe('완료');
-    expect(d.rows, `완료 표시 중 5행\n${context}`).toBe('DDDDD');
+    expect(d.rows, `완료 표시 중 모든 묶음 완료\n${context}`).toMatch(/^D+$/);
     expect(d.headline, `완료 표시 중 headline\n${context}`).toBe(copy.headline);
     expect(d.visualDescription, `완료 표시 중 visual 설명\n${context}`).toBe(copy.visualDescription);
     expect(d.heading, `완료 표시 중 LOG 제목\n${context}`).toBe(copy.heading);

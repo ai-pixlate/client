@@ -8,7 +8,7 @@
 // progress 상태뿐이다.
 //
 // 이 컴포넌트는 순수 presentation이다 — backend stage(ocr/section/verify,
-// inpaint/translate/verify/render)를 5단계 상태로 해석하는 로직은 여기
+// inpaint/translate/verify/render)를 사용자 단계 묶음 상태로 해석하는 로직은 여기
 // 없다. 그 해석은 N2AnalysisView/N4TranslationView 각자의 wrapper가
 // 맡고, 이미 계산된 `steps`/`progressPercent`만 props로 받는다 — 두
 // 화면의 backend stage 어휘가 서로 다르므로(N2: ocr→section→verify,
@@ -20,13 +20,28 @@ import { ProcessingErrorContent, type ProcessingErrorState } from './processing-
 
 export type ProcessingStepState = 'done' | 'active' | 'pending';
 
-export interface ProcessingStep {
-  /** 빈 문자열이면 번호 없이 label 만 보인다(N2 01 묶음의 둘째·셋째 행) */
+/**
+ * 사용자 단계 묶음 하나(Figma 1821:46431 · 1821:48015 「N2 / Step List」의 Step 한 칸).
+ * 묶음 안에 label 이 여러 줄이어도 번호·dot·상태 글자는 하나씩만 그린다 — label 마다 「진행 중」을 반복하지 않는다.
+ */
+export interface ProcessingStageGroup {
   no: string;
-  label: string;
+  labels: readonly string[];
   state: ProcessingStepState;
-  /** dot 표시 여부(기본 true). false 여도 자리는 남겨 텍스트 정렬을 유지한다 — N2 전용, N4 는 지정하지 않는다 */
-  showDot?: boolean;
+}
+
+/**
+ * 화면에 보이는 「진행 중」은 항상 최대 1개다 — 앞에서부터 처음 active 인 묶음만 남기고 뒤의 active 는 대기로 둔다.
+ * 서버 작업이 병렬이어도 표시만 하나로 고른다(서버 작업을 직렬화하지 않는다). N2·N4 가 각자 계산한 상태의 마지막 안전장치다.
+ */
+export function keepSingleActive(states: readonly ProcessingStepState[]): ProcessingStepState[] {
+  let seen = false;
+  return states.map((state) => {
+    if (state !== 'active') return state;
+    if (seen) return 'pending';
+    seen = true;
+    return state;
+  });
 }
 
 export interface ProcessingFailedItem {
@@ -57,8 +72,8 @@ export interface ProcessingStageLayoutProps {
     heading: string;
     description: string;
   };
-  /** 항상 고정 5개를 그린다 — 개수가 늘/줄면 진행률 블록이 패널 안에서 밀린다. */
-  steps: ProcessingStep[];
+  /** Figma 사용자 단계 묶음(N2 3개 · N4 4개). 화면마다 개수는 고정이다 */
+  steps: ProcessingStageGroup[];
   progressPercent: number;
   progressHint: string;
   /** 일시정지 버튼은 비활성 상태로만 존재한다(중단 API가 계약에 없음) — 이유 설명 문구. */
@@ -78,44 +93,46 @@ function PauseIcon() {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// 로그 한 행 — done/active/pending마다 dot·굵기·색·자간이 Figma에서
-// 다르게 지정돼 있다(진행 중만 SemiBold+orange, 완료는 Regular+black,
-// 대기는 Regular/Light+회색에 dot도 채움 없는 outline). 번호+label은
-// Figma 원본처럼 두 칸 띄어 한 문자열로 쓴다(whitespace-pre로 공백을
-// 보존해야 브라우저가 붕괴시키지 않는다).
+// 단계 묶음 한 칸 — Figma 1821:46431(N2) · 1821:48015(N4) · 1821:47221(완료 묶음).
+// [dot 10×16(점은 위 3px)] gap 14 [번호 / label… / 상태] (세로 gap 4). 묶음 위아래 여백은 Figma 12px 을 상한으로
+// 패널 폭·높이에 맞춰 줄어든다(낮은 창에서 목록·진행률이 패널을 넘지 않게).
+// - 진행 중: dot 주황, 번호 SemiBold #171717, label #171717, 상태 12 Regular #ff6a38 「진행 중」
+// - 완료: dot #171717, 번호 SemiBold #171717, label #171717, 상태 12 Light #999 「완료」
+// - 대기: dot 테두리만(#eaeaea), 번호·label #999, 상태 12 Light #999 「대기」
 // ─────────────────────────────────────────────────────────────────
-function StageRow({ no, label, state, showDot = true }: ProcessingStep) {
+function StageGroup({ no, labels, state }: ProcessingStageGroup) {
   const isDone = state === 'done';
   const isActive = state === 'active';
 
   const dotClass = isActive ? 'bg-[#ff6a38]' : isDone ? 'bg-[#171717]' : 'border border-[#eaeaea] bg-transparent';
+  const textColor = isActive || isDone ? 'text-[#171717]' : 'text-[#999]';
+  const statusText = isDone ? '완료' : isActive ? '진행 중' : '대기';
+  const statusClass = isActive
+    ? 'font-normal text-[12px] leading-[14px] tracking-[-0.02em] text-[#ff6a38]'
+    : 'font-light text-[12px] leading-[14px] tracking-[-0.04em] text-[#999]';
 
-  const titleClass = isActive
-    ? "font-semibold leading-[normal] text-[14px] text-[#171717]"
-    : `font-normal leading-[normal] text-[14px] tracking-[-0.01em] ${isDone ? 'text-[#171717]' : 'text-[#999]'}`;
-
-  const captionText = isDone ? '완료' : isActive ? '진행 중' : '대기';
-  const captionClass = isActive
-    ? "font-normal leading-[normal] text-[12px] text-[#ff6a38]"
-    : "font-light leading-[normal] text-[12px] tracking-[-0.04em] text-[#999]";
-
-  // 68px(Figma 1920 기준)를 상한으로, 패널 자신의 렌더링 폭(cqw)과
-  // 세로 크기(cqh) 중 더 작은 쪽에 비례해 줄어든다 — 가로만 넓고 세로가
-  // 짧은 실제 브라우저 창에서도(예: 1920 폭·950 미만 높이) 5단계가
-  // 세로 공간에 맞춰 함께 압축된다. 하한(34px)은 10px 점 + 2줄 텍스트가
-  // 겹치지 않는 최소값이다.
   return (
-    <div className="flex h-[clamp(34px,min(4.219cqw,8.8cqh),68px)] w-full items-center gap-3.5">
-      <div
-        data-testid="processing-step-dot"
-        className={`size-[10px] shrink-0 rounded-full ${dotClass} ${showDot ? '' : 'opacity-0'}`}
-        aria-hidden="true"
-      />
-      <div className="flex flex-col gap-1">
-        <p data-testid="processing-step-title" className={`whitespace-pre ${titleClass}`}>
-          {no ? `${no}  ${label}` : label}
+    <div
+      data-testid="processing-step"
+      data-state={state}
+      className="flex w-full items-start gap-3.5 py-[clamp(4px,min(0.744cqw,1.55cqh),12px)]"
+    >
+      <div className="flex h-4 w-[10px] shrink-0 items-start pt-[3px]">
+        <div data-testid="processing-step-dot" className={`size-[10px] rounded-full ${dotClass}`} aria-hidden="true" />
+      </div>
+      {/* 줄 높이는 Figma 글자 상자 그대로 — 14px 줄 17 · 12px 상태 14 */}
+      <div className={`flex flex-col gap-1 whitespace-nowrap ${textColor}`}>
+        <p data-testid="processing-step-no" className={`text-[14px] leading-[17px] tracking-[-0.01em] ${isActive || isDone ? 'font-semibold' : 'font-normal'}`}>
+          {no}
         </p>
-        <p className={captionClass}>{captionText}</p>
+        {labels.map((label) => (
+          <p key={label} data-testid="processing-step-title" className="font-normal text-[14px] leading-[17px] tracking-[-0.01em]">
+            {label}
+          </p>
+        ))}
+        <p data-testid="processing-step-status" className={statusClass}>
+          {statusText}
+        </p>
       </div>
     </div>
   );
@@ -315,14 +332,11 @@ export function ProcessingStageLayout({
                     </div>
                   </div>
 
-                  {/* 항상 고정 5단계를 그린다(Figma "N2 / Step List", N4도
-                      같은 컴포넌트를 재사용) — 데이터 개수만큼 map하지
-                      않는다. 이 목록 높이가 늘/줄면 아래 진행률 블록이 패널
-                      위아래로 밀리므로, 개수를 고정해야 진행률이 항상 같은
-                      위치(패널 하단부)에 남는다. */}
-                  <div className="flex flex-col">
+                  {/* Figma 「N2 / Step List」(N4 도 같은 컴포넌트) — 사용자 단계 묶음 단위로 그린다. 묶음 개수는 화면마다
+                      고정이라(N2 3 · N4 4) 처리 중에 진행률 블록 위치가 바뀌지 않는다. 「진행 중」은 최대 1개다(keepSingleActive). */}
+                  <div className="flex flex-col" data-testid="processing-step-list">
                     {steps.map((step) => (
-                      <StageRow key={step.label} no={step.no} label={step.label} state={step.state} showDot={step.showDot} />
+                      <StageGroup key={step.no} no={step.no} labels={step.labels} state={step.state} />
                     ))}
                   </div>
 
