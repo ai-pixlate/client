@@ -168,3 +168,57 @@ test('409 check_not_settled(검사 정보 없음 → in_progress) — N5 에 남
   await setCtl(page, { check: { 9101: 'settled' } });
   await expect(page.getByTestId('n5-confirm-button')).toBeEnabled({ timeout: 15_000 });
 });
+
+// ── 버튼을 다시 켜는 기준(BE 확정): 409 의 blocks·registeredBlockIds 가 아니라 /blocks 재조회 결과의 「포함 섹션 검사 대상 블록 전체」다.
+// 서버 job_block_states() 는 bucket=include 이면서 run_scope 에 든 섹션의 검사 대상 블록에만 상태를 준다(그 밖은 check=null).
+// n5-clean fixture 의 서로 다른 포함 섹션: 9101(section 501) · 9103(section 502). 409 의 registeredBlockIds 는 9101 하나뿐이다.
+const BLOCK_A = 9101; // section 501
+const BLOCK_B = 9103; // section 502
+for (const finalB of ['settled', 'failed'] as const) {
+  test(`E${finalB === 'failed' ? '·F' : ''}. 다른 포함 섹션(502)의 검사가 남아 있으면 409 로 등록된 블록(501)이 끝나도 비활성 — 전체가 settled/failed(B=${finalB}) 가 된 뒤에만 활성`, async ({ page }) => {
+    await controlServer(page, { [BLOCK_A]: 'outdated', [BLOCK_B]: 'outdated' });
+    await reachN5(page, { mockScenario: 'n5-clean' });
+    const confirm = page.getByTestId('n5-confirm-button');
+    const notice = page.getByTestId('n5-confirm-check-notice');
+    // 두 블록이 서로 다른 포함 섹션에 있다
+    await expect(page.getByTestId(`n5-block-row-${BLOCK_A}`).locator('xpath=ancestor::*[starts-with(@data-testid,"n5-panel-section-")][1]')).toHaveAttribute('data-testid', 'n5-panel-section-1');
+    await expect(page.getByTestId(`n5-block-row-${BLOCK_B}`).locator('xpath=ancestor::*[starts-with(@data-testid,"n5-panel-section-")][1]')).toHaveAttribute('data-testid', 'n5-panel-section-2');
+    await expect(page.getByTestId(`n5-block-check-${BLOCK_A}`)).toHaveText('검사 준비 중');
+    await expect(page.getByTestId(`n5-block-check-${BLOCK_B}`)).toHaveText('검사 준비 중');
+    await expect(confirm).toBeEnabled();
+
+    // 1. 확정 → 409 check_not_settled(registeredBlockIds=[9101] 만). 재조회한 /blocks 에서는 두 섹션 모두 in_progress
+    await setCtl(page, { confirm409: true, check: { [BLOCK_A]: 'in_progress', [BLOCK_B]: 'in_progress' } });
+    await confirm.click();
+    await expect(page.getByTestId(`n5-block-check-${BLOCK_A}`)).toHaveText('검사 중…', { timeout: 10_000 });
+    await expect(page.getByTestId(`n5-block-check-${BLOCK_B}`)).toHaveText('검사 중…');
+    await expect(confirm).toBeDisabled();
+    expect((await ctl(page)).confirmPosts).toBe(1);
+
+    // 2. 409 로 등록된 A 만 끝났다(settled) — 다른 섹션 B 가 in_progress 라 버튼은 계속 비활성 · 안내 유지 · /tasks 추적 유지
+    await setCtl(page, { check: { [BLOCK_A]: 'settled', [BLOCK_B]: 'in_progress' } });
+    await expect(page.getByTestId(`n5-block-check-${BLOCK_A}`)).toHaveCount(0, { timeout: 15_000 });
+    const tasksAtASettled = (await ctl(page)).tasksGets;
+    await expect(page.getByTestId(`n5-block-check-${BLOCK_B}`)).toHaveText('검사 중…');
+    await expect(confirm).toBeDisabled();
+    await expect(notice).toHaveText('번역문 검사가 끝나면 저장할 수 있습니다.');
+    await expect.poll(async () => (await ctl(page)).tasksGets - tasksAtASettled, { timeout: 10_000 }).toBeGreaterThanOrEqual(2);
+    await expect(confirm).toBeDisabled();
+    expect((await ctl(page)).confirmPosts).toBe(1);
+
+    // 3. B 도 끝났다(settled 또는 failed) — 포함 섹션 검사 대상 전체가 settled/failed 라 다시 저장할 수 있다
+    await setCtl(page, { check: { [BLOCK_A]: 'settled', [BLOCK_B]: finalB } });
+    await expect(confirm).toBeEnabled({ timeout: 15_000 });
+    await expect(notice).toHaveCount(0);
+    await expect(page.getByTestId(`n5-block-check-${BLOCK_B}`)).toHaveCount(0);
+    // failed 는 확정을 막지 않고 블록에 「검사하지 못했습니다」만 보인다(e2e/n5-status-messages.spec.ts)
+    if (finalB === 'failed') await expect(page.getByTestId(`n5-block-row-${BLOCK_B}`)).toContainText('검사하지 못했습니다');
+    // 검사가 끝나면 추적을 멈춘다
+    const tasksAtDone = (await ctl(page)).tasksGets;
+    await page.waitForTimeout(4_500);
+    expect((await ctl(page)).tasksGets - tasksAtDone).toBeLessThanOrEqual(1);
+
+    // 409 흐름 전체에서 확정 오류 안내는 한 번도 그려지지 않았다
+    expect((await ctl(page)).errorTexts).toEqual([]);
+  });
+}
