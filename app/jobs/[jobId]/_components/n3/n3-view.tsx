@@ -23,7 +23,6 @@ import { getN3SectionCardState } from '@/lib/n3/section-card-state';
 import {
   N3_COLUMNS,
   N3_CTA_BLOCK_HEIGHT,
-  N3_HEADER_LEFT_INSET,
   N3_INNER_GAP,
   N3_OUTER_GAP,
   N3_WORK_AREA_INSET,
@@ -176,11 +175,10 @@ export function N3View({ jobId }: { jobId: string }) {
     <div className="flex h-full w-full bg-white">
       {/* Figma 1759:11529 — 제목 top 60(h29) · 작업 영역 top 112 · 아래 48. 작업 영역 높이는 남은 세로(1080에서 920)를 채운다 */}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col pt-[60px] pb-[clamp(24px,4.44vh,48px)]">
-        <div className="flex shrink-0 items-center gap-[11px] pb-[23px]" style={{ paddingLeft: N3_HEADER_LEFT_INSET }}>
-          <h1 className="text-[24px] leading-[normal] font-semibold tracking-[-0.02em] whitespace-nowrap text-[#171717]">섹션 확인</h1>
-          <p className="truncate text-[14px] tracking-[-0.01em] text-[#707070]">
-            전체 섹션에서 제외 판정을 확인하고, 필요한 경우 번역에 포함하세요.
-          </p>
+        {/* 예전 제목·설명 행 자리(h29 + 아래 23) — 최신 Figma 에서 빠지고 공통 작업 헤더(JobHeader)의 화면명이 대신한다.
+            작업 영역 top 112 를 바꾸지 않도록 높이만 남긴다(Figma 정합은 후속). h1 은 화면 읽기용으로만 둔다 */}
+        <div className="h-[52px] shrink-0">
+          <h1 className="sr-only">섹션 확인</h1>
         </div>
 
         {sectionsQuery.isLoading ? (

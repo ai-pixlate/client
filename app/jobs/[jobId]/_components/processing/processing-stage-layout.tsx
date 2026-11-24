@@ -53,8 +53,8 @@ export interface ProcessingFailedItem {
 
 export interface ProcessingStageLayoutProps {
   header: {
+    /** 화면 제목 — 보이는 화면명은 공통 작업 헤더(JobHeader)가 맡고, 여기서는 화면 읽기용 h1 로만 둔다 */
     title: string;
-    description: string;
   };
   /** 패널 좌상단 "진행중" 같은 상태 태그 문구. */
   statusTagLabel: string;
@@ -153,17 +153,11 @@ export function ProcessingStageLayout({
   return (
     <div className="flex h-full w-full bg-white">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        {/* 헤더 — Figma("N1 / Header") x140 y60. 패널 왼쪽 +20을 유지하고, 낮은 화면에서는 ✕와 맞추며 위로 올린다.
-            높이 94는 아래 패널 위치 계산(10vh - 94px)의 기준이라 바꾸지 않는다. */}
-        <div className="h-[94px] shrink-0 pt-[clamp(46px,calc(10vh_-_48px),60px)] pr-10 pl-[calc(clamp(0px,calc(6.25vw_-_80px),40px)_+_20px)]">
-          <div className="flex items-center gap-4">
-            <h1 className="font-semibold leading-[normal] text-[20px] tracking-[-0.02em] text-[#171717]">
-              {header.title}
-            </h1>
-            <p className="font-normal leading-[normal] text-[14px] tracking-[-0.01em] text-[#707070]">
-              {header.description}
-            </p>
-          </div>
+        {/* 예전 화면별 제목·설명 행 자리 — 최신 Figma 에서 빠지고 공통 작업 헤더(JobHeader)의 화면명이 대신한다.
+            높이 94는 아래 패널 위치 계산(10vh - 94px)의 기준이라 빈 자리로 그대로 둔다(본문 위치 유지 — Figma y96 정합은 후속).
+            h1 은 화면 읽기용으로만 남긴다. */}
+        <div className="h-[94px] shrink-0">
+          <h1 className="sr-only">{header.title}</h1>
         </div>
 
         {/* 본문 — 패널에 aspect-ratio를 강제하지 않는다. 1740×892는 1920

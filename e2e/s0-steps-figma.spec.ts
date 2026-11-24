@@ -92,10 +92,10 @@ test.describe('1920×1080 — Figma 608:1440', () => {
     await openStep(page, 'N1');
     const steps = await box(page, 's0-steps');
     near(steps.x + steps.width, 92, 'steps right');
-    // 본문 첫 heading 이 진행단계 오른쪽보다 충분히 오른쪽에서 시작한다(Figma 본문 시작 ≈140)
-    const heading = (await page.getByRole('heading').first().boundingBox())!;
-    console.log('[N1] heading', JSON.stringify(heading));
-    expect(heading.x - (steps.x + steps.width)).toBeGreaterThanOrEqual(40);
+    // 본문 첫 행(국가·언어)이 진행단계 오른쪽보다 충분히 오른쪽에서 시작한다(Figma 본문 시작 ≈140). 예전 제목 h1 은 최신 Figma 에서 빠졌다
+    const row = await box(page, 'n1-target-row');
+    console.log('[N1] target row', JSON.stringify(row));
+    expect(row.x - (steps.x + steps.width)).toBeGreaterThanOrEqual(40);
   });
 });
 

@@ -26,7 +26,7 @@ test('N1에서 N5 검수 화면까지 기본 작업 흐름을 완료한다', asy
   // ── N1: 진입 ──────────────────────────────────────────────
   await page.goto(`/jobs/new?brandId=${MOCK_BRAND_ID}`);
 
-  await expect(page.getByText('이미지 입력')).toBeVisible();
+  await expect(page.getByTestId('job-header-title')).toHaveText('정보 입력');
   await expect(page.getByRole('combobox')).toHaveCount(3);
   await expect(page.getByLabel('파일 선택')).toBeAttached();
   await expect(page.getByRole('button', { name: '다음' })).toBeVisible();
@@ -93,8 +93,8 @@ test('N1에서 N5 검수 화면까지 기본 작업 흐름을 완료한다', asy
   // N4는 N2와 같은 ProcessingStageLayout을 공유하는 Figma(1821:48003) 기준
   // 실제 화면이다(placeholder였던 "번역을 진행하고 있습니다" 문구는 폐기). 01 묶음 첫 라벨은 Figma 「배경복원」이다.
   await page.getByRole('button', { name: '이대로 진행' }).click();
-  await expect(page.getByRole('heading', { name: '번역 중' })).toBeVisible();
-  await expect(page.getByText('확정한 섹션을 번역하고 이미지에 적용하고 있습니다.')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '번역 중' })).toBeAttached();
+  await expect(page.getByTestId('job-header-title')).toHaveText('번역 중');
   await expect(page.getByText('배경복원', { exact: true })).toBeVisible();
   await expect(page.getByText('이미지 합성')).toBeVisible();
   await expect(page.getByRole('progressbar')).toBeVisible();

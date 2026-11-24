@@ -295,7 +295,6 @@ export function N2AnalysisView({
     <ProcessingStageLayout
       header={{
         title: '이미지 분석',
-        description: '등록한 이미지의 텍스트와 구조를 분석하고 있습니다.',
       }}
       statusTagLabel={isCompleted ? N2_COMPLETION_COPY.statusTag : '진행중'}
       visual={{

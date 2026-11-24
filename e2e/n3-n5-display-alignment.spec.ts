@@ -46,10 +46,12 @@ async function reachN3(page: Page) {
   await expect(page.getByRole('button', { name: '이대로 진행' })).toBeVisible({ timeout: 30_000 });
 }
 
-test('N3 헤더는 「섹션 확인」과 Figma 부제를 쓴다', async ({ page }) => {
+test('N3 화면명은 작업용 공통 헤더의 「섹션 확인」이고, 예전 부제 행은 없다', async ({ page }) => {
   await reachN3(page);
-  await expect(page.getByRole('heading', { level: 1, name: '섹션 확인' })).toBeVisible();
-  await expect(page.getByText('전체 섹션에서 제외 판정을 확인하고, 필요한 경우 번역에 포함하세요.')).toBeVisible();
+  // 최신 Figma(1759:11529)는 화면별 제목·부제 행 없이 작업용 헤더 화면명만 둔다. h1 은 화면 읽기용으로 남는다
+  await expect(page.getByTestId('job-header-title')).toHaveText('섹션 확인');
+  await expect(page.getByRole('heading', { level: 1, name: '섹션 확인' })).toBeAttached();
+  await expect(page.getByText('전체 섹션에서 제외 판정을 확인하고, 필요한 경우 번역에 포함하세요.')).toHaveCount(0);
   await expect(page.getByText('삭제할 섹션과 번역할 섹션을 확인할 수 있습니다.', { exact: false })).toHaveCount(0);
 });
 

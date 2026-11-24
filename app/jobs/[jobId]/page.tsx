@@ -3,6 +3,7 @@
 import { use, useEffect, useState } from 'react';
 import Link from 'next/link';
 
+import { JobHeader } from '@/app/jobs/_components/job-header';
 import { S0Rail } from '@/app/jobs/_components/s0-rail';
 import type { StepNavStep } from '@/app/jobs/_components/step-nav';
 import { isJobNotFoundError } from '@/lib/api/pixlate';
@@ -43,16 +44,6 @@ const COMPLETION_TRANSITIONS: Record<string, string> = { N2: 'N3', N4: 'N5' };
 // ─────────────────────────────────────────────────────────────────
 // 페이지 루트
 // ─────────────────────────────────────────────────────────────────
-
-const STEP_META: Record<string, { label: string; desc: string }> = {
-  N1: { label: 'N1', desc: '정보 입력' },
-  N2: { label: 'N2', desc: '이미지 분석' },
-  N3: { label: 'N3', desc: '섹션 확인' },
-  N4: { label: 'N4', desc: '번역 처리' },
-  N5: { label: 'N5', desc: '검수' },
-  N6: { label: 'N6', desc: '최종 결과' },
-};
-const STEP_META_FALLBACK = STEP_META.N2;
 
 /** 화면이 rail 옆을 차지하는 단계 */
 const SCREEN_STEPS: readonly (string | undefined)[] = ['N2', 'N3', 'N4', 'N5', 'N6'];
@@ -102,36 +93,21 @@ export default function Page({
   const isN6 = displayStep === 'N6';
   const jobQuery = useJobQuery(jobId, { enabled: isN6 });
   const isSavedJob = isN6 && jobQuery.data?.isSaved === true;
-  const meta = (displayStep && STEP_META[displayStep]) || STEP_META_FALLBACK;
   const hasScreen = SCREEN_STEPS.includes(displayStep);
+  const headerStep = toStepNavStep(displayStep);
 
   return (
     <div className="relative flex h-screen flex-col bg-gray-50">
-      {/* 상단 헤더 — 단계를 아는데 자체 화면이 없을 때(N1)만 쓴다. 상태를 모르는 동안에는 단계 라벨을 추측해 보이지 않는다. 왼쪽은 ✕ 자리다 */}
-      {displayStep && !hasScreen && (
-        <header className="flex h-14 shrink-0 items-center gap-4 border-b bg-white pr-6 pl-24 shadow-sm">
-          <Link
-            href="/"
-            className="text-sm text-gray-500 transition-colors hover:text-gray-700"
-          >
-            ← 뒤로
-          </Link>
-          <div className="h-4 w-px bg-gray-200" />
-          <div className="flex items-center gap-2">
-            <span className="rounded bg-blue-100 px-2 py-0.5 text-xs font-bold text-blue-700">
-              {meta.label}
-            </span>
-            <span className="text-sm font-medium text-gray-700">{meta.desc}</span>
-          </div>
-        </header>
-      )}
+      {/* N1~N6 작업용 공통 헤더(Figma 1809:42006 작업용) — 화면 위에 겹쳐 놓아 본문 위치를 바꾸지 않는다.
+          상태 조회 중·실패처럼 단계를 모르는 동안에는 화면명을 추측하지 않으므로 그리지 않는다 */}
+      {headerStep && <JobHeader step={headerStep} />}
 
       {/* S0 rail 은 단계 화면 밖에 한 번만 그린다 — 자동 전환에도 작업 취소 확인창과 요청이 유지된다(S0Rail 주석).
           화면이 없는 동안(상태 조회 중·실패·N1)은 겹쳐 놓아 본문 위치를 바꾸지 않는다. */}
       <div className={`flex min-h-0 flex-1 ${hasScreen ? 'bg-white' : ''}`}>
         <S0Rail currentStep={toStepNavStep(displayStep)} jobId={jobId} isSaved={isSavedJob} overlay={!hasScreen} />
 
-        {/* 본문. 상태를 모르는 동안 헤더 높이를 비워 두어 안내 문구가 기존 위치에 있게 한다 */}
+        {/* 본문. 상태를 모르는 동안(작업용 헤더도 없다) 예전 헤더 높이(56)를 비워 두어 안내 문구가 기존 위치에 있게 한다 */}
         <div className={`flex min-w-0 flex-1 flex-col overflow-hidden ${displayStep ? '' : 'pt-14'}`}>
           {tasksQuery.isLoading && (
             <div className="flex flex-1 items-center justify-center">

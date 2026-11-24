@@ -382,9 +382,7 @@ test.describe('N2 analysisProgress 상세 진행', () => {
     ]);
 
     await expect(logCaption(page)).toContainText('원본 2장 중 1번째');
-    const n1Header = page.locator('header', { has: page.getByRole('link', { name: '← 뒤로' }) });
-    await expect(n1Header).toBeVisible({ timeout: 8_000 });
-    await expect(n1Header).toContainText('정보 입력');
+    await expect(page.getByTestId('job-header-title')).toHaveText('정보 입력', { timeout: 8_000 });
     expect(responses.some((r) => r.currentStep === 'N1')).toBe(true);
     expect(responses.some((r) => r.currentStep === 'N3')).toBe(false);
     // N2 동안 단계 묶음은 있었지만, 모든 묶음 완료 표시는 한 번도 그리지 않았다

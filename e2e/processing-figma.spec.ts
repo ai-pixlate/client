@@ -36,22 +36,19 @@ for (const c of [
 ] as const) {
   test(`${c.step} — Pretendard 굵기와 헤더·헤드라인·이미지 위치가 Figma와 같다`, async ({ page }) => {
     await openStep(page, c.step);
-    const title = page.getByRole('heading', { name: c.title, exact: true });
+    // 화면별 제목 행은 최신 Figma 에서 빠졌다 — 화면명은 작업용 공통 헤더가 보이고, h1 은 화면 읽기용으로만 남는다
+    await expect(page.getByTestId('job-header-title')).toHaveText(c.title);
+    await expect(page.getByRole('heading', { name: c.title, exact: true })).toHaveClass(/sr-only/);
     const headline = page.getByText(c.headline, { exact: true });
     const log = page.getByRole('heading', { name: '지금 처리하는 일' });
-    await expect(title).toBeVisible();
     await expect(headline).toBeVisible();
 
-    for (const [locator, weight] of [[title, '600'], [headline, '600'], [log, '600']] as const) {
+    for (const [locator, weight] of [[headline, '600'], [log, '600']] as const) {
       const font = await locator.evaluate((el) => ({ family: getComputedStyle(el).fontFamily, weight: getComputedStyle(el).fontWeight }));
       expect(font.family).toContain('Pretendard,');
       expect(font.weight).toBe(weight);
     }
 
-    const t = (await title.boundingBox())!;
-    near(t.x, 140, 'title x');
-    near(t.y, 60, 'title y');
-    near(t.height, 24, 'title h');
     const h = (await headline.boundingBox())!;
     near(h.y, c.headlineY, 'headline y');
     near(h.height, 33, 'headline h');

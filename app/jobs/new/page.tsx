@@ -29,6 +29,7 @@ import { isImeComposingKeyEvent } from './_lib/ime';
 import { N1_SIZE_CHANGE_BLOCK_LINES, getN1SubmitBlockMessages, isN1Ready, resolveN1BrandId, requiresOtcType } from './_lib/n1-readiness';
 import { INITIAL_SIZE_SELECTION, sizeSelectionReducer } from './_lib/size-selection';
 import { useSourceImageUploads } from './_lib/use-source-image-uploads';
+import { JobHeader } from '../_components/job-header';
 import { S0Rail } from '../_components/s0-rail';
 import { TooltipArrow } from '@/app/_components/tooltip-arrow';
 
@@ -741,29 +742,24 @@ function NewJobPageInner() {
     // globals.css의 body font-family로 전체 화면에 적용한다 — N1에서
     // 별도로 <link>를 넣거나 font-family를 다시 걸지 않는다(body에서
     // 상속받는다).
-    <div className="flex h-screen w-full bg-white">
+    <div className="relative flex h-screen w-full bg-white">
+      {/* 작업용 공통 헤더(Figma 1792:21551) — 화면명 「정보 입력」이 N1 제목 역할을 한다. 겹쳐 놓아 본문을 밀지 않는다 */}
+      <JobHeader step="N1" />
       {/* [다음] 처리 중(POST /jobs 응답 전 포함)에는 ✕를 막는다 — 나간 뒤 작업이 생겨 남는 것을 피한다 */}
       <S0Rail currentStep="N1" jobId={draftJobId} exitDisabled={isSubmitting} />
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        {/* 헤더 — X 버튼이 좌측 rail로 옮겨가면서, 여기는 이제 제목/설명 행만
-            남는다(N1 Figma 재정합 1단계). */}
-        {/* Figma(525:3023) 실측 — rail(x36·w44) 뒤 본문 좌우 여백 60(업로더 x140 · 패널 오른쪽 끝 1860),
-            제목 top 60(h24) → 국가·언어 행 top 108(h39) → 본문 top 162(gap 15). */}
-        <div className="shrink-0 px-[60px] pt-[60px] pb-[15px]">
-          <div className="flex items-center gap-4">
-            <h1 className="text-[20px] leading-[24px] font-semibold tracking-[-0.02em] text-[#171717]">이미지 입력</h1>
-            <p className="text-[14px] tracking-[-0.01em] text-[#707070]">
-              번역할 원본 이미지를 등록하고 작업 조건을 설정합니다.
-            </p>
-          </div>
-
+      {/* Figma(525:3023) 실측 — rail(x36·w44) 뒤 본문 좌우 여백 60(업로더 x140 · 패널 오른쪽 끝 1860), 위 96 · 아래 60.
+          좌측 열: 국가·언어 행 top 96(h39) → gap 12 → 업로더 top 147 ~ bottom 1020.
+          우측 열(x1344 w516): 필드 패널 top 96 ~ 891 → 동의 체크 907 → [다음] 975~1020.
+          예전 제목·설명 행(이미지 입력)은 최신 Figma 에서 빠졌다 — 작업용 헤더의 화면명이 대신한다. */}
+      <div className="flex min-h-0 min-w-0 flex-1 gap-5 px-[60px] pt-[96px] pb-[60px]">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
           {/* 국가선택 / 언어선택 — Figma(525:3023, node 787:6016) 두 필드를
               한 줄에 배치. 각 필드 그룹은 w-[385px] 고정이고(늘어나 퍼지는
               구조가 아니다), 두 그룹 사이 gap은 40px다 — 예전엔 flex-1 +
               justify-between이라 뷰포트가 넓을수록 두 select가 거의 절반씩
               퍼졌다(N1 Figma 재정합 3단계). */}
-          <div className="mt-6 flex items-center gap-10">
+          <div data-testid="n1-target-row" className="flex shrink-0 items-center gap-10 self-start">
             <div className="flex w-[385px] shrink-0 items-center gap-5">
               <p className="shrink-0 text-[12px] tracking-[-0.02em] text-[#707070]">국가선택</p>
               <div className="relative flex-1">
@@ -803,13 +799,8 @@ function NewJobPageInner() {
               </div>
             </div>
           </div>
-        </div>
 
-        {/* 본문: 좌 FileUploader + 우 열(필드 패널 · 동의 체크 · 버튼). Figma(525:3023)
-            실측 — 업로더 x140~1324 · 우측 열 x1344(gap 20), 버튼 bottom 1010(아래 70),
-            업로더 bottom 1000. 우측 열은 패널만 스크롤되고 동의 체크와 버튼은 늘 보인다. */}
-        <div className="flex min-h-0 flex-1 gap-5 px-[60px] pb-[70px]">
-          {/* 좌측 — 업로드 영역 */}
+          {/* 좌측 — 업로드 영역. 우측 열은 패널만 스크롤되고 동의 체크와 버튼은 늘 보인다 */}
           <div
             data-testid="n1-image-dropzone"
             onDragOver={(e) => {
@@ -824,7 +815,7 @@ function NewJobPageInner() {
             // 확인). 안쪽 스크롤 wrapper(overflow-auto)가 실제 스크롤을
             // 담당하고, 이 div는 그 스크롤 영역이 자기 폭보다 좁아지는
             // 걸 허용만 하면 된다.
-            className={`mb-2.5 flex min-w-0 flex-1 flex-col items-center justify-center gap-10 rounded-[8px] border transition-colors ${
+            className={`flex min-h-0 min-w-0 flex-1 flex-col items-center justify-center gap-10 rounded-[8px] border transition-colors ${
               isDragOver ? 'border-[#ff6a38] bg-[#faf3ed]' : 'border-[#eaeaea] bg-white'
             }`}
           >
@@ -980,6 +971,7 @@ function NewJobPageInner() {
               id="image-upload"
             />
           </div>
+        </div>
 
           {/* 우측 — 필드 패널 */}
           {/* 우측 필드 패널 — Figma(643:5942) 폭 516px. get_metadata로 4개
@@ -1269,9 +1261,9 @@ function NewJobPageInner() {
               </p>
             )}
 
-            {/* 책임 동의 — PRD F-ACC-04, Figma Checkbox(1170:6002): 패널 아래 30 · [다음] 바로 위.
+            {/* 책임 동의 — PRD F-ACC-04, Figma Checkbox(1170:6002): 패널 아래 16(y907) · [다음] 위 40.
                 Checkbox / Compact(1063:5156) 18px 박스, Checked는 orange border + check. */}
-            <label className="mt-[30px] flex shrink-0 cursor-pointer items-center gap-3" data-testid="n1-consent">
+            <label className="mt-4 flex shrink-0 cursor-pointer items-center gap-3" data-testid="n1-consent">
               {/* 필수 * — Figma(525:3023): Checkbox x1344·y913, * x1363·y909(8×19, Pretendard Regular 16 · -3%). checkbox ↔ 문구 gap 12. 체크박스 바로 오른쪽 위의 별도 표시다.
                   별표는 시각 보조라 aria-hidden이고, 필수 여부는 input의 aria-required와 sr-only 문구로 전달한다. */}
               <span className="relative flex size-5 shrink-0 items-center justify-center">
@@ -1305,7 +1297,7 @@ function NewJobPageInner() {
                 인증 마크 업로드는 PRD F-SRC-08 12월 기능이고 9월은 원본 규격뿐이라 비활성이다(업로드 없음).
                 툴팁은 버튼 상태와 관계없이 hover·focus에 두 줄(PRD). 키보드로도 닿도록 disabled 대신
                 aria-disabled를 쓴다. 툴팁 위치는 Figma(1090:10048) — 버튼 왼쪽에서 64 · 버튼 위 3px 겹침, 화살표가 info를 가리킨다. */}
-            <div className="mt-6 flex shrink-0 items-center justify-end gap-2">
+            <div className="mt-10 flex shrink-0 items-center justify-end gap-2">
               <div className="group relative">
                 <button
                   type="button"
@@ -1359,7 +1351,6 @@ function NewJobPageInner() {
               </div>
             </div>
           </div>
-        </div>
       </div>
 
       {/* 카테고리 선택 모달 (Figma 381:6293) */}

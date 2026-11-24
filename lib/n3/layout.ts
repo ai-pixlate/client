@@ -9,9 +9,6 @@
  * 비율(832:688, 1:1)과 vw 기반 clamp 간격으로 함께 줄어든다 — 세로 stack이나 가로 스크롤을 만들지 않는다.
  */
 
-/** 진행단계 rail(끝 x=80) → 제목(x=140) 60px */
-export const N3_HEADER_LEFT_INSET = '60px';
-
 /** rail 끝(x=80) → 작업 영역(x=200) 120px, 오른쪽 끝도 120px. 120/1920 = 6.25vw */
 export const N3_WORK_AREA_INSET = 'clamp(24px, 6.25vw, 120px)';
 

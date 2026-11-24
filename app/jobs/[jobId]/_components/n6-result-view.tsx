@@ -972,13 +972,12 @@ export function N6ResultView({ jobId }: { jobId: string }) {
           나온다(그래서 상한도 40→60으로 바꿨다) — pr(3.125vw, 60px 상한)과
           gap(3.594vw, 69px 상한) 쪽은 원래도 N6 자체 실측값이라 그대로 둔다. */}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 pt-10 pr-[clamp(45px,3.125vw,60px)] pb-8 pl-[clamp(0px,calc(7.2917vw_-_80px),60px)]">
-        <div className="flex shrink-0 items-center gap-4">
-          <h1 ref={headingRef} tabIndex={-1} className="text-[20px] font-semibold tracking-[-0.02em] text-[#171717] outline-none">
+        {/* 예전 제목·설명 행 자리(h30) — 최신 Figma 에서 빠지고 공통 작업 헤더(JobHeader)의 화면명이 대신한다.
+            프리뷰·패널 top 86 을 바꾸지 않도록 높이만 남긴다(Figma 정합은 후속). h1 은 화면 읽기용이자 렌더 진행 창의 포커스 복귀 자리다 */}
+        <div className="h-[30px] shrink-0">
+          <h1 ref={headingRef} tabIndex={-1} className="sr-only">
             저장 및 내보내기
           </h1>
-          <p className="text-[14px] tracking-[-0.01em] text-[#707070]">
-            최종 결과물을 확인하고 내려받거나 보관함에 저장합니다.
-          </p>
         </div>
 
         {body}

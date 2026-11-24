@@ -155,11 +155,8 @@ test('N2 에서 currentStep=N1 로 돌아가면 5단계 완료 표시 없이 바
   await expect(page.getByRole('heading', { name: '이미지 분석' })).toBeVisible({ timeout: 15_000 });
 
   // 최종 화면은 서버 정본(currentStep=N1)대로 N1 — 완료 표시로 붙잡지 않는다
-  // (N2 의 StepNav 에도 "정보 입력"이 있으므로 N1 일 때만 그리는 페이지 공통 헤더로 확인한다)
-  const n1Header = page.locator('header', { has: page.getByRole('link', { name: '← 뒤로' }) });
-  await expect(n1Header).toBeVisible({ timeout: 6_000 });
-  await expect(n1Header).toContainText('N1');
-  await expect(n1Header).toContainText('정보 입력');
+  // (N2 의 StepNav 에도 "정보 입력"이 있으므로 작업용 공통 헤더의 화면명으로 확인한다)
+  await expect(page.getByTestId('job-header-title')).toHaveText('정보 입력', { timeout: 6_000 });
   await expect(page.getByRole('heading', { name: '이미지 분석' })).toBeHidden();
   expect(steps).toContain('N1');
   expect(steps).not.toContain('N3');

@@ -209,7 +209,6 @@ export function N4ProcessingView({
     <ProcessingStageLayout
       header={{
         title: '번역 중',
-        description: '확정한 섹션을 번역하고 이미지에 적용하고 있습니다.',
       }}
       statusTagLabel={isCompleted ? N4_COMPLETION_COPY.statusTag : '진행중'}
       visual={{

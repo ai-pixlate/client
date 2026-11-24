@@ -302,7 +302,7 @@ test('2차 범위 — 새 작업은 기존 N1 경로로 가고, 브랜드·작�
   });
   await page.getByTestId('library-add-card-link').click();
   await expect(page).toHaveURL(/\/jobs\/new\?brandId=101$/);
-  await expect(page.getByRole('heading', { name: '이미지 입력' })).toBeVisible();
+  await expect(page.getByTestId('job-header-title')).toHaveText('정보 입력');
   // brandId 는 GET /brands 응답(브랜드 1개)의 id 다 — FE 가 임의 값을 만들지 않고, 브랜드·작업을 자동으로 만들지 않는다
   expect(new URL(page.url()).searchParams.get('brandId')).toBe('101');
   await page.waitForTimeout(500);
