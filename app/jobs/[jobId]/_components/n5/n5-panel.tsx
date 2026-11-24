@@ -1014,9 +1014,11 @@ export function N5Panel({
           return;
         }
         if (parsed && isCheckNotSettledError(parsed)) {
-          // 검사가 끝나지 않은 블록이 있다 — 서버가 필요한 검사를 등록했다(registeredBlockIds). 확정하지 않고 N5 에 남아
-          // 블록 검사 상태를 다시 받는다(in_progress 가 되면 버튼이 비활성이 되고 끝날 때까지 추적한다)
-          setConfirmError('번역문 검사가 아직 끝나지 않아 다음 단계로 넘어가지 않았습니다. 검사가 끝나면 다시 저장해 주세요.');
+          // 검사가 끝나지 않은 블록이 있다 — 사용자 오류가 아니라 복구 계약이다(PM 확정). 서버가 이 확정 요청으로 필요한 검사를
+          // 등록했으므로(registeredBlockIds) 오류 안내 없이 N5 에 남아 블록 검사 상태를 바로 다시 받는다. in_progress 가 오면
+          // 「검사 중…」·[저장하러 가기] 비활성이 되고 use-n5-check-sync 의 2초 추적으로 이어진다. 다시 받는 동안은
+          // 확정 잠금(저장하는 중…)이 유지돼 버튼이 먼저 풀리지 않는다. 다른 409·오류는 아래 기존 안내 그대로다.
+          setConfirmError(null);
           await refreshN5Snapshot(queryClient, jobId).catch(() => {
             void queryClient.invalidateQueries({ queryKey: pixlateKeys.n5Blocks(jobId) });
           });
