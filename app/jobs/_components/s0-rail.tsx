@@ -11,9 +11,10 @@ import { StepNav, type StepNavStep } from './step-nav';
 // ─────────────────────────────────────────────────────────────────
 // S0 전역 프로세스 바(PRD F-NAV-01 · F-JOB-07) — N1~N6 좌측 고정 rail. 화면마다 만들지 않고 이것만 쓴다.
 //
-// Figma 1920×1080: ✕ x40 y40 40×40 · 진행단계(298:2872) x36 y150 44×860.
-// 진행단계 위쪽은 max(100px, 100vh-930px)다. 1080 에서는 150 이고, 낮은 창에서는 ✕ 아래 20px 여백을 지키며
-// 남는 높이를 진행단계에 준다. 1080 공식을 그대로 옮기면 낮은 창에서 1단계가 ✕ 뒤로 들어간다.
+// Figma 1920×1080: ✕ x40 y40 40×40 · 진행단계(525:3023 화면의 instance 608:1440) x48 y96 44×924.
+// 진행단계는 rail root(x36) 기준 left 12 · top 96 · bottom 60 으로 실제 bbox 를 만든다. ✕·rail 폭·본문 시작은 그대로 둔다.
+// 단계 위치는 하드코딩하지 않는다 — 높이 924 안에서 item 52×6 과 flex-1 연결선 5개(각 122.4)로 Figma y 가 나온다.
+// 낮은 창에서는 최소 높이·breakpoint 없이 진행단계 높이만 줄어든다(✕ 아래 끝 80 과 진행단계 위 96 사이 16px).
 //
 // ✕ 동작: 서버 작업이 있으면(jobId) 작업 전체 취소, 아직 없는 N1 이면 저장 없이 나가기.
 // 이미 보관함에 저장된 작업(N6 · 서버 job.isSaved=true)이면 확인창·DELETE 없이 보관함으로 바로 이동한다 — 저장한 결과물을 취소로 지우지 않는다.
@@ -99,7 +100,7 @@ export function S0Rail({
         </svg>
       </button>
       {currentStep && (
-        <div data-testid="s0-steps" className="absolute inset-0 pt-[max(100px,calc(100vh-930px))] pb-[70px]">
+        <div data-testid="s0-steps" className="absolute top-[96px] bottom-[60px] left-3 w-[44px]">
           <StepNav currentStep={currentStep} />
         </div>
       )}
