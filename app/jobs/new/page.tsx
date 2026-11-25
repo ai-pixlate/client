@@ -30,6 +30,7 @@ import { N1_SIZE_CHANGE_BLOCK_LINES, getN1SubmitBlockMessages, isN1Ready, resolv
 import { INITIAL_SIZE_SELECTION, sizeSelectionReducer } from './_lib/size-selection';
 import { useSourceImageUploads } from './_lib/use-source-image-uploads';
 import { JobHeader } from '../_components/job-header';
+import { useJobExitGuard } from '../_components/job-exit-guard';
 import { S0Rail } from '../_components/s0-rail';
 import { TooltipArrow } from '@/app/_components/tooltip-arrow';
 
@@ -672,6 +673,9 @@ function NewJobPageInner() {
   const submitBlockMessages = getN1SubmitBlockMessages({ ...readinessInput, isUploadBusy });
   const hasSubmitBlock = submitBlockMessages.length > 0;
   const canSubmit = !hasSubmitBlock && !isSubmitting;
+  // 나가기(뒤로 가기 · 상단 메뉴)를 같은 확인으로 묶는다 — 작업이 아직 없으면 미저장 확인, draft 작업이 생겼으면 작업 취소.
+  // [다음] 처리 중(POST /jobs 응답 전 포함)에는 나가기를 막는다 — 나간 뒤 작업이 생겨 남는 것을 피한다
+  const exitGuard = useJobExitGuard({ jobId: draftJobId, status: 'active', locked: isSubmitting });
 
   const handleSubmit = async () => {
     if (!isValid) {
@@ -742,11 +746,11 @@ function NewJobPageInner() {
     // globals.css의 body font-family로 전체 화면에 적용한다 — N1에서
     // 별도로 <link>를 넣거나 font-family를 다시 걸지 않는다(body에서
     // 상속받는다).
-    <div className="relative flex h-screen w-full bg-white">
+    <div className="relative flex h-screen w-full bg-white" data-exit-guard={exitGuard.guarding ? 'on' : 'off'}>
       {/* 작업용 공통 헤더(Figma 1792:21551) — 화면명 「정보 입력」이 N1 제목 역할을 한다. 겹쳐 놓아 본문을 밀지 않는다 */}
-      <JobHeader step="N1" />
-      {/* [다음] 처리 중(POST /jobs 응답 전 포함)에는 ✕를 막는다 — 나간 뒤 작업이 생겨 남는 것을 피한다 */}
-      <S0Rail currentStep="N1" jobId={draftJobId} exitDisabled={isSubmitting} />
+      <JobHeader step="N1" onLogoutRequest={exitGuard.requestLogout} />
+      <S0Rail currentStep="N1" />
+      {exitGuard.dialog}
 
       {/* Figma(525:3023) 실측 — rail(x36·w44) 뒤 본문 좌우 여백 60(업로더 x140 · 패널 오른쪽 끝 1860), 위 96 · 아래 60.
           좌측 열: 국가·언어 행 top 96(h39) → gap 12 → 업로더 top 147 ~ bottom 1020.

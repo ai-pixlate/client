@@ -631,9 +631,20 @@ async function getExportDownloadWithUrl(jobId: string, artifactId: number) {
 // mutation으로 감싼다 — 영구 식별자처럼 캐시해 두지 않는다.
 // ─────────────────────────────────────────────
 
+/**
+ * 다운로드 URL 을 받은 뒤 job 을 다시 받는다 — PRD F-FIN-03 은 [저장]과 첫 다운로드 중 먼저 일어난 것을 완료로 본다. 완료 여부는
+ * FE 가 정하지 않고 서버 job.isSaved 를 다시 읽는다(작업 나가기 확인 여부 — useJobExitGuard). URL 발급은 실제 파일 저장 완료가 아니며,
+ * 다운로드가 is_saved 를 바꾸는지는 API 계약(3.5.10)에 적혀 있지 않다 — 서버가 false 를 주면 계속 진행 중 작업으로 본다.
+ */
+function refetchJobAfterDownload(queryClient: ReturnType<typeof useQueryClient>, jobId: string) {
+  void queryClient.invalidateQueries({ queryKey: pixlateKeys.job(jobId), exact: true });
+}
+
 export function useExportDownloadMutation(jobId: string) {
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (artifactId: number) => getExportDownloadWithUrl(jobId, artifactId),
+    onSuccess: () => refetchJobAfterDownload(queryClient, jobId),
   });
 }
 
@@ -645,12 +656,14 @@ export function useExportDownloadMutation(jobId: string) {
  * psd는 호출부가 애초에 disabled라 이 mutation을 쓰지 않는다.
  */
 export function useExportComponentDownloadMutation(jobId: string) {
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (artifactType: ApiExportArtifactType) => {
       const created = await createExport(jobId, { components: [artifactType as string] });
       if (created.artifactId == null) throw new Error('내보내기 산출물이 만들어지지 않았습니다');
       return getExportDownloadWithUrl(jobId, created.artifactId);
     },
+    onSuccess: () => refetchJobAfterDownload(queryClient, jobId),
   });
 }
 

@@ -3,8 +3,9 @@
 import { Fragment } from 'react';
 
 // ─────────────────────────────────────────────────────────────────
-// 좌측 진행 단계 네비게이션 (PRD F-NAV-01) — 단계 이동이 없다. 실행계획 v3.6.4: cursor 는 pointer, hover 강조·안내 툴팁 없음,
-// 눌러도 URL·단계·서버 상태가 바뀌지 않는다.
+// 좌측 진행 단계 네비게이션 (PRD F-NAV-01) — 단계 이동이 없다. PRD v3.6.4 수용 ③(12월 · PM 11/10): 단계에 마우스를 올려도
+// 툴팁 · 손가락 커서 · 강조가 나오지 않는다(눌러도 아무 일이 없는 단계가 고장처럼 보이지 않게). 눌러도 URL·단계·서버 상태가
+// 바뀌지 않는다. 완료·현재·미도달 구분(수용 ①)은 그대로다.
 // F-NAV-02(이전 단계 이동)가 오기 전까지 단계 상태에 따라 이동 가능 여부를 나누지 않는다.
 // Figma 진행단계(298:2872)의 6개 variant 를 하나로 그린다 — currentStep 이전은 done,
 // 해당 단계는 current, 이후는 upcoming으로 파생한다. 화면에서는 S0Rail 을 거쳐 쓴다.
@@ -64,7 +65,7 @@ function StepItem({ label, index, status }: { label: string; index: number; stat
         aria-current={status === 'current' ? 'step' : undefined}
         aria-disabled="true"
         data-step-status={status}
-        className="flex cursor-pointer flex-col items-center gap-3.5 rounded-[4px] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ff6a38]"
+        className="flex cursor-default flex-col items-center gap-3.5 rounded-[4px] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ff6a38]"
       >
         <StepBadge index={index} status={status} />
         <span

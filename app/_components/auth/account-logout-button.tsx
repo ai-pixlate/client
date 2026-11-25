@@ -21,11 +21,21 @@ const APPEARANCE_CLASS = {
   header: 'flex h-6 min-w-[60px] items-center justify-center pl-3 text-[14px] leading-[normal] tracking-[-0.14px] text-[#707070]',
 } as const;
 
-export function AccountLogoutButton({ appearance = 'floating' }: { appearance?: keyof typeof APPEARANCE_CLASS } = {}) {
+export function AccountLogoutButton({
+  appearance = 'floating',
+  onRequest,
+}: {
+  appearance?: keyof typeof APPEARANCE_CLASS;
+  /**
+   * 로그아웃 전에 확인이 필요한 화면(N1~N6 작업 나가기 — PRD F-JOB-07)이 넘긴다. 버튼은 로그아웃을 바로 하지 않고 실행 함수를
+   * 넘기며, 받은 쪽이 확인(작업 취소 성공) 뒤에만 부른다. 없으면 바로 로그아웃한다.
+   */
+  onRequest?: (runLogout: () => Promise<void>) => void;
+} = {}) {
   const [pending, setPending] = useState(false);
   if (!isAccountLogoutEnabled()) return null;
 
-  const onClick = async () => {
+  const runLogout = async () => {
     if (pending) return;
     setPending(true);
     try {
@@ -34,6 +44,11 @@ export function AccountLogoutButton({ appearance = 'floating' }: { appearance?: 
       setPending(false);
     }
   };
+  const onClick = () => {
+    if (pending) return;
+    if (onRequest) onRequest(runLogout);
+    else void runLogout();
+  };
 
   return (
     <button
@@ -41,7 +56,7 @@ export function AccountLogoutButton({ appearance = 'floating' }: { appearance?: 
       data-testid="account-logout"
       aria-disabled={pending}
       aria-busy={pending || undefined}
-      onClick={() => void onClick()}
+      onClick={onClick}
       className={`${APPEARANCE_CLASS[appearance]} whitespace-nowrap aria-disabled:cursor-not-allowed aria-disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ff6a38]`}
     >
       {pending ? '로그아웃 중...' : '로그아웃'}

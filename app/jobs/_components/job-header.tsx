@@ -16,8 +16,11 @@ import type { StepNavStep } from './step-nav';
 //
 // 배치: 화면마다 본문 시작 y 가 다르다(N1·N2·N4 = 96, N3 우측·N6 프리뷰 = 72). 그래서 헤더는 흐름에 72px 행을 넣지 않고
 // 가장 가까운 positioned 조상(화면 전체)의 맨 위에 겹쳐 놓는다 — 본문 geometry 를 밀지 않는다.
-// 컨테이너는 pointer-events 를 받지 않는다. 좌측 x0~124 에는 헤더 클릭 요소가 없으므로 S0 ✕(x40 y40)는 헤더와 겹쳐도 그대로 눌린다.
-// z-10 은 S0 ✕·rail(z-20)과 dialog(z-50)보다 아래다.
+// 컨테이너는 pointer-events 를 받지 않는다. z-10 은 S0 rail(z-20)과 dialog(z-50)보다 아래다.
+//
+// 로고 · [브랜드 관리] · [로그아웃]은 작업 나가기다(PRD F-JOB-07 · 화면정의서 HD) — 같은 확인은 페이지의 useJobExitGuard 가 맡는다.
+// 링크 두 개는 가드가 클릭을 가로채고, 로그아웃은 버튼이라 실행 함수를 가드에 넘겨 확인(작업 취소 성공) 뒤에만 로그아웃한다.
+// 로고의 PRD 목적지는 H0 홈이지만 H0 화면이 아직 없어 기존 보관함(/)으로 둔다.
 // ─────────────────────────────────────────────────────────────────
 
 /**
@@ -33,7 +36,14 @@ export const JOB_HEADER_TITLES: Record<StepNavStep, string> = {
   N6: '저장 및 내보내기',
 };
 
-export function JobHeader({ step }: { step: StepNavStep }) {
+export function JobHeader({
+  step,
+  onLogoutRequest,
+}: {
+  step: StepNavStep;
+  /** 작업 나가기 확인(useJobExitGuard requestLogout) — 확인 뒤에만 로그아웃한다 */
+  onLogoutRequest?: (runLogout: () => Promise<void>) => void;
+}) {
   const showLogout = isAccountLogoutEnabled();
   return (
     <header
@@ -85,7 +95,7 @@ export function JobHeader({ step }: { step: StepNavStep }) {
           <>
             <span aria-hidden="true" data-testid="job-header-divider" className="h-3 w-px shrink-0 bg-[#707070]" />
             <span className="pointer-events-auto flex">
-              <AccountLogoutButton appearance="header" />
+              <AccountLogoutButton appearance="header" onRequest={onLogoutRequest} />
             </span>
           </>
         )}

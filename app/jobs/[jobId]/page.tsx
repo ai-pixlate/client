@@ -4,6 +4,7 @@ import { use, useEffect, useState } from 'react';
 import Link from 'next/link';
 
 import { JobHeader } from '@/app/jobs/_components/job-header';
+import { useJobExitGuard, type ExitGuardStatus } from '@/app/jobs/_components/job-exit-guard';
 import { S0Rail } from '@/app/jobs/_components/s0-rail';
 import type { StepNavStep } from '@/app/jobs/_components/step-nav';
 import { isJobNotFoundError } from '@/lib/api/pixlate';
@@ -87,28 +88,54 @@ export default function Page({
   const isN2Failed = !completion && currentStep === 'N2' && tasksQuery.data?.jobStatus === 'failed';
   // N4 전체 실패도 같은 기준이다. items 에 실패가 있어도 job 이 진행 중이면 부분 실패다
   const isN4Failed = !completion && currentStep === 'N4' && tasksQuery.data?.jobStatus === 'failed';
-  // N6 ✕ — 저장 여부의 정본은 서버 job.isSaved 다(API-FIN-06 저장 성공 = is_saved=true). N6 에서만 조회하고(N1~N5 는 요청을 늘리지 않는다),
-  // 저장 성공 시 useSaveJobMutation 이 같은 key 의 cache 를 이동보다 먼저 isSaved=true 로 바꾸므로 그 값이 바로 rail 에 반영된다.
-  // 조회 중·실패·false 는 저장 완료로 추정하지 않는다(기존 작업 취소 확인창 유지).
+  // N6 완료 작업 — 저장 여부의 정본은 서버 job.isSaved 다(API-FIN-06 저장 성공 = is_saved=true). N6 에서만 조회하고(N1~N5 는
+  // 요청을 늘리지 않는다), [저장] 성공 시 useSaveJobMutation 이 같은 key 의 cache 를 이동보다 먼저 isSaved=true 로 바꾼다. 다운로드 URL
+  // 발급 뒤에는 job 을 다시 받기만 한다(다운로드가 is_saved 를 바꾸는지는 계약에 없다 — FE 가 isSaved 를 만들지 않는다).
+  // 실패·false 는 완료로 추정하지 않는다(작업 취소 확인 유지).
   const isN6 = displayStep === 'N6';
   const jobQuery = useJobQuery(jobId, { enabled: isN6 });
-  const isSavedJob = isN6 && jobQuery.data?.isSaved === true;
-  const hasScreen = SCREEN_STEPS.includes(displayStep);
-  const headerStep = toStepNavStep(displayStep);
+  // 나가기 판단용 조회 상태(useJobExitGuard) — 서버 응답이 있는 값부터 본다(재조회 실패에도 받아 둔 값은 남는다).
+  // 단계를 모르거나 N6 완료 여부를 아직 모르면 loading(나가기를 잡아 두고 기다린다), N6 isSaved=true 는 saved(묻지 않음),
+  // 없는 작업(404)은 not-found, 첫 조회가 실패해 완료 여부를 모르면 error(취소하지 않고 「상태를 확인하지 못함」 창으로 묻는다)다.
+  const isNotFound = tasksQuery.isError && isJobNotFoundError(tasksQuery.error);
+  // 취소된 작업(DELETE 뒤 status=archived) — 계약 enum 값이다. 취소 뒤 조회가 404 일지 archived 200 일지는 계약에 적혀 있지 않아
+  // 둘 다 받는다: 404 는 위 없는 작업 화면, archived 는 편집 화면을 다시 그리지 않고 종료 안내만 둔다(지킬 작업이 없다)
+  const isArchived = tasksQuery.data?.jobStatus === 'archived';
+  let exitStatus: ExitGuardStatus = 'loading';
+  if (isNotFound || isArchived) exitStatus = 'not-found';
+  else if (tasksQuery.data && !isN6) exitStatus = 'active';
+  else if (tasksQuery.data && jobQuery.data) exitStatus = jobQuery.data.isSaved ? 'saved' : 'active';
+  else if (tasksQuery.data ? jobQuery.isError : tasksQuery.isError) exitStatus = 'error';
+  // 조회 실패 창의 [다시 확인] — 같은 기준으로 다시 받아 결과 상태를 돌려준다(재조회 GET 뿐 · 새 요청 계약 없음)
+  const recheckExitStatus = async (): Promise<ExitGuardStatus> => {
+    const tasks = await tasksQuery.refetch();
+    if (tasks.isError) return isJobNotFoundError(tasks.error) ? 'not-found' : 'error';
+    if (!tasks.data) return 'error';
+    if (tasks.data.currentStep !== 'N6') return 'active';
+    const job = await jobQuery.refetch();
+    if (job.isError || !job.data) return 'error';
+    return job.data.isSaved ? 'saved' : 'active';
+  };
+  const exitGuard = useJobExitGuard({ jobId, status: exitStatus, recheck: recheckExitStatus });
+  // 취소된 작업은 단계 화면이 아니다 — 단계를 모를 때와 같이 화면명·현재 단계를 그리지 않는다
+  const screenStep = isArchived ? undefined : displayStep;
+  const hasScreen = SCREEN_STEPS.includes(screenStep);
+  const headerStep = toStepNavStep(screenStep);
 
   return (
-    <div className="relative flex h-screen flex-col bg-gray-50">
+    <div className="relative flex h-screen flex-col bg-gray-50" data-exit-guard={exitGuard.guarding ? 'on' : 'off'} data-exit-state={exitStatus}>
       {/* N1~N6 작업용 공통 헤더(Figma 1809:42006 작업용) — 화면 위에 겹쳐 놓아 본문 위치를 바꾸지 않는다.
           상태 조회 중·실패처럼 단계를 모르는 동안에는 화면명을 추측하지 않으므로 그리지 않는다 */}
-      {headerStep && <JobHeader step={headerStep} />}
+      {headerStep && <JobHeader step={headerStep} onLogoutRequest={exitGuard.requestLogout} />}
 
-      {/* S0 rail 은 단계 화면 밖에 한 번만 그린다 — 자동 전환에도 작업 취소 확인창과 요청이 유지된다(S0Rail 주석).
-          화면이 없는 동안(상태 조회 중·실패·N1)은 겹쳐 놓아 본문 위치를 바꾸지 않는다. */}
+      {/* S0 rail 과 나가기 확인창은 단계 화면 밖에 한 번만 둔다 — 자동 전환에도 확인창과 진행 중인 취소 요청이 유지된다.
+          화면이 없는 동안(상태 조회 중·실패·N1)은 rail 을 겹쳐 놓아 본문 위치를 바꾸지 않는다. */}
+      {exitGuard.dialog}
       <div className={`flex min-h-0 flex-1 ${hasScreen ? 'bg-white' : ''}`}>
-        <S0Rail currentStep={toStepNavStep(displayStep)} jobId={jobId} isSaved={isSavedJob} overlay={!hasScreen} />
+        <S0Rail currentStep={headerStep} overlay={!hasScreen} />
 
         {/* 본문. 상태를 모르는 동안(작업용 헤더도 없다) 예전 헤더 높이(56)를 비워 두어 안내 문구가 기존 위치에 있게 한다 */}
-        <div className={`flex min-w-0 flex-1 flex-col overflow-hidden ${displayStep ? '' : 'pt-14'}`}>
+        <div className={`flex min-w-0 flex-1 flex-col overflow-hidden ${screenStep ? '' : 'pt-14'}`}>
           {tasksQuery.isLoading && (
             <div className="flex flex-1 items-center justify-center">
               <span className="text-sm text-gray-400">작업 상태를 확인하고 있습니다.</span>
@@ -138,7 +165,20 @@ export default function Page({
               </div>
             ))}
 
-          {tasksQuery.data && (
+          {isArchived && (
+            <div data-testid="job-archived" role="alert" className="flex flex-1 flex-col items-center justify-center gap-4">
+              <p className="text-sm text-[#171717]">취소된 작업입니다.</p>
+              <Link
+                href="/"
+                data-testid="job-archived-library"
+                className="rounded-[6px] border border-[#eaeaea] bg-white px-4 py-2 text-[14px] leading-[17px] text-[#171717] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ff6a38]"
+              >
+                보관함으로 돌아가기
+              </Link>
+            </div>
+          )}
+
+          {tasksQuery.data && !isArchived && (
             <>
               {displayStep === 'N2' && (
                 <N2AnalysisView

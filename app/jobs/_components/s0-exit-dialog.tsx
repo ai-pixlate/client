@@ -5,14 +5,18 @@ import { useRef, type RefObject } from 'react';
 import { useModalDialog } from '@/app/_components/use-modal-dialog';
 
 // ─────────────────────────────────────────────────────────────────
-// S0 ✕ 확인창(PRD F-JOB-07) — 서버 작업이 있는지에 따라 둘로 나뉜다.
+// 작업 나가기 확인창(PRD F-JOB-07) — 서버 작업이 있는지에 따라 둘로 나뉜다. 여는 곳은 useJobExitGuard 다
+// (12월 ✕ 없음 — 브라우저 뒤로 가기 · 상단 메뉴 로고 · [브랜드 관리] · [로그아웃]).
 //
-// - 작업 없음(N1 [다음] 전): 입력값과 고른 로컬 이미지가 남지 않는다는 안내 → [나가기]로 보관함 이동. 서버 요청 없음.
+// - 작업 없음(N1 [다음] 전): 입력값과 고른 로컬 이미지가 남지 않는다는 안내 → [나가기]로 이동. 서버 요청 없음.
 // - 작업 있음(N1 draft · N2~N6): 삭제 대상을 열거하고 되돌릴 수 없음을 밝힌다 → DELETE /jobs/{jobId}(API-JOB-04).
-//   성공해야 보관함으로 이동하고, 실패하면 창과 화면을 그대로 두어 다시 시도할 수 있다.
+//   성공해야 이동하고(뒤로 가기는 보관함 · 상단 메뉴는 누른 곳), 실패하면 창과 화면을 그대로 두어 다시 시도할 수 있다.
+// - 상태를 확인하지 못함(작업 상태 조회 실패): 저장 완료인지 몰라 취소하지 않는다. 실패를 알리고 [계속하기] · [다시 확인] ·
+//   [작업 남기고 나가기]를 둔다. 나가도 작업이 취소되지 않고 남는다는 것을 밝힌다. 서버 요청은 재조회(GET)뿐이다.
+//   전용 Figma 가 없어 같은 모달의 버튼 두 종류(흰 테두리 · 검정)만 써서 2단으로 둔다(PM 문구 확인 전 초안).
 //
 // 전용 Figma 프레임이 없어 M1 보관함 다운로드 모달(Figma 1056:9744)의 dim·모달·제목/설명·footer 버튼 값과
-// 동작(useModalDialog: 배경 inert, focus trap, Escape=닫기, 닫히면 ✕로 포커스 복귀)을 그대로 쓴다.
+// 동작(useModalDialog: 배경 inert, focus trap, Escape=닫기, 닫히면 연 요소로 포커스 복귀)을 그대로 쓴다.
 // 삭제 대상 문구는 PRD 수용 조건에 맞춘 초안이며 PRD 정본 문구가 오면 교체한다.
 // ─────────────────────────────────────────────────────────────────
 
@@ -26,35 +30,76 @@ const COPY = {
   },
   cancelJob: {
     title: '작업을 취소할까요?',
-    description: [
-      '원본 이미지, 섹션 분해 결과, 인페인팅 결과, 번역문, 판정 근거, 수정 전후 문구가 삭제되며 되돌릴 수 없습니다.',
-      '취소 후 보관함으로 이동합니다.',
-    ],
+    description: ['원본 이미지, 섹션 분해 결과, 인페인팅 결과, 번역문, 판정 근거, 수정 전후 문구가 삭제되며 되돌릴 수 없습니다.'],
     dismiss: '계속하기',
     confirm: '작업 취소',
     pending: '취소 중...',
   },
+  statusUnknown: {
+    title: '작업 상태를 확인하지 못했습니다',
+    description: ['작업이 완료됐는지 확인할 수 없어 작업을 취소하지 않습니다.'],
+    dismiss: '계속하기',
+    confirm: '작업 남기고 나가기',
+    pending: '나가는 중...',
+  },
 } as const;
+
+/** 확인 뒤 가는 곳 — 작업 취소 안내의 마지막 줄을 정한다(PRD F-JOB-07: 뒤로 가기는 보관함, 상단 메뉴는 누른 곳) */
+export type ExitDestination = 'library' | 'brand' | 'logout' | 'other';
+
+const AFTER_CANCEL: Record<ExitDestination, string> = {
+  library: '취소 후 보관함으로 이동합니다.',
+  brand: '취소 후 브랜드 관리로 이동합니다.',
+  logout: '취소 후 로그아웃합니다.',
+  other: '취소 후 선택한 화면으로 이동합니다.',
+};
+
+const AFTER_KEEP: Record<ExitDestination, string> = {
+  library: '나가면 작업은 취소되지 않고 남으며, 보관함으로 이동합니다.',
+  brand: '나가면 작업은 취소되지 않고 남으며, 브랜드 관리로 이동합니다.',
+  logout: '나가면 작업은 취소되지 않고 남으며, 로그아웃합니다.',
+  other: '나가면 작업은 취소되지 않고 남으며, 선택한 화면으로 이동합니다.',
+};
+
+const SECONDARY_BUTTON =
+  'flex h-[45px] min-w-0 flex-1 items-center justify-center rounded-[6px] border border-[#eaeaea] bg-white px-8 disabled:cursor-not-allowed disabled:opacity-40';
+const SECONDARY_LABEL = 'px-3 text-[14px] leading-[17px] font-medium tracking-[-0.42px] whitespace-nowrap text-[#171717]';
 
 export function S0ExitDialog({
   hasJob,
+  statusUnknown = false,
+  destination,
   isBusy,
   cancelFailed,
+  recheckState = 'idle',
+  onRecheck,
   onDismiss,
   onConfirm,
   returnFocusRef,
 }: {
   hasJob: boolean;
+  /** 작업 상태 조회 실패 — 취소하지 않는 「상태를 확인하지 못함」 창 */
+  statusUnknown?: boolean;
+  destination: ExitDestination;
   isBusy: boolean;
   cancelFailed: boolean;
+  /** 조회 실패 창의 [다시 확인] 진행 상태 */
+  recheckState?: 'idle' | 'running' | 'failed';
+  /** 조회 실패 창의 [다시 확인] — 없으면 버튼을 두지 않는다 */
+  onRecheck?: () => void;
   /** 안정된 참조로 넘긴다(useModalDialog onClose) */
   onDismiss: () => void;
   onConfirm: () => void;
-  returnFocusRef: RefObject<HTMLButtonElement | null>;
+  returnFocusRef: RefObject<HTMLElement | null>;
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
   useModalDialog(dialogRef, { onClose: onDismiss, returnFocusRef });
-  const copy = hasJob ? COPY.cancelJob : COPY.leave;
+  const copy = statusUnknown ? COPY.statusUnknown : hasJob ? COPY.cancelJob : COPY.leave;
+  const description = statusUnknown
+    ? [...copy.description, AFTER_KEEP[destination]]
+    : hasJob
+      ? [...copy.description, AFTER_CANCEL[destination]]
+      : copy.description;
 
   return (
     <div data-testid="s0-exit-dim" className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(23,23,23,0.4)]">
@@ -73,10 +118,15 @@ export function S0ExitDialog({
             {copy.title}
           </h2>
           <div id="s0-exit-description" className="flex flex-col gap-1 text-[14px] leading-[20px] tracking-[-0.14px] break-keep text-[#707070]">
-            {copy.description.map((line) => (
+            {description.map((line) => (
               <p key={line}>{line}</p>
             ))}
           </div>
+          {statusUnknown && recheckState === 'failed' && (
+            <p role="alert" className="text-[12px] text-red-500">
+              작업 상태를 다시 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.
+            </p>
+          )}
           {cancelFailed && (
             // 프로젝트 공통 오류 한 줄 문구(text-red-500). 작업은 그대로 남아 있다
             <p role="alert" className="text-[12px] text-red-500">
@@ -84,17 +134,23 @@ export function S0ExitDialog({
             </p>
           )}
         </div>
+        {statusUnknown && onRecheck && (
+          // 조회 실패 창 — [계속하기] · [다시 확인]을 위 줄에, 작업을 남기고 나가는 동작을 아래 줄에 둔다
+          <div className="-mb-5 flex w-full items-center gap-3">
+            <button type="button" onClick={onDismiss} disabled={isBusy} className={SECONDARY_BUTTON}>
+              <span className={SECONDARY_LABEL}>{copy.dismiss}</span>
+            </button>
+            <button type="button" onClick={onRecheck} disabled={isBusy} className={SECONDARY_BUTTON}>
+              <span className={SECONDARY_LABEL}>{recheckState === 'running' ? '확인 중...' : '다시 확인'}</span>
+            </button>
+          </div>
+        )}
         <div className="flex w-full items-center gap-3">
-          <button
-            type="button"
-            onClick={onDismiss}
-            disabled={isBusy}
-            className="flex h-[45px] min-w-0 flex-1 items-center justify-center rounded-[6px] border border-[#eaeaea] bg-white px-8 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            <span className="px-3 text-[14px] leading-[17px] font-medium tracking-[-0.42px] whitespace-nowrap text-[#171717]">
-              {copy.dismiss}
-            </span>
-          </button>
+          {!(statusUnknown && onRecheck) && (
+            <button type="button" onClick={onDismiss} disabled={isBusy} className={SECONDARY_BUTTON}>
+              <span className={SECONDARY_LABEL}>{copy.dismiss}</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={onConfirm}
@@ -102,7 +158,7 @@ export function S0ExitDialog({
             className="flex h-[45px] min-w-0 flex-1 items-center justify-center rounded-[6px] bg-[#171717] px-8 disabled:cursor-not-allowed disabled:opacity-40"
           >
             <span className="px-3 text-[14px] leading-[17px] font-medium tracking-[-0.42px] whitespace-nowrap text-white">
-              {isBusy ? copy.pending : copy.confirm}
+              {isBusy && recheckState !== 'running' ? copy.pending : copy.confirm}
             </span>
           </button>
         </div>
