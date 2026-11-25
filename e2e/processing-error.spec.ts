@@ -149,14 +149,15 @@ for (const c of CASES) {
     await expect(abort(page)).toBeFocused();
   });
 
-  test(`${c.step} 실패 뒤에도 S0 ✕ 는 기존 작업 취소로 동작한다`, async ({ page }) => {
+  test(`${c.step} 실패 뒤에도 나가기(로고)는 [중단]과 다른 작업 취소로 동작한다`, async ({ page }) => {
     await openWith(page, { currentStep: c.step, jobStatus: 'failed' });
     await expect(errorPanel(page)).toBeVisible();
     const deletes: string[] = [];
     page.on('request', (r) => {
       if (r.method() === 'DELETE') deletes.push(new URL(r.url()).pathname);
     });
-    await page.getByTestId('s0-exit').click();
+    await expect(page.getByTestId('s0-exit')).toHaveCount(0);
+    await page.getByTestId('job-header-home').click();
     const dialog = page.getByTestId('s0-exit-dialog');
     await expect(dialog).toHaveAccessibleName('작업을 취소할까요?');
     await dialog.getByRole('button', { name: '작업 취소' }).click();

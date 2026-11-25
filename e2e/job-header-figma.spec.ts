@@ -137,8 +137,8 @@ test.describe('1920×1080 — header 1809:42006 작업용', () => {
       nearBox(await box(page, 'job-header-divider'), [1719, 30, 1, 12], 'divider');
       nearBox((await page.getByTestId('job-header').getByTestId('account-logout').boundingBox())!, [1736, 24, 60, 24], 'logout');
 
-      // ✕ 와 진행단계는 그대로다
-      nearBox(await box(page, 's0-exit'), [40, 40, 40, 40], 'exit');
+      // 진행단계는 그대로다. 12월(PRD F-JOB-07 · F-NAV-01)에는 ✕ 가 없다
+      await expect(page.getByTestId('s0-exit')).toHaveCount(0);
       nearBox(await box(page, 's0-steps'), [48, 96, 44, 924], 'steps');
 
       for (const { testId, box: expected } of BODY[step] ?? []) {
@@ -147,11 +147,11 @@ test.describe('1920×1080 — header 1809:42006 작업용', () => {
         nearBox(actual, expected, testId);
       }
       if (step === 'N2' || step === 'N4') {
-        // 처리 화면 본문 패널은 예전 제목 자리(h94) 아래 그대로다
+        // 처리 화면 단계 목록 — Figma 1821:46419 · 1821:48003 로그(「Frame 300」) y + 122(N2 273 · N4 243.5). 로그는 패널 세로 가운데다
         const list = await box(page, 'processing-step-list');
         console.log(`[${step}] processing-step-list`, JSON.stringify(list));
         near(list.x, 1397, 'step list x');
-        if (step === 'N4') near(list.y, 305.94, 'step list y');
+        near(list.y, step === 'N2' ? 273 + 122 : 243.5 + 122, 'step list y');
       }
 
       for (const text of REMOVED_DESCRIPTIONS) await expect(page.getByText(text)).toHaveCount(0);
@@ -181,15 +181,19 @@ test.describe('1920×1080 — header 1809:42006 작업용', () => {
 test.describe('헤더 동작', () => {
   test.use({ viewport: { width: 1920, height: 1080 } });
 
-  test('로고 → / (보관함)', async ({ page }) => {
+  // 상단 메뉴는 작업 나가기다(PRD F-JOB-07) — 같은 확인을 거친 뒤 누른 곳으로 간다. 확인 흐름 전체는 job-exit.spec.ts 가 맡는다.
+  // 로고의 PRD 목적지는 H0 홈이지만 H0 화면이 없어 보관함(/)이다
+  test('로고 → 작업 취소 확인 → / (보관함)', async ({ page }) => {
     await openStep(page, 'N3');
     await page.getByTestId('job-header-home').click();
+    await page.getByTestId('s0-exit-dialog').getByRole('button', { name: '작업 취소' }).click();
     await page.waitForURL((url) => url.pathname === '/');
   });
 
-  test('브랜드관리 → /brand', async ({ page }) => {
+  test('브랜드관리 → 미저장 확인 → /brand', async ({ page }) => {
     await openStep(page, 'N1');
     await page.getByTestId('job-header-brand').click();
+    await page.getByTestId('s0-exit-dialog').getByRole('button', { name: '나가기' }).click();
     await page.waitForURL((url) => url.pathname === '/brand');
   });
 
@@ -207,23 +211,22 @@ test.describe('헤더 동작', () => {
     await expect(page.getByRole('dialog')).toHaveCount(0);
   });
 
-  test('로그아웃 — 기존 logout() 흐름(POST /auth/logout 1회 → G1)을 그대로 쓴다', async ({ page }) => {
+  test('로그아웃 — 작업 취소 확인 뒤 기존 logout() 흐름(POST /auth/logout 1회 → G1)을 그대로 쓴다', async ({ page }) => {
     const logouts: string[] = [];
     page.on('request', (r) => {
       if (new URL(r.url()).pathname === '/auth/logout') logouts.push(r.method());
     });
     await openStep(page, 'N6');
+    await expect(page.locator('[data-exit-guard]')).toHaveAttribute('data-exit-guard', 'on');
     await page.getByTestId('job-header').getByTestId('account-logout').click();
+    await page.getByTestId('s0-exit-dialog').getByRole('button', { name: '작업 취소' }).click();
     await page.waitForURL((url) => url.pathname === '/login');
     expect(logouts).toEqual(['POST']);
   });
 
-  test('S0 ✕ 는 헤더와 겹쳐도 눌리고, 확인창은 헤더 위에 뜬다', async ({ page }) => {
+  test('나가기 확인창은 헤더 위에 뜬다', async ({ page }) => {
     await openStep(page, 'N1');
-    // ✕ 중심에서 실제로 맨 위에 있는 요소가 ✕ 자신이다
-    const topAtExit = await page.evaluate(() => document.elementFromPoint(60, 60)?.closest('[data-testid]')?.getAttribute('data-testid'));
-    expect(topAtExit).toBe('s0-exit');
-    await page.getByTestId('s0-exit').click();
+    await page.getByTestId('job-header-home').click();
     await expect(page.getByTestId('s0-exit-dim')).toBeVisible();
     const topAtHeader = await page.evaluate(() => {
       const ids = ['job-header-home', 'job-header-actions'];

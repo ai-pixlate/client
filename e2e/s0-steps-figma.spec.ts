@@ -4,8 +4,8 @@ import { MOCK_BRAND_ID, MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 
 // ─────────────────────────────────────────────────────────────────
 // S0 진행단계 위치·상호작용 — 최신 Figma 525:3023 / 진행단계 instance 608:1440(1920×1080: x48 y96 44×924),
-// 실행계획 v3.6.4(단계 이동 안내 툴팁 제거 · cursor pointer · hover 강조 없음 · 이동 기능 없음).
-// ✕ 버튼(x40 y40 40×40)과 rail 레이아웃은 그대로여야 한다.
+// PRD v3.6.4 F-NAV-01 수용 ③(12월 · PM 11/10 — 단계 툴팁 · 손가락 커서 · 강조 없음 · 이동 기능 없음).
+// 12월(F-JOB-07 · PM 11/18)에는 ✕ 가 없다. rail 레이아웃은 그대로여야 한다.
 // ─────────────────────────────────────────────────────────────────
 
 test.skip(({ browserName }) => browserName !== 'chromium', '화면 수치 검증은 Chromium 기준이다');
@@ -40,8 +40,8 @@ async function openStep(page: Page, step: (typeof STEPS)[number]) {
     );
     await page.goto(`/jobs/${MOCK_JOB_ID}`);
   }
-  await expect(page.getByTestId('s0-exit')).toBeVisible();
   await expect(stepButtons(page).first()).toBeVisible();
+  await expect(page.getByTestId('s0-exit')).toHaveCount(0);
 }
 
 const nav = (page: Page) => page.getByRole('navigation', { name: '작업 진행 단계' });
@@ -74,13 +74,6 @@ test.describe('1920×1080 — Figma 608:1440', () => {
         near(item.y, FIGMA_ITEM_Y[i], `item ${i + 1} y`);
       }
 
-      // ✕ 버튼은 이번 변경과 무관하게 그대로다(rail root ml-9 · ✕ left-1 top-10)
-      const exit = await box(page, 's0-exit');
-      near(exit.x, 40, 'exit x');
-      near(exit.y, 40, 'exit y');
-      near(exit.width, 40, 'exit w');
-      near(exit.height, 40, 'exit h');
-      expect(exit.y + exit.height).toBeLessThan(steps.y);
 
       // 잘리지 않고 가로 넘침이 없다
       expect(steps.y + steps.height).toBeLessThanOrEqual(1080);
@@ -99,11 +92,11 @@ test.describe('1920×1080 — Figma 608:1440', () => {
   });
 });
 
-test.describe('상호작용 — 실행계획 v3.6.4', () => {
+test.describe('상호작용 — PRD v3.6.4 F-NAV-01 수용 ③', () => {
   test.use({ viewport: { width: 1920, height: 1080 } });
 
   for (const step of ['N1', 'N3'] as const) {
-    test(`${step} — 툴팁 없음 · cursor pointer · hover 강조 없음 · 클릭해도 이동·요청 없음`, async ({ page }) => {
+    test(`${step} — 툴팁 없음 · 손가락 커서 없음 · hover 강조 없음 · 클릭해도 이동·요청 없음`, async ({ page }) => {
       await openStep(page, step);
       const requests: string[] = [];
       page.on('request', (r) => {
@@ -129,7 +122,7 @@ test.describe('상호작용 — 실행계획 v3.6.4', () => {
         });
 
       for (let i = 0; i < 6; i++) {
-        expect(await buttons.nth(i).evaluate((el) => getComputedStyle(el).cursor), `step ${i + 1} cursor`).toBe('pointer');
+        expect(await buttons.nth(i).evaluate((el) => getComputedStyle(el).cursor), `step ${i + 1} cursor`).toBe('default');
         const before = await styleOf(i);
         await buttons.nth(i).hover();
         await page.waitForTimeout(250);
@@ -153,17 +146,15 @@ test.describe('상호작용 — 실행계획 v3.6.4', () => {
 
 test.describe('낮은 화면 — 최소 높이·breakpoint 없이 진행단계 높이만 줄어든다', () => {
   for (const [width, height] of [[1728, 885], [1512, 860], [1440, 900], [1280, 720]] as const) {
-    test(`${width}×${height} — top 96 · bottom 60 · ✕ 와 겹치지 않음`, async ({ page }) => {
+    test(`${width}×${height} — top 96 · bottom 60 · 헤더와 겹치지 않음`, async ({ page }) => {
       await page.setViewportSize({ width, height });
       await openStep(page, 'N3');
       const steps = await box(page, 's0-steps');
-      const exit = await box(page, 's0-exit');
+      const header = await box(page, 'job-header');
       near(steps.x, 48, 'steps x');
       near(steps.y, 96, 'steps y');
       near(steps.height, height - 96 - 60, 'steps h');
-      near(exit.x, 40, 'exit x');
-      near(exit.y, 40, 'exit y');
-      expect(exit.y + exit.height).toBeLessThan(steps.y);
+      expect(header.y + header.height).toBeLessThanOrEqual(steps.y);
       const buttons = stepButtons(page);
       for (let i = 0; i < 6; i++) {
         const item = (await buttons.nth(i).boundingBox())!;

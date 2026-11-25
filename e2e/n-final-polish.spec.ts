@@ -157,7 +157,7 @@ test.describe('Mock 오류 URL', () => {
 
   test('모르는 scenario 값은 무시하고 정상 처리 화면을 보인다', async ({ page }) => {
     await page.goto('/jobs/1?scenario=unknown');
-    await expect(page.getByTestId('s0-exit')).toBeVisible();
+    await expect(page.getByTestId('s0-steps')).toBeVisible();
     await page.waitForTimeout(1000);
     await expect(page.getByTestId('processing-error')).toHaveCount(0);
   });
@@ -187,7 +187,9 @@ test.describe('N6', () => {
     await expect(page.getByTestId('n6-render-dim')).toBeVisible();
     await expect(page.getByTestId('n6-preparing-banner')).toContainText('최종 결과물을 만들고 있습니다.');
     await expect(page.getByRole('heading', { name: '저장 및 내보내기' })).toBeVisible();
-    await expect(page.getByTestId('s0-exit')).toBeVisible();
+    // 12월(PRD F-JOB-07)에는 ✕ 가 없다 — 렌더 중에도 나가기는 상단 메뉴·뒤로 가기다
+    await expect(page.getByTestId('s0-exit')).toHaveCount(0);
+    await expect(page.getByTestId('job-header-home')).toBeVisible();
     // 렌더 전 샘플 숫자를 쓰지 않는다
     await expect(page.getByTestId('n6-render-percent')).not.toHaveText('72');
 

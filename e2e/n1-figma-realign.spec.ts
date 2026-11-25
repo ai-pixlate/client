@@ -491,8 +491,8 @@ test('1920×1080 — Figma 525:3023 주요 좌표', async ({ page }) => {
   expect(Math.abs(consent.y - 907)).toBeLessThanOrEqual(4);
   const next = (await nextButton(page).boundingBox())!;
   expect([next.y, next.width, next.height]).toEqual([975, 148, 45]);
-  const exit = (await page.getByRole('button', { name: '보관함으로 나가기' }).boundingBox())!;
-  expect([exit.x, exit.y, exit.width, exit.height]).toEqual([40, 40, 40, 40]);
+  // 12월(PRD F-JOB-07 · F-NAV-01)에는 ✕ 가 없다
+  await expect(page.getByTestId('s0-exit')).toHaveCount(0);
   // 우측 패널 입력칸 — Figma Text Input 474×39, 상품명 입력 top 148, 상품코드 입력 top 226
   const name = (await page.getByPlaceholder('상품 이름을 입력해주세요').boundingBox())!;
   const code = (await page.getByPlaceholder('상품 코드를 입력해주세요').boundingBox())!;
