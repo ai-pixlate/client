@@ -14,7 +14,7 @@ import { reachN6 } from './helpers/reach-n6';
 // - 새로고침은 취소하지 않는다
 // - 상태 조회 중 나가기는 잡아 두었다가 조회 뒤 처리한다(진행 중 = 작업 취소 확인 · 완료·404 = 취소 없이 이동 ·
 //   조회 실패 = 「상태를 확인하지 못함」 창 — DELETE 없음, [계속하기]·[다시 확인]·[작업 남기고 나가기])
-// - 취소한 작업 주소로 돌아오면 cache 없이 다시 묻고, archived 200·404 어느 쪽이든 편집 화면을 다시 그리지 않는다
+// - 취소한 작업 주소로 돌아오면 cache 없이 다시 묻고, archived 200(구 서버)·cancelled 200(새 서버 PR #157)·404 어느 쪽이든 편집 화면을 다시 그리지 않는다
 // N2~N6 은 폴링 응답의 currentStep 만 고정해 바로 연다. 작업 있는 N1 은 n1-source-upload.spec.ts 가 맡는다.
 // ─────────────────────────────────────────────────────────────────
 
@@ -677,10 +677,10 @@ test.describe('작업 상태 조회 실패 — 실패를 알리고, 계속·다�
   });
 });
 
-/** 취소 뒤 tasks 응답을 서버 계약 후보 중 하나로 바꾼다(window.__afterCancel = 'archived' | 'not-found') */
+/** 취소 뒤 tasks 응답을 서버 계약 후보 중 하나로 바꾼다(window.__afterCancel = 'archived' | 'cancelled' | 'not-found') */
 async function afterCancelResponse(page: Page) {
   await page.addInitScript((jobId) => {
-    const w = window as unknown as { __afterCancel?: 'archived' | 'not-found' };
+    const w = window as unknown as { __afterCancel?: 'archived' | 'cancelled' | 'not-found' };
     const original = window.fetch.bind(window);
     window.fetch = async (input, init) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
@@ -694,13 +694,18 @@ async function afterCancelResponse(page: Page) {
       }
       const response = await original(input, init);
       const body = await response.json();
-      return new Response(JSON.stringify({ ...body, jobStatus: 'archived' }), { status: 200, headers: { 'content-type': 'application/json' } });
+      const cancelled = w.__afterCancel;
+      return new Response(JSON.stringify({ ...body, jobStatus: cancelled, userFacingStatus: cancelled }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
     };
   }, MOCK_JOB_ID);
 }
 
 for (const [label, mode] of [
   ['archived 200', 'archived'],
+  ['cancelled 200', 'cancelled'],
   ['404', 'not-found'],
 ] as const) {
   test(`삭제된 작업 주소 재진입(${label}) — 보관함에서 뒤로 가도 편집 화면을 다시 그리지 않는다`, async ({ page }) => {
@@ -718,12 +723,12 @@ for (const [label, mode] of [
     await page.evaluate((m) => ((window as unknown as { __afterCancel: string }).__afterCancel = m), mode);
     await pressBack(page);
     await expect(page).toHaveURL(JOB_URL);
-    await expect(page.getByTestId(mode === 'archived' ? 'job-archived' : 'job-not-found')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId(mode === 'not-found' ? 'job-not-found' : 'job-archived')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByRole('heading', { name: '섹션 확인' })).toHaveCount(0);
     await expect(page.getByTestId('job-header')).toHaveCount(0);
     await expect(guard(page)).toHaveAttribute('data-exit-guard', 'off');
     // 다시 나가도 묻지 않고, 두 번째 DELETE 도 없다
-    await page.getByTestId(mode === 'archived' ? 'job-archived-library' : 'job-not-found-library').click();
+    await page.getByTestId(mode === 'not-found' ? 'job-not-found-library' : 'job-archived-library').click();
     await expect(page).toHaveURL(/\/$/);
     await expect(dialog(page)).toHaveCount(0);
     expect(cancels(writes)).toEqual([`DELETE /jobs/${MOCK_JOB_ID}`]);

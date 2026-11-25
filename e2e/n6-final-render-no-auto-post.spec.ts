@@ -20,7 +20,15 @@ type Item = { taskId: number; taskType: 'render'; unitType: 'job' | 'section' | 
 type Script = { armed: boolean; responses: Item[][]; afterRender: Item[][] | null; cursor: number; log: string[] };
 
 const JOB = Number(MOCK_JOB_ID);
-const job = (taskId: number, status: string): Item => ({ taskId, taskType: 'render', unitType: 'job', unitId: JOB, status });
+// 실패 task 는 서버처럼 retryable 을 싣는다 — [다시 렌더링]은 현재 task 의 retryable=true 일 때만 보인다(server PR #157 README 7.8 ③)
+const job = (taskId: number, status: string): Item => ({
+  taskId,
+  taskType: 'render',
+  unitType: 'job',
+  unitId: JOB,
+  status,
+  ...(status === 'failed' ? { retryable: true } : {}),
+});
 
 /** GET /tasks 를 responses 순서로 응답한다(마지막은 반복). POST /render 가 오면 afterRender 로 갈아 끼운다. armed 전에는 손대지 않는다 */
 async function scriptTasks(page: Page, responses: Item[][], options: { afterRender?: Item[][]; armNow?: boolean } = {}) {
