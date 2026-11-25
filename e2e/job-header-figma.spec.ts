@@ -4,7 +4,8 @@ import { MOCK_BRAND_ID, MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 
 // ─────────────────────────────────────────────────────────────────
 // N1~N6 작업용 공통 헤더 — Figma header component set 1809:42006 「속성 1=작업용」(N1 525:3023 instance 1792:21551).
-// 1920×1080: header 0/0/1920/72 · home 124/12/102/48 · 화면명 x238 y27.5 h17 · 우측 1547/24/249/24(오른쪽 끝 1796).
+// 1920×1080: header 0/0/1920/72 · home 124/12/102/48 · 화면명 x238 y27.5 h17 · 우측 1539/24/257/24(오른쪽 끝 1796).
+// [내 계정] 드롭다운 — 1876:40072 작업용_오픈 · 1890:58502: 버튼 1623/24/80/24 · 메뉴 1613/56/102 × 38(실제 값이 있는 이메일 한 행).
 // 헤더는 화면 위에 겹쳐 놓아 본문 geometry 를 바꾸지 않는다 — S0 ✕·진행단계와 화면별 본문 위치가 그대로인지 함께 본다.
 // ─────────────────────────────────────────────────────────────────
 
@@ -129,11 +130,14 @@ test.describe('1920×1080 — header 1809:42006 작업용', () => {
 
       const actions = await box(page, 'job-header-actions');
       console.log(`[${step}] actions`, JSON.stringify(actions));
-      nearBox(actions, [1547, 24, 249, 24], 'actions');
+      nearBox(actions, [1539, 24, 257, 24], 'actions');
       near(actions.x + actions.width, 1796, 'actions right edge');
       near(1920 - (actions.x + actions.width), 124, 'right margin');
-      nearBox(await box(page, 'job-header-brand'), [1547, 24, 72, 24], 'brand');
-      nearBox(await box(page, 'job-header-account'), [1631, 24, 72, 24], 'account');
+      nearBox(await box(page, 'job-header-brand'), [1539, 24, 72, 24], 'brand');
+      await expect(page.getByTestId('job-header-brand')).toHaveText('브랜드 관리');
+      nearBox(await box(page, 'job-header-account'), [1623, 24, 80, 24], 'account');
+      await expect(page.getByTestId('job-header-account')).toHaveAttribute('aria-expanded', 'false');
+      await expect(page.getByTestId('job-header-account-menu')).toBeHidden();
       nearBox(await box(page, 'job-header-divider'), [1719, 30, 1, 12], 'divider');
       nearBox((await page.getByTestId('job-header').getByTestId('account-logout').boundingBox())!, [1736, 24, 60, 24], 'logout');
 
@@ -197,20 +201,6 @@ test.describe('헤더 동작', () => {
     await page.waitForURL((url) => url.pathname === '/brand');
   });
 
-  test('내 계정 — 계약이 없어 이동·메뉴를 만들지 않는다(흐리게 만들지도 않는다)', async ({ page }) => {
-    await openStep(page, 'N5');
-    const account = page.getByTestId('job-header-account');
-    await expect(account).toHaveText('내 계정');
-    await expect(account).toBeEnabled();
-    expect(await account.evaluate((el) => getComputedStyle(el).opacity)).toBe('1');
-    const before = page.url();
-    await account.click();
-    await page.waitForTimeout(500);
-    expect(page.url()).toBe(before);
-    await expect(page.getByRole('menu')).toHaveCount(0);
-    await expect(page.getByRole('dialog')).toHaveCount(0);
-  });
-
   test('로그아웃 — 작업 취소 확인 뒤 기존 logout() 흐름(POST /auth/logout 1회 → G1)을 그대로 쓴다', async ({ page }) => {
     const logouts: string[] = [];
     page.on('request', (r) => {
@@ -238,3 +228,285 @@ test.describe('헤더 동작', () => {
     expect(topAtHeader).toEqual([true, true]);
   });
 });
+
+// ── [내 계정] 드롭다운 ───────────────────────────────────────────
+
+const account = (page: Page) => page.getByTestId('job-header-account');
+const accountMenu = (page: Page) => page.getByTestId('job-header-account-menu');
+const MOCK_EMAIL = 'kakao-seller@pixlate.mock';
+
+/**
+ * 계정은 이 탭의 메모리 세션에만 있다. G1 소셜 로그인 → M1 → [추가] 로 앱 안에서 N1 까지 간다(새로 불러오면 메모리가 비고,
+ * Mock 의 작업 API 는 401 을 주지 않아 refresh·/auth/me 가 일어나지 않는다 — 그때는 「계정 정보 없음」이다)
+ */
+async function loginToN1(page: Page, provider: 'kakao' | 'google' = 'kakao') {
+  await page.goto('/login');
+  await page.getByTestId(`g1-social-${provider}`).click();
+  await page.waitForURL((url) => url.pathname === '/');
+  await page.getByTestId('library-add-card-link').click();
+  await page.waitForURL((url) => url.pathname === '/jobs/new');
+  await expect(page.getByTestId('job-header-title')).toHaveText('정보 입력');
+}
+
+/** GET 이 아닌 요청(페이지 이동 제외)을 기록한다 — 메뉴를 열고 닫는 것만으로는 아무 요청도 없어야 한다 */
+function recordWrites(page: Page) {
+  const writes: string[] = [];
+  page.on('request', (request) => {
+    if (request.method() !== 'GET' && !request.isNavigationRequest()) writes.push(`${request.method()} ${new URL(request.url()).pathname}`);
+  });
+  return writes;
+}
+
+async function expectClosed(page: Page) {
+  await expect(account(page)).toHaveAttribute('aria-expanded', 'false');
+  await expect(accountMenu(page)).toBeHidden();
+  await expect(page.getByTestId('job-header-account-chevron')).toHaveAttribute('data-direction', 'down');
+}
+
+async function expectOpen(page: Page) {
+  await expect(account(page)).toHaveAttribute('aria-expanded', 'true');
+  await expect(accountMenu(page)).toBeVisible();
+  await expect(page.getByTestId('job-header-account-chevron')).toHaveAttribute('data-direction', 'up');
+}
+
+test.describe('[내 계정] 드롭다운 — 1876:40072 · 1890:58502', () => {
+  test.use({ viewport: { width: 1920, height: 1080 } });
+
+  test('기본 닫힘 → 누르면 열리고 다시 누르면 닫힌다 · Figma 크기·위치·색 · 메뉴 접근성 구조', async ({ page }) => {
+    await openStep(page, 'N3');
+    await expectClosed(page);
+    const labelColor = () => account(page).locator('span').filter({ hasText: '내 계정' }).last().evaluate((el) => getComputedStyle(el).color);
+    expect(await labelColor()).toBe('rgb(112, 112, 112)');
+    await expect(account(page)).toHaveAttribute('aria-controls', (await accountMenu(page).getAttribute('id'))!);
+    // 고를 항목이 없는 계정 정보라 menu 역할을 쓰지 않는다
+    await expect(page.getByRole('menu')).toHaveCount(0);
+
+    await account(page).click();
+    await expectOpen(page);
+    expect(await labelColor()).toBe('rgb(23, 23, 23)');
+    nearBox(await box(page, 'job-header-account'), [1623, 24, 80, 24], 'account');
+    nearBox(await box(page, 'job-header-account-menu'), [1613, 56, 102, 38], 'menu');
+    const style = await accountMenu(page).evaluate((el) => {
+      const s = getComputedStyle(el);
+      const text = getComputedStyle(el.querySelector('[data-testid="job-header-account-email"]')!);
+      return { bg: s.backgroundColor, radius: s.borderRadius, filter: s.filter, size: text.fontSize, color: text.color, spacing: text.letterSpacing };
+    });
+    expect(style).toEqual({
+      bg: 'rgb(255, 255, 255)',
+      radius: '8px',
+      filter: 'drop-shadow(rgba(0, 0, 0, 0.06) 2px 2px 12px)',
+      size: '10px',
+      color: 'rgb(112, 112, 112)',
+      spacing: '-0.4px',
+    });
+    await expect(page.getByRole('group', { name: '내 계정 정보' })).toBeVisible();
+    // 열려 있는 동안 헤더가 rail·본문 위로 올라온다(확인창보다는 아래)
+    expect(await page.getByTestId('job-header').evaluate((el) => getComputedStyle(el).zIndex)).toBe('30');
+    await page.screenshot({ path: test.info().outputPath('account-open-1920x1080.png') });
+
+    await account(page).click();
+    await expectClosed(page);
+    expect(await page.getByTestId('job-header').evaluate((el) => getComputedStyle(el).zIndex)).toBe('10');
+  });
+
+  test('바깥을 누르면 닫히고, 그 클릭은 작업 나가기가 아니다', async ({ page }) => {
+    const writes = recordWrites(page);
+    await openStep(page, 'N3');
+    await account(page).click();
+    await expectOpen(page);
+    await page.mouse.click(960, 600);
+    await expectClosed(page);
+    await expect(page.getByTestId('s0-exit-dialog')).toHaveCount(0);
+    expect(writes).toEqual([]);
+  });
+
+  test('Escape 는 닫고 버튼으로 포커스를 돌려준다 · Enter/Space 로 열고 닫는다 · Tab 으로 벗어나면 닫힌다', async ({ page }) => {
+    await openStep(page, 'N5');
+    await account(page).focus();
+    await page.keyboard.press('Enter');
+    await expectOpen(page);
+    await page.keyboard.press('Escape');
+    await expectClosed(page);
+    await expect(account(page)).toBeFocused();
+
+    await page.keyboard.press('Space');
+    await expectOpen(page);
+    await page.keyboard.press('Space');
+    await expectClosed(page);
+
+    await page.keyboard.press('Enter');
+    await expectOpen(page);
+    await page.keyboard.press('Tab');
+    await expectClosed(page);
+  });
+
+  test('실제 세션 계정의 이메일만 보여 준다 — Figma 예시 이름·제공자를 만들지 않는다', async ({ page }) => {
+    await loginToN1(page);
+    await account(page).click();
+    await expect(page.getByTestId('job-header-account-email')).toHaveText(MOCK_EMAIL);
+    for (const sample of ['dabduck', 'dabduck@email.com', '카카오 로그인']) await expect(accountMenu(page)).not.toContainText(sample);
+    await expect(accountMenu(page).locator('p')).toHaveCount(1);
+  });
+
+  test('세션 계정의 email 이 null 이면 오류 없이 중립 문구', async ({ page }) => {
+    const errors: Error[] = [];
+    page.on('pageerror', (e) => errors.push(e));
+    await page.addInitScript(() => {
+      const original = window.fetch.bind(window);
+      window.fetch = async (input, init) => {
+        const response = await original(input, init);
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (new URL(url, location.href).pathname !== '/auth/social' || !response.ok) return response;
+        const body = await response.json();
+        return new Response(JSON.stringify({ ...body, seller: { ...body.seller, email: null } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      };
+    });
+    await loginToN1(page);
+    await account(page).click();
+    await expect(page.getByTestId('job-header-account-email')).toHaveText('이메일 정보 없음');
+    await expect(accountMenu(page)).not.toContainText('@');
+    expect(errors).toEqual([]);
+  });
+
+  test('이 탭이 아직 계정을 모르면(새로 불러옴) 중립 문구 — 계정을 알아내려고 새 API 를 부르지 않는다', async ({ page }) => {
+    const authCalls: string[] = [];
+    page.on('request', (r) => {
+      if (new URL(r.url()).pathname.startsWith('/auth/')) authCalls.push(`${r.method()} ${new URL(r.url()).pathname}`);
+    });
+    await openStep(page, 'N3');
+    const before = authCalls.length;
+    await account(page).click();
+    await expect(page.getByTestId('job-header-account-email')).toHaveText('계정 정보 없음');
+    await page.waitForTimeout(300);
+    expect(authCalls.length).toBe(before);
+  });
+
+  test('메뉴를 열고 안을 눌러도 확인창·DELETE·이동이 없다', async ({ page }) => {
+    const writes = recordWrites(page);
+    await openStep(page, 'N4');
+    const before = page.url();
+    await account(page).click();
+    await page.getByTestId('job-header-account-email').click();
+    await expectOpen(page);
+    await page.waitForTimeout(300);
+    expect(page.url()).toBe(before);
+    await expect(page.getByTestId('s0-exit-dialog')).toHaveCount(0);
+    expect(writes).toEqual([]);
+  });
+
+  test('메뉴가 열린 채 로그아웃 — 메뉴가 닫히고 작업 취소 확인 뒤에만 로그아웃한다', async ({ page }) => {
+    const writes = recordWrites(page);
+    await openStep(page, 'N3');
+    await account(page).click();
+    await expectOpen(page);
+    await page.getByTestId('job-header').getByTestId('account-logout').click();
+    await expectClosed(page);
+    await expect(page.getByTestId('s0-exit-dialog')).toHaveAccessibleName('작업을 취소할까요?');
+    expect(writes).toEqual([]);
+    await page.getByTestId('s0-exit-dialog').getByRole('button', { name: '작업 취소' }).click();
+    await page.waitForURL((url) => url.pathname === '/login');
+    expect(writes).toEqual([`DELETE /jobs/${MOCK_JOB_ID}`, 'POST /auth/logout']);
+  });
+
+  test('메뉴가 열린 채 로고 · 브라우저 뒤로 가기 — 메뉴는 닫히고 기존 작업 취소 확인이 뜬다', async ({ page }) => {
+    await page.goto('/');
+    await openStep(page, 'N3');
+    await account(page).click();
+    await page.getByTestId('job-header-home').click();
+    await expectClosed(page);
+    await expect(page.getByTestId('s0-exit-dialog')).toHaveAccessibleName('작업을 취소할까요?');
+    await page.getByTestId('s0-exit-dialog').getByRole('button', { name: '계속하기' }).click();
+
+    await account(page).click();
+    await expectOpen(page);
+    await page.evaluate(() => history.back());
+    await expectClosed(page);
+    await expect(page.getByTestId('s0-exit-dialog')).toHaveAccessibleName('작업을 취소할까요?');
+  });
+
+  test('다른 탭에서 다른 계정으로 바뀌면 이전 계정 정보를 남기지 않는다', async ({ context }) => {
+    const a = await context.newPage();
+    await loginToN1(a);
+    await a.getByTestId('job-header-account').click();
+    await expect(a.getByTestId('job-header-account-email')).toHaveText(MOCK_EMAIL);
+
+    // 다른 탭이 Google 계정으로 로그인한다(G1 → 콜백 → M1)
+    const b = await context.newPage();
+    await b.goto('/login');
+    await b.getByTestId('g1-social-google').click();
+    await b.waitForURL((url) => url.pathname === '/');
+
+    // 이 탭은 이전 계정 화면을 버리고 보관함으로 간다(기존 계정 전환 정책). 계정 세대가 바뀌며 이전 계정 정보(seller)는 지워진다 —
+    // 다시 작업 화면을 열어도 이전 계정 이메일은 없다. 새 계정은 다음 401→refresh→/auth/me 가 정한다(Mock 작업 API 는 401 이 없어 미확인)
+    await a.waitForURL((url) => url.pathname === '/');
+    await a.getByTestId('library-add-card-link').click();
+    await a.waitForURL((url) => url.pathname === '/jobs/new');
+    await a.getByTestId('job-header-account').click();
+    await expect(a.getByTestId('job-header-account-menu')).toBeVisible();
+    await expect(a.getByTestId('job-header-account-menu')).not.toContainText(MOCK_EMAIL);
+    await expect(a.getByTestId('job-header-account-email')).toHaveText(/^(google-seller@pixlate\.mock|계정 정보 없음)$/);
+  });
+});
+
+// ── 반응형 ──────────────────────────────────────────────────────
+
+const VIEWPORTS = [
+  [1920, 1080],
+  [1728, 885],
+  [1512, 860],
+  [1440, 900],
+  [1280, 720],
+] as const;
+
+for (const [width, height] of VIEWPORTS) {
+  test.describe(`${width}×${height} — [내 계정] 드롭다운`, () => {
+    test.use({ viewport: { width, height } });
+
+    for (const step of STEPS) {
+      test(`${step} — 메뉴가 잘리거나 가려지지 않고, 헤더 요소가 겹치지 않으며 본문을 밀지 않는다`, async ({ page }) => {
+        await openStep(page, step);
+        const watched = step === 'N1' ? 'n1-input-panel' : step === 'N3' ? 'n3-section-list' : step === 'N5' ? 'n5-panel' : step === 'N6' ? 'n6-export-panel' : 'processing-panel';
+        const bodyBefore = await box(page, watched);
+        const stepsBefore = await box(page, 's0-steps');
+
+        await account(page).click();
+        await expectOpen(page);
+        const menu = await box(page, 'job-header-account-menu');
+        expect(menu.x).toBeGreaterThanOrEqual(0);
+        expect(menu.y).toBeGreaterThanOrEqual(0);
+        expect(menu.x + menu.width).toBeLessThanOrEqual(width);
+        expect(menu.y + menu.height).toBeLessThanOrEqual(height);
+        near(menu.width, 102, 'menu w');
+        near(menu.height, 38, 'menu h');
+        // 메뉴 가운데가 다른 요소에 가려지지 않는다
+        const onTop = await page.evaluate(() => {
+          const el = document.querySelector('[data-testid="job-header-account-menu"]')!;
+          const r = el.getBoundingClientRect();
+          return [
+            [r.x + r.width / 2, r.y + r.height / 2],
+            [r.x + 4, r.y + 4],
+            [r.right - 4, r.bottom - 4],
+          ].every(([x, y]) => el.contains(document.elementFromPoint(x, y)));
+        });
+        expect(onTop).toBe(true);
+
+        // 로고·화면명·우측 메뉴가 겹치지 않는다
+        const home = await box(page, 'job-header-home');
+        const title = await box(page, 'job-header-title');
+        const actions = await box(page, 'job-header-actions');
+        expect(home.x + home.width).toBeLessThanOrEqual(title.x);
+        expect(title.x + title.width).toBeLessThan(actions.x);
+        near(width - (actions.x + actions.width), 124, 'right margin');
+
+        // 드롭다운은 겹쳐 뜬다 — 본문·진행단계 위치가 그대로다
+        nearBox(await box(page, watched), [bodyBefore.x, bodyBefore.y, bodyBefore.width, bodyBefore.height], watched);
+        nearBox(await box(page, 's0-steps'), [stepsBefore.x, stepsBefore.y, stepsBefore.width, stepsBefore.height], 'steps');
+        expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBe(0);
+        if (step === 'N2' || step === 'N5') await page.screenshot({ path: test.info().outputPath(`${step}-account-${width}x${height}.png`) });
+      });
+    }
+  });
+}
