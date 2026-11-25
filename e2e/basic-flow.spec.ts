@@ -20,6 +20,10 @@ const TINY_PNG_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 
 test('N1에서 N5 검수 화면까지 기본 작업 흐름을 완료한다', async ({ page }) => {
+  // N2·N4의 정상 2초 polling을 한 테스트에서 연속으로 지나므로
+  // Playwright 기본 30초보다 긴 전체 제한만 둔다. 단계별 assertion timeout은 그대로 유지한다.
+  test.setTimeout(60_000);
+
   const pageErrors: Error[] = [];
   page.on('pageerror', (err) => pageErrors.push(err));
 
