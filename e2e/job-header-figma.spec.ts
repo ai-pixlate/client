@@ -30,9 +30,10 @@ const BODY: Partial<Record<Step, { testId: string; box: [number, number, number,
     { testId: 'n1-image-dropzone', box: [140, 147, 1184, 873] },
     { testId: 'n1-input-panel', box: [1344, 96, 516, 795] },
   ],
+  // N3 는 헤더 도입 뒤 Figma 1759:11529 가 다시 그려져(목록이 헤더 바로 아래 y72) 새 실측으로 맞췄다 — e2e/n3-responsive.spec.ts
   N3: [
-    { testId: 'n3-work-area', box: [200, 112, 1600, 920] },
-    { testId: 'n3-section-list', box: [1112, 112, 688, 863] },
+    { testId: 'n3-work-area', box: [262, 72, 1538, 948] },
+    { testId: 'n3-section-list', box: [1112, 72, 688, 891] },
   ],
   N5: [
     { testId: 'n5-viewport', box: [120, 0, 1255, 1080] },

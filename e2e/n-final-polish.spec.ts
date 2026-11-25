@@ -23,8 +23,9 @@ function recordWrites(page: Page) {
 }
 
 test.describe('N3 배치', () => {
-  // Figma 1759:11529 — 작업 영역 x200·y112·1600×920. 오른쪽 목록 688×863 · gap 12 · CTA 688×45(아래 끝 1032).
-  // 왼쪽 묶음(이미지 404 · gap 24 · 상세 404)은 높이 863 으로 작업 영역 세로 가운데(y140.5)라 이미지 아래 끝은 CTA 아래 끝과 같지 않다.
+  // Figma 1759:11529(헤더 도입 뒤) — 목록 1112/72/688/891 · gap 12 · CTA 1112/975/688/45(아래 끝 1020).
+  // 왼쪽 묶음 262/96/832/924 — 이미지 404×924 는 CTA 아래 끝까지, 판정 상세 404×863(상세 버튼 698/902/384/45).
+  // 좌표 전체와 1280 · 데이터 상태별 검증은 e2e/n3-responsive.spec.ts 가 맡는다.
   test('1920×1080 — Figma 수치와 같다', async ({ page }) => {
     await page.setViewportSize({ width: 1920, height: 1080 });
     await reachN3(page);
@@ -35,21 +36,22 @@ test.describe('N3 배치', () => {
     const action = await box(page, 'n3-detail-action');
     const near = (a: number, b: number, label: string) => expect(Math.abs(a - b), `${label}: ${a} ≈ ${b}`).toBeLessThanOrEqual(1);
     near(list.x, 1112, 'list x');
-    near(list.y, 112, 'list y');
+    near(list.y, 72, 'list y');
     near(list.width, 688, 'list w');
-    near(list.height, 863, 'list h');
+    near(list.height, 891, 'list h');
     near(cta.x, 1112, 'cta x');
-    near(cta.y, 987, 'cta y');
+    near(cta.y, 975, 'cta y');
     near(cta.width, 688, 'cta w');
     near(cta.height, 45, 'cta h');
     near(list.y + list.height + 12, cta.y, 'list + 12');
-    near(cta.y + cta.height, 1032, 'cta bottom');
-    near(image.x, 200, 'image x');
-    near(image.y, 140.5, 'image y');
+    near(cta.y + cta.height, 1020, 'cta bottom');
+    near(image.x, 262, 'image x');
+    near(image.y, 96, 'image y');
     near(image.width, 404, 'image w');
-    near(image.height, 863, 'image h');
-    near(image.y + image.height / 2, 112 + 920 / 2, 'image 세로 가운데');
-    near(action.x, 636, 'detail action x');
+    near(image.height, 924, 'image h');
+    near(image.y + image.height, cta.y + cta.height, 'image 아래 끝 = CTA 아래 끝');
+    near(action.x, 698, 'detail action x');
+    near(action.y, 902, 'detail action y');
     near(action.width, 384, 'detail action w');
   });
 
@@ -61,9 +63,9 @@ test.describe('N3 배치', () => {
       const cta = await box(page, 'n3-proceed');
       const image = await box(page, 'n3-section-image');
       const action = await box(page, 'n3-detail-action');
-      // 왼쪽 묶음은 작업 영역(목록 위 ~ CTA 아래) 세로 가운데, 목록과 같은 높이
-      expect(Math.abs(image.y + image.height / 2 - (list.y + cta.y + cta.height) / 2)).toBeLessThanOrEqual(1);
-      expect(Math.abs(image.height - list.height)).toBeLessThanOrEqual(1);
+      // 왼쪽 묶음은 목록보다 24 아래에서 시작해 CTA 아래 끝까지
+      expect(Math.abs(image.y - (list.y + 24))).toBeLessThanOrEqual(1);
+      expect(Math.abs(image.y + image.height - (cta.y + cta.height))).toBeLessThanOrEqual(1);
       expect(image.x + image.width).toBeLessThan(list.x); // 이미지 | 상세 | 목록 가로 순서
       for (const b of [cta, action, image]) {
         expect(b.y + b.height).toBeLessThanOrEqual(height);
