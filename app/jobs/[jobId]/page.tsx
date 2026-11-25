@@ -8,7 +8,8 @@ import { useJobExitGuard, type ExitGuardStatus } from '@/app/jobs/_components/jo
 import { S0Rail } from '@/app/jobs/_components/s0-rail';
 import type { StepNavStep } from '@/app/jobs/_components/step-nav';
 import { isJobNotFoundError } from '@/lib/api/pixlate';
-import { useJobQuery, useJobTasksQuery } from '@/lib/queries/pixlate';
+import { useJobCancellationRecheck, useJobQuery, useJobTasksQuery } from '@/lib/queries/pixlate';
+import { isCancelledJob } from '@/lib/api/job-status';
 import type { ApiJobTaskStatus } from '@/lib/api/job-schema';
 import { COMPLETION_PRESENTATION_MS } from '@/lib/processing/displayed-progress';
 import { N2AnalysisView } from './_components/n2-analysis-view';
@@ -98,11 +99,14 @@ export default function Page({
   // 단계를 모르거나 N6 완료 여부를 아직 모르면 loading(나가기를 잡아 두고 기다린다), N6 isSaved=true 는 saved(묻지 않음),
   // 없는 작업(404)은 not-found, 첫 조회가 실패해 완료 여부를 모르면 error(취소하지 않고 「상태를 확인하지 못함」 창으로 묻는다)다.
   const isNotFound = tasksQuery.isError && isJobNotFoundError(tasksQuery.error);
-  // 취소된 작업(DELETE 뒤 status=archived) — 계약 enum 값이다. 취소 뒤 조회가 404 일지 archived 200 일지는 계약에 적혀 있지 않아
-  // 둘 다 받는다: 404 는 위 없는 작업 화면, archived 는 편집 화면을 다시 그리지 않고 종료 안내만 둔다(지킬 작업이 없다)
-  const isArchived = tasksQuery.data?.jobStatus === 'archived';
+  // 취소된 작업 — 구 서버 archived · 새 서버 cancelled(server PR #157, 200 응답) 둘 다 같다(lib/api/job-status.ts). 기존 404 도 받는다:
+  // 404 는 위 없는 작업 화면, 취소는 편집 화면을 다시 그리지 않고 종료 안내만 둔다(지킬 작업이 없다 — 나가기도 DELETE 없이 통과).
+  // N6 에서는 GET /jobs/{id} 의 status 도 본다(서버 응답이 취소라고 말할 때만 — 조회 실패·없음은 취소로 추정하지 않는다)
+  const isCancelled = isCancelledJob(tasksQuery.data) || (isN6 && isCancelledJob(jobQuery.data));
+  // 변경 요청이 409 INVALID_STATE · RETRY_NOT_ALLOWED 로 끝나면 /tasks 를 다시 받아 위 판단에 넣는다(취소일 때만 안내로 바뀜)
+  useJobCancellationRecheck(jobId);
   let exitStatus: ExitGuardStatus = 'loading';
-  if (isNotFound || isArchived) exitStatus = 'not-found';
+  if (isNotFound || isCancelled) exitStatus = 'not-found';
   else if (tasksQuery.data && !isN6) exitStatus = 'active';
   else if (tasksQuery.data && jobQuery.data) exitStatus = jobQuery.data.isSaved ? 'saved' : 'active';
   else if (tasksQuery.data ? jobQuery.isError : tasksQuery.isError) exitStatus = 'error';
@@ -111,14 +115,17 @@ export default function Page({
     const tasks = await tasksQuery.refetch();
     if (tasks.isError) return isJobNotFoundError(tasks.error) ? 'not-found' : 'error';
     if (!tasks.data) return 'error';
+    // 재조회 결과가 취소(archived · cancelled)면 진행 중 작업으로 보지 않는다 — 취소 확인(DELETE)을 다시 열지 않는다
+    if (isCancelledJob(tasks.data)) return 'not-found';
     if (tasks.data.currentStep !== 'N6') return 'active';
     const job = await jobQuery.refetch();
     if (job.isError || !job.data) return 'error';
+    if (isCancelledJob(job.data)) return 'not-found';
     return job.data.isSaved ? 'saved' : 'active';
   };
   const exitGuard = useJobExitGuard({ jobId, status: exitStatus, recheck: recheckExitStatus });
   // 취소된 작업은 단계 화면이 아니다 — 단계를 모를 때와 같이 화면명·현재 단계를 그리지 않는다
-  const screenStep = isArchived ? undefined : displayStep;
+  const screenStep = isCancelled ? undefined : displayStep;
   const hasScreen = SCREEN_STEPS.includes(screenStep);
   const headerStep = toStepNavStep(screenStep);
 
@@ -165,7 +172,7 @@ export default function Page({
               </div>
             ))}
 
-          {isArchived && (
+          {isCancelled && (
             <div data-testid="job-archived" role="alert" className="flex flex-1 flex-col items-center justify-center gap-4">
               <p className="text-sm text-[#171717]">취소된 작업입니다.</p>
               <Link
@@ -178,7 +185,7 @@ export default function Page({
             </div>
           )}
 
-          {tasksQuery.data && !isArchived && (
+          {tasksQuery.data && !isCancelled && (
             <>
               {displayStep === 'N2' && (
                 <N2AnalysisView

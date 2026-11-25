@@ -8,6 +8,7 @@ import {
   useAnalyzeJobMutation,
   useMasterCategoriesQuery,
   usePatchJobMutation,
+  useJobCancellationRecheck,
 } from '@/lib/queries/pixlate';
 import type { ApiRegulatoryClass } from '@/lib/api/job-schema';
 import { isApiMockingEnabled } from '@/lib/api/session';
@@ -676,6 +677,12 @@ function NewJobPageInner() {
   // 나가기(뒤로 가기 · 상단 메뉴)를 같은 확인으로 묶는다 — 작업이 아직 없으면 미저장 확인, draft 작업이 생겼으면 작업 취소.
   // [다음] 처리 중(POST /jobs 응답 전 포함)에는 나가기를 막는다 — 나간 뒤 작업이 생겨 남는 것을 피한다
   const exitGuard = useJobExitGuard({ jobId: draftJobId, status: 'active', locked: isSubmitting });
+  // draft 작업의 변경 요청(업로드 · 삭제 · 순서 · PATCH · analyze)이 409 INVALID_STATE 로 끝나면 서버 상태를 다시 묻는다. 취소(archived ·
+  // cancelled)로 확인됐을 때만 작업 주소로 옮겨 공통 「취소된 작업입니다」 안내를 보인다(N1 에는 그 안내 자리가 없다 — 나가기도 DELETE 없이
+  // 통과). 취소가 아니거나 재조회가 실패하면 N1 에 그대로 머물고 기존 오류 문구를 보인다
+  useJobCancellationRecheck(draftJobId, () => {
+    if (draftJobId) router.replace(`/jobs/${draftJobId}`);
+  });
 
   const handleSubmit = async () => {
     if (!isValid) {

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { useRouter } from 'next/navigation';
 
 import {
-  selectN6RenderTask,
+  resolveN6RenderPhase,
   isN6RenderStatusUnknown,
   resetN6RenderStatusTracking,
   useJobTasksQuery,
@@ -58,20 +58,34 @@ import { ZoomControls } from './n5/n5-toolbar';
 // 진행 모달을 얹는다. 닫아도 렌더는 계속되고 폴링도 멈추지 않으며, 끝나면 완료 화면으로 바뀐다.
 // ─────────────────────────────────────────────────────────────────
 
-function RenderFailed({ onRetry, retryPending }: { onRetry: () => void; retryPending: boolean }) {
+/**
+ * 최종 렌더 실패(새 서버 failed · N6 · 구 서버 reviewing + 실패 task). 버튼은 현재 최종 렌더 task 의 retryable === true 일 때만 둔다
+ * (JOB-05 — server PR #157 README 7.8 ③⑤). errorCode(PROCESSING_TIMEOUT 포함)나 재시도 횟수로 정하지 않는다 — 시간 초과도 서버가
+ * retryable=true 를 주면 재시도할 수 있다(PM 11-25). 한도 소진 · 렌더러 불일치처럼 retryable=false 면 눌러도 409 인 버튼을
+ * 두지 않고 다시 렌더링할 수 없다는 안내만 둔다(Figma 에 이 상태가 없어 같은 자리 · 같은 글자 체계로 최소 보완). [중단](→ N5)은 G17 후속.
+ * 저장 대기(awaiting_save)에는 이 화면이 없다 — 저장 대기의 POST /render 는 409 라 부르지 않는다.
+ */
+function RenderFailed({ onRetry, retryPending, retryable }: { onRetry: () => void; retryPending: boolean; retryable: boolean }) {
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
       <p className="text-[14px] text-red-500" data-testid="n6-render-error">
         최종 이미지 렌더링에 실패했습니다.
       </p>
-      <button
-        type="button"
-        onClick={onRetry}
-        disabled={retryPending}
-        className="rounded-[6px] bg-[#171717] px-8 py-3.5 text-[14px] font-medium tracking-[-0.03em] text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        {retryPending ? '재시도 중...' : '다시 렌더링'}
-      </button>
+      {retryable ? (
+        <button
+          type="button"
+          data-testid="n6-render-retry"
+          onClick={onRetry}
+          disabled={retryPending}
+          className="rounded-[6px] bg-[#171717] px-8 py-3.5 text-[14px] font-medium tracking-[-0.03em] text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {retryPending ? '재시도 중...' : '다시 렌더링'}
+        </button>
+      ) : (
+        <p className="text-[14px] text-[#707070]" data-testid="n6-render-retry-unavailable">
+          이 작업은 다시 렌더링할 수 없습니다.
+        </p>
+      )}
     </div>
   );
 }
@@ -854,13 +868,15 @@ export function N6ResultView({ jobId }: { jobId: string }) {
   const tasksQuery = useJobTasksQuery(jobId, { polling: true });
   const renderMutation = useN6RenderMutation(jobId);
 
-  // 현재 최종 렌더 = N6 · render · job · 현재 jobId 1건(lib/queries/n6-render-task.ts). taskId·status 로 최신을 추정하지 않는다
-  const renderSelection = selectN6RenderTask(tasksQuery.data, jobId);
-  const renderItem = renderSelection.kind === 'single' ? renderSelection.task : undefined;
-  // 후보 2건 이상 — 서버 응답 invariant 위반. 어느 것도 골라 진행하지 않고 다음 응답을 기다린다
-  const renderAmbiguous = renderSelection.kind === 'ambiguous';
-  const renderFailed = renderItem?.status === 'failed';
-  const renderDone = renderItem?.status === 'done';
+  // 현재 최종 렌더 = N6 · render · job · 현재 jobId 1건(lib/queries/n6-render-task.ts). taskId·status 로 최신을 추정하지 않는다.
+  // 화면 상태는 그 task 와 작업 상태(jobStatus · userFacingStatus — 새 서버 rendering · awaiting_save · failed, 구 서버 reviewing)를
+  // 함께 본다(resolveN6RenderPhase). 둘이 어긋나면 완료로 추정하지 않고 다시 조회한다(unresolved).
+  const renderPhase = resolveN6RenderPhase(tasksQuery.data, jobId);
+  const renderItem = renderPhase.kind === 'rendering' || renderPhase.kind === 'ready' || renderPhase.kind === 'failed' ? renderPhase.task : undefined;
+  // 후보 2건 이상(invariant 위반) · 작업 상태와 어긋남 — 어느 것도 골라 진행하지 않고 다음 응답을 기다린다
+  const renderAmbiguous = renderPhase.kind === 'unresolved' && renderPhase.reason !== 'none';
+  const renderFailed = renderPhase.kind === 'failed';
+  const renderDone = renderPhase.kind === 'ready';
 
   // 0건(관측 전)·여러 건(invariant 위반)이 상한을 넘게 이어지면 무한 로딩으로 숨기지 않고 상태 확인 불가로 바꾼다.
   // polling 중단도 같은 기준이다(useJobTasksQuery) — page.tsx 와 같은 /tasks query 를 쓰므로 판단을 query 계층에 둔다
@@ -914,6 +930,7 @@ export function N6ResultView({ jobId }: { jobId: string }) {
           renderMutation.mutate();
         }}
         retryPending={renderMutation.isPending}
+        retryable={renderPhase.kind === 'failed' && renderPhase.retryable}
       />
     );
   } else if (!renderDone) {

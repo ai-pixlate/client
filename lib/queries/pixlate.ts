@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { focusManager, notifyManager, onlineManager, useQueries, useQuery, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { getAuthEpoch } from '@/lib/auth/session-store';
 
@@ -59,7 +59,9 @@ function retryTasksQuery(failureCount: number, error: unknown): boolean {
   return shouldRetryQuery(failureCount, error);
 }
 import type { ApiSection } from '@/lib/api/n3-schema';
-import { isN6RenderStatusUnknown, selectN6RenderTask } from './n6-render-task';
+import { isN6RenderStatusUnknown, resolveN6RenderPhase } from './n6-render-task';
+import { isCancelledJob } from '@/lib/api/job-status';
+import { subscribeJobStateConflict } from '@/lib/api/job-state-conflict';
 
 // ─────────────────────────────────────────────
 // Query Keys
@@ -177,18 +179,21 @@ export function useAnalyzeJobMutation() {
 
 export {
   selectN6RenderTask,
+  resolveN6RenderPhase,
   isN6RenderStatusUnknown,
   resetN6RenderStatusTracking,
   N6_TASK_UNRESOLVED_LIMIT_MS,
   type N6RenderTaskSelection,
+  type N6RenderPhase,
 } from './n6-render-task';
 
-/** N6 에서 /tasks 를 계속 다시 물어야 하는가 — 현재 최종 렌더가 진행 중이거나, 아직 1건으로 관측되지 않았을 때 */
+/**
+ * N6 에서 /tasks 를 계속 다시 물어야 하는가 — 현재 최종 렌더가 진행 중이거나, 아직 확인되지 않았을 때
+ * (0건 · 여러 건 · 작업 상태와 어긋남 — n6-render-task.ts resolveN6RenderPhase). 저장 대기 · 완료 · 실패는 멈춘다
+ */
 function shouldPollN6Tasks(data: ApiJobTaskStatus, jobId: string): boolean {
-  const selection = selectN6RenderTask(data, jobId);
-  if (selection.kind === 'single') return selection.task.status === 'pending' || selection.task.status === 'running';
-  // none(아직 관측 전)·ambiguous(invariant 위반) — 다른 task 로 대신하지 않고 다음 응답을 기다린다
-  return selection.kind === 'none' || selection.kind === 'ambiguous';
+  const phase = resolveN6RenderPhase(data, jobId);
+  return phase.kind === 'rendering' || phase.kind === 'unresolved';
 }
 
 export function useJobTasksQuery(jobId: string, options: { polling?: boolean } = {}) {
@@ -205,6 +210,8 @@ export function useJobTasksQuery(jobId: string, options: { polling?: boolean } =
           if (isJobNotFoundError(query.state.error)) return false;
           const data = query.state.data;
           if (!data) return 2_000; // 첫 응답 대기 중
+          // 취소된 작업(구 서버 archived · 새 서버 cancelled)은 종료 상태다 — currentStep 이 N2·N4 에 남아 있어도 다시 묻지 않는다
+          if (isCancelledJob(data)) return false;
           // N2·N4 전체 실패(jobStatus=failed)는 종료 상태라 폴링을 멈춘다
           if ((data.currentStep === 'N2' || data.currentStep === 'N4') && data.jobStatus === 'failed') return false;
           if (data.currentStep === 'N2' || data.currentStep === 'N4') return 2_000;
@@ -217,6 +224,47 @@ export function useJobTasksQuery(jobId: string, options: { polling?: boolean } =
         }
       : false,
   });
+}
+
+// ─────────────────────────────────────────────
+// 취소된 작업의 409 — 변경 요청이 409 INVALID_STATE · RETRY_NOT_ALLOWED 로 끝나면(lib/api/job-state-conflict.ts 신호)
+// JOB-05 를 서버에서 다시 받아 tasks cache 에 넣는다. 취소(archived · cancelled)인지는 이 재조회 결과로만 정한다.
+// - 취소면: 같은 cache 를 보는 page.tsx 가 편집 화면 대신 「취소된 작업입니다」를 그린다. N1(tasks 화면이 없음)은 onCancelled 로 옮긴다.
+// - 취소가 아니면: 받은 서버 값만 cache 에 넣고 아무것도 하지 않는다 — 각 화면의 기존 409 처리가 그대로 보인다.
+// - 재조회가 실패하면: 아무것도 바꾸지 않는다(취소로 추정하지 않음 · cache 를 지우거나 보관함으로 옮기지 않음).
+// 같은 작업의 재조회가 진행 중이면 새 신호는 그 결과를 함께 쓴다(요청을 겹쳐 보내지 않는다).
+// ─────────────────────────────────────────────
+
+export function useJobCancellationRecheck(jobId: string | null, onCancelled?: () => void) {
+  const queryClient = useQueryClient();
+  const onCancelledRef = useRef(onCancelled);
+  useEffect(() => {
+    onCancelledRef.current = onCancelled;
+  }, [onCancelled]);
+
+  useEffect(() => {
+    if (!jobId) return;
+    let inFlight = false;
+    let disposed = false;
+    const unsubscribe = subscribeJobStateConflict((conflictJobId) => {
+      if (conflictJobId !== jobId || inFlight) return;
+      inFlight = true;
+      getJobTasks(jobId)
+        .then((data) => {
+          if (disposed) return;
+          queryClient.setQueryData(pixlateKeys.tasks(jobId), data);
+          if (isCancelledJob(data)) onCancelledRef.current?.();
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          inFlight = false;
+        });
+    });
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, [jobId, queryClient]);
 }
 
 // ─────────────────────────────────────────────
