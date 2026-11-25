@@ -24,7 +24,7 @@ import { hasProcessingFailure, useDisplayedProgress } from './processing/use-dis
 // - N4 전체 완료는 서버 currentStep=N5 뿐이다. render=done·progress=1 은 지금 생성된 render 시도들의 집계일 뿐이라 처리
 //   중에는 완료·100% 를 만들지 않는다. N5 응답 뒤에만 page.tsx 가 isCompleted 로 잠깐 유지해 모든 묶음 완료를 보여 준다.
 //
-// 표시 % 상한·GIF caption 도 화면에 진행 중으로 그린 묶음 하나를 기준으로 한다 — dot·「진행 중」·caption·% 가 같은 사용자
+// 표시 % 상한·LOG 현재 상태도 화면에 진행 중으로 그린 묶음 하나를 기준으로 한다 — dot·「진행 중」·LOG 상태·% 가 같은 사용자
 // 단계를 말한다. 뒤쪽 병렬 stage 가 running 이라는 이유로 상한을 열지 않는다. 숫자는 서버 처리율이 아니라 UX 표시용이며,
 // 상한만 열고 현재 값에서 tick 마다 조금씩 오른다(lib/processing/displayed-progress.ts). 2초 polling 사이에 지나간 단계는
 // 관측하지 못할 수 있다 — 그 단계를 화면에 재생하지 않는다.
@@ -33,7 +33,6 @@ import { hasProcessingFailure, useDisplayedProgress } from './processing/use-dis
 // progress 기반 coarse fallback 은 남긴다(4단계까지만, render 내부는 나누지 않는다).
 // ─────────────────────────────────────────────────────────────────
 
-const N4_HEADLINE = '번역과 배경 복원을 함께 진행하고 있습니다.';
 const N4_AUTO_ADVANCE_NOTICE = '완료되면 검수 화면으로 자동 이동합니다.';
 const N4_PAUSE_BUTTON_TITLE = '번역 중단 기능은 아직 제공되지 않습니다.';
 
@@ -69,28 +68,21 @@ const GROUP_BY_N4_STAGE: Record<N4ObservedStage, GroupIndex> = { inpaint: 0, tra
 const DISPLAY_CEILING_BY_GROUP: Record<GroupIndex, number> = { 0: 39, 1: 59, 2: 99 };
 
 /**
- * GIF 하단 caption — 진행 중 묶음의 지금 단계를 설명한다(01 묶음은 그 안에서 아직 끝나지 않은 앞 stage). render 는
- * 03·04 중 하나를 고르지 않고 render 전체를 설명하는 문구를 쓴다.
- * 9/23 재조정 — 흰색 description은 Figma처럼 한 줄이어야 한다(processing-stage-layout.tsx의
- * whitespace-nowrap 처리 참고). 뜻은 유지하되 분량만 Figma 수준으로 줄였다.
+ * TRANSLATION LOG 현재 상태(설명 줄 앞)와 세부 설명 — 진행 중 묶음의 지금 단계를 말한다(01 묶음은 그 안에서 아직 끝나지
+ * 않은 앞 stage). render 는 03·04 중 하나를 고르지 않고 render 전체를 설명한다. 예전 GIF 하단 caption 문구를 그대로 쓴다.
  */
-const OVERLAY_CAPTION_BY_N4_STAGE: Record<N4ObservedStage, { title: string; description: string }> = {
-  inpaint: { title: '원문 제거·배경 복원 중', description: '원문을 지우고 주변 배경을 자연스럽게 복원하고 있습니다.' },
-  translate: { title: '번역·용어 맞춤 중', description: '번역문과 제품·브랜드 용어를 맞추고 있습니다.' },
-  verify: { title: '규제 기준 확인 중', description: '번역문이 대상 국가의 규제 기준에 맞는지 확인합니다.' },
-  render: { title: '번역 결과 이미지 적용 중', description: '번역문을 디자인에 맞게 조정하고 이미지에 반영합니다.' },
+const LOG_STATUS_BY_N4_STAGE: Record<N4ObservedStage, { status: string; description: string }> = {
+  inpaint: { status: '원문 제거·배경 복원 중', description: '원문을 지우고 주변 배경을 자연스럽게 복원하고 있습니다.' },
+  translate: { status: '번역·용어 맞춤 중', description: '번역문과 제품·브랜드 용어를 맞추고 있습니다.' },
+  verify: { status: '규제 기준 확인 중', description: '번역문이 대상 국가의 규제 기준에 맞는지 확인합니다.' },
+  render: { status: '번역 결과 이미지 적용 중', description: '번역문을 디자인에 맞게 조정하고 이미지에 반영합니다.' },
 };
 
 /**
- * 실제 완료(currentStep=N5) 응답 뒤 완료 표시 동안의 문구 — Figma 에 별도 완료 상태가 없어 기존 슬롯(상태 태그·visual headline·
- * GIF caption·LOG·progress 안내) 안에서만 최소한으로 바꾼다. 완료 표시 동안 "진행중"·"…하고 있습니다"·
+ * 실제 완료(currentStep=N5) 응답 뒤 완료 표시 동안의 문구 — Figma 에 별도 완료 상태가 없어 기존 슬롯(LOG·progress 안내) 안에서만 최소한으로 바꾼다. 완료 표시 동안 "진행중"·"…하고 있습니다"·
  * "완료되면 이동합니다"가 남아 100%·모든 묶음 완료와 서로 다른 말을 하지 않게 한다.
  */
-const N4_COMPLETION_CAPTION = { title: '번역 완료', description: '검수 화면으로 이동합니다.' };
 const N4_COMPLETION_COPY = {
-  statusTag: '완료',
-  headline: '번역 작업이 완료되었습니다.',
-  visualDescription: '번역 결과를 반영해 검수 화면으로 이동합니다.',
   logHeading: '번역 완료',
   logDescription: '번역과 이미지 적용이 완료되었습니다.',
   progressHint: '검수 화면으로 이동합니다.',
@@ -203,29 +195,22 @@ export function N4ProcessingView({
     isCompleted,
   });
   const steps = buildStageGroups(isCompleted ? ALL_DONE : rows);
-  const caption = isCompleted ? N4_COMPLETION_CAPTION : OVERLAY_CAPTION_BY_N4_STAGE[captionStage];
 
   return (
     <ProcessingStageLayout
       header={{
         title: '번역 중',
       }}
-      statusTagLabel={isCompleted ? N4_COMPLETION_COPY.statusTag : '진행중'}
       visual={{
         // N2/N4 공용 GIF — 별도 복사본을 만들지 않는다.
         src: '/process/ai-processing.gif',
-        headline: isCompleted ? N4_COMPLETION_COPY.headline : N4_HEADLINE,
-        description: isCompleted
-          ? N4_COMPLETION_COPY.visualDescription
-          : '확정한 섹션의 원문을 지우고 번역한 뒤, 원래 레이아웃에 맞게 다시 구성합니다.',
         overlayTopLabel: 'SOURCE  →  LOCALIZED',
-        overlayBottomTitle: caption.title,
-        overlayBottomDescription: caption.description,
       }}
       log={{
         sectionLabel: 'TRANSLATION LOG',
         heading: isCompleted ? N4_COMPLETION_COPY.logHeading : '지금 처리하는 일',
-        description: isCompleted ? N4_COMPLETION_COPY.logDescription : '번역문을 원래 디자인 안에 다시 맞추고 있습니다.',
+        status: isCompleted ? undefined : LOG_STATUS_BY_N4_STAGE[captionStage].status,
+        description: isCompleted ? N4_COMPLETION_COPY.logDescription : LOG_STATUS_BY_N4_STAGE[captionStage].description,
       }}
       steps={steps}
       progressPercent={displayedProgress}

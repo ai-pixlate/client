@@ -8,7 +8,7 @@ import { useDisplayedProgress } from './processing/use-displayed-progress';
 //
 // 레이아웃(rail/헤더/회색 패널/비주얼/로그/progress)은 N4와 같아 ./processing/processing-stage-layout.tsx로
 // 뺐다. 이 파일에는 N2 고유의 것만 남는다:
-// - copy(헤더/헤드라인/로그/단계 라벨/안내문 텍스트/GIF 하단 caption)
+// - copy(화면명/로그/단계 라벨/안내문 텍스트)
 // - N2의 backend stage(ocr/section/verify)·analysisProgress → 사용자 단계 묶음(01·02·03) 상태 해석
 // - 관측 단계 → 표시 % 상한(숫자 자체는 ./processing/use-displayed-progress.ts)
 //
@@ -20,11 +20,10 @@ import { useDisplayedProgress } from './processing/use-displayed-progress';
 //
 // 이 해석 로직은 N4와 공유하지 않는다 — N4는 backend stage 어휘 자체가 다르다(inpaint/translate/verify/render).
 //
-// GIF 하단 caption(주황 title + 회색 description)은 오른쪽 목록과 같은 값(coarse stage 또는 analysisProgress)을
-// 참조해 지금 진행 중인 묶음을 설명한다 — progress%로 caption이나 substage를 다시 추론하지 않는다.
+// 현재 상태(예: 영역별 판정 재시도 대기 중)는 ANALYSIS LOG 설명 줄 앞에 둔다 — 예전 GIF 하단 caption 자리가 최신 Figma 에서
+// 빠졌다. 오른쪽 목록과 같은 값(coarse stage 또는 analysisProgress)을 참조하고, progress%로 다시 추론하지 않는다.
 // ─────────────────────────────────────────────────────────────────
 
-const HEADLINE_FALLBACK = '상세페이지의 구조와 문맥을 읽고 있습니다.';
 const AUTO_ADVANCE_NOTICE = '분석이 끝나면 섹션 확인 단계로 자동 이동합니다.';
 const PAUSE_BUTTON_TITLE = '분석 중단 기능은 아직 제공되지 않습니다.';
 // 전체 실패 안내(Figma 793:4890). 서버 응답에 사용자용 문구가 없어(errorCode 뿐) 실패 단계를 추측하지 않고 이 문구를 쓴다
@@ -52,44 +51,20 @@ const GROUP_STATES_BY_COARSE_STAGE: Record<'ocr' | 'section' | 'verify' | 'done'
   done: ['done', 'done', 'done'],
 };
 
-// coarse stage → GIF 하단 caption. 오른쪽 목록이 참조하는 것과 같은
-// coarse stage 값을 그대로 쓴다(steps에서 active를 다시 찾지 않는다) — ocr·section 은 01 묶음,
-// verify 는 02 묶음을 설명한다.
-// 9/23 재조정 — 흰색 description은 Figma처럼 한 줄이어야 한다(processing-
-// stage-layout.tsx의 whitespace-nowrap 처리 참고). 이전 문구는 Figma 원본
-// 분량보다 길어 실측상 줄바꿈이 났다 — 뜻은 유지하되 분량만 Figma 수준으로
-// 줄였다(font-size를 줄이거나 컨테이너를 늘리는 방식으로 우회하지 않는다).
-const OVERLAY_CAPTION_BY_COARSE_STAGE: Record<'ocr' | 'section' | 'verify', { title: string; description: string }> = {
-  ocr: {
-    title: '텍스트 영역 인식 중',
-    description: '이미지 속 텍스트와 위치를 인식하고 있습니다.',
-  },
-  section: {
-    title: '콘텐츠 구조 분석 중',
-    description: '콘텐츠 영역과 텍스트 역할을 구분하고 있습니다.',
-  },
-  verify: {
-    title: '번역 대상·적합성 확인 중',
-    description: '번역 제외 대상과 현지 적합성을 확인하고 있습니다.',
-  },
+// coarse stage → LOG 현재 상태. 오른쪽 목록이 참조하는 것과 같은 coarse stage 값을 그대로 쓴다 — ocr·section 은 01 묶음,
+// verify 는 02 묶음을 설명한다. 처리 중 'done'(verify=done 이지만 아직 N3 응답 전)에는 verify 문구를 그대로 둔다.
+const STATUS_BY_COARSE_STAGE: Record<keyof typeof GROUP_STATES_BY_COARSE_STAGE, string> = {
+  ocr: '텍스트 영역 인식 중',
+  section: '콘텐츠 구조 분석 중',
+  verify: '번역 대상·적합성 확인 중',
+  done: '번역 대상·적합성 확인 중',
 };
 
-/** 처리 중 'done'(verify=done 이지만 아직 N3 응답 전)에는 마지막 coarse stage(verify)의 caption을
- *  그대로 둔다. 실제 완료(N3 응답) 뒤 완료 표시는 N2_COMPLETION_CAPTION 이다. */
-function resolveOverlayCaption(stage: keyof typeof GROUP_STATES_BY_COARSE_STAGE) {
-  return OVERLAY_CAPTION_BY_COARSE_STAGE[stage === 'done' ? 'verify' : stage];
-}
-
 /**
- * 실제 완료(currentStep=N3) 응답 뒤 완료 표시 동안의 문구 — Figma 에 별도 완료 상태가 없어 기존 슬롯(상태 태그·visual headline·
- * GIF caption·LOG·progress 안내) 안에서만 최소한으로 바꾼다. 완료 표시 동안 "진행중"·"…하고 있습니다"·
+ * 실제 완료(currentStep=N3) 응답 뒤 완료 표시 동안의 문구 — Figma 에 별도 완료 상태가 없어 기존 슬롯(LOG·progress 안내) 안에서만 최소한으로 바꾼다. 완료 표시 동안 "진행중"·"…하고 있습니다"·
  * "끝나면 이동합니다"가 남아 100%·5행 완료와 서로 다른 말을 하지 않게 한다.
  */
-const N2_COMPLETION_CAPTION = { title: '분석 완료', description: '섹션 확인 단계로 이동합니다.' };
 const N2_COMPLETION_COPY = {
-  statusTag: '완료',
-  headline: '이미지 분석이 완료되었습니다.',
-  visualDescription: '분석 결과를 정리해 섹션 확인 단계로 이동합니다.',
   logHeading: '분석 완료',
   logDescription: '이미지 분석이 완료되었습니다.',
   progressHint: '섹션 확인 단계로 이동합니다.',
@@ -126,7 +101,7 @@ function buildStageGroups(states: GroupStates): ProcessingStageGroup[] {
 // N2 화면 구조(단계 묶음·progress 레이아웃)는 그대로 두고, 서버가
 // 이번 poll 에 준 값을 두 수준으로 나눠 쓴다.
 // - 실제 세부 작업(ANALYSIS LOG 설명 줄): 원본·영역 위치와 split/ocr/merge 등 지금 하는 일, 또는 판정 수치
-// - 큰 묶음(단계 묶음 · GIF 하단 caption): 분석 묶음(analyze) / 정리(finalize) / 영역별 판정(judge)
+// - 큰 묶음(단계 묶음): 분석 묶음(analyze) / 정리(finalize) / 영역별 판정(judge)
 // 원본마다 split → (영역마다) ocr → merge 가 반복되고 그 뒤 finalize · judge 다. analyze running 동안은 01 묶음
 // 하나가 진행 중이다 — split/ocr/merge 중 어느 것인지는 LOG 설명 줄에서만 보인다. judge 에는 02·03 을 가르는 하위
 // 단계가 없어 앞 묶음(02)만 진행 중, 03 은 대기다(진행 중은 항상 최대 1개).
@@ -157,26 +132,23 @@ const ANALYZE_STATUS_LABEL: Partial<Record<ApiAnalysisProgress['status'], string
   failed: '실패',
 };
 
-// GIF 하단 caption 은 단계 묶음과 같은 묶음을 말한다 — split/ocr/merge 는 LOG 설명 줄에서만 구분한다.
-const ANALYZE_RUNNING_CAPTION = { title: '이미지 구조 분석 중', description: '원본마다 영역·텍스트·역할을 분석하고 있습니다.' };
-const FINALIZE_CAPTION = { title: '분석 결과 정리 중', description: '분석 결과를 정리하고 있습니다.' };
-
-const JUDGE_CAPTION_BY_STATUS: Record<ApiAnalysisProgress['status'], { title: string; description: string }> = {
-  waiting: { title: '영역별 판정 대기 중', description: '영역별 판정 시작을 기다리고 있습니다.' },
-  retrying: { title: '영역별 판정 재시도 대기 중', description: '일부 영역 판정을 다시 시도하기 전입니다.' },
-  running: { title: '영역별 판정 중', description: '영역마다 번역 대상과 현지 적합성을 확인하고 있습니다.' },
-  // 판정 실행 실패 종료 — 전체 실패 화면은 isFailed 일 때만이고, 여기선 "판정 중"이라고만 하지 않는다
-  failed: { title: '영역별 판정 중단', description: '영역별 판정을 마치지 못했습니다.' },
+// LOG 현재 상태는 단계 묶음과 같은 묶음을 말한다 — split/ocr/merge 는 설명 줄의 세부 문구에서만 구분한다.
+// judge 의 failed 는 판정 실행 실패 종료일 뿐 작업 전체 실패가 아니다(전체 실패 화면은 isFailed 일 때만) — 「판정 중」이라고만 하지 않는다.
+const JUDGE_STATUS_BY_STATUS: Record<ApiAnalysisProgress['status'], string> = {
+  waiting: '영역별 판정 대기 중',
+  retrying: '영역별 판정 재시도 대기 중',
+  running: '영역별 판정 중',
+  failed: '영역별 판정 중단',
 };
 
-function resolveDetailCaption(detail: ApiAnalysisProgress): { title: string; description: string } {
-  if (detail.phase === 'judge') return JUDGE_CAPTION_BY_STATUS[detail.status];
-  if (detail.status === 'waiting') return { title: '분석 대기 중', description: '분석 시작을 기다리고 있습니다.' };
-  if (detail.status === 'retrying') return { title: '분석 재시도 대기 중', description: '분석을 다시 시도하기 전입니다.' };
-  if (detail.activity === 'finalize') return FINALIZE_CAPTION;
-  if (detail.status === 'running' && detail.activity) return ANALYZE_RUNNING_CAPTION;
+function resolveDetailStatus(detail: ApiAnalysisProgress): string {
+  if (detail.phase === 'judge') return JUDGE_STATUS_BY_STATUS[detail.status];
+  if (detail.status === 'waiting') return '분석 대기 중';
+  if (detail.status === 'retrying') return '분석 재시도 대기 중';
+  if (detail.activity === 'finalize') return '분석 결과 정리 중';
+  if (detail.status === 'running' && detail.activity) return '이미지 구조 분석 중';
   // activity=null 이면 특정 작업을 하고 있다고 추정하지 않는다
-  return { title: '이미지 분석 중', description: '원본 이미지를 분석하고 있습니다.' };
+  return '이미지 분석 중';
 }
 
 function describeActivity(detail: ApiAnalysisProgress): string | null {
@@ -277,7 +249,7 @@ export function N2AnalysisView({
   // analysisProgress 가 있으면 묶음도 그 값으로, 없을 때만 기존 coarse stages 해석(레거시 응답 그대로).
   const groupStates = detail ? resolveAnalysisProgressGroupStates(detail) : GROUP_STATES_BY_COARSE_STAGE[coarseStage];
   const steps = buildStageGroups(groupStates);
-  const caption = isCompleted ? N2_COMPLETION_CAPTION : detail ? resolveDetailCaption(detail) : resolveOverlayCaption(coarseStage);
+  const logStatus = isCompleted ? undefined : detail ? resolveDetailStatus(detail) : STATUS_BY_COARSE_STAGE[coarseStage];
   // 서버가 analysisProgress 로 대기·재시도 대기·실패라고 알린 동안만 숫자를 그 자리에 둔다(running 이 오면 그 값에서
   // 이어서 오른다). status=failed 는 표시 % 정지일 뿐 전체 실패 판정(isFailed)에 쓰지 않는다. analysisProgress 가 없는
   // 레거시 응답에서는 대기를 추정하지 않는다.
@@ -296,21 +268,15 @@ export function N2AnalysisView({
       header={{
         title: '이미지 분석',
       }}
-      statusTagLabel={isCompleted ? N2_COMPLETION_COPY.statusTag : '진행중'}
       visual={{
         // 공용 GIF — N2/N4가 같은 자산을 쓴다(별도 복사본 금지).
         src: '/process/ai-processing.gif',
-        headline: isCompleted ? N2_COMPLETION_COPY.headline : HEADLINE_FALLBACK,
-        description: isCompleted
-          ? N2_COMPLETION_COPY.visualDescription
-          : '텍스트만 추출하지 않고, 번역에 필요한 섹션과 판단 근거를 함께 정리합니다.',
         overlayTopLabel: 'SCAN  ·  STRUCTURE  ·  CONTEXT',
-        overlayBottomTitle: caption.title,
-        overlayBottomDescription: caption.description,
       }}
       log={{
         sectionLabel: 'ANALYSIS LOG',
         heading: isCompleted ? N2_COMPLETION_COPY.logHeading : '지금 처리하는 일',
+        status: logStatus,
         description: isCompleted ? N2_COMPLETION_COPY.logDescription : detail ? describeDetailLine(detail) : LOG_DESCRIPTION,
       }}
       steps={steps}
