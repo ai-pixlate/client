@@ -5,6 +5,7 @@ import { useQueryClient } from '@tanstack/react-query';
 
 import type { ApiBrand, ApiBrandLogo } from '@/lib/api/brand-schema';
 import { ApiRequestError, deleteBrandLogo, getBrandLogos, updateBrand, uploadBrandLogo } from '@/lib/api/pixlate';
+import { getAuthEpoch } from '@/lib/auth/session-store';
 import { planM2LogoChanges, reconcileM2AfterSave, toM2BrandFormValue, toM2BrandUpdate } from '@/lib/brand/m2-adapter';
 import type { M2BrandFormValue } from '@/lib/brand/m2-form';
 import { pixlateKeys } from '@/lib/queries/pixlate';
@@ -16,6 +17,8 @@ import { pixlateKeys } from '@/lib/queries/pixlate';
 // - 로고는 하나씩 보내고, 실패한 것만 draft 에 남긴다(실패한 삭제는 계속 빠진 채, 실패한 추가는 저장 전 로고로).
 // - 저장 중에는 다시 저장하지 않는다(중복 요청 금지).
 // - 신규 등록(use-m2-brand-create.ts)은 POST /brands 성공 뒤 같은 save 를 등록된 brandId 로 불러 로고만 올린다.
+// - 저장 도중 계정·세션이 바뀌면(다른 탭 로그인·로그아웃) 그 자리에서 멈춘다 — 이전 계정 응답을 cache 에 쓰지 않고, 다음 요청을
+//   새 세션으로 보내지 않고, 실패 안내도 띄우지 않는다(null). TanStack mutation 이 아니라 lib/auth/mutation-epoch.ts 를 타지 않는다.
 // ─────────────────────────────────────────────────────────────────
 
 export type M2SaveState =
@@ -49,6 +52,8 @@ export function useM2BrandSave(initialTarget: M2SaveTarget | null) {
       const { brandId, brand } = target;
       savingRef.current = true;
       setState({ kind: 'saving' });
+      const epoch = getAuthEpoch();
+      const sessionChanged = () => getAuthEpoch() !== epoch;
       try {
         const patch = toM2BrandUpdate(baseline, draft);
         let savedBrand = brand;
@@ -56,9 +61,11 @@ export function useM2BrandSave(initialTarget: M2SaveTarget | null) {
           try {
             savedBrand = await updateBrand(brandId, patch);
           } catch {
+            if (sessionChanged()) return null;
             setState({ kind: 'error', brandFailed: true, failedDeletes: 0, failedUploads: 0 });
             return { complete: false, draft, baseline };
           }
+          if (sessionChanged()) return null;
           queryClient.setQueryData(pixlateKeys.brand(brandId), savedBrand);
         }
 
@@ -66,6 +73,7 @@ export function useM2BrandSave(initialTarget: M2SaveTarget | null) {
         const failedDeletes: number[] = [];
         const deleted = new Set<number>();
         for (const logoId of plan.deletes) {
+          if (sessionChanged()) return null;
           try {
             await deleteBrandLogo(brandId, logoId);
             deleted.add(logoId);
@@ -78,6 +86,7 @@ export function useM2BrandSave(initialTarget: M2SaveTarget | null) {
         const failedUploadIds: string[] = [];
         const created: ApiBrandLogo[] = [];
         for (const upload of plan.uploads) {
+          if (sessionChanged()) return null;
           try {
             created.push(await uploadBrandLogo(brandId, upload.file));
           } catch {
@@ -85,6 +94,7 @@ export function useM2BrandSave(initialTarget: M2SaveTarget | null) {
           }
         }
 
+        if (sessionChanged()) return null;
         let logos: ApiBrandLogo[];
         const logoChanged = deleted.size > 0 || created.length > 0;
         const cachedLogos = queryClient.getQueryData<ApiBrandLogo[]>(pixlateKeys.brandLogos(brandId)) ?? [];
@@ -98,6 +108,7 @@ export function useM2BrandSave(initialTarget: M2SaveTarget | null) {
             logos = [...cachedLogos.filter((logo) => logo.id == null || !deleted.has(logo.id)), ...created];
             void queryClient.invalidateQueries({ queryKey: pixlateKeys.brandLogos(brandId) });
           }
+          if (sessionChanged()) return null;
           queryClient.setQueryData(pixlateKeys.brandLogos(brandId), logos);
         }
 

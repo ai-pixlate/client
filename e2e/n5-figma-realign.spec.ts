@@ -20,11 +20,12 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('1920×1080 — 핵심 container가 Figma 좌표에 있다', async ({ page }) => {
-  const exit = (await page.getByRole('button', { name: '작업 취소' }).boundingBox())!;
-  expect([exit.x, exit.y, exit.width, exit.height]).toEqual([40, 40, 40, 40]);
+  // 12월(PRD F-JOB-07 · F-NAV-01)에는 ✕ 가 없다
+  await expect(page.getByTestId('s0-exit')).toHaveCount(0);
 
-  const stepNav = (await page.getByText('정보 입력', { exact: true }).boundingBox())!;
-  near(stepNav.x + stepNav.width / 2, 58);
+  // 진행단계 라벨은 Figma 525:3023 진행단계(608:1440) x48 · w44 칸 가운데다 — 48 + 44/2 = 70 (s0-steps-figma.spec.ts 와 같은 정본)
+  const stepNav = (await page.getByRole('navigation', { name: '작업 진행 단계' }).getByText('정보 입력', { exact: true }).boundingBox())!;
+  near(stepNav.x + stepNav.width / 2, 70);
 
   const workspace = await box(page, 'n5-viewport');
   expect([workspace.x, workspace.y, workspace.width, workspace.height]).toEqual([120, 0, 1255, 1080]);

@@ -41,7 +41,8 @@ test('render → deliverables → validation → export → download → save �
 
   // ── StepNav + 헤더가 Figma대로 붙어 있다 ─────────────────────────
   await expect(page.getByRole('heading', { name: '저장 및 내보내기' })).toBeVisible();
-  await expect(page.getByRole('button', { name: '작업 취소' })).toBeVisible();
+  // 12월(PRD F-JOB-07)에는 ✕ 가 없다 — 나가기는 상단 메뉴·뒤로 가기다
+  await expect(page.getByTestId('s0-exit')).toHaveCount(0);
   await expect(page.getByRole('navigation', { name: '작업 진행 단계' })).toBeVisible();
 
   // ── deliverables / validation ────────────────────────────────

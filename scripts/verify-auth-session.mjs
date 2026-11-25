@@ -9,13 +9,17 @@
 
 import { fetchWithSessionRecovery, AuthRecoveryError, AuthSessionChangedError } from '../lib/auth/authorized-request.ts';
 import { shouldRetryQuery } from '../lib/auth/query-retry.ts';
-import { QueryClient } from '@tanstack/query-core';
+import { MutationCache, MutationObserver, QueryClient } from '@tanstack/query-core';
+import { AuthEpochQueryClient } from '../lib/auth/mutation-epoch.ts';
+import { isAuthTerminalError } from '../lib/auth/query-retry.ts';
+import { sectionBucketMutationOptions } from '../lib/queries/section-bucket-mutation.ts';
 import { AUTH_REFRESH_MAX_ATTEMPTS, AUTH_ORIGINAL_REQUEST_MAX_RETRIES, AUTH_REFRESH_EVENT_WAIT_MS, AUTH_REFRESH_LOCK_WAIT_MS } from '../lib/auth/constants.ts';
 import { createAuthChannel, toWireEvent } from '../lib/auth/cross-tab.ts';
 import { logout, resumePendingLogout, retryPendingLogout } from '../lib/auth/logout.ts';
 import { isLogoutPending, markLogoutPending, setLogoutPendingStorageForTest } from '../lib/auth/logout-pending.ts';
 import { configureAuthRuntimeForTest, handleAuthTabEvent, recoverSession } from '../lib/auth/runtime.ts';
-import { getAccessToken, getAuthSnapshot, resetAuthStoreForTest, setAuthenticated } from '../lib/auth/session-store.ts';
+import { getAccessToken, getAuthEpochSignal, getAuthSnapshot, resetAuthStoreForTest, setAuthenticated } from '../lib/auth/session-store.ts';
+import { createSessionRecovery } from '../lib/auth/refresh.ts';
 import { completeSocialLogin, resetSocialLoginForTest, startSocialLogin } from '../lib/auth/social-login.ts';
 import { AuthLockTimeoutError, createAuthLock } from '../lib/auth/tab-lock.ts';
 import { isSessionRestoreSuppressed, readCallbackState, setCallbackStateStorageForTest } from '../lib/auth/callback-state.ts';
@@ -103,7 +107,7 @@ const memoryStorage = () => {
 };
 
 /** 한 「탭」 준비 — 상태 초기화 + 채널·잠금·이동 기록 */
-function setupTab({ bus = createBus(), path = '/jobs/1', eventWaitMs = 40, lock } = {}) {
+function setupTab({ bus = createBus(), path = '/jobs/1', eventWaitMs = 40, lock, onClear } = {}) {
   resetAuthStoreForTest();
   resetSocialLoginForTest();
   const storage = memoryStorage();
@@ -114,7 +118,14 @@ function setupTab({ bus = createBus(), path = '/jobs/1', eventWaitMs = 40, lock 
   let cleared = 0;
   const channel = createAuthChannel(() => bus.channel());
   configureAuthRuntimeForTest({
-    hooks: { navigate: (p) => navigations.push(p), currentPath: () => path, clearClientData: () => (cleared += 1) },
+    hooks: {
+      navigate: (p) => navigations.push(p),
+      currentPath: () => path,
+      clearClientData: () => {
+        cleared += 1;
+        onClear?.();
+      },
+    },
     channel,
     lock: lock ?? ((task) => task()),
     recoveryDeps: { eventWaitMs },
@@ -624,6 +635,476 @@ console.log('\n[cross-tab]');
   tab.navigations.length = 0;
   handleAuthTabEvent({ type: 'login-complete', sellerId: 1 });
   check('로그아웃 뒤 G1 탭은 다른 탭 로그인을 따라 M1', tab.navigations.join() === '/');
+}
+
+// ── 계정 격리(F-ACC-01) ─────────────────────────
+console.log('\n[계정 격리 — 다른 탭 X → Y 전환 시 이전 계정 요청·cache 정리]');
+const JOB_KEY = ['pixlate', 'job', '1'];
+/** app/providers.tsx 의 clearClientData 와 같은 동작을 하는 실제 QueryClient 를 붙인 탭 */
+function setupTabWithQueries(options = {}) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: shouldRetryQuery } } });
+  const tab = setupTab({
+    ...options,
+    onClear: () => {
+      void queryClient.cancelQueries();
+      queryClient.clear();
+    },
+  });
+  return { ...tab, queryClient };
+}
+/** 응답을 붙잡아 두는 요청 — signal 이 abort 되면 실제 fetch 처럼 AbortError 로 끝난다 */
+function heldRequest(body) {
+  let release;
+  const gate = new Promise((resolve) => (release = resolve));
+  const state = { sends: 0, aborted: false, release: () => release() };
+  state.send = (signal) =>
+    new Promise((resolve, reject) => {
+      state.sends += 1;
+      signal.addEventListener('abort', () => {
+        state.aborted = true;
+        reject(new DOMException('aborted', 'AbortError'));
+      }, { once: true });
+      gate.then(() => resolve(json(200, body)));
+    });
+  return state;
+}
+/** 헤더는 바로 오고 본문이 늦게 오는 응답(signal 을 무시하는 서버 대역 — 세대 확인만으로 막히는지 본다) */
+function slowBodyResponse(body) {
+  let release;
+  const gate = new Promise((resolve) => (release = resolve));
+  const stream = new ReadableStream({
+    async start(controller) {
+      await gate;
+      controller.enqueue(new TextEncoder().encode(JSON.stringify(body)));
+      controller.close();
+    },
+  });
+  return { response: new Response(stream, { status: 200, headers: { 'Content-Type': 'application/json' } }), release: () => release() };
+}
+const readJson = async (send) => (await fetchWithSessionRecovery(send)).json();
+/** queryFn 안 요청 자체가 어떻게 끝났는지 기록한다(query Promise 는 clearClientData 의 cancelQueries 로 CancelledError 가 된다) */
+function recordingQueryFn(send) {
+  const record = { error: null, done: null };
+  record.fn = () => {
+    const run = readJson(send);
+    record.done = run.then(() => null, (e) => (record.error = e));
+    return run;
+  };
+  return record;
+}
+const isCancelled = (error) => error?.constructor?.name === 'CancelledError' || String(error).includes('CancelledError');
+
+{
+  // 1. X seller 있음 → 다른 탭 Y login-complete
+  const tab = setupTabWithQueries({ path: '/jobs/1' });
+  setAuthenticated('tX', SELLER_1);
+  tab.queryClient.setQueryData(['pixlate', 'library'], [{ owner: 'X' }]);
+  const epoch = getAuthSnapshot().epoch;
+  const signalX = getAuthEpochSignal();
+  const held = heldRequest({ owner: 'X' });
+  const q = recordingQueryFn(held.send);
+  const inflight = tab.queryClient.fetchQuery({ queryKey: JOB_KEY, queryFn: q.fn }).then(() => null, (e) => e);
+  await sleep(5);
+  handleAuthTabEvent({ type: 'login-complete', sellerId: 2 });
+  held.release();
+  const error = await inflight;
+  await q.done;
+  const snap = getAuthSnapshot();
+  check('A1 X 진행 중 query → 취소(CancelledError)', isCancelled(error), String(error));
+  check('A1 X 진행 중 요청 → 네트워크에서 abort', held.aborted && signalX.aborted);
+  check('A1 X 요청 자체는 AuthSessionChangedError(응답 폐기)', q.error instanceof AuthSessionChangedError, String(q.error));
+  check('A1 X query cache 전부 제거', tab.queryClient.getQueryCache().getAll().length === 0);
+  check('A1 새 계정 경계: 세대+1 · access·seller 비움 · unknown', snap.epoch === epoch + 1 && getAccessToken() === null && snap.seller === null && snap.status === 'unknown');
+  check('A1 새 세대 signal 은 살아 있음', !getAuthEpochSignal().aborted);
+  check('A1 이전 계정 정리 1회 · M1', tab.cleared() === 1 && tab.navigations.join() === '/');
+}
+{
+  // 2. seller=null 경계 — /auth/me 실패 뒤 access 를 남기지 않는다(이전 결함: seller 없이 access 만 남아 X 데이터를 받고 알림을 무시)
+  const tab = setupTabWithQueries({ path: '/jobs/1' });
+  const server = createServer({
+    'POST /auth/refresh': [okRefresh('x-unconfirmed'), okRefresh('y-t')],
+    'GET /auth/me': [async () => authError(503, 'SERVICE_UNAVAILABLE', null), meReturns(SELLER_2)],
+  });
+  const r = originalRequest(1);
+  const first = await fetchWithSessionRecovery(r.send).then(() => null, (e) => e);
+  check('A2 /auth/me 503 → 확인 못 한 access 를 메모리에 두지 않음', getAccessToken() === null && getAuthSnapshot().seller === null, `access=${getAccessToken()}`);
+  check('A2 /auth/me 503 → AuthRecoveryError(unavailable)', first instanceof AuthRecoveryError && first.failure === 'unavailable');
+  // 이전 구현에서 남을 수 있던 X 데이터를 넣어 두고, seller=null 상태에서 다른 탭 Y 로그인을 받는다
+  tab.queryClient.setQueryData(JOB_KEY, { owner: 'X' });
+  const epoch = getAuthSnapshot().epoch;
+  handleAuthTabEvent({ type: 'login-complete', sellerId: 2 });
+  check('A2 seller=null 이어도 알림을 무시하지 않음(세대+1 · 정리 1회 · M1)', getAuthSnapshot().epoch === epoch + 1 && tab.cleared() === 1 && tab.navigations.join() === '/');
+  check('A2 이전 cache 제거', tab.queryClient.getQueryData(JOB_KEY) === undefined);
+  // 이후 401 → refresh → /auth/me=Y
+  let sends = 0;
+  const yData = await tab.queryClient.fetchQuery({
+    queryKey: JOB_KEY,
+    queryFn: () => readJson(async () => (sends += 1, sends === 1 ? authError(401, 'TOKEN_EXPIRED', null) : json(200, { owner: getAccessToken() === 'y-t' ? 'Y' : '?' }))),
+  });
+  check('A2 이후 /auth/me=Y → Y 로 확정, 화면 데이터는 Y 것만', getAuthSnapshot().seller?.id === 2 && yData.owner === 'Y' && tab.queryClient.getQueryCache().getAll().length === 1);
+  check('A2 /auth/me 는 확인 전 access 로(메모리 반영 전)', server.last('GET /auth/me').headers.get('Authorization') === 'Bearer y-t');
+}
+{
+  // 2-b. refresh 성공 뒤 /auth/me 응답 전에 나간 요청은 확인 전 access 를 싣지 않는다
+  setupTab({ path: '/jobs/1' });
+  setAuthenticated('t1', SELLER_1);
+  let releaseMe;
+  const meGate = new Promise((resolve) => (releaseMe = resolve));
+  createServer({ 'POST /auth/refresh': [okRefresh('t2')], 'GET /auth/me': [async () => (await meGate, json(200, SELLER_1))] });
+  const r = originalRequest(1);
+  const pending = fetchWithSessionRecovery(r.send);
+  await sleep(10);
+  const duringMe = getAccessToken();
+  releaseMe();
+  await pending;
+  check('A2b /auth/me 확인 전에는 새 access 가 메모리에 없음', duringMe === 't1' && getAccessToken() === 't2', `during=${duringMe}`);
+}
+{
+  // 2-c. seller=null 이라도 로그인 화면·콜백에서는 경계를 세우지 않는다(이 탭 자신의 로그인 처리 보호)
+  for (const path of ['/login', '/login/callback/kakao']) {
+    const tab = setupTab({ path });
+    const epoch = getAuthSnapshot().epoch;
+    handleAuthTabEvent({ type: 'login-complete', sellerId: 2 });
+    check(`A2c unknown + ${path} → 정리·이동·세대 변경 없음`, tab.cleared() === 0 && tab.navigations.length === 0 && getAuthSnapshot().epoch === epoch);
+  }
+}
+{
+  // 2-d. 같은 계정 알림이 다시 와도 새 계정 복구를 끊지 않는다 · 다른 계정 알림은 다시 경계를 세운다
+  const tab = setupTab({ path: '/jobs/1' });
+  setAuthenticated('tX', SELLER_1);
+  handleAuthTabEvent({ type: 'login-complete', sellerId: 2 });
+  const epoch = getAuthSnapshot().epoch;
+  handleAuthTabEvent({ type: 'account-changed', sellerId: 2 });
+  check('A2d 같은 대상 계정 알림 반복 → 세대·정리 그대로', getAuthSnapshot().epoch === epoch && tab.cleared() === 1);
+  handleAuthTabEvent({ type: 'login-complete', sellerId: 3 });
+  check('A2d 그 사이 다른 계정(Z) 로그인 → 다시 경계', getAuthSnapshot().epoch === epoch + 1 && tab.cleared() === 2);
+}
+{
+  // 3. X 의 늦은 응답 — 본문이 계정 전환 뒤 도착해도 Y cache 를 채우지 않는다
+  const tab = setupTabWithQueries({ path: '/jobs/1' });
+  setAuthenticated('tX', SELLER_1);
+  const slow = slowBodyResponse({ owner: 'X' });
+  const q = recordingQueryFn(async () => slow.response);
+  const late = tab.queryClient.fetchQuery({ queryKey: JOB_KEY, queryFn: q.fn }).then(() => null, (e) => e);
+  await sleep(5);
+  handleAuthTabEvent({ type: 'account-changed', sellerId: 2 });
+  slow.release();
+  await late;
+  await q.done;
+  check('A3 본문 수신 중 계정 전환(서버가 abort 를 무시해도) → AuthSessionChangedError', q.error instanceof AuthSessionChangedError, String(q.error));
+  check('A3 늦은 X 본문이 cache 에 들어가지 않음', tab.queryClient.getQueryData(JOB_KEY) === undefined && tab.queryClient.getQueryCache().getAll().length === 0);
+}
+{
+  // 3-b. X mutation 응답이 늦게 와도 onSuccess 가 Y cache 에 쓰지 않는다
+  const tab = setupTabWithQueries({ path: '/jobs/1' });
+  setAuthenticated('tX', SELLER_1);
+  const held = heldRequest({ owner: 'X' });
+  let wrote = false;
+  const mutation = tab.queryClient.getMutationCache().build(tab.queryClient, {
+    mutationFn: () => readJson(held.send),
+    onSuccess: (data) => {
+      wrote = true;
+      tab.queryClient.setQueryData(JOB_KEY, data);
+    },
+  });
+  const running = mutation.execute(undefined).then(() => null, (e) => e);
+  await sleep(5);
+  handleAuthTabEvent({ type: 'login-complete', sellerId: 2 });
+  held.release();
+  const error = await running;
+  check('A3b X mutation → abort·AuthSessionChangedError, onSuccess 미실행·cache 재생성 없음', held.aborted && error instanceof AuthSessionChangedError && !wrote && tab.queryClient.getQueryData(JOB_KEY) === undefined);
+}
+{
+  // 4. refresh 진행 중 계정 변경 — seller=null(새로고침 직후) 탭
+  const tab = setupTab({ path: '/jobs/1' });
+  let releaseRefresh;
+  const refreshGate = new Promise((resolve) => (releaseRefresh = resolve));
+  const server = createServer({ 'POST /auth/refresh': [async () => (await refreshGate, json(200, { accessToken: 'x-old-cookie' }))], 'GET /auth/me': [meReturns(SELLER_1)] });
+  const r = originalRequest(1);
+  const pending = fetchWithSessionRecovery(r.send).then(() => null, (e) => e);
+  await sleep(10);
+  handleAuthTabEvent({ type: 'login-complete', sellerId: 2 });
+  releaseRefresh();
+  const thrown = await pending;
+  check('A4 seller=null 복구 중 다른 탭 로그인 → 이전 세대 복구 stale(/auth/me 0회)', server.count('GET /auth/me') === 0 && thrown instanceof AuthSessionChangedError);
+  check('A4 이전 쿠키 계정(X)을 이 탭 계정으로 확정하지 않음 · access 저장 없음', getAuthSnapshot().seller === null && getAccessToken() === null);
+  check('A4 원 요청 재전송 없음 · 정리 1회', r.sends === 1 && tab.cleared() === 1);
+}
+{
+  // 4-b. 복구 결과가 나온 직후(onOutcome 전) 세대가 바뀌면 그 결과를 적용하지 않는다
+  let epoch = 0;
+  let bumpAfterNext = false;
+  const outcomes = [];
+  const recovery = createSessionRecovery({
+    refresh: async () => ({ ok: true, data: { accessToken: 'y' } }),
+    me: async () => ((bumpAfterNext = true), { ok: true, data: SELLER_2 }),
+    lock: (task) => task(),
+    channel: { post() {}, waitFor: async () => false },
+    isLogoutPending: () => false,
+    isSessionRestoreSuppressed: () => false,
+    onOutcome: (outcome) => outcomes.push(outcome.kind),
+    currentEpoch: () => {
+      if (bumpAfterNext) {
+        bumpAfterNext = false;
+        const seen = epoch;
+        epoch += 1; // run 의 마지막 확인은 통과하고, 그다음(onOutcome 직전) 확인부터 새 세대
+        return seen;
+      }
+      return epoch;
+    },
+  });
+  setupTab();
+  setAuthenticated('tX', SELLER_1);
+  const outcome = await recovery.recover(0);
+  check('A4b run 직후 세대 변경 → onOutcome 에 stale 전달(account-changed 미적용)', outcome.kind === 'stale' && outcomes.join() === 'stale', outcomes.join());
+}
+{
+  // 5. logout 과 account change 경합 — 로그아웃된 세션을 되살리지 않는다
+  const tab = setupTab({ path: '/jobs/1' });
+  setAuthenticated('tX', SELLER_1);
+  let releaseMe;
+  const meGate = new Promise((resolve) => (releaseMe = resolve));
+  createServer({ 'POST /auth/refresh': [okRefresh('y-t')], 'GET /auth/me': [async () => (await meGate, json(200, SELLER_2))] });
+  const r = originalRequest(1);
+  const pending = fetchWithSessionRecovery(r.send).then(() => null, (e) => e);
+  await sleep(10);
+  handleAuthTabEvent({ type: 'logout' });
+  releaseMe();
+  const thrown = await pending;
+  const snap = getAuthSnapshot();
+  check('A5 복구 중 logout → 복구가 찾은 Y 를 반영하지 않음(signed-out 유지 · access 없음)', snap.status === 'signed-out' && snap.seller === null && getAccessToken() === null);
+  check('A5 account-changed 처리(M1 이동·알림) 없음 · 응답 폐기', tab.navigations.join() === '/login' && thrown instanceof AuthSessionChangedError);
+}
+{
+  const tab = setupTab({ path: '/jobs/1' });
+  setAuthenticated('tX', SELLER_1);
+  handleAuthTabEvent({ type: 'account-changed', sellerId: 2 });
+  handleAuthTabEvent({ type: 'logout' });
+  check('A5 계정 전환 뒤 logout → 최종 signed-out · G1', getAuthSnapshot().status === 'signed-out' && tab.navigations.at(-1) === '/login');
+  handleAuthTabEvent({ type: 'login-complete', sellerId: 2 });
+  check('A5 로그아웃된 탭(G1 이동 전 경로)은 늦은 login-complete 로 세션을 되살리지 않음', getAuthSnapshot().status === 'signed-out' && getAccessToken() === null && tab.cleared() === 2);
+}
+{
+  // 6. 같은 계정 refresh 는 cache 를 지우지 않는다
+  const tab = setupTabWithQueries({ path: '/jobs/1' });
+  setAuthenticated('t1', SELLER_1);
+  tab.queryClient.setQueryData(['pixlate', 'library'], [{ owner: 'X' }]);
+  const epoch = getAuthSnapshot().epoch;
+  createServer({ 'POST /auth/refresh': [okRefresh('t2')], 'GET /auth/me': [meReturns(SELLER_1)] });
+  const r = originalRequest(1);
+  const res = await fetchWithSessionRecovery(r.send);
+  check('A6 same-account → 원 요청 200 · cache 유지 · 정리 0회 · 세대 그대로', res.status === 200 && tab.queryClient.getQueryData(['pixlate', 'library'])?.[0]?.owner === 'X' && tab.cleared() === 0 && getAuthSnapshot().epoch === epoch);
+  check('A6 same-account → 이동 없음 · 이전 세대 signal 그대로', tab.navigations.length === 0 && !getAuthEpochSignal().aborted);
+}
+{
+  // 응답 사본은 status·header·본문을 그대로 전한다(204 포함)
+  setupTab();
+  setAuthenticated('t1', SELLER_1);
+  const ok = await fetchWithSessionRecovery(async () => json(201, { a: 1 }));
+  const empty = await fetchWithSessionRecovery(async () => new Response(null, { status: 204 }));
+  check('응답 사본: status·Content-Type·본문 유지 · 204 본문 없음', ok.status === 201 && ok.headers.get('Content-Type') === 'application/json' && (await ok.json()).a === 1 && empty.status === 204 && (await empty.text()) === '');
+}
+
+// ── mutation 결과 격리 ─────────────────────────
+console.log('\n[mutation 결과 격리 — 실행 중 계정이 바뀌면 이전 계정 onSuccess 가 cache 에 쓰지 않는다]');
+/** app/providers.tsx 와 같은 AuthEpochQueryClient 를 붙인 탭. mutationCacheConfig 로 TanStack 의 성공 처리 직전에 멈출 수 있다 */
+function setupTabWithAppClient(options = {}, mutationCacheConfig) {
+  const queryClient = new AuthEpochQueryClient({
+    defaultOptions: { queries: { retry: shouldRetryQuery } },
+    ...(mutationCacheConfig ? { mutationCache: new MutationCache(mutationCacheConfig) } : {}),
+  });
+  const tab = setupTab({
+    ...options,
+    onClear: () => {
+      void queryClient.cancelQueries();
+      queryClient.clear();
+    },
+  });
+  return { ...tab, queryClient };
+}
+function gate() {
+  let open;
+  const promise = new Promise((resolve) => (open = resolve));
+  return { promise, open: () => open() };
+}
+/** 서버 성공 응답(즉시 200) — 요청 계층의 세대 확인은 통과한다 */
+const okSend = (body) => async () => json(200, body);
+/** useMutation 과 같은 경로(MutationObserver → defaultMutationOptions → Mutation.execute)로 실행한다 */
+function observe(queryClient, options) {
+  const observer = new MutationObserver(queryClient, options);
+  observer.subscribe(() => {}); // useMutation 처럼 구독 중일 때만 호출부(mutate 두 번째 인자) 콜백이 불린다
+  const calls = { success: 0, error: null };
+  const run = (variables) =>
+    observer.mutate(variables, {
+      onSuccess: () => (calls.success += 1),
+      onError: (error) => (calls.error = error),
+    }).then(() => null, (error) => error);
+  return { observer, calls, run };
+}
+{
+  // 같은 세대 정상 mutation → onSuccess 정상 실행
+  const tab = setupTabWithAppClient({ path: '/jobs/1' });
+  setAuthenticated('tX', SELLER_1);
+  let wrote = 0;
+  const { calls, run } = observe(tab.queryClient, {
+    mutationFn: () => readJson(okSend({ owner: 'X' })),
+    onSuccess: (data) => {
+      wrote += 1;
+      tab.queryClient.setQueryData(JOB_KEY, data);
+    },
+  });
+  const error = await run(undefined);
+  check('M1 같은 세대 → onSuccess 1회 · cache 반영 · 호출부 onSuccess', error === null && wrote === 1 && tab.queryClient.getQueryData(JOB_KEY)?.owner === 'X' && calls.success === 1);
+}
+{
+  // API Promise 가 성공으로 resolve 된 직후(요청 계층 세대 확인 통과 뒤) 멈춤 → 다른 탭 Y 로그인 → 이어서 TanStack 성공 처리
+  const tab = setupTabWithAppClient({ path: '/jobs/1' });
+  setAuthenticated('tX', SELLER_1);
+  const resolved = gate();
+  const hold = gate();
+  let wrote = 0;
+  const { observer, calls, run } = observe(tab.queryClient, {
+    mutationFn: async () => {
+      const data = await readJson(okSend({ owner: 'X' }));
+      resolved.open();
+      await hold.promise; // API 결과는 이미 손에 있다
+      return data;
+    },
+    onSuccess: (data) => {
+      wrote += 1;
+      tab.queryClient.setQueryData(JOB_KEY, data);
+    },
+  });
+  const running = run(undefined);
+  await resolved.promise;
+  handleAuthTabEvent({ type: 'login-complete', sellerId: 2 });
+  check('M2 전제: 경계에서 query·mutation cache 비움', tab.queryClient.getQueryCache().getAll().length === 0 && tab.queryClient.getMutationCache().getAll().length === 0);
+  hold.open();
+  const error = await running;
+  check('M2 API resolve 직후 계정 전환 → 이전 계정 onSuccess 미실행 · X 데이터가 cache 에 다시 생기지 않음', wrote === 0 && tab.queryClient.getQueryData(JOB_KEY) === undefined && tab.queryClient.getQueryCache().getAll().length === 0);
+  // 서버 오류(ApiRequestError)는 HTTP status 를 가진다 — 세션 변경 오류는 status 가 없고, 자동 재시도 대상도 아니다
+  check('M2 결과는 AuthSessionChangedError(응답 폐기) — 서버 오류(status)가 아니고 자동 재시도 대상도 아님', error instanceof AuthSessionChangedError && !('status' in error) && isAuthTerminalError(error) && shouldRetryQuery(0, error) === false);
+  check('M2 호출부 onSuccess 미실행 · mutation 상태는 세션 변경 오류', calls.success === 0 && calls.error instanceof AuthSessionChangedError && observer.getCurrentResult().error instanceof AuthSessionChangedError);
+}
+{
+  // TanStack 이 data 를 받은 뒤 options.onSuccess 를 부르기 직전(MutationCache 성공 처리)에 멈춤 → 경계 → 이어서 실행
+  const atSuccess = gate();
+  const hold = gate();
+  const tab = setupTabWithAppClient({ path: '/jobs/1' }, {
+    onSuccess: async () => {
+      atSuccess.open();
+      await hold.promise;
+    },
+  });
+  setAuthenticated('tX', SELLER_1);
+  let wrote = 0;
+  const { run } = observe(tab.queryClient, {
+    mutationFn: () => readJson(okSend({ owner: 'X' })),
+    onSuccess: (data) => {
+      wrote += 1;
+      tab.queryClient.setQueryData(JOB_KEY, data);
+    },
+  });
+  const running = run(undefined);
+  await atSuccess.promise;
+  handleAuthTabEvent({ type: 'account-changed', sellerId: 2 });
+  hold.open();
+  const error = await running;
+  check('M3 성공 적용 직전 계정 전환 → onSuccess 미실행 · cache 재오염 없음', wrote === 0 && tab.queryClient.getQueryData(JOB_KEY) === undefined && error instanceof AuthSessionChangedError);
+}
+{
+  // logout 중 stale mutation 도 같은 방식으로 폐기
+  const tab = setupTabWithAppClient({ path: '/jobs/1' });
+  setAuthenticated('tX', SELLER_1);
+  const resolved = gate();
+  const hold = gate();
+  let wrote = 0;
+  const { run } = observe(tab.queryClient, {
+    mutationFn: async () => {
+      const data = await readJson(okSend({ owner: 'X' }));
+      resolved.open();
+      await hold.promise;
+      return data;
+    },
+    onSuccess: (data) => {
+      wrote += 1;
+      tab.queryClient.setQueryData(JOB_KEY, data);
+    },
+  });
+  const running = run(undefined);
+  await resolved.promise;
+  handleAuthTabEvent({ type: 'logout' });
+  hold.open();
+  const error = await running;
+  check('M4 logout 중 완료된 mutation → onSuccess 미실행 · cache 비어 있음 · signed-out 유지', wrote === 0 && tab.queryClient.getQueryCache().getAll().length === 0 && error instanceof AuthSessionChangedError && getAuthSnapshot().status === 'signed-out');
+}
+{
+  // mutationCache.build 경로(옵션을 observer 없이 바로 넘김)도 같은 확인을 탄다
+  const tab = setupTabWithAppClient({ path: '/jobs/1' });
+  setAuthenticated('tX', SELLER_1);
+  const hold = gate();
+  let wrote = 0;
+  const mutation = tab.queryClient.getMutationCache().build(tab.queryClient, {
+    mutationFn: async () => {
+      const data = await readJson(okSend({ owner: 'X' }));
+      await hold.promise;
+      return data;
+    },
+    onSuccess: () => (wrote += 1),
+  });
+  const running = mutation.execute(undefined).then(() => null, (e) => e);
+  await sleep(5);
+  handleAuthTabEvent({ type: 'login-complete', sellerId: 2 });
+  hold.open();
+  const error = await running;
+  check('M5 mutationCache.build 경로도 stale onSuccess 차단', wrote === 0 && error instanceof AuthSessionChangedError);
+}
+{
+  // 기존 section-bucket 방어와 함께 — 같은 세대는 그대로, stale 은 한 번만 폐기(rollback·프리뷰 반영·invalidate 없음)
+  const SECTIONS = ['pixlate', 'job', '1', 'sections'];
+  const PREVIEW = ['pixlate', 'job', '1', 'n5-preview'];
+  const sectionList = () => ({ include: [{ id: 1, bucket: 'include' }], exclude: [] });
+  {
+    const tab = setupTabWithAppClient({ path: '/jobs/1' });
+    setAuthenticated('tX', SELLER_1);
+    tab.queryClient.setQueryData(SECTIONS, sectionList());
+    tab.queryClient.setQueryData(PREVIEW, { sections: [{ id: 1, bucket: 'include' }] });
+    const options = sectionBucketMutationOptions({
+      queryClient: tab.queryClient,
+      sectionsKey: SECTIONS,
+      previewKey: PREVIEW,
+      update: async (sectionId) => ({ id: sectionId, bucket: 'exclude', excludedStage: 'N5' }),
+    });
+    const { run } = observe(tab.queryClient, options);
+    const error = await run({ sectionId: 1, bucket: 'exclude' });
+    check('M6 section-bucket 같은 세대 → onSuccess 프리뷰 반영 유지', error === null && tab.queryClient.getQueryData(PREVIEW)?.sections?.[0]?.bucket === 'exclude');
+  }
+  {
+    const tab = setupTabWithAppClient({ path: '/jobs/1' });
+    setAuthenticated('tX', SELLER_1);
+    tab.queryClient.setQueryData(SECTIONS, sectionList());
+    tab.queryClient.setQueryData(PREVIEW, { sections: [{ id: 1, bucket: 'include' }] });
+    const resolved = gate();
+    const hold = gate();
+    const options = sectionBucketMutationOptions({
+      queryClient: tab.queryClient,
+      sectionsKey: SECTIONS,
+      previewKey: PREVIEW,
+      update: async (sectionId) => {
+        resolved.open();
+        await hold.promise;
+        return { id: sectionId, bucket: 'exclude', excludedStage: 'N5' };
+      },
+    });
+    const { run } = observe(tab.queryClient, options);
+    const running = run({ sectionId: 1, bucket: 'exclude' });
+    await resolved.promise;
+    handleAuthTabEvent({ type: 'login-complete', sellerId: 2 });
+    hold.open();
+    const error = await running;
+    await sleep(0);
+    check('M6 section-bucket stale → AuthSessionChangedError 1회 · rollback·프리뷰·invalidate 로 cache 를 다시 만들지 않음', error instanceof AuthSessionChangedError && tab.queryClient.getQueryCache().getAll().length === 0);
+  }
 }
 
 // ── 소셜 로그인 시작 ───────────────────────────

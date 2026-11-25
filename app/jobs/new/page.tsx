@@ -8,6 +8,7 @@ import {
   useAnalyzeJobMutation,
   useMasterCategoriesQuery,
   usePatchJobMutation,
+  useJobCancellationRecheck,
 } from '@/lib/queries/pixlate';
 import type { ApiRegulatoryClass } from '@/lib/api/job-schema';
 import { isApiMockingEnabled } from '@/lib/api/session';
@@ -29,6 +30,8 @@ import { isImeComposingKeyEvent } from './_lib/ime';
 import { N1_SIZE_CHANGE_BLOCK_LINES, getN1SubmitBlockMessages, isN1Ready, resolveN1BrandId, requiresOtcType } from './_lib/n1-readiness';
 import { INITIAL_SIZE_SELECTION, sizeSelectionReducer } from './_lib/size-selection';
 import { useSourceImageUploads } from './_lib/use-source-image-uploads';
+import { JobHeader } from '../_components/job-header';
+import { useJobExitGuard } from '../_components/job-exit-guard';
 import { S0Rail } from '../_components/s0-rail';
 import { TooltipArrow } from '@/app/_components/tooltip-arrow';
 
@@ -76,26 +79,25 @@ const REGULATORY_CLASS_OPTIONS: RegulatoryClassOption[] = (['cosmetic', 'otc', '
 }));
 
 /**
- * 선택값별 검사 기준 안내 (helper text). 복합 문구는 PRD v3.5.10 F-LNG-03 한계 고지(★초안) 그대로다 —
- * PRD는 이 고지를 복합에만 두고 OTC 의약품에는 두지 않는다. Figma(525:3023) 문구와 다르면 PRD를 따른다.
+ * 선택값별 검사 기준 안내 (helper text). PRD F-LNG-03 의 복합 한계 고지는 ★초안이라 화면 문구는 Figma
+ * (1170:7877 Field / 규제 분류) 를 따른다. PRD 는 이 고지를 복합에만 두고 OTC 의약품·화장품·잘 모름에는 두지 않는다.
  */
 const REGULATORY_CLASS_HELPER: Partial<Record<ApiRegulatoryClass, string[]>> = {
-  unknown: ['잘 모름을 선택하면 화장품 기준으로 검사됩니다.'],
   combination: [
-    '복합 제품은 고른 OTC 종류와 같은 기준으로 검사합니다(화장품 규칙 포함).',
-    '제품이 그 OTC 기준(성분 · 함량 · 시험)을 실제로 충족하는지는 확인하지 않습니다.',
+    '선택한 OTC 종류의 기준과 화장품 규칙을 함께 적용해 검사합니다.',
+    '성분·함량·시험 요건의 실제 충족 여부는 확인하지 않습니다.',
   ],
 };
 
 /**
  * OTC 종류 — PRD v3.5.10 F-LNG-03 · 용어집 「OTC 종류(monograph_key)」 미국 4종. 값은 용어집의 열쇠,
- * 라벨은 Figma(525:3023) 태그 표기(한글 이름은 PRD v3.5.10 「비듬·지루성 피부염·건선」).
- * BLOCKED — DATA CONTRACT: OpenAPI v3.4.2 JobPatch에 OTC 종류 필드가 없어 화면 선택만 하고 서버로 보내지 않는다.
+ * 라벨은 Figma(1170:7877) 태그 표기 — 한글명과 영문명을 함께 보인다.
+ * BLOCKED — DATA CONTRACT: OpenAPI(v3.5.10) JobPatch에 OTC 종류 필드가 없어 화면 선택(진행 조건)만 하고 서버로 보내지 않는다.
  */
 const OTC_TYPE_OPTIONS = [
   { value: 'M020', label: '선크림 (Sunscreen)' },
   { value: 'M006', label: '여드름 (Acne)' },
-  { value: 'M032', label: '비듬·지루성 피부염·건선 (Dandruff · Seborrheic Dermatitis · Psoriasis)' },
+  { value: 'M032', label: '비듬 · 지루성 피부염 · 건선 (Dandruff · Seborrheic Dermatitis · Psoriasis)' },
   { value: 'M016', label: '피부보호제 (Skin Protectant)' },
 ];
 
@@ -672,6 +674,15 @@ function NewJobPageInner() {
   const submitBlockMessages = getN1SubmitBlockMessages({ ...readinessInput, isUploadBusy });
   const hasSubmitBlock = submitBlockMessages.length > 0;
   const canSubmit = !hasSubmitBlock && !isSubmitting;
+  // 나가기(뒤로 가기 · 상단 메뉴)를 같은 확인으로 묶는다 — 작업이 아직 없으면 미저장 확인, draft 작업이 생겼으면 작업 취소.
+  // [다음] 처리 중(POST /jobs 응답 전 포함)에는 나가기를 막는다 — 나간 뒤 작업이 생겨 남는 것을 피한다
+  const exitGuard = useJobExitGuard({ jobId: draftJobId, status: 'active', locked: isSubmitting });
+  // draft 작업의 변경 요청(업로드 · 삭제 · 순서 · PATCH · analyze)이 409 INVALID_STATE 로 끝나면 서버 상태를 다시 묻는다. 취소(archived ·
+  // cancelled)로 확인됐을 때만 작업 주소로 옮겨 공통 「취소된 작업입니다」 안내를 보인다(N1 에는 그 안내 자리가 없다 — 나가기도 DELETE 없이
+  // 통과). 취소가 아니거나 재조회가 실패하면 N1 에 그대로 머물고 기존 오류 문구를 보인다
+  useJobCancellationRecheck(draftJobId, () => {
+    if (draftJobId) router.replace(`/jobs/${draftJobId}`);
+  });
 
   const handleSubmit = async () => {
     if (!isValid) {
@@ -742,36 +753,30 @@ function NewJobPageInner() {
     // globals.css의 body font-family로 전체 화면에 적용한다 — N1에서
     // 별도로 <link>를 넣거나 font-family를 다시 걸지 않는다(body에서
     // 상속받는다).
-    <div className="flex h-screen w-full bg-white">
-      {/* [다음] 처리 중(POST /jobs 응답 전 포함)에는 ✕를 막는다 — 나간 뒤 작업이 생겨 남는 것을 피한다 */}
-      <S0Rail currentStep="N1" jobId={draftJobId} exitDisabled={isSubmitting} />
+    <div className="relative flex h-screen w-full bg-white" data-exit-guard={exitGuard.guarding ? 'on' : 'off'}>
+      {/* 작업용 공통 헤더(Figma 1792:21551) — 화면명 「정보 입력」이 N1 제목 역할을 한다. 겹쳐 놓아 본문을 밀지 않는다 */}
+      <JobHeader step="N1" onLogoutRequest={exitGuard.requestLogout} />
+      <S0Rail currentStep="N1" />
+      {exitGuard.dialog}
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        {/* 헤더 — X 버튼이 좌측 rail로 옮겨가면서, 여기는 이제 제목/설명 행만
-            남는다(N1 Figma 재정합 1단계). */}
-        {/* Figma(525:3023) 실측 — rail(x36·w44) 뒤 본문 좌우 여백 60(업로더 x140 · 패널 오른쪽 끝 1860),
-            제목 top 60(h24) → 국가·언어 행 top 108(h39) → 본문 top 162(gap 15). */}
-        <div className="shrink-0 px-[60px] pt-[60px] pb-[15px]">
-          <div className="flex items-center gap-4">
-            <h1 className="text-[20px] leading-[24px] font-semibold tracking-[-0.02em] text-[#171717]">이미지 입력</h1>
-            <p className="text-[14px] tracking-[-0.01em] text-[#707070]">
-              번역할 원본 이미지를 등록하고 작업 조건을 설정합니다.
-            </p>
-          </div>
-
-          {/* 국가선택 / 언어선택 — Figma(525:3023, node 787:6016) 두 필드를
-              한 줄에 배치. 각 필드 그룹은 w-[385px] 고정이고(늘어나 퍼지는
-              구조가 아니다), 두 그룹 사이 gap은 40px다 — 예전엔 flex-1 +
-              justify-between이라 뷰포트가 넓을수록 두 select가 거의 절반씩
-              퍼졌다(N1 Figma 재정합 3단계). */}
-          <div className="mt-6 flex items-center gap-10">
-            <div className="flex w-[385px] shrink-0 items-center gap-5">
+      {/* Figma(525:3023) 실측 — rail(x36·w44) 뒤 본문 좌우 여백 60(업로더 x140 · 패널 오른쪽 끝 1860), 위 96 · 아래 60.
+          좌측 열: 국가·언어 행 top 96(h39) → gap 12 → 업로더 top 147 ~ bottom 1020.
+          우측 열(x1344 w516): 필드 패널 top 96 ~ 891 → 동의 체크 907 → [다음] 975~1020.
+          예전 제목·설명 행(이미지 입력)은 최신 Figma 에서 빠졌다 — 작업용 헤더의 화면명이 대신한다. */}
+      <div className="flex min-h-0 min-w-0 flex-1 gap-5 px-[60px] pt-[96px] pb-[60px]">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+          {/* 국가선택 / 언어선택 — Figma(525:3023, node 787:6016) 두 필드를 한 줄에 배치. 1920 에서 각 그룹 385 · 사이 gap 40 ·
+              행 810 이다(넓어져도 더 퍼지지 않는다 — 최대 810). 좌측 열이 810 보다 좁은 창(1512 이하)에서는 행이 열 폭을 따르고
+              두 그룹이 반씩 줄어든다(라벨 41 고정 · select 가 줄어듦) — 예전 385 고정은 1512·1440·1280 에서 언어 선택이
+              우측 패널 밑으로 넘쳤다(실측: 행 오른쪽 950 > 패널 x 936·864·704). */}
+          <div data-testid="n1-target-row" className="flex w-full max-w-[810px] min-w-0 shrink-0 items-center gap-10 self-start">
+            <div className="flex min-w-0 flex-1 items-center gap-5">
               <p className="shrink-0 text-[12px] tracking-[-0.02em] text-[#707070]">국가선택</p>
-              <div className="relative flex-1">
+              <div className="relative min-w-0 flex-1">
                 <select
                   value={targetCountry}
                   onChange={(e) => handleCountryChange(e.target.value)}
-                  className="h-[39px] w-full appearance-none rounded-[6px] border border-[#eaeaea] bg-white px-[14px] text-[14px] tracking-[-0.01em] text-[#707070] outline-none focus:border-[#ff6a38]"
+                  className="h-[39px] w-full appearance-none truncate rounded-[6px] border border-[#eaeaea] bg-white pr-9 pl-[14px] text-[14px] tracking-[-0.01em] text-[#707070] outline-none focus:border-[#ff6a38]"
                 >
                   <option value="">선택하세요</option>
                   {COUNTRY_OPTIONS.map((o) => (
@@ -784,14 +789,14 @@ function NewJobPageInner() {
               </div>
             </div>
 
-            <div className="flex w-[385px] shrink-0 items-center gap-5">
+            <div className="flex min-w-0 flex-1 items-center gap-5">
               <p className="shrink-0 text-[12px] tracking-[-0.02em] text-[#707070]">언어선택</p>
               {/* 국가 select와 같은 구조 — 국가를 고르면 기본 언어가 자동으로 들어가고, 여기서 다른 언어로 바꿀 수 있다 */}
-              <div className="relative flex-1">
+              <div className="relative min-w-0 flex-1">
                 <select
                   value={targetLanguage}
                   onChange={(e) => setTargetLanguage(e.target.value)}
-                  className="h-[39px] w-full appearance-none rounded-[6px] border border-[#eaeaea] bg-white px-[14px] text-[14px] tracking-[-0.01em] text-[#707070] outline-none focus:border-[#ff6a38]"
+                  className="h-[39px] w-full appearance-none truncate rounded-[6px] border border-[#eaeaea] bg-white pr-9 pl-[14px] text-[14px] tracking-[-0.01em] text-[#707070] outline-none focus:border-[#ff6a38]"
                 >
                   <option value="">선택하세요</option>
                   {LANGUAGE_OPTIONS.map((o) => (
@@ -804,13 +809,8 @@ function NewJobPageInner() {
               </div>
             </div>
           </div>
-        </div>
 
-        {/* 본문: 좌 FileUploader + 우 열(필드 패널 · 동의 체크 · 버튼). Figma(525:3023)
-            실측 — 업로더 x140~1324 · 우측 열 x1344(gap 20), 버튼 bottom 1010(아래 70),
-            업로더 bottom 1000. 우측 열은 패널만 스크롤되고 동의 체크와 버튼은 늘 보인다. */}
-        <div className="flex min-h-0 flex-1 gap-5 px-[60px] pb-[70px]">
-          {/* 좌측 — 업로드 영역 */}
+          {/* 좌측 — 업로드 영역. 우측 열은 패널만 스크롤되고 동의 체크와 버튼은 늘 보인다 */}
           <div
             data-testid="n1-image-dropzone"
             onDragOver={(e) => {
@@ -825,7 +825,7 @@ function NewJobPageInner() {
             // 확인). 안쪽 스크롤 wrapper(overflow-auto)가 실제 스크롤을
             // 담당하고, 이 div는 그 스크롤 영역이 자기 폭보다 좁아지는
             // 걸 허용만 하면 된다.
-            className={`mb-2.5 flex min-w-0 flex-1 flex-col items-center justify-center gap-10 rounded-[8px] border transition-colors ${
+            className={`flex min-h-0 min-w-0 flex-1 flex-col items-center justify-center gap-10 rounded-[8px] border transition-colors ${
               isDragOver ? 'border-[#ff6a38] bg-[#faf3ed]' : 'border-[#eaeaea] bg-white'
             }`}
           >
@@ -868,9 +868,12 @@ function NewJobPageInner() {
               // variant를 그대로 "파일 추가" 자리로 쓴다(Figma에 별도
               // "+이미지 추가" 헤더 버튼은 없다). up/down 버튼은 이 카드에
               // 없다(X만 있음) — 대신 드래그 재정렬로 대체한다.
-              <div className="flex h-full w-full flex-col gap-4 overflow-y-auto p-6">
+              // 열 수는 업로더 안쪽 폭(container query)으로 정한다 — 카드가 「파일 추가」 내용(약 208px)보다 좁아지지 않게
+              // 880 이상 4열(1920·1728) · 650 이상 3열(1512·1440) · 그보다 좁으면 2열(1280). 예전 4열 고정은 1280 에서 카드가
+              // 112px 로 줄고 「파일 추가」 문구가 카드 밖으로 넘쳐 그 카드만 키가 커졌다(실측 237 vs 146).
+              <div className="@container flex h-full w-full flex-col gap-4 overflow-y-auto p-6">
                 <p className="text-[14px] text-[#707070]">이미지 {images.length}개</p>
-                <div className="grid grid-cols-4 gap-x-4 gap-y-5">
+                <div className="grid grid-cols-2 gap-x-4 gap-y-5 @min-[650px]:grid-cols-3 @min-[880px]:grid-cols-4">
                   {images.map((img) => {
                     const isDragging = draggingLocalId === img.localId;
                     const isDragOverTarget = dragOverLocalId === img.localId && draggingLocalId !== img.localId;
@@ -947,15 +950,19 @@ function NewJobPageInner() {
                     );
                   })}
 
-                  <div className="flex aspect-[244/320] w-full max-w-[244px] flex-col items-center justify-center gap-5 rounded-[8px] border border-[#eaeaea] bg-white px-6 py-8">
+                  <div
+                    data-testid="n1-add-file-card"
+                    className="flex aspect-[244/320] w-full max-w-[244px] min-w-0 flex-col items-center justify-center gap-5 overflow-hidden rounded-[8px] border border-[#eaeaea] bg-white px-4 py-8"
+                  >
                     <div className="flex size-10 items-center justify-center rounded-full border border-[#eaeaea] bg-white">
                       <PlusIcon size={16} />
                     </div>
                     <div className="flex flex-col items-center gap-2 text-center">
-                      <p className="text-[16px] font-medium tracking-[-0.03em] whitespace-nowrap text-[#171717]">
+                      {/* 좁은 카드에서는 단어 단위로 줄바꿈한다(카드 밖으로 넘치지 않게) */}
+                      <p className="text-[16px] font-medium tracking-[-0.03em] break-keep text-[#171717]">
                         파일을 드래그하거나 선택
                       </p>
-                      <p className="text-[12px] tracking-[-0.01em] whitespace-nowrap text-[#707070]">JPG, PNG · 최대 1GB</p>
+                      <p className="text-[12px] tracking-[-0.01em] break-keep text-[#707070]">JPG, PNG · 최대 1GB</p>
                     </div>
                     {/* 기존 빈 상태와 동일한 label 패턴 — htmlFor로 숨은
                         input#image-upload를 직접 연다(accessible name이
@@ -981,6 +988,7 @@ function NewJobPageInner() {
               id="image-upload"
             />
           </div>
+        </div>
 
           {/* 우측 — 필드 패널 */}
           {/* 우측 필드 패널 — Figma(643:5942) 폭 516px. get_metadata로 4개
@@ -1134,31 +1142,26 @@ function NewJobPageInner() {
                   </div>
 
                   {/* OTC 종류 — OTC 의약품·복합일 때만(PRD F-LNG-03). Tag / flexible(406:6648) 단일 선택 —
-                      Selected는 orange border·text. 서버 저장 필드가 없어 아래 안내로 알린다. */}
+                      Selected는 orange border·text. 서버 저장 필드가 아직 없어 진행 조건으로만 쓴다(OTC_TYPE_OPTIONS 주석). */}
                   {requiresOtcType(regulatoryClass) && (
-                    <div className="flex flex-col gap-2">
-                      <div role="radiogroup" aria-label="OTC 종류" className="flex flex-wrap gap-1" data-testid="n1-otc-type">
-                        {OTC_TYPE_OPTIONS.map((o) => {
-                          const selected = otcType === o.value;
-                          return (
-                            <button
-                              key={o.value}
-                              type="button"
-                              role="radio"
-                              aria-checked={selected}
-                              onClick={() => setOtcType(o.value)}
-                              className={`flex h-7 items-center justify-center rounded-[6px] border bg-white px-2 text-[12px] leading-[14px] transition-colors ${
-                                selected ? 'border-[#ff6a38] text-[#ff6a38]' : 'border-[#eaeaea] text-[#171717] hover:bg-gray-50'
-                              }`}
-                            >
-                              {o.label}
-                            </button>
-                          );
-                        })}
-                      </div>
-                      <p data-testid="n1-otc-type-notice" className="text-[12px] font-light tracking-[-0.04em] text-[#999]">
-                        OTC 종류는 아직 작업에 저장되지 않습니다. 저장 기능이 준비되면 반영됩니다.
-                      </p>
+                    <div role="radiogroup" aria-label="OTC 종류" className="flex flex-wrap gap-1" data-testid="n1-otc-type">
+                      {OTC_TYPE_OPTIONS.map((o) => {
+                        const selected = otcType === o.value;
+                        return (
+                          <button
+                            key={o.value}
+                            type="button"
+                            role="radio"
+                            aria-checked={selected}
+                            onClick={() => setOtcType(o.value)}
+                            className={`flex h-7 items-center justify-center rounded-[6px] border bg-white px-2 text-[12px] leading-[14px] transition-colors ${
+                              selected ? 'border-[#ff6a38] text-[#ff6a38]' : 'border-[#eaeaea] text-[#171717] hover:bg-gray-50'
+                            }`}
+                          >
+                            {o.label}
+                          </button>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -1275,9 +1278,9 @@ function NewJobPageInner() {
               </p>
             )}
 
-            {/* 책임 동의 — PRD F-ACC-04, Figma Checkbox(1170:6002): 패널 아래 30 · [다음] 바로 위.
+            {/* 책임 동의 — PRD F-ACC-04, Figma Checkbox(1170:6002): 패널 아래 16(y907) · [다음] 위 40.
                 Checkbox / Compact(1063:5156) 18px 박스, Checked는 orange border + check. */}
-            <label className="mt-[30px] flex shrink-0 cursor-pointer items-center gap-3" data-testid="n1-consent">
+            <label className="mt-4 flex shrink-0 cursor-pointer items-center gap-3" data-testid="n1-consent">
               {/* 필수 * — Figma(525:3023): Checkbox x1344·y913, * x1363·y909(8×19, Pretendard Regular 16 · -3%). checkbox ↔ 문구 gap 12. 체크박스 바로 오른쪽 위의 별도 표시다.
                   별표는 시각 보조라 aria-hidden이고, 필수 여부는 input의 aria-required와 sr-only 문구로 전달한다. */}
               <span className="relative flex size-5 shrink-0 items-center justify-center">
@@ -1311,7 +1314,7 @@ function NewJobPageInner() {
                 인증 마크 업로드는 PRD F-SRC-08 12월 기능이고 9월은 원본 규격뿐이라 비활성이다(업로드 없음).
                 툴팁은 버튼 상태와 관계없이 hover·focus에 두 줄(PRD). 키보드로도 닿도록 disabled 대신
                 aria-disabled를 쓴다. 툴팁 위치는 Figma(1090:10048) — 버튼 왼쪽에서 64 · 버튼 위 3px 겹침, 화살표가 info를 가리킨다. */}
-            <div className="mt-6 flex shrink-0 items-center justify-end gap-2">
+            <div className="mt-10 flex shrink-0 items-center justify-end gap-2">
               <div className="group relative">
                 <button
                   type="button"
@@ -1365,7 +1368,6 @@ function NewJobPageInner() {
               </div>
             </div>
           </div>
-        </div>
       </div>
 
       {/* 카테고리 선택 모달 (Figma 381:6293) */}

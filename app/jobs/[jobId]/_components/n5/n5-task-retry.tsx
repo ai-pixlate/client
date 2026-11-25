@@ -1,12 +1,11 @@
 'use client';
 
-import { createContext, useContext, useEffect, useId, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { retryJobTask } from '@/lib/api/pixlate';
 import type { ApiJobAsyncTaskItem } from '@/lib/api/n5-schema';
 import type { RetryTarget } from '@/lib/n5/adapter';
-import { TooltipArrow } from '@/app/_components/tooltip-arrow';
 import { pixlateKeys, refreshN5Snapshot, useN5TaskStatusQuery } from '@/lib/queries/pixlate';
 
 // ─────────────────────────────────────────────────────────────────
@@ -17,7 +16,7 @@ import { pixlateKeys, refreshN5Snapshot, useN5TaskStatusQuery } from '@/lib/quer
 //   → 끝나면(done·failed·cancelled·목록에서 사라짐) /blocks·/preview 를 한 쌍으로 다시 받고 /tasks 를 갱신한다
 //   요청 실패(409 등)·재시도 실패 → 서버가 주는 실패 상태가 그대로 남는다
 // 미리보기 갱신 실패·섹션 렌더 실패는 각자의 자리와 상태를 그대로 두고 이 버튼만 같이 쓴다.
-// 번역 실패 [다시 시도]는 12월 범위라 UpcomingRetryButton(비활성·요청 없음)을 쓴다. 인페인팅은 재시도 계약이 없어 버튼이 없다.
+// 번역 실패 칸에는 [다시 시도]를 두지 않는다(이후 기능 — n5-panel.tsx). 인페인팅은 재시도 계약이 없어 버튼이 없다.
 // ─────────────────────────────────────────────────────────────────
 
 const N5JobIdContext = createContext<string | null>(null);
@@ -73,48 +72,6 @@ const RETRY_BUTTON_CLASS =
 const RETRY_BUTTON_ENABLED_CLASS = 'border-[#eaeaea] bg-white hover:bg-[#f5f5f5]';
 /** Figma Button Style=Secondary · Size=XS · State=Disabled(57:1450) — BG/subtle #f5f5f5 면 · 선 없음(높이 유지를 위해 투명 선) · 글자 그대로 · hover 없음 */
 const RETRY_BUTTON_DISABLED_CLASS = 'cursor-not-allowed border-transparent bg-[#f5f5f5]';
-
-const UPCOMING_RETRY_TOOLTIP = '다시 시도는 12월 구현 예정입니다.';
-
-/**
- * 제품 범위가 12월인 [다시 시도](번역 실패 부분 재실행 — PRD F-CFM-05). 모양은 비활성 [다시 시도] 그대로이고 어떤 요청도 보내지 않는다.
- * 이유는 단계 이동(step-nav)·N1 인증 마크와 같은 말풍선으로 hover·focus 때 알린다. 안내가 보이도록 disabled 대신 aria-disabled 를 쓴다.
- */
-export function UpcomingRetryButton({ label, testId }: { label: string; testId: string }) {
-  const tooltipId = useId();
-  return (
-    <span className="relative inline-flex shrink-0">
-      <button
-        type="button"
-        data-testid={testId}
-        aria-disabled="true"
-        aria-describedby={tooltipId}
-        // Safari 는 클릭해도 버튼에 포커스를 주지 않는다 — 눌렀을 때 안내가 남도록 직접 옮긴다(step-nav 와 같다)
-        onClick={(e) => {
-          e.stopPropagation();
-          e.currentTarget.focus();
-        }}
-        onKeyDown={(e) => {
-          if (e.key === 'Escape') e.currentTarget.blur();
-        }}
-        className={`peer ${RETRY_BUTTON_CLASS} ${RETRY_BUTTON_DISABLED_CLASS} focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ff6a38]`}
-      >
-        {label}
-      </button>
-      {/* 말풍선은 Figma 1090:10048(N1 인증 마크 안내) 그대로 — 흰 면 · #ff6a38 선 · radius 8 · padding 10 · 12px Light · 아래 화살표.
-          24px 버튼 글자를 가리지 않게 화살표 끝이 버튼 위 가장자리에 닿도록 둔다(버튼 위 11px) */}
-      <span
-        id={tooltipId}
-        role="tooltip"
-        data-testid={`${testId}-tooltip`}
-        className="pointer-events-none invisible absolute bottom-[calc(100%+11px)] left-0 z-40 rounded-[8px] border border-[#ff6a38] bg-white p-2.5 text-[12px] leading-[normal] font-light tracking-[-0.04em] whitespace-nowrap text-[#ff6a38] peer-hover:visible peer-focus:visible"
-      >
-        {UPCOMING_RETRY_TOOLTIP}
-        <TooltipArrow className="left-5" />
-      </span>
-    </span>
-  );
-}
 
 /** Figma 1244:8238·8444 의 [다시 시도] 버튼 모양 그대로 — 재시도할 수 없으면 비활성 */
 export function TaskRetryButton({

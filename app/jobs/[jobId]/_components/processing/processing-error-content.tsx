@@ -32,24 +32,25 @@ export function ProcessingErrorContent({
   progressPercent: number;
 }) {
   return (
+    // Figma 793:4890(1920): 비주얼 1044×589 와 오른쪽 열 405×589 가 패널 세로 가운데(y264)에 나란히 놓인다.
+    // 구분선은 진행 화면과 달리 비주얼 높이가 아니라 패널 위 60 · 아래 100 사이(764)다 — 위아래 60 은 패널 padding(layout),
+    // 아래 추가 40 은 구분선 margin 이다. 예전 좌상단 「오류」 칩은 최신 Figma 에 없다(오류는 ERROR!·상태 제목·role=alert 가 알린다).
+    // 795:4820(N4 오류)은 예전 헤더 92 · 패널 y116 기준이라 위치값을 옮기지 않고, 같은 컴포넌트로 N2 오류와 같은 최신 shell 에 둔다.
     <div
       data-testid="processing-error"
       className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_1px_max(300px,25.13cqw)] grid-rows-[1fr_auto_1fr] gap-x-[clamp(60px,4.17vw,80px)]"
     >
-      <div className="col-start-1 row-start-1 mt-0.5 flex h-[26px] w-[60px] items-center justify-center rounded-[6px] bg-[#fff0eb] px-2">
-        <p className="text-[12px] leading-[14px] text-[#e5484d]">오류</p>
-      </div>
+      <div data-testid="processing-error-divider" className="col-start-2 row-span-3 row-start-1 mb-[clamp(0px,3.7vh,40px)] bg-[#eaeaea]" />
 
-      <div className="col-start-2 row-span-3 row-start-1 bg-[#eaeaea]" />
-
-      <div className="relative col-start-1 row-start-2 aspect-[1044/520] w-full max-w-[1044px] overflow-hidden rounded-[8px]">
+      <div className="relative col-start-1 row-start-2 aspect-[1044/589] w-full max-w-[1044px] overflow-hidden rounded-[8px]">
         <img src="/process/ai-processing-error.jpg" alt="" aria-hidden="true" className="absolute inset-0 size-full object-cover opacity-[0.97]" />
         <p className="absolute top-7 left-6 text-[12px] leading-[normal] font-light tracking-[-0.48px] whitespace-pre text-white/[58%]">{visualLabel}</p>
       </div>
 
       <div className="col-start-3 row-start-2 flex flex-col justify-between gap-6 leading-[normal]">
-        <div className="flex flex-col gap-9">
-          <div className="flex flex-col gap-1.5">
+        {/* Figma 「Frame 370」 — ERROR! 64 · 4 · 진행율 14 · 24 · 막대 3 */}
+        <div className="flex flex-col gap-6">
+          <div className="flex flex-col gap-1">
             <p className="text-[58px] leading-[64px] font-semibold text-[#e5484d]">ERROR!</p>
             <p data-testid="processing-error-progress" className="text-[12px] font-light tracking-[-0.48px] text-[#999]">
               진행율: {progressPercent}%
@@ -66,10 +67,11 @@ export function ProcessingErrorContent({
           </div>
         </div>
 
-        <div className="flex flex-col gap-11">
-          <div role="alert" className="flex flex-col gap-6">
+        {/* Figma 「Frame 969」 — label 14 · 12 · 제목 24 · 4 · 설명 14 · 52 · 버튼 37 */}
+        <div className="flex flex-col gap-[52px]">
+          <div role="alert" className="flex flex-col gap-3">
             <p className="text-[12px] tracking-[-0.24px] text-[#999]">{error.sectionLabel}</p>
-            <div className="flex flex-col gap-3 text-[#171717]">
+            <div className="flex flex-col gap-1 text-[#171717]">
               <h2 className="text-[20px] font-semibold tracking-[-0.4px]">{error.title}</h2>
               <p data-testid="processing-error-description" className="text-[12px] font-light tracking-[-0.48px]">
                 {error.description}

@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { focusManager, notifyManager, onlineManager, useQueries, useQuery, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { getAuthEpoch } from '@/lib/auth/session-store';
 
 import {
   createJob,
@@ -58,7 +59,9 @@ function retryTasksQuery(failureCount: number, error: unknown): boolean {
   return shouldRetryQuery(failureCount, error);
 }
 import type { ApiSection } from '@/lib/api/n3-schema';
-import { isN6RenderStatusUnknown, selectN6RenderTask } from './n6-render-task';
+import { isN6RenderStatusUnknown, resolveN6RenderPhase } from './n6-render-task';
+import { isCancelledJob } from '@/lib/api/job-status';
+import { subscribeJobStateConflict } from '@/lib/api/job-state-conflict';
 
 // ─────────────────────────────────────────────
 // Query Keys
@@ -176,18 +179,21 @@ export function useAnalyzeJobMutation() {
 
 export {
   selectN6RenderTask,
+  resolveN6RenderPhase,
   isN6RenderStatusUnknown,
   resetN6RenderStatusTracking,
   N6_TASK_UNRESOLVED_LIMIT_MS,
   type N6RenderTaskSelection,
+  type N6RenderPhase,
 } from './n6-render-task';
 
-/** N6 에서 /tasks 를 계속 다시 물어야 하는가 — 현재 최종 렌더가 진행 중이거나, 아직 1건으로 관측되지 않았을 때 */
+/**
+ * N6 에서 /tasks 를 계속 다시 물어야 하는가 — 현재 최종 렌더가 진행 중이거나, 아직 확인되지 않았을 때
+ * (0건 · 여러 건 · 작업 상태와 어긋남 — n6-render-task.ts resolveN6RenderPhase). 저장 대기 · 완료 · 실패는 멈춘다
+ */
 function shouldPollN6Tasks(data: ApiJobTaskStatus, jobId: string): boolean {
-  const selection = selectN6RenderTask(data, jobId);
-  if (selection.kind === 'single') return selection.task.status === 'pending' || selection.task.status === 'running';
-  // none(아직 관측 전)·ambiguous(invariant 위반) — 다른 task 로 대신하지 않고 다음 응답을 기다린다
-  return selection.kind === 'none' || selection.kind === 'ambiguous';
+  const phase = resolveN6RenderPhase(data, jobId);
+  return phase.kind === 'rendering' || phase.kind === 'unresolved';
 }
 
 export function useJobTasksQuery(jobId: string, options: { polling?: boolean } = {}) {
@@ -204,6 +210,8 @@ export function useJobTasksQuery(jobId: string, options: { polling?: boolean } =
           if (isJobNotFoundError(query.state.error)) return false;
           const data = query.state.data;
           if (!data) return 2_000; // 첫 응답 대기 중
+          // 취소된 작업(구 서버 archived · 새 서버 cancelled)은 종료 상태다 — currentStep 이 N2·N4 에 남아 있어도 다시 묻지 않는다
+          if (isCancelledJob(data)) return false;
           // N2·N4 전체 실패(jobStatus=failed)는 종료 상태라 폴링을 멈춘다
           if ((data.currentStep === 'N2' || data.currentStep === 'N4') && data.jobStatus === 'failed') return false;
           if (data.currentStep === 'N2' || data.currentStep === 'N4') return 2_000;
@@ -216,6 +224,47 @@ export function useJobTasksQuery(jobId: string, options: { polling?: boolean } =
         }
       : false,
   });
+}
+
+// ─────────────────────────────────────────────
+// 취소된 작업의 409 — 변경 요청이 409 INVALID_STATE · RETRY_NOT_ALLOWED 로 끝나면(lib/api/job-state-conflict.ts 신호)
+// JOB-05 를 서버에서 다시 받아 tasks cache 에 넣는다. 취소(archived · cancelled)인지는 이 재조회 결과로만 정한다.
+// - 취소면: 같은 cache 를 보는 page.tsx 가 편집 화면 대신 「취소된 작업입니다」를 그린다. N1(tasks 화면이 없음)은 onCancelled 로 옮긴다.
+// - 취소가 아니면: 받은 서버 값만 cache 에 넣고 아무것도 하지 않는다 — 각 화면의 기존 409 처리가 그대로 보인다.
+// - 재조회가 실패하면: 아무것도 바꾸지 않는다(취소로 추정하지 않음 · cache 를 지우거나 보관함으로 옮기지 않음).
+// 같은 작업의 재조회가 진행 중이면 새 신호는 그 결과를 함께 쓴다(요청을 겹쳐 보내지 않는다).
+// ─────────────────────────────────────────────
+
+export function useJobCancellationRecheck(jobId: string | null, onCancelled?: () => void) {
+  const queryClient = useQueryClient();
+  const onCancelledRef = useRef(onCancelled);
+  useEffect(() => {
+    onCancelledRef.current = onCancelled;
+  }, [onCancelled]);
+
+  useEffect(() => {
+    if (!jobId) return;
+    let inFlight = false;
+    let disposed = false;
+    const unsubscribe = subscribeJobStateConflict((conflictJobId) => {
+      if (conflictJobId !== jobId || inFlight) return;
+      inFlight = true;
+      getJobTasks(jobId)
+        .then((data) => {
+          if (disposed) return;
+          queryClient.setQueryData(pixlateKeys.tasks(jobId), data);
+          if (isCancelledJob(data)) onCancelledRef.current?.();
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          inFlight = false;
+        });
+    });
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, [jobId, queryClient]);
 }
 
 // ─────────────────────────────────────────────
@@ -273,12 +322,15 @@ export function useSourceImagesQuery(jobId: string) {
 // N5 — 실제 계약(v3.4.2) 조회.
 // ─────────────────────────────────────────────
 
-/** N5 헤더(targetCountry/targetLanguage)용 job 조회 */
-export function useJobQuery(jobId: string) {
+/**
+ * N3·N5 헤더(targetCountry/targetLanguage)와 N6 ✕ 의 저장 여부(isSaved)용 job 조회.
+ * enabled=false 면 같은 key 의 cache 만 읽고 요청하지 않는다(페이지가 N6 에서만 켠다).
+ */
+export function useJobQuery(jobId: string, options: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: pixlateKeys.job(jobId),
     queryFn: () => getJob(jobId),
-    enabled: !!jobId,
+    enabled: !!jobId && (options.enabled ?? true),
   });
 }
 
@@ -386,6 +438,8 @@ export interface N5Snapshot {
   blocks: Awaited<ReturnType<typeof getN5Blocks>>;
   preview: Awaited<ReturnType<typeof getN5Preview>>;
   seq: number;
+  /** 받기 시작할 때의 인증 세대 — 그 사이 계정·세션이 바뀌었으면 화면 캐시에 넣지 않는다 */
+  epoch: number;
 }
 
 let n5SnapshotSeq = 0;
@@ -405,8 +459,9 @@ export function markN5SnapshotBoundary(jobId: string): void {
 /** /blocks·/preview 를 함께 받는다(캐시는 바꾸지 않는다) */
 export async function fetchN5Snapshot(jobId: string): Promise<N5Snapshot> {
   const seq = ++n5SnapshotSeq;
+  const epoch = getAuthEpoch();
   const [blocks, preview] = await Promise.all([getN5Blocks(jobId), getN5Preview(jobId)]);
-  return { blocks, preview, seq };
+  return { blocks, preview, seq, epoch };
 }
 
 /**
@@ -414,9 +469,11 @@ export async function fetchN5Snapshot(jobId: string): Promise<N5Snapshot> {
  * 동기로 끝난다(넣은 직후 캐시를 읽어도 이 값이다). 넣지 않는 경우(false) — 먼저 시작했지만 늦게 끝난 응답이 새 화면을 이전 값으로 되돌리지 않게 한다:
  * - 이미 더 늦게 시작한 쌍을 넣었다
  * - 이 쌍을 받기 시작한 뒤 block 저장이 성공했다(markN5SnapshotBoundary)
+ * - 이 쌍을 받기 시작한 뒤 계정·세션이 바뀌었다 — 이전 계정 응답을 새 세션 캐시에 쓰지 않는다(F-ACC-01)
  * 화면에 넣지 않을 뿐이다 — 저장 장벽은 받은 쌍으로 판정을 그대로 한다(n5-panel.tsx).
  */
 export function publishN5Snapshot(queryClient: QueryClient, jobId: string, snapshot: N5Snapshot): boolean {
+  if (snapshot.epoch !== getAuthEpoch()) return false;
   const floor = Math.max(publishedN5SnapshotSeq.get(jobId) ?? 0, n5SnapshotBoundarySeq.get(jobId) ?? 0);
   if (snapshot.seq < floor) return false;
   publishedN5SnapshotSeq.set(jobId, snapshot.seq);
@@ -622,9 +679,20 @@ async function getExportDownloadWithUrl(jobId: string, artifactId: number) {
 // mutation으로 감싼다 — 영구 식별자처럼 캐시해 두지 않는다.
 // ─────────────────────────────────────────────
 
+/**
+ * 다운로드 URL 을 받은 뒤 job 을 다시 받는다 — PRD F-FIN-03 은 [저장]과 첫 다운로드 중 먼저 일어난 것을 완료로 본다. 완료 여부는
+ * FE 가 정하지 않고 서버 job.isSaved 를 다시 읽는다(작업 나가기 확인 여부 — useJobExitGuard). URL 발급은 실제 파일 저장 완료가 아니며,
+ * 다운로드가 is_saved 를 바꾸는지는 API 계약(3.5.10)에 적혀 있지 않다 — 서버가 false 를 주면 계속 진행 중 작업으로 본다.
+ */
+function refetchJobAfterDownload(queryClient: ReturnType<typeof useQueryClient>, jobId: string) {
+  void queryClient.invalidateQueries({ queryKey: pixlateKeys.job(jobId), exact: true });
+}
+
 export function useExportDownloadMutation(jobId: string) {
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (artifactId: number) => getExportDownloadWithUrl(jobId, artifactId),
+    onSuccess: () => refetchJobAfterDownload(queryClient, jobId),
   });
 }
 
@@ -636,12 +704,14 @@ export function useExportDownloadMutation(jobId: string) {
  * psd는 호출부가 애초에 disabled라 이 mutation을 쓰지 않는다.
  */
 export function useExportComponentDownloadMutation(jobId: string) {
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (artifactType: ApiExportArtifactType) => {
       const created = await createExport(jobId, { components: [artifactType as string] });
       if (created.artifactId == null) throw new Error('내보내기 산출물이 만들어지지 않았습니다');
       return getExportDownloadWithUrl(jobId, created.artifactId);
     },
+    onSuccess: () => refetchJobAfterDownload(queryClient, jobId),
   });
 }
 

@@ -80,7 +80,7 @@ test.describe('N5 섹션 제외·되돌리기 — 서버 저장', () => {
     await expect(page.getByTestId('n5-section-restore-501')).toBeVisible();
   });
 
-  test('제외 효과는 그 섹션에만 — 섹션 크기의 반투명 회색·블러, 다른 섹션·미리보기 전체에는 없음(Figma 1725:11707)', async ({ page }) => {
+  test('제외 효과는 그 섹션에만 — 섹션 크기의 #707070 24% · 블러 4px, 다른 섹션·미리보기 전체에는 없음(Figma 1821:49608)', async ({ page }) => {
     await page.getByTestId('n5-section-exclude-501').click();
     const overlay = page.getByTestId('n5-section-excluded-501');
     await expect(overlay).toBeVisible();
@@ -88,7 +88,7 @@ test.describe('N5 섹션 제외·되돌리기 — 서버 저장', () => {
       const css = getComputedStyle(el);
       return { bg: css.backgroundColor, backdrop: css.backdropFilter, filter: css.filter, opacity: css.opacity };
     });
-    expect(style).toEqual({ bg: 'rgba(245, 245, 245, 0.4)', backdrop: 'blur(3px)', filter: 'none', opacity: '1' });
+    expect(style).toEqual({ bg: 'rgba(112, 112, 112, 0.24)', backdrop: 'blur(4px)', filter: 'none', opacity: '1' });
     await expect(overlay).toContainText('저장 시 제외됨 · 위아래가 붙습니다');
     // 크기·위치 = 제외된 섹션(slice) 그대로
     const slice = (await page.getByTestId('n5-slice-translated-501').boundingBox())!;
@@ -111,6 +111,60 @@ test.describe('N5 섹션 제외·되돌리기 — 서버 저장', () => {
       });
     });
     expect(others.find((o) => o.id === 'n5-slice-translated-502')).toEqual({ id: 'n5-slice-translated-502', found: true, blurred: [] });
+  });
+
+  test('N5 제외 섹션은 자리에 남고 제외 전 결과 이미지(renderedUrl)를 흐리게 그대로 보인다 — 이미지 opacity 는 낮추지 않는다', async ({ page }) => {
+    const slice = page.getByTestId('n5-slice-translated-501');
+    const sliceStyle = () =>
+      slice.evaluate((el) => {
+        const css = getComputedStyle(el);
+        return { image: css.backgroundImage, opacity: css.opacity, filter: css.filter };
+      });
+    // 포함 상태 — 이미지가 있다
+    expect((await sliceStyle()).image).not.toBe('none');
+
+    const preview = page.waitForResponse((r) => r.request().method() === 'GET' && new URL(r.url()).pathname.endsWith('/preview'));
+    await page.getByTestId('n5-section-exclude-501').click();
+    const body = (await (await preview).json()) as { sections: { id: number; excludedStage: string | null; renderedUrl: string | null }[] };
+    const server = body.sections.find((s) => s.id === 501)!;
+    expect(server.excludedStage).toBe('N5');
+    expect(server.renderedUrl).not.toBeNull();
+
+    const overlay = page.getByTestId('n5-section-excluded-501');
+    await expect(overlay).toBeVisible();
+    await expect(slice).toBeVisible();
+    // 서버가 준 제외 전 결과 이미지 — presigned 쿼리는 조회마다 바뀔 수 있어 경로로 비교한다
+    const renderedPath = new URL(server.renderedUrl!, page.url()).pathname;
+    await expect.poll(async () => (await sliceStyle()).image).toContain(renderedPath);
+    expect(await sliceStyle()).toMatchObject({ opacity: '1', filter: 'none' });
+    // 안내 문구와 [되돌리기]는 PRD 그대로다
+    await expect(overlay).toContainText('저장 시 제외됨 · 위아래가 붙습니다');
+    await expect(page.getByTestId('n5-section-restore-501')).toHaveText('되돌리기');
+
+    // 되돌리기 → overlay 가 사라지고 포함 표시로 돌아온다
+    await page.getByTestId('n5-section-restore-501').click();
+    await expect(overlay).toHaveCount(0);
+    await expect(page.getByTestId('n5-section-exclude-501')).toBeVisible();
+    expect((await sliceStyle()).image).not.toBe('none');
+  });
+
+  test('N5 제외 섹션에 제외 전 결과 이미지가 없으면(renderedUrl=null) 원본 이미지를 흐리게 보인다', async ({ page }) => {
+    await page.evaluate(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.fetch = async (input, init) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        const res = await originalFetch(input, init);
+        if (!new URL(url, location.href).pathname.endsWith('/preview')) return res;
+        const body = (await res.json()) as { sections: { id: number; renderedUrl: string | null }[] };
+        body.sections = body.sections.map((s) => (s.id === 501 ? { ...s, renderedUrl: null } : s));
+        return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      };
+    });
+    await page.getByTestId('n5-section-exclude-501').click();
+    await expect(page.getByTestId('n5-section-excluded-501')).toBeVisible();
+    await expect
+      .poll(() => page.getByTestId('n5-slice-translated-501').evaluate((el) => getComputedStyle(el).backgroundImage))
+      .toContain('/mock/n5/sections/501-original.png');
   });
 
   test('N5에서 제외된 섹션 되돌리기 → SEC-03 restore 저장 → 포함 상태 복구', async ({ page }) => {
@@ -193,8 +247,39 @@ test.describe('N5 섹션 제외·되돌리기 — 서버 저장', () => {
 
     await expect(page.getByTestId('n5-section-excluded-503')).toBeVisible();
     await expect(page.getByTestId('n5-section-restore-503')).toHaveCount(0);
+    // N3 제외 섹션의 이미지는 되살리지 않는다 — 제외 전 이미지 유지는 N5 에서 사용자가 제외한 섹션에만 적용한다
+    await expect.poll(() => page.getByTestId('n5-slice-translated-503').evaluate((el) => getComputedStyle(el).backgroundImage)).toBe('none');
     // N5 에서 제외한 501 은 그대로 되돌릴 수 있다
     await expect(page.getByTestId('n5-section-restore-501')).toBeVisible();
+  });
+
+  test('N3 제외 섹션(계약상 프리뷰에 오지 않음)은 이번 이미지 유지 처리로 N5 좌·우 어디에도 다시 나타나지 않는다', async ({ page }) => {
+    // 504 를 N3 에서 제외된 것처럼 프리뷰·blocks 에서 뺀다(계약: 「N3 제외 제외 · N5 제외는 bucket=exclude 포함」)
+    await page.evaluate(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.fetch = async (input, init) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        const res = await originalFetch(input, init);
+        const path = new URL(url, location.href).pathname;
+        if (path.endsWith('/preview')) {
+          const body = (await res.json()) as { sections: { id: number }[] };
+          body.sections = body.sections.filter((s) => s.id !== 504);
+          return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }
+        if (path.endsWith('/blocks')) {
+          const blocks = (await res.json()) as { sectionId: number }[];
+          return new Response(JSON.stringify(blocks.filter((b) => b.sectionId !== 504)), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }
+        return res;
+      };
+    });
+    await page.getByTestId('n5-section-exclude-501').click();
+    await expect(page.getByTestId('n5-section-excluded-501')).toBeVisible();
+    await expect(page.getByTestId('n5-slice-translated-504')).toHaveCount(0);
+    await expect(page.getByTestId('n5-section-excluded-504')).toHaveCount(0);
+    await expect(page.getByTestId('n5-section-exclude-504')).toHaveCount(0);
+    await page.getByTestId('n5-view-mode-original').click();
+    await expect(page.getByTestId('n5-slice-original-504')).toHaveCount(0);
   });
 
   test('선택된 블록이 있는 섹션을 제외하면 선택이 정리된다', async ({ page }) => {

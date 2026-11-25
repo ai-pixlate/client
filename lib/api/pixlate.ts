@@ -1,4 +1,5 @@
 import { ensureBackendSession } from '@/lib/api/session';
+import { reportJobStateConflict } from '@/lib/api/job-state-conflict';
 import { fetchWithSessionRecovery } from '@/lib/auth/authorized-request';
 import { getAuthMode } from '@/lib/auth/capability';
 import { getAccessToken, setAccessToken } from '@/lib/auth/session-store';
@@ -57,7 +58,17 @@ function errorMessageFromBody(body: unknown, status: number): string {
   return `API error: ${status}`;
 }
 
+/**
+ * 모든 API 요청의 공통 입구. 작업 변경 요청이 409 INVALID_STATE · RETRY_NOT_ALLOWED 로 끝나면 상태 재확인 신호를 낸다
+ * (lib/api/job-state-conflict.ts — 취소 여부는 받는 쪽이 재조회로만 정한다). 응답과 오류 처리는 바꾸지 않는다.
+ */
 async function authorizedFetch(url: string, init?: RequestInit): Promise<Response> {
+  const res = await authorizedFetchInner(url, init);
+  reportJobStateConflict(url, init?.method, res);
+  return res;
+}
+
+async function authorizedFetchInner(url: string, init?: RequestInit): Promise<Response> {
   if (getAuthMode() === 'dev-login') {
     await ensureBackendSession();
     let res = await fetch(url, withProxyHeader(init));
@@ -69,8 +80,11 @@ async function authorizedFetch(url: string, init?: RequestInit): Promise<Respons
     return res;
   }
 
-  // 'session' 모드 — 401 이면 refresh → /auth/me 로 같은 계정임을 확인한 뒤에만 원 요청을 다시 보낸다(최대 1회)
-  return fetchWithSessionRecovery(() => fetch(url, withProxyHeader(init)));
+  // 'session' 모드 — 401 이면 refresh → /auth/me 로 같은 계정임을 확인한 뒤에만 원 요청을 다시 보낸다(최대 1회).
+  // signal = 보낼 때 인증 세대의 AbortSignal. 계정 전환·로그아웃으로 세대가 바뀌면 이 요청이 끊긴다(lib/auth/authorized-request.ts)
+  return fetchWithSessionRecovery((signal) =>
+    fetch(url, withProxyHeader({ ...init, signal: init?.signal ? AbortSignal.any([init.signal, signal]) : signal })),
+  );
 }
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
@@ -162,7 +176,7 @@ export async function deleteSourceImage(jobId: string, sourceImageId: number): P
 }
 
 /**
- * 작업 취소 (API-JOB-04, DELETE /jobs/{jobId} · 204 본문 없음). 서버가 status=archived로 바꾸고 종속 리소스를
+ * 작업 취소 (API-JOB-04, DELETE /jobs/{jobId}). 서버가 status 를 취소(구 서버 archived · 새 서버 cancelled)로 바꾸고 종속 리소스를
  * 정리한다. 진입점은 S0 ✕(F-JOB-07)이며 N1 draft · N2~N6 에서 같은 흐름으로 쓴다.
  */
 export async function cancelJob(jobId: string): Promise<void> {

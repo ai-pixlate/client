@@ -4,7 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { useRouter } from 'next/navigation';
 
 import {
-  selectN6RenderTask,
+  resolveN6RenderPhase,
   isN6RenderStatusUnknown,
   resetN6RenderStatusTracking,
   useJobTasksQuery,
@@ -58,20 +58,34 @@ import { ZoomControls } from './n5/n5-toolbar';
 // 진행 모달을 얹는다. 닫아도 렌더는 계속되고 폴링도 멈추지 않으며, 끝나면 완료 화면으로 바뀐다.
 // ─────────────────────────────────────────────────────────────────
 
-function RenderFailed({ onRetry, retryPending }: { onRetry: () => void; retryPending: boolean }) {
+/**
+ * 최종 렌더 실패(새 서버 failed · N6 · 구 서버 reviewing + 실패 task). 버튼은 현재 최종 렌더 task 의 retryable === true 일 때만 둔다
+ * (JOB-05 — server PR #157 README 7.8 ③⑤). errorCode(PROCESSING_TIMEOUT 포함)나 재시도 횟수로 정하지 않는다 — 시간 초과도 서버가
+ * retryable=true 를 주면 재시도할 수 있다(PM 11-25). 한도 소진 · 렌더러 불일치처럼 retryable=false 면 눌러도 409 인 버튼을
+ * 두지 않고 다시 렌더링할 수 없다는 안내만 둔다(Figma 에 이 상태가 없어 같은 자리 · 같은 글자 체계로 최소 보완). [중단](→ N5)은 G17 후속.
+ * 저장 대기(awaiting_save)에는 이 화면이 없다 — 저장 대기의 POST /render 는 409 라 부르지 않는다.
+ */
+function RenderFailed({ onRetry, retryPending, retryable }: { onRetry: () => void; retryPending: boolean; retryable: boolean }) {
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
       <p className="text-[14px] text-red-500" data-testid="n6-render-error">
         최종 이미지 렌더링에 실패했습니다.
       </p>
-      <button
-        type="button"
-        onClick={onRetry}
-        disabled={retryPending}
-        className="rounded-[6px] bg-[#171717] px-8 py-3.5 text-[14px] font-medium tracking-[-0.03em] text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        {retryPending ? '재시도 중...' : '다시 렌더링'}
-      </button>
+      {retryable ? (
+        <button
+          type="button"
+          data-testid="n6-render-retry"
+          onClick={onRetry}
+          disabled={retryPending}
+          className="rounded-[6px] bg-[#171717] px-8 py-3.5 text-[14px] font-medium tracking-[-0.03em] text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {retryPending ? '재시도 중...' : '다시 렌더링'}
+        </button>
+      ) : (
+        <p className="text-[14px] text-[#707070]" data-testid="n6-render-retry-unavailable">
+          이 작업은 다시 렌더링할 수 없습니다.
+        </p>
+      )}
     </div>
   );
 }
@@ -667,7 +681,7 @@ function PendingExportPanel() {
             data-testid="n6-pending-save"
             className="w-full cursor-not-allowed rounded-[6px] border border-[#eaeaea] bg-white px-8 py-3.5 text-[14px] font-medium tracking-[-0.03em] text-[#999]"
           >
-            보관함에 저장하기
+            저장하고 보관함으로 가기
           </button>
         </div>
       </div>
@@ -818,7 +832,7 @@ function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeli
             </p>
           )}
 
-          {/* [보관함에 저장] — 서버 저장 성공(200) 뒤에만 보관함(M1 '/')으로 이동한다. 실패하면 N6 에 남아 오류를 보이고 다시 누를 수 있다.
+          {/* [저장하고 보관함으로 가기] — 서버 저장 성공(200) 뒤에만 보관함(M1 '/')으로 이동한다. 실패하면 N6 에 남아 오류를 보이고 다시 누를 수 있다.
               성공 뒤 이동하는 동안에도 다시 누르지 못하게 둔다. 저장 완료 상태 글자(디자인에 없는 초록 「보관함에 저장됨」)는 두지 않는다 */}
           <button
             type="button"
@@ -827,7 +841,7 @@ function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeli
             disabled={saveMutation.isPending || saveMutation.isSuccess}
             className="w-full rounded-[6px] border border-[#eaeaea] bg-white px-8 py-3.5 text-[14px] font-medium tracking-[-0.03em] text-[#171717] transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {saveMutation.isPending || saveMutation.isSuccess ? '저장하는 중…' : '보관함에 저장'}
+            {saveMutation.isPending || saveMutation.isSuccess ? '저장하는 중…' : '저장하고 보관함으로 가기'}
           </button>
           {saveMutation.isError && (
             <p className="text-[12px] text-red-500" data-testid="n6-save-error">
@@ -854,13 +868,15 @@ export function N6ResultView({ jobId }: { jobId: string }) {
   const tasksQuery = useJobTasksQuery(jobId, { polling: true });
   const renderMutation = useN6RenderMutation(jobId);
 
-  // 현재 최종 렌더 = N6 · render · job · 현재 jobId 1건(lib/queries/n6-render-task.ts). taskId·status 로 최신을 추정하지 않는다
-  const renderSelection = selectN6RenderTask(tasksQuery.data, jobId);
-  const renderItem = renderSelection.kind === 'single' ? renderSelection.task : undefined;
-  // 후보 2건 이상 — 서버 응답 invariant 위반. 어느 것도 골라 진행하지 않고 다음 응답을 기다린다
-  const renderAmbiguous = renderSelection.kind === 'ambiguous';
-  const renderFailed = renderItem?.status === 'failed';
-  const renderDone = renderItem?.status === 'done';
+  // 현재 최종 렌더 = N6 · render · job · 현재 jobId 1건(lib/queries/n6-render-task.ts). taskId·status 로 최신을 추정하지 않는다.
+  // 화면 상태는 그 task 와 작업 상태(jobStatus · userFacingStatus — 새 서버 rendering · awaiting_save · failed, 구 서버 reviewing)를
+  // 함께 본다(resolveN6RenderPhase). 둘이 어긋나면 완료로 추정하지 않고 다시 조회한다(unresolved).
+  const renderPhase = resolveN6RenderPhase(tasksQuery.data, jobId);
+  const renderItem = renderPhase.kind === 'rendering' || renderPhase.kind === 'ready' || renderPhase.kind === 'failed' ? renderPhase.task : undefined;
+  // 후보 2건 이상(invariant 위반) · 작업 상태와 어긋남 — 어느 것도 골라 진행하지 않고 다음 응답을 기다린다
+  const renderAmbiguous = renderPhase.kind === 'unresolved' && renderPhase.reason !== 'none';
+  const renderFailed = renderPhase.kind === 'failed';
+  const renderDone = renderPhase.kind === 'ready';
 
   // 0건(관측 전)·여러 건(invariant 위반)이 상한을 넘게 이어지면 무한 로딩으로 숨기지 않고 상태 확인 불가로 바꾼다.
   // polling 중단도 같은 기준이다(useJobTasksQuery) — page.tsx 와 같은 /tasks query 를 쓰므로 판단을 query 계층에 둔다
@@ -914,6 +930,7 @@ export function N6ResultView({ jobId }: { jobId: string }) {
           renderMutation.mutate();
         }}
         retryPending={renderMutation.isPending}
+        retryable={renderPhase.kind === 'failed' && renderPhase.retryable}
       />
     );
   } else if (!renderDone) {
@@ -972,13 +989,12 @@ export function N6ResultView({ jobId }: { jobId: string }) {
           나온다(그래서 상한도 40→60으로 바꿨다) — pr(3.125vw, 60px 상한)과
           gap(3.594vw, 69px 상한) 쪽은 원래도 N6 자체 실측값이라 그대로 둔다. */}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 pt-10 pr-[clamp(45px,3.125vw,60px)] pb-8 pl-[clamp(0px,calc(7.2917vw_-_80px),60px)]">
-        <div className="flex shrink-0 items-center gap-4">
-          <h1 ref={headingRef} tabIndex={-1} className="text-[20px] font-semibold tracking-[-0.02em] text-[#171717] outline-none">
+        {/* 예전 제목·설명 행 자리(h30) — 최신 Figma 에서 빠지고 공통 작업 헤더(JobHeader)의 화면명이 대신한다.
+            프리뷰·패널 top 86 을 바꾸지 않도록 높이만 남긴다(Figma 정합은 후속). h1 은 화면 읽기용이자 렌더 진행 창의 포커스 복귀 자리다 */}
+        <div className="h-[30px] shrink-0">
+          <h1 ref={headingRef} tabIndex={-1} className="sr-only">
             저장 및 내보내기
           </h1>
-          <p className="text-[14px] tracking-[-0.01em] text-[#707070]">
-            최종 결과물을 확인하고 내려받거나 보관함에 저장합니다.
-          </p>
         </div>
 
         {body}

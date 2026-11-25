@@ -342,15 +342,23 @@ function getN5RenderBlocksFromState(referrer = ''): ApiTextBlock[] {
   return getN5BlocksFromState(undefined, referrer).map((block) => withMockLegacyBox(block, n5LegacyLayoutBox.get(block.id as number)));
 }
 
-function getN5BlocksFromState(sectionId?: number, referrer = ''): ApiTextBlock[] {
-  seedN5LegacyLayout(referrer);
-  const overlay = isN5ErrorScenario(referrer)
+/**
+ * ?mockScenario 별 블록 overlay. GET /blocks 와 PATCH /blocks/:id 응답이 같은 표현을 쓰도록 한 곳에서 고른다 —
+ * 실서버는 PATCH 응답 block 과 이후 GET /blocks 가 같은 표현이다(PATCH 응답만 원본 state 를 주면 n5-clean 에서 지운 signal 이 되살아난다)
+ */
+function getN5ScenarioBlockOverlay(referrer: string): ((block: ApiTextBlock) => ApiTextBlock) | null {
+  return isN5ErrorScenario(referrer)
     ? applyN5ErrorBlocks
     : isN5OverlapScenario(referrer)
       ? applyN5OverlapBlock
       : isN5CleanScenario(referrer)
         ? applyN5CleanBlock
         : null;
+}
+
+function getN5BlocksFromState(sectionId?: number, referrer = ''): ApiTextBlock[] {
+  seedN5LegacyLayout(referrer);
+  const overlay = getN5ScenarioBlockOverlay(referrer);
   const all = [...n5BlockState.values()].map((b) => (overlay ? overlay(b) : b));
   return sectionId != null ? all.filter((b) => b.sectionId === sectionId) : all;
 }
@@ -1555,7 +1563,8 @@ export const handlers = [
     }
     n5SectionRenderState.set(sectionId, { ...render, attempt: { taskId: rerenderTaskId, status: 'pending', errorCode: null, retryable: false } });
 
-    const [withFingerprint] = withSectionInputFingerprint([updated], request.referrer);
+    const overlay = getN5ScenarioBlockOverlay(request.referrer);
+    const [withFingerprint] = withSectionInputFingerprint([overlay ? overlay(updated) : updated], request.referrer);
     return HttpResponse.json({ block: withFingerprint, rerenderTaskId });
   }),
 
