@@ -758,19 +758,18 @@ function NewJobPageInner() {
           예전 제목·설명 행(이미지 입력)은 최신 Figma 에서 빠졌다 — 작업용 헤더의 화면명이 대신한다. */}
       <div className="flex min-h-0 min-w-0 flex-1 gap-5 px-[60px] pt-[96px] pb-[60px]">
         <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
-          {/* 국가선택 / 언어선택 — Figma(525:3023, node 787:6016) 두 필드를
-              한 줄에 배치. 각 필드 그룹은 w-[385px] 고정이고(늘어나 퍼지는
-              구조가 아니다), 두 그룹 사이 gap은 40px다 — 예전엔 flex-1 +
-              justify-between이라 뷰포트가 넓을수록 두 select가 거의 절반씩
-              퍼졌다(N1 Figma 재정합 3단계). */}
-          <div data-testid="n1-target-row" className="flex shrink-0 items-center gap-10 self-start">
-            <div className="flex w-[385px] shrink-0 items-center gap-5">
+          {/* 국가선택 / 언어선택 — Figma(525:3023, node 787:6016) 두 필드를 한 줄에 배치. 1920 에서 각 그룹 385 · 사이 gap 40 ·
+              행 810 이다(넓어져도 더 퍼지지 않는다 — 최대 810). 좌측 열이 810 보다 좁은 창(1512 이하)에서는 행이 열 폭을 따르고
+              두 그룹이 반씩 줄어든다(라벨 41 고정 · select 가 줄어듦) — 예전 385 고정은 1512·1440·1280 에서 언어 선택이
+              우측 패널 밑으로 넘쳤다(실측: 행 오른쪽 950 > 패널 x 936·864·704). */}
+          <div data-testid="n1-target-row" className="flex w-full max-w-[810px] min-w-0 shrink-0 items-center gap-10 self-start">
+            <div className="flex min-w-0 flex-1 items-center gap-5">
               <p className="shrink-0 text-[12px] tracking-[-0.02em] text-[#707070]">국가선택</p>
-              <div className="relative flex-1">
+              <div className="relative min-w-0 flex-1">
                 <select
                   value={targetCountry}
                   onChange={(e) => handleCountryChange(e.target.value)}
-                  className="h-[39px] w-full appearance-none rounded-[6px] border border-[#eaeaea] bg-white px-[14px] text-[14px] tracking-[-0.01em] text-[#707070] outline-none focus:border-[#ff6a38]"
+                  className="h-[39px] w-full appearance-none truncate rounded-[6px] border border-[#eaeaea] bg-white pr-9 pl-[14px] text-[14px] tracking-[-0.01em] text-[#707070] outline-none focus:border-[#ff6a38]"
                 >
                   <option value="">선택하세요</option>
                   {COUNTRY_OPTIONS.map((o) => (
@@ -783,14 +782,14 @@ function NewJobPageInner() {
               </div>
             </div>
 
-            <div className="flex w-[385px] shrink-0 items-center gap-5">
+            <div className="flex min-w-0 flex-1 items-center gap-5">
               <p className="shrink-0 text-[12px] tracking-[-0.02em] text-[#707070]">언어선택</p>
               {/* 국가 select와 같은 구조 — 국가를 고르면 기본 언어가 자동으로 들어가고, 여기서 다른 언어로 바꿀 수 있다 */}
-              <div className="relative flex-1">
+              <div className="relative min-w-0 flex-1">
                 <select
                   value={targetLanguage}
                   onChange={(e) => setTargetLanguage(e.target.value)}
-                  className="h-[39px] w-full appearance-none rounded-[6px] border border-[#eaeaea] bg-white px-[14px] text-[14px] tracking-[-0.01em] text-[#707070] outline-none focus:border-[#ff6a38]"
+                  className="h-[39px] w-full appearance-none truncate rounded-[6px] border border-[#eaeaea] bg-white pr-9 pl-[14px] text-[14px] tracking-[-0.01em] text-[#707070] outline-none focus:border-[#ff6a38]"
                 >
                   <option value="">선택하세요</option>
                   {LANGUAGE_OPTIONS.map((o) => (
@@ -862,9 +861,12 @@ function NewJobPageInner() {
               // variant를 그대로 "파일 추가" 자리로 쓴다(Figma에 별도
               // "+이미지 추가" 헤더 버튼은 없다). up/down 버튼은 이 카드에
               // 없다(X만 있음) — 대신 드래그 재정렬로 대체한다.
-              <div className="flex h-full w-full flex-col gap-4 overflow-y-auto p-6">
+              // 열 수는 업로더 안쪽 폭(container query)으로 정한다 — 카드가 「파일 추가」 내용(약 208px)보다 좁아지지 않게
+              // 880 이상 4열(1920·1728) · 650 이상 3열(1512·1440) · 그보다 좁으면 2열(1280). 예전 4열 고정은 1280 에서 카드가
+              // 112px 로 줄고 「파일 추가」 문구가 카드 밖으로 넘쳐 그 카드만 키가 커졌다(실측 237 vs 146).
+              <div className="@container flex h-full w-full flex-col gap-4 overflow-y-auto p-6">
                 <p className="text-[14px] text-[#707070]">이미지 {images.length}개</p>
-                <div className="grid grid-cols-4 gap-x-4 gap-y-5">
+                <div className="grid grid-cols-2 gap-x-4 gap-y-5 @min-[650px]:grid-cols-3 @min-[880px]:grid-cols-4">
                   {images.map((img) => {
                     const isDragging = draggingLocalId === img.localId;
                     const isDragOverTarget = dragOverLocalId === img.localId && draggingLocalId !== img.localId;
@@ -941,15 +943,19 @@ function NewJobPageInner() {
                     );
                   })}
 
-                  <div className="flex aspect-[244/320] w-full max-w-[244px] flex-col items-center justify-center gap-5 rounded-[8px] border border-[#eaeaea] bg-white px-6 py-8">
+                  <div
+                    data-testid="n1-add-file-card"
+                    className="flex aspect-[244/320] w-full max-w-[244px] min-w-0 flex-col items-center justify-center gap-5 overflow-hidden rounded-[8px] border border-[#eaeaea] bg-white px-4 py-8"
+                  >
                     <div className="flex size-10 items-center justify-center rounded-full border border-[#eaeaea] bg-white">
                       <PlusIcon size={16} />
                     </div>
                     <div className="flex flex-col items-center gap-2 text-center">
-                      <p className="text-[16px] font-medium tracking-[-0.03em] whitespace-nowrap text-[#171717]">
+                      {/* 좁은 카드에서는 단어 단위로 줄바꿈한다(카드 밖으로 넘치지 않게) */}
+                      <p className="text-[16px] font-medium tracking-[-0.03em] break-keep text-[#171717]">
                         파일을 드래그하거나 선택
                       </p>
-                      <p className="text-[12px] tracking-[-0.01em] whitespace-nowrap text-[#707070]">JPG, PNG · 최대 1GB</p>
+                      <p className="text-[12px] tracking-[-0.01em] break-keep text-[#707070]">JPG, PNG · 최대 1GB</p>
                     </div>
                     {/* 기존 빈 상태와 동일한 label 패턴 — htmlFor로 숨은
                         input#image-upload를 직접 연다(accessible name이
