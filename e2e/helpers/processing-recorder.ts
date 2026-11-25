@@ -4,7 +4,7 @@ import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 
 // ─────────────────────────────────────────────────────────────────
 // N2/N4 처리 화면을 사용자 눈 기준으로 시간 순서대로 기록한다.
-// - dom: DOM 이 바뀔 때마다 h1·표시 %·5단계 행·GIF caption·status tag·LOG 제목·LOG 설명 줄·progress 안내
+// - dom: DOM 이 바뀔 때마다 h1·표시 %·단계 묶음 행·LOG 현재 상태·LOG 제목·LOG 설명 줄·progress 안내
 //   (연속 중복 제거)
 // - polls: GET /jobs/{jobId}/tasks 응답마다 서버가 보낸 값
 // 두 기록 모두 페이지의 Date.now() 기준이라 같은 시계로 비교할 수 있다. exposeFunction 으로
@@ -22,11 +22,6 @@ export interface DomSnap {
   /** 화면 전체에서 글자가 정확히 「진행 중」인 요소 수 — 항상 최대 1개여야 한다 */
   activeTexts: number;
   cap: string;
-  /** 패널 좌상단 상태 태그(진행중·완료·분석 실패) */
-  tag: string;
-  /** 왼쪽 visual 영역 큰 headline 과 그 아래 설명 */
-  headline: string;
-  visualDescription: string;
   /** LOG 제목(지금 처리하는 일 · 분석 완료 …) */
   heading: string;
   line: string;
@@ -73,15 +68,12 @@ export async function recordProcessing(page: Page): Promise<ProcessingRecord> {
       const groupEls = Array.from(document.querySelectorAll('[data-testid="processing-step"]'));
       const rows = groupEls.map((g) => code[g.getAttribute('data-state') ?? ''] ?? '?').join('');
       const activeTexts = Array.from(document.querySelectorAll('p, span')).filter((el) => el.childElementCount === 0 && el.textContent?.trim() === '진행 중').length;
-      const cap = Array.from(document.querySelectorAll('p')).find((p) => p.className.includes('text-[#ff6a38]'))?.textContent?.trim() ?? '';
+      // 현재 처리 상태 — 예전 GIF 하단 caption 이 최신 Figma 에서 빠져 LOG 설명 줄 앞으로 옮겨졌다
+      const cap = document.querySelector('[data-testid="processing-log-status"]')?.textContent?.trim() ?? '';
       const line = document.querySelector('[data-testid="processing-log-description"]')?.textContent?.replace(/\s+/g, ' ').trim() ?? '';
-      const tag = document.querySelector('div[class*="bg-[#f5f5f5]"] > p')?.textContent?.trim() ?? '';
-      const headlineEl = document.querySelector('p[class*="text-[28px]"]');
-      const headline = headlineEl?.textContent?.trim() ?? '';
-      const visualDescription = headlineEl?.nextElementSibling?.textContent?.trim() ?? '';
       const heading = document.querySelector('h2')?.textContent?.trim() ?? '';
       const hint = bar?.nextElementSibling?.textContent?.trim() ?? '';
-      const entry = { h1, pct: bar ? Number(bar.getAttribute('aria-valuenow')) : null, rows, activeTexts, cap, tag, headline, visualDescription, heading, line, hint };
+      const entry = { h1, pct: bar ? Number(bar.getAttribute('aria-valuenow')) : null, rows, activeTexts, cap, heading, line, hint };
       const key = JSON.stringify(entry);
       if (key === last) return;
       last = key;
@@ -150,7 +142,7 @@ export function formatTimeline(rec: ProcessingRecord, from = 0, until = Infinity
     ...rec.polls.filter((p) => p.t >= from && p.t <= until).map((p) => ({ t: p.t, s: `POLL ${p.currentStep} ${p.jobStatus} p=${p.progress} [${p.stages}] ${p.ap ?? ''}` })),
     ...rec.dom
       .filter((d, i, all) => d.t >= from && d.t <= until && (d.pct !== null || d.h1 !== all[i - 1]?.h1))
-      .map((d) => ({ t: d.t, s: d.pct !== null ? `  ${d.h1} ${d.pct}% ${d.rows} [${d.tag}] "${d.cap}" ${d.heading}: ${d.line} / ${d.hint}` : `  → 화면: ${d.h1 || '(h1 없음)'}` })),
+      .map((d) => ({ t: d.t, s: d.pct !== null ? `  ${d.h1} ${d.pct}% ${d.rows} "${d.cap}" ${d.heading}: ${d.line} / ${d.hint}` : `  → 화면: ${d.h1 || '(h1 없음)'}` })),
   ].sort((a, b) => a.t - b.t);
   return rows.map((r) => `${((r.t - t0) / 1000).toFixed(2).padStart(6)}s ${r.s}`).join('\n');
 }
@@ -194,7 +186,7 @@ export function expectCompletionCopy(
   rec: ProcessingRecord,
   title: string,
   nextStep: string,
-  copy: { headline: string; visualDescription: string; heading: string; line: string; hint: string },
+  copy: { heading: string; line: string; hint: string },
   context: string,
   from = 0,
 ) {
@@ -204,18 +196,13 @@ export function expectCompletionCopy(
   const during = screen.filter((d) => d.t >= donePollAt);
   expect(before.length, context).toBeGreaterThan(0);
   for (const d of before) {
-    expect(d.tag, `완료 전 상태 태그\n${context}`).not.toBe('완료');
     expect(d.heading, `완료 전 LOG 제목\n${context}`).not.toBe(copy.heading);
-    expect(d.headline, `완료 전 headline\n${context}`).not.toBe(copy.headline);
     expect(d.rows, `완료 전 모든 묶음 완료 금지\n${context}`).not.toMatch(/^D+$/);
   }
   const at100 = during.filter((d) => d.pct === 100);
   expect(at100.length, `완료 표시 중 100%\n${context}`).toBeGreaterThan(0);
   for (const d of during) {
-    expect(d.tag, `완료 표시 중 상태 태그\n${context}`).toBe('완료');
     expect(d.rows, `완료 표시 중 모든 묶음 완료\n${context}`).toMatch(/^D+$/);
-    expect(d.headline, `완료 표시 중 headline\n${context}`).toBe(copy.headline);
-    expect(d.visualDescription, `완료 표시 중 visual 설명\n${context}`).toBe(copy.visualDescription);
     expect(d.heading, `완료 표시 중 LOG 제목\n${context}`).toBe(copy.heading);
     expect(d.line, `완료 표시 중 LOG 설명\n${context}`).toBe(copy.line);
     expect(d.hint, `완료 표시 중 안내\n${context}`).toBe(copy.hint);

@@ -3,7 +3,8 @@ import { type Page, expect, test } from '@playwright/test';
 import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 
 // ─────────────────────────────────────────────────────────────────
-// N2·N4 전체 실패 화면 (Figma 793:4890 · 795:4820) — Chromium.
+// N2·N4 전체 실패 화면 (Figma 793:4890 · 795:4820) — Chromium. 위치는 최신 shell(헤더 72 · 패널 y96)인 793:4890 기준이다 —
+// 795:4820 은 예전 헤더 92 · 패널 y116 이라 위치값은 쓰지 않고, N4 도 같은 위치를 확인한다.
 // 폴링 응답의 currentStep·jobStatus·items 만 고정한다. [다시 시도]·[중단]은 abort/resume API 전까지 동작이 없다.
 // ─────────────────────────────────────────────────────────────────
 
@@ -70,7 +71,8 @@ for (const c of CASES) {
   test(`${c.step} 전체 실패는 Figma 오류 화면과 [다시 시도]·[중단]만 보여 준다`, async ({ page }) => {
     await openWith(page, { currentStep: c.step, jobStatus: 'failed' });
     await expect(errorPanel(page)).toBeVisible();
-    await expect(errorPanel(page).getByText('오류', { exact: true })).toBeVisible();
+    // 예전 좌상단 「오류」 칩은 최신 Figma 793:4890 에 없다
+    await expect(errorPanel(page).getByText('오류', { exact: true })).toHaveCount(0);
     await expect(errorPanel(page).getByText('ERROR!')).toBeVisible();
     await expect(errorPanel(page).getByText(c.section)).toBeVisible();
     await expect(errorPanel(page).getByRole('heading', { name: c.title })).toBeVisible();
@@ -85,7 +87,6 @@ for (const c of CASES) {
     // 값은 Figma 와 같다
     await expect(errorPanel(page).getByText('ERROR!')).toHaveCSS('font-size', '58px');
     await expect(errorPanel(page).getByText('ERROR!')).toHaveCSS('color', 'rgb(229, 72, 77)');
-    await expect(errorPanel(page).getByText('오류', { exact: true })).toHaveCSS('color', 'rgb(229, 72, 77)');
     await expect(retry(page)).toHaveCSS('background-color', 'rgb(23, 23, 23)');
     await expect(abort(page)).toHaveCSS('border-color', 'rgb(234, 234, 234)');
     for (const button of [retry(page), abort(page)]) {
@@ -98,14 +99,22 @@ for (const c of CASES) {
     // 1920 위치
     const box = async (loc: ReturnType<Page['locator']>) => (await loc.boundingBox())!;
     const panelBox = await box(errorPanel(page).locator('xpath=..'));
-    expect([panelBox.x, panelBox.y, panelBox.width, panelBox.height]).toEqual([120, 108, 1740, 892]);
+    expect([panelBox.x, panelBox.y, panelBox.width, panelBox.height]).toEqual([120, 96, 1740, 924]);
+    const near = (actual: number, expected: number, label: string) => expect(Math.abs(actual - expected), `${label}: ${actual} ≈ ${expected}`).toBeLessThanOrEqual(1);
+    const nearBox = (b: { x: number; y: number; width: number; height: number }, e: readonly number[], label: string) =>
+      [b.x, b.y, b.width, b.height].forEach((v, i) => near(v, e[i], `${label}[${i}]`));
+    // Figma 793:4890 — 비주얼 188/264/1044/589 · 구분선 1314/156/1/764 · 오른쪽 열 1395/264/405/589
     const image = await box(errorPanel(page).locator('img').first());
-    expect(Math.abs(image.x - 188)).toBeLessThanOrEqual(1);
-    expect(Math.abs(image.width - 1044)).toBeLessThanOrEqual(1);
-    expect(Math.abs(image.height - 520)).toBeLessThanOrEqual(1);
-    expect(Math.abs(image.y - (108 + 186))).toBeLessThanOrEqual(2);
+    nearBox(image, [188, 264, 1044, 589], 'image');
+    nearBox(await box(page.getByTestId('processing-error-divider')), [1314, 156, 1, 764], 'divider');
+    const title = await box(errorPanel(page).getByText('ERROR!'));
+    near(title.y, 264, 'ERROR! y');
+    // 오른쪽 열 안 — ERROR! 64 · 4 · 진행율 · 24 · 막대(y+106) / 상태 블록(y+432, 68) · 52 · 버튼(y+552)
+    near((await box(errorPanel(page).getByRole('progressbar'))).y, 264 + 106, 'bar y');
+    nearBox(await box(errorPanel(page).getByRole('alert')), [1395, 264 + 432, 405, 68], 'status block');
     const retryBox = await box(retry(page));
     const abortBox = await box(abort(page));
+    near(retryBox.y, 264 + 552, 'buttons y');
     expect(Math.abs(retryBox.x - 1395)).toBeLessThanOrEqual(1);
     expect(Math.abs(abortBox.x + abortBox.width - 1800)).toBeLessThanOrEqual(1);
     expect(abortBox.x - (retryBox.x + retryBox.width)).toBe(20);

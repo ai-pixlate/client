@@ -188,13 +188,13 @@ test('N4 A — 일부 섹션 render=done 이어도 translate 가 running 이면 
   // tick 1: 현재 관측 가능한 running 은 translate(01 묶음) — render=done 을 우선하지 않는다. 응답에 없는 inpaint 를 완료로
   // 보지 않으므로 01 묶음은 진행 중 그대로다
   await expect.poll(async () => (await n4Log(page)).at(-1)?.rows, { timeout: 10_000 }).toEqual(rowsOf(A, P, P, P));
-  await expect(page.getByText(TRANSLATE_CAPTION, { exact: true })).toBeVisible();
+  await expect(page.getByTestId('processing-log-status')).toHaveText(TRANSLATE_CAPTION);
   const atTranslate = await readProgress(page);
   expect(atTranslate).toBeLessThan(100);
 
   // tick 2: render running(서버 progress 0.65 → 0.60) — 여전히 N4, 100% 아님, render 표시(03 진행 중 · 04 대기)
   await expect.poll(async () => (await n4Log(page)).at(-1)?.rows, { timeout: 10_000 }).toEqual(rowsOf(D, D, A, P));
-  await expect(page.getByText(RENDER_CAPTION, { exact: true })).toBeVisible();
+  await expect(page.getByTestId('processing-log-status')).toHaveText(RENDER_CAPTION);
   await expect(page.getByRole('heading', { name: '번역 중' })).toBeVisible();
   const atRender = await readProgress(page);
   expect(atRender).toBeLessThan(100);
@@ -245,7 +245,7 @@ test('N4 C — 첫 render 관측이 progress=0.9 여도 render 는 03 진행 중
   await expect(page.getByRole('heading', { name: '번역 중' })).toBeVisible({ timeout: 5_000 });
 
   await expect.poll(async () => (await n4Log(page)).at(-1)?.rows, { timeout: 10_000 }).toEqual(rowsOf(D, D, A, P));
-  await expect(page.getByText(RENDER_CAPTION, { exact: true })).toBeVisible();
+  await expect(page.getByTestId('processing-log-status')).toHaveText(RENDER_CAPTION);
   // 시간이 지나도 03 → 04 로 넘어가는 최소 체류·자동 전환이 없다
   await page.clock.fastForward('05:00');
   await expect.poll(async () => (await n4Log(page)).at(-1)?.rows).toEqual(rowsOf(D, D, A, P));
@@ -301,8 +301,6 @@ test('N4 D — jobStatus=failed·render=done·progress=1 이어도 완료가 아
 const N4_TITLE = '번역 중';
 const INPAINT_CAPTION = '원문 제거·배경 복원 중';
 const N4_COMPLETION_COPY = {
-  headline: '번역 작업이 완료되었습니다.',
-  visualDescription: '번역 결과를 반영해 검수 화면으로 이동합니다.',
   heading: '번역 완료',
   line: '번역과 이미지 적용이 완료되었습니다.',
   hint: '검수 화면으로 이동합니다.',
@@ -435,7 +433,7 @@ test('N4 E-5 — N4 도중 새로 시작(페이지 이동)한 다음 실행이 �
   expectCompletionPresentation(rec, N4_TITLE, 'N5', timeline, secondFrom);
 });
 
-test('N4 E-6 — N5 응답 뒤 완료 표시 동안 상태 태그·LOG·안내가 모두 완료를 말하고, 그 전에는 완료라고 하지 않는다', async ({ page }) => {
+test('N4 E-6 — N5 응답 뒤 완료 표시 동안 LOG·안내가 모두 완료를 말하고, 그 전에는 완료라고 하지 않는다', async ({ page }) => {
   test.setTimeout(90_000);
   const rec = await recordProcessing(page);
   await setN4Script(page, [
@@ -450,10 +448,8 @@ test('N4 E-6 — N5 응답 뒤 완료 표시 동안 상태 태그·LOG·안내�
   const { first100At, leftAt } = expectCompletionPresentation(rec, N4_TITLE, 'N5', timeline);
   expectCompletionCopy(rec, N4_TITLE, 'N5', N4_COMPLETION_COPY, timeline);
   const processing = processingSnaps(rec, N4_TITLE, 'N5');
-  expect(new Set(processing.map((d) => d.tag)), timeline).toEqual(new Set(['진행중']));
   expect(new Set(processing.map((d) => d.heading)), timeline).toEqual(new Set(['지금 처리하는 일']));
   expect(new Set(processing.map((d) => d.hint)), timeline).toEqual(new Set(['완료되면 검수 화면으로 자동 이동합니다.']));
-  expect(new Set(processing.map((d) => d.headline)), timeline).toEqual(new Set(['번역과 배경 복원을 함께 진행하고 있습니다.']));
   console.log(`N4 100% 노출 ${leftAt - first100At}ms`);
 });
 
