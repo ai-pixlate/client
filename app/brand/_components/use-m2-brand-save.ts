@@ -4,16 +4,21 @@ import { useCallback, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
 import type { ApiBrand, ApiBrandLogo } from '@/lib/api/brand-schema';
-import { ApiRequestError, deleteBrandLogo, getBrandLogos, updateBrand, uploadBrandLogo } from '@/lib/api/pixlate';
+import { ApiRequestError, deleteBrandLogo, getBrandLogos, getBrands, updateBrand, uploadBrandLogo } from '@/lib/api/pixlate';
 import { getAuthEpoch } from '@/lib/auth/session-store';
-import { planM2LogoChanges, reconcileM2AfterSave, toM2BrandFormValue, toM2BrandUpdate } from '@/lib/brand/m2-adapter';
+import { findDuplicateBrand, planM2LogoChanges, reconcileM2AfterSave, toM2BrandFormValue, toM2BrandUpdate } from '@/lib/brand/m2-adapter';
 import type { M2BrandFormValue } from '@/lib/brand/m2-form';
 import { pixlateKeys } from '@/lib/queries/pixlate';
+
+import { toBrandRef, type M2BrandRef } from './use-m2-brand-create';
 
 // ─────────────────────────────────────────────────────────────────
 // M2 저장 — PATCH /brands/{brandId}(바뀐 항목만) → 로고 DELETE → 로고 POST → 로고 목록 다시 받기.
 // 화면 정본은 서버 응답이다(PATCH 응답 Brand + 다시 받은 로고 목록). 저장 성공을 가정해 draft 로 덮지 않는다.
 // - 브랜드 PATCH 가 실패하면 로고는 건드리지 않고 멈춘다 — draft 는 그대로 남는다.
+// - 이름(한글명·영문명)을 바꾸면 PATCH 전에 GET /brands 로 같은 셀러 안 중복을 확인한다(F-ACC-02a — 등록과 같은 findDuplicateBrand,
+//   자기 자신은 제외). 중복이면 PATCH·로고 저장을 하지 않고 그 기존 브랜드로 가는 길을 보인다. 목록을 받지 못하면 이름을 확인할 수 없어 저장하지 않는다.
+//   FE 사전 확인은 동시 수정을 막지 못한다 — 서버 409 를 받으면 duplicate 와 같은 「겹침」으로 안내한다.
 // - 로고는 하나씩 보내고, 실패한 것만 draft 에 남긴다(실패한 삭제는 계속 빠진 채, 실패한 추가는 저장 전 로고로).
 // - 저장 중에는 다시 저장하지 않는다(중복 요청 금지).
 // - 신규 등록(use-m2-brand-create.ts)은 POST /brands 성공 뒤 같은 save 를 등록된 brandId 로 불러 로고만 올린다.
@@ -21,11 +26,22 @@ import { pixlateKeys } from '@/lib/queries/pixlate';
 //   새 세션으로 보내지 않고, 실패 안내도 띄우지 않는다(null). TanStack mutation 이 아니라 lib/auth/mutation-epoch.ts 를 타지 않는다.
 // ─────────────────────────────────────────────────────────────────
 
+/** 브랜드 정보 저장이 멈춘 이유 — duplicate: FE 사전 확인 · conflict: 서버 409 · precheck-failed: 중복 확인용 목록 조회 실패 · failed: 그 밖 */
+export type M2BrandFailReason = 'duplicate' | 'conflict' | 'precheck-failed' | 'failed';
+
 export type M2SaveState =
   | { kind: 'idle' }
   | { kind: 'saving' }
   | { kind: 'success' }
-  | { kind: 'error'; brandFailed: boolean; failedDeletes: number; failedUploads: number };
+  | {
+      kind: 'error';
+      brandFailed: boolean;
+      failedDeletes: number;
+      failedUploads: number;
+      reason?: M2BrandFailReason;
+      /** duplicate 일 때 겹친 기존 브랜드 */
+      existing?: M2BrandRef;
+    };
 
 export interface M2SaveOutcome {
   complete: boolean;
@@ -57,13 +73,28 @@ export function useM2BrandSave(initialTarget: M2SaveTarget | null) {
       try {
         const patch = toM2BrandUpdate(baseline, draft);
         let savedBrand = brand;
+        const stopBrand = (reason: M2BrandFailReason, existing?: M2BrandRef) => {
+          setState({ kind: 'error', brandFailed: true, failedDeletes: 0, failedUploads: 0, reason, existing });
+          return { complete: false, draft, baseline };
+        };
+        if (patch && ('nameKo' in patch || 'nameEn' in patch)) {
+          let current: ApiBrand[];
+          try {
+            current = await queryClient.fetchQuery({ queryKey: pixlateKeys.brands(), queryFn: getBrands, staleTime: 0, retry: false });
+          } catch {
+            if (sessionChanged()) return null;
+            return stopBrand('precheck-failed');
+          }
+          if (sessionChanged()) return null;
+          const duplicate = findDuplicateBrand(current, draft, { excludeBrandId: brandId });
+          if (duplicate) return stopBrand('duplicate', toBrandRef(duplicate.brand));
+        }
         if (patch) {
           try {
             savedBrand = await updateBrand(brandId, patch);
-          } catch {
+          } catch (error) {
             if (sessionChanged()) return null;
-            setState({ kind: 'error', brandFailed: true, failedDeletes: 0, failedUploads: 0 });
-            return { complete: false, draft, baseline };
+            return stopBrand(error instanceof ApiRequestError && error.status === 409 ? 'conflict' : 'failed');
           }
           if (sessionChanged()) return null;
           queryClient.setQueryData(pixlateKeys.brand(brandId), savedBrand);

@@ -22,6 +22,9 @@ import {
   M2_EMPTY_FORM,
   resolveM2BrandTarget,
   resolveNewJobEntry,
+  findDuplicateBrand,
+  findCreatedBrand,
+  normalizeBrandName,
   toM2BrandCreate,
   toM2BrandFormValue,
   toM2BrandUpdate,
@@ -197,10 +200,47 @@ test('신규 등록 본문: 앞뒤 공백 제거 · 빈 개요·고객층은 nul
   assert.equal('logos' in withLogo, false);
 });
 
-test('M1 이미지 추가 생성: 0개 등록 · 1개 N1?brandId · 2개 이상 고르지 않는다', () => {
+test('전체 보관함 이미지 추가 생성: 0개 등록 · 1개 N1?brandId · 2개 이상은 브랜드 맥락이 없어 링크 없음', () => {
   assert.deepEqual(resolveNewJobEntry([]), { kind: 'create', href: '/brand?mode=create&next=n1' });
   assert.deepEqual(resolveNewJobEntry([brandDto]), { kind: 'n1', href: '/jobs/new?brandId=7' });
-  assert.deepEqual(resolveNewJobEntry([brandDto, { ...brandDto, id: 8 }]), { kind: 'choose', href: '/brand' });
+  assert.deepEqual(resolveNewJobEntry([brandDto, { ...brandDto, id: 8 }]), { kind: 'needs-brand-scope', href: null });
+});
+
+test('정규화(임시 기준): NFKC · 소문자 · 공백·특수문자 제거', () => {
+  assert.equal(normalizeBrandName(' Pix-late! '), 'pixlate');
+  assert.equal(normalizeBrandName('ＰＩＸＬＡＴＥ'), 'pixlate');
+  assert.equal(normalizeBrandName('pix late'), 'pixlate');
+  assert.equal(normalizeBrandName(' 픽슬 레이트 '), '픽슬레이트');
+  assert.equal(normalizeBrandName('!!!'), '');
+  assert.equal(normalizeBrandName(null), '');
+});
+
+test('중복 브랜드(F-ACC-02a): 한글명끼리·영문명끼리 정규화 비교 · 겹친 항목을 알려 준다', () => {
+  const list = [{ ...brandDto, id: 1, nameKo: '픽슬레이트', nameEn: 'Pixlate' }];
+  assert.deepEqual(findDuplicateBrand(list, { nameKo: ' 픽슬 레이트 ', nameEn: 'Other' })?.field, 'nameKo');
+  assert.deepEqual(findDuplicateBrand(list, { nameKo: '다른 이름', nameEn: '  PIX-LATE ' })?.field, 'nameEn');
+  assert.equal(findDuplicateBrand(list, { nameKo: '다른 이름', nameEn: 'Other' }), null);
+  assert.equal(findDuplicateBrand([], { nameKo: '픽슬레이트', nameEn: 'Pixlate' }), null);
+  // 한글명과 영문명을 서로 섞어 비교하지 않는다
+  assert.equal(findDuplicateBrand([{ ...brandDto, id: 1, nameKo: 'Pixlate', nameEn: 'Other' }], { nameKo: '다른', nameEn: 'Pixlate' }), null);
+  // 정규화 뒤 빈 이름은 비교하지 않는다(필수값 검증이 따로 막는다)
+  assert.equal(findDuplicateBrand([{ ...brandDto, id: 1, nameKo: '!!', nameEn: 'A' }], { nameKo: '??', nameEn: 'B' }), null);
+});
+
+test('수정: 자기 자신은 중복 검사에서 뺀다', () => {
+  const list = [{ ...brandDto, id: 1, nameKo: '픽슬레이트', nameEn: 'Pixlate' }, { ...brandDto, id: 2, nameKo: '두 번째', nameEn: 'Second' }];
+  assert.equal(findDuplicateBrand(list, { nameKo: '픽슬레이트', nameEn: ' PIXLATE ' }, { excludeBrandId: 1 }), null);
+  assert.equal(findDuplicateBrand(list, { nameKo: '픽슬레이트', nameEn: 'second' }, { excludeBrandId: 1 })?.brand.id, 2);
+});
+
+test('응답 유실 뒤 결과 확인: 같은 이름 새 브랜드는 「후보」일 뿐이다', () => {
+  const draft = { nameKo: '새 브랜드', nameEn: 'New' };
+  const old = { ...brandDto, id: 1, nameKo: '새 브랜드', nameEn: 'New' };
+  const made = { ...brandDto, id: 2, nameKo: '새 브랜드', nameEn: 'new' };
+  assert.deepEqual(findCreatedBrand([1], [old, made], draft), { kind: 'candidate', brand: made });
+  assert.deepEqual(findCreatedBrand([1], [old], draft), { kind: 'none' });
+  assert.deepEqual(findCreatedBrand([1], [old, made, { ...made, id: 3 }], draft), { kind: 'ambiguous' });
+  assert.deepEqual(findCreatedBrand([1], [old, { ...made, nameEn: 'Other' }], draft), { kind: 'none' });
 });
 
 console.log(`\nverify-m2-form: ${pass}건 통과`);

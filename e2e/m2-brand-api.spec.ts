@@ -33,10 +33,10 @@ async function open(page: Page, query = '') {
 }
 async function openLoaded(page: Page, query = '') {
   await open(page, query);
-  await expect(status(page)).toHaveAttribute('data-m2-status', 'view');
+  await expect(status(page)).toHaveAttribute('data-m2-status', 'edit-clean');
 }
+/** 최신 Figma(2026-11)에는 [정보수정]이 없다 — M2 는 처음부터 편집 상태다. 진입 직후 깨끗한 편집 상태인지만 확인한다 */
 async function enterEdit(page: Page) {
-  await page.getByTestId('m2-edit').click();
   await expect(status(page)).toHaveAttribute('data-m2-status', 'edit-clean');
 }
 
@@ -64,7 +64,6 @@ test('?brandId 가 있으면 목록을 부르지 않고 그 브랜드를 받는�
 for (const { query, state, text } of [
   { query: '?mockScenario=m2-not-found', state: 'not-found', text: '브랜드를 찾을 수 없습니다.' },
   { query: '?brandId=999', state: 'not-found', text: '브랜드를 찾을 수 없습니다.' },
-  { query: '?mockScenario=m2-multi-brand', state: 'ambiguous', text: '현재 여러 브랜드가 등록되어 있어 작업을 시작할 수 없습니다.' },
 ]) {
   test(`조회 ${query} → ${state}`, async ({ page }) => {
     await open(page, query);
@@ -82,7 +81,7 @@ test('수정 초기값은 서버 값이고, 저장은 바뀐 항목만 PATCH 한
   await page.getByTestId('m2-name-en').fill('  Pixlate Labs ');
   await page.getByTestId('m2-target-customer').fill('');
   await page.getByTestId('m2-save').click();
-  await expect(status(page)).toHaveAttribute('data-m2-status', 'view');
+  await expect(status(page)).toHaveAttribute('data-m2-status', 'edit-clean');
   await expect(status(page)).toHaveAttribute('data-save-state', 'success');
 
   const patch = requests.find((r) => r.method === 'PATCH');
@@ -115,8 +114,8 @@ test('저장 실패 — 입력은 그대로, dirty 유지, 오류 안내, 다시
   // 브랜드 저장이 실패하면 로고는 보내지 않는다
   expect(calls(requests, 'POST')).toEqual([]);
 
-  // 실패 뒤 나가려 해도 막힌다
-  await page.getByTestId('m2-back').click();
+  // 실패 뒤 나가려 해도 막힌다(공통 헤더 이동)
+  await page.getByTestId('app-header-brand').click();
   await expect(page.getByTestId('m2-unsaved-dialog')).toBeVisible();
   await page.getByRole('button', { name: '계속 수정' }).click();
 
@@ -134,7 +133,7 @@ test('저장 중에는 다시 저장하지 않는다(중복 요청 금지)', asy
   await expect(page.getByTestId('m2-save')).toBeDisabled();
   await expect(page.getByTestId('m2-cancel')).toBeDisabled();
   await page.getByTestId('m2-save').click({ force: true });
-  await expect(status(page)).toHaveAttribute('data-m2-status', 'view', { timeout: 5_000 });
+  await expect(status(page)).toHaveAttribute('data-m2-status', 'edit-clean', { timeout: 5_000 });
   expect(calls(requests, 'PATCH')).toHaveLength(1);
 });
 
@@ -147,7 +146,7 @@ test('로고 추가·삭제 — 저장 때 multipart POST(file)·DELETE 하고 �
   expect(calls(requests, 'POST')).toEqual([]);
   const logoGetsBefore = calls(requests, 'GET').filter((p) => p.endsWith('/logos')).length;
   await page.getByTestId('m2-save').click();
-  await expect(status(page)).toHaveAttribute('data-m2-status', 'view');
+  await expect(status(page)).toHaveAttribute('data-m2-status', 'edit-clean');
 
   expect(calls(requests, 'PATCH')).toEqual([]); // 글은 그대로라 PATCH 없음
   expect(calls(requests, 'DELETE')).toEqual(['/brands/101/logos/9001']);
@@ -176,7 +175,7 @@ test('로고 추가 실패 — 그 로고는 저장 전 로고로 남고 dirty �
   // 글은 저장됐고(서버 응답), 실패한 로고만 남는다
   await expect(page.getByTestId('m2-name-ko')).toHaveValue('픽슬레이트 2');
   await expect(page.getByRole('img', { name: 'fail.png' })).toHaveAttribute('src', /^blob:/);
-  await page.getByTestId('m2-back').click();
+  await page.getByTestId('app-header-brand').click();
   await expect(page.getByTestId('m2-unsaved-changes').getByRole('listitem')).toHaveText(['로고 1개 추가']);
 });
 
@@ -199,13 +198,59 @@ test('브랜드 0개 — 안내에서 멈추지 않고 등록 화면을 보인�
   await expect(page.getByTestId('m2-create')).toHaveText('브랜드 등록');
 });
 
-test('범위 유지 — 로고 변경·브랜드 삭제·새 브랜드 추가(브랜드가 이미 있음)는 요청 없는 버튼이다', async ({ page }) => {
+test('범위 유지 — 로고 변경·브랜드 삭제는 요청 없는 버튼이다(최신 Figma 에는 [새 브랜드 추가]가 없다)', async ({ page }) => {
   const requests = recordBrandRequests(page);
   await openLoaded(page);
-  for (const testId of ['m2-logo-change', 'm2-delete-brand', 'm2-new-brand']) {
+  await expect(page.getByTestId('m2-new-brand')).toHaveCount(0);
+  for (const testId of ['m2-logo-change', 'm2-delete-brand']) {
     await expect(page.getByTestId(testId)).toHaveAttribute('aria-disabled', 'true');
     await page.getByTestId(testId).click({ force: true });
   }
   await page.waitForTimeout(200);
   expect(requests.filter((r) => r.method !== 'GET')).toEqual([]);
+});
+
+// ── F-ACC-02a — 수정도 등록과 같은 중복 판정(자기 자신 제외) ─────────────────────────────
+test('수정 중복 — 다른 브랜드와 같은 이름(정규화)이면 PATCH 없이 안내하고 그 브랜드로 가는 길을 보인다', async ({ page }) => {
+  const requests = recordBrandRequests(page);
+  await openLoaded(page, '?brandId=101&mockScenario=m2-multi-brand');
+  await page.getByTestId('m2-name-en').fill(' SEC-ond ');
+  await page.getByTestId('m2-save').click();
+  await expect(page.getByTestId('m2-save-error')).toContainText('같은 셀러에 같은 이름의 브랜드가 있어 저장하지 않았습니다.');
+  await expect(page.getByTestId('m2-error-link')).toHaveAttribute('href', '/brand?brandId=102');
+  await expect(page.getByTestId('m2-error-link')).toHaveText('기존 브랜드 「두 번째 브랜드」 보기');
+  expect(calls(requests, 'PATCH')).toEqual([]);
+  expect(calls(requests, 'GET')).toContain('/brands');
+  await expect(status(page)).toHaveAttribute('data-m2-status', 'edit-dirty');
+  await expect(page.getByTestId('m2-name-en')).toHaveValue(' SEC-ond ');
+});
+
+test('수정 — 자기 자신은 중복 검사에서 빠진다(대소문자·특수문자만 바꾼 자기 이름은 저장된다)', async ({ page }) => {
+  const requests = recordBrandRequests(page);
+  await openLoaded(page, '?brandId=101&mockScenario=m2-multi-brand');
+  await page.getByTestId('m2-name-en').fill('PIX-LATE');
+  await page.getByTestId('m2-save').click();
+  await expect(status(page)).toHaveAttribute('data-save-state', 'success');
+  expect(calls(requests, 'PATCH')).toEqual(['/brands/101']);
+  await expect(page.getByTestId('m2-name-en')).toHaveValue('PIX-LATE');
+});
+
+test('수정 — 이름을 바꾸지 않으면 중복 확인 목록 조회 없이 저장한다', async ({ page }) => {
+  const requests = recordBrandRequests(page);
+  await openLoaded(page, '?brandId=101');
+  const listBefore = calls(requests, 'GET').filter((p) => p === '/brands').length;
+  await page.getByTestId('m2-overview').fill('새 개요');
+  await page.getByTestId('m2-save').click();
+  await expect(status(page)).toHaveAttribute('data-save-state', 'success');
+  expect(calls(requests, 'GET').filter((p) => p === '/brands').length).toBe(listBefore);
+  expect(calls(requests, 'PATCH')).toEqual(['/brands/101']);
+});
+
+test('수정 — 서버 409(FE 사전 확인을 지난 동시 수정)는 겹침으로 안내하고 입력을 남긴다', async ({ page }) => {
+  await openLoaded(page, '?brandId=101&mockScenario=m2-save-conflict');
+  await page.getByTestId('m2-name-ko').fill('새 이름');
+  await page.getByTestId('m2-save').click();
+  await expect(page.getByTestId('m2-save-error')).toContainText('다른 브랜드와 이름이 겹쳐 저장하지 못했습니다.');
+  await expect(page.getByTestId('m2-name-ko')).toHaveValue('새 이름');
+  await expect(status(page)).toHaveAttribute('data-m2-status', 'edit-dirty');
 });

@@ -1,6 +1,7 @@
 import { delay, http, HttpResponse } from 'msw';
 
 import type { ApiBrand, ApiBrandCreate, ApiBrandLogo, ApiBrandLogoFormat, ApiBrandUpdate } from '@/lib/api/brand-schema';
+import { normalizeBrandName } from '@/lib/brand/m2-adapter';
 import { M2_MOCK_BRAND, M2_MOCK_BRAND_ID, M2_MOCK_LOGOS } from '@/lib/mock-api/m2-brand-fixtures';
 
 // ─────────────────────────────────────────────────────────────────
@@ -20,6 +21,7 @@ type M2Scenario =
   | 'no-brand'
   | 'multi-brand'
   | 'save-fail'
+  | 'save-conflict'
   | 'save-slow'
   | 'logo-upload-fail'
   | 'logo-delete-fail'
@@ -91,6 +93,19 @@ async function toDataUrl(file: File, format: ApiBrandLogoFormat): Promise<string
   return `data:${MIME_BY_FORMAT[format]};base64,${btoa(binary)}`;
 }
 
+/** 이 계정이 GET /brands 로 보는 목록(시나리오 반영) */
+function listedBrands(scenario: M2Scenario | null): ApiBrand[] {
+  if (scenario === 'no-brand' || scenario?.startsWith('create-') || (scenario == null && noBaseBrandAccount)) return createdBrands;
+  if (scenario === 'multi-brand') return [brand, { ...brand, id: M2_MOCK_BRAND_ID + 1, nameKo: '두 번째 브랜드', nameEn: 'Second' }, ...createdBrands];
+  return [brand, ...createdBrands];
+}
+
+function hasNameConflict(list: ApiBrand[], names: { nameKo?: string | null; nameEn?: string | null }): boolean {
+  const ko = normalizeBrandName(names.nameKo);
+  const en = normalizeBrandName(names.nameEn);
+  return list.some((b) => (ko !== '' && normalizeBrandName(b.nameKo) === ko) || (en !== '' && normalizeBrandName(b.nameEn) === en));
+}
+
 export const m2BrandHandlers = [
   http.get('/brands', ({ request }) => {
     const scenario = scenarioOf(request.referrer);
@@ -126,6 +141,8 @@ export const m2BrandHandlers = [
     const nameEn = typeof body?.nameEn === 'string' ? body.nameEn.trim() : '';
     if (!nameKo) return errorJson(400, 'VALIDATION_ERROR', 'nameKo is required');
     if (!nameEn) return errorJson(400, 'VALIDATION_ERROR', 'nameEn is required');
+    // 계약 「동일 셀러 중복 시 409」(OpenAPI brandCreate) — FE 와 같은 임시 정규화 기준. 실제 서버(develop)는 아직 409 를 돌려주지 않는다
+    if (hasNameConflict(listedBrands(scenario), { nameKo, nameEn })) return errorJson(409, 'CONFLICT', 'brand already exists');
     nextBrandId += 1;
     const now = new Date().toISOString();
     const created: ApiBrand = {
@@ -158,9 +175,15 @@ export const m2BrandHandlers = [
     const scenario = scenarioOf(request.referrer);
     if (scenario === 'save-slow') await delay(1500);
     if (scenario === 'save-fail') return errorJson(500, 'INTERNAL_ERROR', 'mock brand update failure', true);
+    // FE 사전 확인을 지난 동시 수정 — 서버만 아는 겹침(409)을 흉내 낸다
+    if (scenario === 'save-conflict') return errorJson(409, 'CONFLICT', 'brand name already exists');
     const body = (await request.json()) as ApiBrandUpdate;
     if ('nameEn' in body && (body.nameEn == null || body.nameEn.trim() === '')) return errorJson(400, 'VALIDATION_ERROR', 'nameEn is required');
     const id = Number(params.brandId);
+    // 계약 「동일 셀러 중복 시 409」 — 자기 자신은 빼고 비교한다
+    if (hasNameConflict(listedBrands(scenario).filter((b) => b.id !== id), { nameKo: body.nameKo, nameEn: body.nameEn })) {
+      return errorJson(409, 'CONFLICT', 'brand name already exists');
+    }
     const updated = { ...findBrand(id), ...body, updatedAt: new Date().toISOString() };
     if (id === M2_MOCK_BRAND_ID) brand = updated;
     else createdBrands = createdBrands.map((b) => (b.id === id ? updated : b));

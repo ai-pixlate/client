@@ -112,23 +112,85 @@ export function reconcileM2AfterSave(options: {
 
 /**
  * 어느 브랜드를 보일지 — 계약에 셀러 → 대표 브랜드 정본이 없다(/auth/me Seller 에 brandId 없음).
- * ?brandId= 가 있으면 그것, 없으면 GET /brands 가 하나일 때만 그 브랜드. 없거나 여러 개면 고르지 않는다(M0 다중 브랜드는 별도 범위).
+ * ?brandId= 가 있으면 그것, 없으면 GET /brands 가 하나일 때만 그 브랜드. 없거나 여러 개면 고르지 않는다 — 여러 개면 M0(브랜드 선택)로 보낸다.
  */
 export type M2BrandTarget = { kind: 'id'; brandId: number } | { kind: 'none' } | { kind: 'ambiguous'; count: number } | { kind: 'invalid-query' };
 
 /**
- * M1 「이미지 추가 생성」이 갈 곳 — GET /brands 결과로만 정한다(임의 brandId 금지).
+ * 전체 보관함(M1 '/')의 「이미지 추가 생성」이 갈 곳 — GET /brands 결과로만 정한다(임의 brandId 금지).
  * - 0개: 브랜드 등록(/brand?mode=create&next=n1) → 등록 응답 id 로 N1
- * - 1개: /jobs/new?brandId={id}
- * - 2개 이상: FE 가 고르지 않는다(M0 브랜드 선택 화면 전) — /brand 의 「하나로 정할 수 없음」 안내로 보낸다
+ * - 1개: /jobs/new?brandId={id} — 브랜드가 하나뿐이라 귀속이 분명하다
+ * - 2개 이상: 이 화면에는 브랜드 맥락이 없다. 최종 요구사항은 「브랜드별 M1 새 작업 → 그 브랜드 N1」인데 브랜드별 보관함 계약이 없어
+ *   FE 가 브랜드를 고르면 잘못 귀속될 수 있다 — 링크 없이 이유만 보인다(href=null)
  */
-export type NewJobEntry = { kind: 'create' | 'n1' | 'choose'; href: string };
+export type NewJobEntry = { kind: 'create' | 'n1'; href: string } | { kind: 'needs-brand-scope'; href: null };
 
 export function resolveNewJobEntry(brands: readonly ApiBrand[]): NewJobEntry {
   const target = resolveM2BrandTarget(null, brands);
   if (target?.kind === 'id') return { kind: 'n1', href: `/jobs/new?brandId=${target.brandId}` };
-  if (target?.kind === 'ambiguous') return { kind: 'choose', href: '/brand' };
+  if (target?.kind === 'ambiguous') return { kind: 'needs-brand-scope', href: null };
   return { kind: 'create', href: '/brand?mode=create&next=n1' };
+}
+
+/**
+ * 브랜드명 비교용 정규화(F-ACC-02a — 공백·대소문자·특수문자 정규화 후 비교).
+ * ★ 임시 기준: 문자 처리 방식은 BE 확정 전이다. 지금은 NFKC(전각·호환 문자 통일) → 소문자 → 문자(\p{L})·숫자(\p{N}) 외 모두 제거.
+ *   예) " Pix-late! " · "ＰＩＸＬＡＴＥ" · "pix late" → "pixlate". BE 기준이 정해지면 이 함수만 바꾼다.
+ */
+export function normalizeBrandName(name: string | null | undefined): string {
+  return (name ?? '').normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+}
+
+export type BrandNameField = 'nameKo' | 'nameEn';
+export interface BrandDuplicate {
+  brand: ApiBrand & { id: number };
+  /** 겹친 항목 — 한글명끼리 또는 영문명끼리 비교한다 */
+  field: BrandNameField;
+}
+
+/**
+ * 같은 셀러 안 중복 브랜드(F-ACC-02a) — 등록·수정이 같은 함수를 쓴다. GET /brands 는 로그인한 셀러의 브랜드만 주므로
+ * 다른 셀러의 같은 이름은 비교 대상에 들어오지 않는다(허용). 수정은 excludeBrandId 로 자기 자신을 뺀다.
+ * 정규화 뒤 빈 이름(특수문자만 등)은 비교하지 않는다 — 필수값 검증(getM2NameErrors)이 따로 막는다.
+ * FE 사전 확인일 뿐이다: 동시 등록·수정은 막지 못하며 최종 판정은 서버(409)다.
+ */
+export function findDuplicateBrand(
+  brands: readonly ApiBrand[],
+  draft: Pick<M2BrandFormValue, 'nameKo' | 'nameEn'>,
+  options: { excludeBrandId?: number | null } = {},
+): BrandDuplicate | null {
+  const wanted: [BrandNameField, string][] = [
+    ['nameKo', normalizeBrandName(draft.nameKo)],
+    ['nameEn', normalizeBrandName(draft.nameEn)],
+  ];
+  for (const brand of brands) {
+    if (typeof brand.id !== 'number' || brand.id === options.excludeBrandId) continue;
+    for (const [field, value] of wanted) {
+      if (value !== '' && normalizeBrandName(brand[field]) === value) return { brand: brand as ApiBrand & { id: number }, field };
+    }
+  }
+  return null;
+}
+
+/**
+ * 응답 유실 뒤 결과 확인 — 등록 전 목록에 없던 브랜드 중 입력한 이름(정규화 비교)과 같은 「후보」를 찾는다.
+ * 후보가 있어도 이번 요청이 만든 것이라고 단정하지 않는다: 다른 탭·다른 기기의 같은 이름 등록일 수 있고, 계약에 요청 식별(멱등 키)이 없다.
+ * 호출부는 후보에 로고·정보를 이어 저장하지 않고 사용자에게 확인을 맡긴다(use-m2-brand-create.ts).
+ */
+export function findCreatedBrand(
+  before: readonly number[],
+  after: readonly ApiBrand[],
+  draft: Pick<M2BrandFormValue, 'nameKo' | 'nameEn'>,
+): { kind: 'candidate'; brand: ApiBrand & { id: number } } | { kind: 'none' } | { kind: 'ambiguous' } {
+  const known = new Set(before);
+  const ko = normalizeBrandName(draft.nameKo);
+  const en = normalizeBrandName(draft.nameEn);
+  const matches = after.filter(
+    (brand): brand is ApiBrand & { id: number } =>
+      typeof brand.id === 'number' && !known.has(brand.id) && normalizeBrandName(brand.nameKo) === ko && normalizeBrandName(brand.nameEn) === en,
+  );
+  if (matches.length === 1) return { kind: 'candidate', brand: matches[0] };
+  return matches.length === 0 ? { kind: 'none' } : { kind: 'ambiguous' };
 }
 
 export function resolveM2BrandTarget(queryBrandId: string | null, brands: readonly ApiBrand[] | null): M2BrandTarget | null {
