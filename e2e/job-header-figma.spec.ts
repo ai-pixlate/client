@@ -237,12 +237,14 @@ const accountMenu = (page: Page) => page.getByTestId('job-header-account-menu');
 const MOCK_EMAIL = 'kakao-seller@pixlate.mock';
 
 /**
- * 계정은 이 탭의 메모리 세션에만 있다. G1 소셜 로그인 → M1 → [추가] 로 앱 안에서 N1 까지 간다(새로 불러오면 메모리가 비고,
+ * 계정은 이 탭의 메모리 세션에만 있다. G1 소셜 로그인 → H0 → [전체 보관함 보기] → M1 → [추가] 로 앱 안에서 N1 까지 간다(새로 불러오면 메모리가 비고,
  * Mock 의 작업 API 는 401 을 주지 않아 refresh·/auth/me 가 일어나지 않는다 — 그때는 「계정 정보 없음」이다)
  */
 async function loginToN1(page: Page, provider: 'kakao' | 'google' = 'kakao') {
   await page.goto('/login');
   await page.getByTestId(`g1-social-${provider}`).click();
+  await page.waitForURL((url) => url.pathname === '/home');
+  await page.getByTestId('home-all-library').click();
   await page.waitForURL((url) => url.pathname === '/');
   await page.getByTestId('library-add-card-link').click();
   await page.waitForURL((url) => url.pathname === '/jobs/new');
@@ -434,14 +436,17 @@ test.describe('[내 계정] 드롭다운 — 1876:40072 · 1890:58502', () => {
     await a.getByTestId('job-header-account').click();
     await expect(a.getByTestId('job-header-account-email')).toHaveText(MOCK_EMAIL);
 
-    // 다른 탭이 Google 계정으로 로그인한다(G1 → 콜백 → M1)
+    // 다른 탭이 Google 계정으로 로그인한다(G1 → 콜백 → H0)
     const b = await context.newPage();
     await b.goto('/login');
     await b.getByTestId('g1-social-google').click();
-    await b.waitForURL((url) => url.pathname === '/');
+    await b.waitForURL((url) => url.pathname === '/home');
 
     // 이 탭은 이전 계정 화면을 버리고 보관함으로 간다(기존 계정 전환 정책). 계정 세대가 바뀌며 이전 계정 정보(seller)는 지워진다 —
     // 다시 작업 화면을 열어도 이전 계정 이메일은 없다. 새 계정은 다음 401→refresh→/auth/me 가 정한다(Mock 작업 API 는 401 이 없어 미확인)
+    // 이 탭은 이전 계정 화면을 버리고 새 계정 H0 로 간다 — H0 가 새 계정 세션을 확인한다
+    await a.waitForURL((url) => url.pathname === '/home');
+    await a.getByTestId('home-all-library').click();
     await a.waitForURL((url) => url.pathname === '/');
     await a.getByTestId('library-add-card-link').click();
     await a.waitForURL((url) => url.pathname === '/jobs/new');

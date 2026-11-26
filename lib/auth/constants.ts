@@ -36,7 +36,11 @@ export function isSocialProvider(value: unknown): value is SocialProvider {
 
 /** G1 로그인 화면 */
 export const AUTH_LOGIN_PATH = '/login';
-/** 2차 로그인 후 이동 — 신규·기존 계정 모두 M1 보관함 */
-export const AUTH_HOME_PATH = '/';
+/**
+ * 로그인 후 이동 — H0 홈(요구사항 v3.6.4 F-ACC-09 · 03_화면정의서 H0). 로그인 성공·다른 탭 계정 전환 모두 여기로 간다.
+ * 같은 경로가 로그인 전에는 공개 랜딩을 보인다(app/home/_components/home-view.tsx — 구현 결정).
+ * 2차(9월 MVP)에는 M1 보관함('/')이었다 — '/' 는 지금도 전체 보관함(M1)이며 작업 나가기 목적지다.
+ */
+export const AUTH_HOME_PATH = '/home';
 /** 소셜 제공자가 돌려보내는 경로 /login/callback/{provider} */
 export const AUTH_CALLBACK_PATH_PREFIX = '/login/callback/';

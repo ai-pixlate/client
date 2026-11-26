@@ -17,7 +17,7 @@ import { AUTH_REFRESH_MAX_ATTEMPTS, AUTH_ORIGINAL_REQUEST_MAX_RETRIES, AUTH_REFR
 import { createAuthChannel, toWireEvent } from '../lib/auth/cross-tab.ts';
 import { logout, resumePendingLogout, retryPendingLogout } from '../lib/auth/logout.ts';
 import { isLogoutPending, markLogoutPending, setLogoutPendingStorageForTest } from '../lib/auth/logout-pending.ts';
-import { configureAuthRuntimeForTest, handleAuthTabEvent, recoverSession } from '../lib/auth/runtime.ts';
+import { configureAuthRuntimeForTest, handleAuthTabEvent, probeSessionForPublicEntry, recoverSession } from '../lib/auth/runtime.ts';
 import { getAccessToken, getAuthEpochSignal, getAuthSnapshot, resetAuthStoreForTest, setAuthenticated } from '../lib/auth/session-store.ts';
 import { createSessionRecovery } from '../lib/auth/refresh.ts';
 import { completeSocialLogin, resetSocialLoginForTest, startSocialLogin } from '../lib/auth/social-login.ts';
@@ -283,7 +283,7 @@ console.log('\n[refresh — single-flight·계정 확인]');
   }
   check('다른 계정 → 원 요청 재시도 안 함', r.sends === 1);
   check('다른 계정 → 이전 계정 응답 버림(AuthSessionChangedError)', thrown instanceof AuthSessionChangedError);
-  check('다른 계정 → M1 이동', tab.navigations.join() === '/');
+  check('다른 계정 → H0 이동', tab.navigations.join() === '/home');
   check('다른 계정 → 이전 계정 데이터 정리', tab.cleared() === 1);
   const snap = getAuthSnapshot();
   check('다른 계정 → 새 계정 반영·안내', snap.seller?.id === 2 && snap.notice === 'account-changed' && snap.status === 'authenticated');
@@ -620,7 +620,7 @@ console.log('\n[cross-tab]');
   const epoch = getAuthSnapshot().epoch;
   handleAuthTabEvent({ type: 'login-complete', sellerId: 2 });
   const snap = getAuthSnapshot();
-  check('다른 탭이 다른 계정으로 로그인 → 이전 계정 정리·M1·안내', tab.navigations.join() === '/' && tab.cleared() === 1 && snap.notice === 'account-changed' && snap.epoch === epoch + 1);
+  check('다른 탭이 다른 계정으로 로그인 → 이전 계정 정리·H0·안내', tab.navigations.join() === '/home' && tab.cleared() === 1 && snap.notice === 'account-changed' && snap.epoch === epoch + 1);
   check('다른 탭 계정 전환 → 이 탭 access 는 버리고 다음 요청에서 refresh', getAccessToken() === null);
 }
 {
@@ -634,7 +634,7 @@ console.log('\n[cross-tab]');
   handleAuthTabEvent({ type: 'logout' });
   tab.navigations.length = 0;
   handleAuthTabEvent({ type: 'login-complete', sellerId: 1 });
-  check('로그아웃 뒤 G1 탭은 다른 탭 로그인을 따라 M1', tab.navigations.join() === '/');
+  check('로그아웃 뒤 G1 탭은 다른 탭 로그인을 따라 H0', tab.navigations.join() === '/home');
 }
 
 // ── 계정 격리(F-ACC-01) ─────────────────────────
@@ -716,7 +716,7 @@ const isCancelled = (error) => error?.constructor?.name === 'CancelledError' || 
   check('A1 X query cache 전부 제거', tab.queryClient.getQueryCache().getAll().length === 0);
   check('A1 새 계정 경계: 세대+1 · access·seller 비움 · unknown', snap.epoch === epoch + 1 && getAccessToken() === null && snap.seller === null && snap.status === 'unknown');
   check('A1 새 세대 signal 은 살아 있음', !getAuthEpochSignal().aborted);
-  check('A1 이전 계정 정리 1회 · M1', tab.cleared() === 1 && tab.navigations.join() === '/');
+  check('A1 이전 계정 정리 1회 · H0', tab.cleared() === 1 && tab.navigations.join() === '/home');
 }
 {
   // 2. seller=null 경계 — /auth/me 실패 뒤 access 를 남기지 않는다(이전 결함: seller 없이 access 만 남아 X 데이터를 받고 알림을 무시)
@@ -733,7 +733,7 @@ const isCancelled = (error) => error?.constructor?.name === 'CancelledError' || 
   tab.queryClient.setQueryData(JOB_KEY, { owner: 'X' });
   const epoch = getAuthSnapshot().epoch;
   handleAuthTabEvent({ type: 'login-complete', sellerId: 2 });
-  check('A2 seller=null 이어도 알림을 무시하지 않음(세대+1 · 정리 1회 · M1)', getAuthSnapshot().epoch === epoch + 1 && tab.cleared() === 1 && tab.navigations.join() === '/');
+  check('A2 seller=null 이어도 알림을 무시하지 않음(세대+1 · 정리 1회 · H0)', getAuthSnapshot().epoch === epoch + 1 && tab.cleared() === 1 && tab.navigations.join() === '/home');
   check('A2 이전 cache 제거', tab.queryClient.getQueryData(JOB_KEY) === undefined);
   // 이후 401 → refresh → /auth/me=Y
   let sends = 0;
@@ -1265,7 +1265,7 @@ console.log('\n[callback — 새로고침(새 document) · 확정 계약 B]');
   await tabMarkUnconfirmed();
   handleAuthTabEvent({ type: 'logout' });
   handleAuthTabEvent({ type: 'login-complete', sellerId: 2 });
-  check('다른 탭의 새 로그인 완료 → 이 탭 차단 해제', readCallbackState() === null && tab.navigations.at(-1) === '/');
+  check('다른 탭의 새 로그인 완료 → 이 탭 차단 해제', readCallbackState() === null && tab.navigations.at(-1) === '/home');
 }
 {
   setupTab({ path: '/' });
@@ -1414,6 +1414,49 @@ console.log('\n[logoutPending — 앱 진입]');
   const server = createServer({ 'POST /auth/logout': [async () => json(204, null)] });
   const result = await retryPendingLogout();
   check('[다시 시도] → Authorization 없이 보내고 204 면 대기 해제', result.kind === 'done' && !isLogoutPending() && server.last('POST /auth/logout').headers.get('Authorization') === null);
+}
+
+// ── 공개 진입(H 랜딩) 세션 확인 ──────────
+console.log('\n[public entry probe]');
+{
+  const tab = setupTab({ path: '/home' });
+  const server = createServer({ 'POST /auth/refresh': [okRefresh('t1')], 'GET /auth/me': [meReturns(SELLER_1)] });
+  const result = await probeSessionForPublicEntry();
+  check('세션 있음 → authenticated · 계정 확정 · 이동 없음', result === 'authenticated' && getAuthSnapshot().status === 'authenticated' && tab.navigations.length === 0);
+  check('세션 있음 → refresh 1 · /auth/me 1', server.calls.length === 2);
+}
+{
+  const tab = setupTab({ path: '/home' });
+  const server = createServer({ 'POST /auth/refresh': [async () => authError(401, 'UNAUTHORIZED', 'refresh_invalid')] });
+  const result = await probeSessionForPublicEntry();
+  check('세션 없음 → signed-out · G1 으로 보내지 않는다(랜딩)', result === 'signed-out' && getAuthSnapshot().status === 'signed-out' && tab.navigations.length === 0);
+  check('세션 없음 → refresh 1회만', server.calls.length === 1);
+  // 확인이 끝난 뒤의 세션 종료(다른 탭 로그아웃)는 기존대로 G1
+  handleAuthTabEvent({ type: 'logout' });
+  check('확인 뒤 logout 알림 → G1', tab.navigations.join() === '/login');
+}
+{
+  const tab = setupTab({ path: '/home' });
+  createServer({ 'POST /auth/refresh': [async () => authError(503, 'SERVICE_UNAVAILABLE', null)] });
+  const result = await probeSessionForPublicEntry();
+  check('503 → unavailable · 로그아웃으로 보지 않음(unknown 유지) · 이동 없음', result === 'unavailable' && getAuthSnapshot().status === 'unknown' && tab.navigations.length === 0);
+}
+{
+  const tab = setupTab({ path: '/home' });
+  createServer({});
+  setAuthenticated('t1', SELLER_1);
+  const result = await probeSessionForPublicEntry();
+  check('이미 인증된 탭 → 요청 없이 authenticated', result === 'authenticated' && tab.navigations.length === 0);
+}
+{
+  // 로그아웃 상태로 랜딩(H0 경로)을 보던 탭 — 다른 탭 새 로그인 → 세대+1 · unknown(다시 확인 대상), 이동 없음
+  const tab = setupTab({ path: '/home' });
+  createServer({ 'POST /auth/refresh': [async () => authError(401, 'UNAUTHORIZED', 'refresh_invalid')] });
+  await probeSessionForPublicEntry();
+  const epoch = getAuthSnapshot().epoch;
+  handleAuthTabEvent({ type: 'login-complete', sellerId: 2 });
+  const snap = getAuthSnapshot();
+  check('랜딩 탭 + 다른 탭 로그인 → 세대+1 · unknown · 이동 없음', snap.epoch === epoch + 1 && snap.status === 'unknown' && tab.navigations.length === 0);
 }
 
 // ── 전체: 채널에 토큰이 실린 적 없음 ──────────

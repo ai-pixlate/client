@@ -176,7 +176,7 @@ console.log('\n[A. 계정 A 저장 중 다른 탭에서 계정 B 로그인 → A
 
   // 다른 탭에서 계정 B 로그인 완료 알림
   handleAuthTabEvent({ type: 'login-complete', sellerId: SELLER_B.id });
-  check('계정 전환 → epoch 변경·캐시 비움·M1 이동', getAuthEpoch() !== epochA && cacheKeys(queryClient).length === 0 && navigations.at(-1) === '/');
+  check('계정 전환 → epoch 변경·캐시 비움·H0 이동', getAuthEpoch() !== epochA && cacheKeys(queryClient).length === 0 && navigations.at(-1) === '/home');
 
   // B 화면이 같은 key 를 가진 상황(새 계정 데이터)도 덮이지 않는지 본다 — B 소유 데이터라고 표시한 값을 둔다
   queryClient.setQueryData(LIBRARY_KEY, [{ jobId: 99, owner: 'B' }]);
@@ -223,7 +223,7 @@ console.log('\n[B. 계정 A 저장 → 401 → refresh + /auth/me → 계정 B]'
   check('원 요청 전송 1회', patches.length === 1, JSON.stringify(patches));
   check('A 저장을 B access 로 다시 보내지 않음', patches.every((c) => c.auth === 'Bearer a1'));
   check('refresh·/auth/me 각 1회', server.count('POST /auth/refresh') === 1 && server.count('GET /auth/me') === 1);
-  check('계정 전환 처리(M1 이동)', navigations.at(-1) === '/');
+  check('계정 전환 처리(H0 이동)', navigations.at(-1) === '/home');
   check('A 저장은 실패로 끝남(재전송 없이 버림)', error instanceof AuthSessionChangedError, String(error));
   check('B 로 전환 뒤 A 섹션 캐시 없음(rollback 미적용)', queryClient.getQueryData(SECTIONS_KEY) === undefined, JSON.stringify(queryClient.getQueryData(SECTIONS_KEY)));
   check('B 로 전환 뒤 캐시 비어 있음', cacheKeys(queryClient).length === 0, cacheKeys(queryClient).join());

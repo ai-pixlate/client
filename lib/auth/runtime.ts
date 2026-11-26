@@ -45,6 +45,11 @@ let recovery: SessionRecovery | null = null;
  * 세대가 바뀌면(복구 확정·로그아웃 등) 저절로 무효다.
  */
 let tabEventBoundary: { epoch: number; sellerId: number } | null = null;
+/**
+ * 공개 진입(H 랜딩)이 세션을 확인하는 중인지 — 이 동안의 「세션 없음」은 랜딩을 보일 근거라 G1 으로 보내지 않는다(probeSessionForPublicEntry).
+ * 확인이 끝난 뒤의 세션 종료(보호 화면의 401 · 다른 탭 로그아웃)는 기존대로 G1 으로 간다.
+ */
+let publicEntryProbes = 0;
 
 export function configureAuthRuntime(next: AuthRuntimeHooks): void {
   hooks = next;
@@ -101,7 +106,7 @@ export function applyRecoveryOutcome(outcome: RecoveryOutcome): void {
     case 'same-account':
       return;
     case 'account-changed':
-      // 원 요청은 다시 보내지 않는다. 이전 계정 상태를 버리고 새 계정으로 M1 에서 다시 시작한다
+      // 원 요청은 다시 보내지 않는다. 이전 계정 상태를 버리고 새 계정으로 H0 에서 다시 시작한다
       crossAccountBoundary({ seller: outcome.seller, accessToken: outcome.accessToken });
       getAuthChannel().post({ type: 'account-changed', sellerId: outcome.seller.id });
       hooks.navigate(AUTH_HOME_PATH);
@@ -166,7 +171,50 @@ function isLoginPath(path: string): boolean {
 export function endSessionLocally(): void {
   clearAuth();
   hooks.clearClientData();
-  if (hooks.currentPath() !== AUTH_LOGIN_PATH) hooks.navigate(AUTH_LOGIN_PATH);
+  if (publicEntryProbes === 0 && hooks.currentPath() !== AUTH_LOGIN_PATH) hooks.navigate(AUTH_LOGIN_PATH);
+}
+
+/**
+ * 공개 진입의 세션 확인 결과.
+ *   authenticated — 이 탭의 계정이 확정됐다(H0 로)
+ *   signed-out    — 세션이 없다(로그아웃·쿠키 없음·허용 밖 계정·복원 보류) → 랜딩
+ *   unavailable   — 서버·네트워크 문제나 자동 복구 중단으로 확인하지 못했다 — 로그아웃으로 보지 않는다
+ */
+export type PublicEntrySession = 'authenticated' | 'signed-out' | 'unavailable';
+
+/**
+ * H 랜딩(공개 진입)이 보호 API 를 부르지 않고 세션만 확인한다. 401 복구와 같은 refresh → /auth/me 경로(recoverSession)를 그대로 쓰므로
+ * single-flight·탭 잠금·계정 경계·logoutPending·callback 보류 규칙이 같다. 다른 점은 「세션 없음」일 때 G1 으로 보내지 않는 것뿐이다.
+ */
+export async function probeSessionForPublicEntry(): Promise<PublicEntrySession> {
+  const before = getAuthSnapshot().status;
+  if (before === 'authenticated') return 'authenticated';
+  if (before === 'signed-out') return 'signed-out';
+  if (before === 'recovery-stopped') return 'unavailable';
+  publicEntryProbes += 1;
+  let outcome: RecoveryOutcome;
+  try {
+    outcome = await recoverSession();
+  } catch {
+    return 'unavailable';
+  } finally {
+    publicEntryProbes -= 1;
+  }
+  switch (outcome.kind) {
+    case 'same-account':
+    case 'account-changed':
+      return 'authenticated';
+    case 'session-ended':
+    case 'account-not-allowed':
+    case 'restore-suppressed':
+      return 'signed-out';
+    case 'stale': {
+      // 확인 중 다른 탭 알림 등으로 세대가 바뀌었다 — 새 세대 기준으로 다시 확인한다(확정된 상태면 바로 그 값을 돌려준다)
+      return probeSessionForPublicEntry();
+    }
+    default:
+      return 'unavailable';
+  }
 }
 
 /** 다른 탭 알림 처리 */
@@ -191,14 +239,16 @@ export function handleAuthTabEvent(event: AuthTabEvent): void {
       if (seller || (status !== 'signed-out' && !isLoginPath(path))) {
         // 이미 이 세대에서 같은 계정을 기다리는 경계를 세웠다 — 그 뒤의 복구는 그 계정 쿠키를 쓰고 있어 다시 끊지 않는다
         if (!seller && tabEventBoundary?.epoch === getAuthEpoch() && tabEventBoundary.sellerId === event.sellerId) return;
-        // 한 브라우저 한 계정 — 기존 요청·미저장 편집·이전 계정 데이터를 버리고 새 계정으로 M1 에서 시작한다.
+        // 한 브라우저 한 계정 — 기존 요청·미저장 편집·이전 계정 데이터를 버리고 새 계정으로 H0 에서 시작한다.
         // 새 계정 access 는 알림으로 받지 않는다. 다음 요청의 401 → refresh → /auth/me 가 새 계정으로 맞춘다
         crossAccountBoundary(null, event.sellerId);
         hooks.navigate(AUTH_HOME_PATH);
         return;
       }
-      // 로그아웃 뒤 G1 에 있던 탭은 새 로그인을 따라 M1 로 간다
+      // 로그아웃 뒤 G1 에 있던 탭은 새 로그인을 따라 H0 로 간다
       if (status === 'signed-out' && path === AUTH_LOGIN_PATH) hooks.navigate(AUTH_HOME_PATH);
+      // 로그아웃 상태로 공개 랜딩(H0 경로)을 보던 탭 — 세대를 올려 「확인 전」으로 되돌린다. 랜딩이 세션을 다시 확인해 새 계정 H0 를 보인다
+      else if (status === 'signed-out' && path === AUTH_HOME_PATH) crossAccountBoundary(null, event.sellerId);
       return;
     }
   }

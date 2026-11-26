@@ -59,10 +59,12 @@ async function stubBackend(page: Page, logoutSteps: LogoutStep[] = []) {
   };
 }
 
-/** G1 → 카카오 → 콜백 → M1 */
+/** G1 → 카카오 → 콜백 → H0(로그인 후 홈, v3.6.4) → [전체 보관함 보기] → M1 */
 async function loginToM1(page: Page) {
   await page.goto('/login');
   await page.getByTestId('g1-social-kakao').click();
+  await page.waitForURL((url) => url.pathname === '/home');
+  await page.getByTestId('home-all-library').click();
   await page.waitForURL((url) => url.pathname === '/');
   await expect(page.getByRole('heading', { name: '보관함' })).toBeVisible();
 }
@@ -88,16 +90,20 @@ test.describe('unset — 기본 production(dev-login)', () => {
 test.describe('session — 정식 로그아웃 버튼', () => {
   test.skip(MODE !== 'session', 'session 모드 전용');
 
-  test('M1 우측 상단에 「로그아웃」이 보이고 임시 시험 버튼은 없다·키보드 접근 가능', async ({ page }) => {
+  test('M1 공통 헤더 우측에 「로그아웃」이 보이고 임시 시험 버튼은 없다·키보드 접근 가능', async ({ page }) => {
     await stubBackend(page);
     await loginToM1(page);
     await expect(entry(page)).toBeVisible();
     await expect(entry(page)).toHaveText('로그아웃');
     await expect(tempEntry(page)).toHaveCount(0);
+    // Figma M1 헤더(1806:32280) — 높이 72 안 · 오른쪽 여백 124 의 마지막 항목(이전 임시 위치는 화면 우측 상단 40)
     const box = (await entry(page).boundingBox())!;
+    const header = (await page.getByTestId('app-header').boundingBox())!;
     const viewport = page.viewportSize()!;
-    expect(box.y).toBeLessThan(80);
-    expect(viewport.width - (box.x + box.width)).toBeLessThan(60);
+    await expect(page.getByTestId('app-header').getByTestId('account-logout')).toBeVisible();
+    expect(box.y).toBeGreaterThanOrEqual(header.y);
+    expect(box.y + box.height).toBeLessThanOrEqual(header.y + 72);
+    expect(Math.round(viewport.width - (box.x + box.width))).toBe(124);
     await entry(page).focus();
     await expect(entry(page)).toBeFocused();
   });
