@@ -9,8 +9,6 @@
 
 import {
   getFontScaleToolbarLeft,
-  FONT_HANDLE_CENTER_TOP_PX,
-  overlapsFontHandleHitArea,
   COMPACT_RESIZE_HEIGHT_PX,
   COMPACT_RIGHT_RESIZE_HALF_PX,
   isCompactResizeHeight,
@@ -305,28 +303,26 @@ console.log('\nscreenDeltaToBboxDelta');
   check('다시 scale·zoom을 곱하면 화면 이동량이다', Math.abs(rect.width * 2 - 40) < 1e-9, String(rect.width));
 }
 
-console.log('\ngetFontScaleToolbarLeft');
+// 현재 좌표 규약(6e6fe93 · Figma 1512:23496 Selection): 글자크기 툴바(117×34)는 선택 테두리 「위」(테두리 왼쪽 + 4, 위 −46)에 선택 즉시 보인다.
+// 예전 오른쪽 변의 12px 글자크기 action handle(FONT_HANDLE_CENTER_TOP_PX · overlapsFontHandleHitArea)은 그 커밋에서 없어졌다 —
+// 툴바가 테두리 위에 있어 오른쪽 변 손잡이(e·se)와 누르는 영역이 겹치지 않으므로 「겹침 나누기」 계산 자체가 없다.
+// 툴바 가로 위치는 preferredLeft(테두리 왼쪽 + 4)를 기본으로 하고 workspace 오른쪽 끝을 넘을 때만 민다.
+console.log('\ngetFontScaleToolbarLeft — 테두리 위 · 왼쪽 기준(preferredLeft)');
 {
-  const base = { toolbarWidth: 119, gap: 25, maxRight: 1000 };
-  const left = (blockLeft, blockRight) => getFontScaleToolbarLeft({ ...base, blockLeft, blockRight });
-  check('자리가 있으면 block 오른쪽 25', left(100, 300) === 325, String(left(100, 300)));
-  check('workspace에 딱 맞으면 밀지 않는다', left(700, 856) === 881, String(left(700, 856)));
-  check('workspace를 넘으면 필요한 만큼만 왼쪽으로 민다', left(700, 900) === 881, String(left(700, 900)));
-  check('끝에 붙은 좁은 block도 workspace 안에 남는다', left(970, 990) === 881, String(left(970, 990)));
-  check('오른쪽 변이 workspace 밖이어도 block이 보이면 안에 남는다', left(500, 1400) === 881, String(left(500, 1400)));
-  check('block이 완전히 나가면 block과 함께 움직인다', left(1200, 1400) === 1081, String(left(1200, 1400)));
-  check('왼쪽으로 나간 block은 뒤집지 않고 그대로 오른쪽이다', left(-500, -300) === -275, String(left(-500, -300)));
-}
-
-console.log('\n[글자크기 손잡이] 위치는 고정, 누르는 영역만 나눈다');
-{
-  check('중심은 block 위에서 18', FONT_HANDLE_CENTER_TOP_PX === 18);
-  check('높은 block(높이 80)의 e(40)는 겹치지 않는다', !overlapsFontHandleHitArea(40));
-  check('높이 36의 e(18)는 정확히 포개진다', overlapsFontHandleHitArea(18));
-  check('높이 60의 e(30)는 일부 겹친다', overlapsFontHandleHitArea(30));
-  check('높이 66의 e(33)는 경계라 겹치지 않는다', !overlapsFontHandleHitArea(33));
-  check('위 모서리 ne(0)는 겹치지 않는다', !overlapsFontHandleHitArea(0));
-  check('높이 20의 se(20)는 겹친다', overlapsFontHandleHitArea(20));
+  const base = { toolbarWidth: 117, maxRight: 1000 };
+  // 화면 px — blockLeft = 선택 테두리 왼쪽, preferredLeft = 테두리 왼쪽 + 4
+  const left = (blockLeft) => getFontScaleToolbarLeft({ ...base, blockLeft, preferredLeft: blockLeft + 4 });
+  check('자리가 있으면 테두리 왼쪽 + 4', left(100) === 104, String(left(100)));
+  check('workspace에 딱 맞으면 밀지 않는다', left(879) === 883, String(left(879)));
+  check('workspace를 넘으면 필요한 만큼만 왼쪽으로 민다', left(900) === 883, String(left(900)));
+  check('끝에 붙은 좁은 block도 workspace 안에 남는다', left(990) === 883, String(left(990)));
+  check('block이 workspace 밖으로 완전히 나가면 block과 함께 움직인다(민 위치에 남지 않는다)', left(1200) === 1083, String(left(1200)));
+  check('왼쪽으로 나간 block은 밀지 않고 테두리 기준 그대로다', left(-500) === -496, String(left(-500)));
+  // 테두리가 workspace 안에 있는 동안 툴바 오른쪽 끝은 workspace 를 넘지 않는다
+  for (const b of [-500, 100, 879, 900, 990]) {
+    const l = left(b);
+    check(`툴바 오른쪽 끝은 workspace 안(테두리 왼쪽 ${b})`, l + 117 <= 1000, String(l + 117));
+  }
 }
 
 console.log('\n[compact resize] 보이는 높이 48 미만은 오른쪽 변 전체가 가로 resize');
