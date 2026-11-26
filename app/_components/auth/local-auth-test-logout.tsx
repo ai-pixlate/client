@@ -15,11 +15,24 @@ import { logout } from '@/lib/auth/logout';
  * - 응답 분기(204·invalid_token 쿠키만 1회·refresh_invalid·미완료 pending), G1 이동, 모든 탭 logout 알림, logout-pending 안내는
  *   모두 logout() 이 맡는다. 같은 탭 중복 클릭은 logout() 의 single-flight 와 이 버튼의 진행 중 잠금이 함께 막는다.
  */
-export function LocalAuthTestLogout() {
+const APPEARANCE_CLASS = {
+  floating: 'absolute top-10 right-10 rounded-[4px] border border-dashed border-[#999] bg-white px-3 py-[6px]',
+  /** M·H 공통 헤더의 로그아웃 자리(app-header) — 헤더(z-10)가 우측 상단 absolute 버튼을 덮어 누를 수 없게 되므로 헤더 안에 둔다 */
+  header: 'flex h-6 items-center rounded-[4px] border border-dashed border-[#999] bg-white px-2',
+} as const;
+
+export function LocalAuthTestLogout({
+  appearance = 'floating',
+  onRequest,
+}: {
+  appearance?: keyof typeof APPEARANCE_CLASS;
+  /** 미저장 변경이 있는 화면(M2)이 확인 뒤에만 로그아웃하도록 넘긴다(정식 버튼 AccountLogoutButton 과 같은 방식) */
+  onRequest?: (runLogout: () => Promise<void>) => void;
+} = {}) {
   const [pending, setPending] = useState(false);
   if (!isLocalAuthTestMode()) return null;
 
-  const onClick = async () => {
+  const runLogout = async () => {
     if (pending) return;
     setPending(true);
     try {
@@ -28,6 +41,11 @@ export function LocalAuthTestLogout() {
       setPending(false);
     }
   };
+  const onClick = () => {
+    if (pending) return;
+    if (onRequest) onRequest(runLogout);
+    else void runLogout();
+  };
 
   return (
     <button
@@ -35,8 +53,8 @@ export function LocalAuthTestLogout() {
       data-testid="local-auth-test-logout"
       aria-disabled={pending}
       aria-busy={pending || undefined}
-      onClick={() => void onClick()}
-      className="absolute top-10 right-10 rounded-[4px] border border-dashed border-[#999] bg-white px-3 py-[6px] text-[12px] leading-[normal] tracking-[-0.24px] whitespace-nowrap text-[#707070] aria-disabled:cursor-not-allowed aria-disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ff6a38]"
+      onClick={onClick}
+      className={`${APPEARANCE_CLASS[appearance]} text-[12px] leading-[normal] tracking-[-0.24px] whitespace-nowrap text-[#707070] aria-disabled:cursor-not-allowed aria-disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ff6a38]`}
     >
       로그아웃(인증 시험)
     </button>
