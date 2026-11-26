@@ -29,13 +29,14 @@ import type { StepNavStep } from './step-nav';
 /**
  * 화면명 SSOT — Figma 각 화면 header instance 의 「화면 분기」 문구.
  * N4 는 Figma(1821:48003)에 「이미지 분석」으로 남아 있지만 N4 프레임 이름·서비스 단계가 「번역 중」이라 복사 잔여로 보고 「번역 중」을 쓴다.
+ * N5 는 섹션 검수 Figma(544:3168)의 「번역 결과 검수」다. 모듈 검수 시안(1816:36057)의 「번역 중」은 복사 잔여다(디자인 확인).
  */
 export const JOB_HEADER_TITLES: Record<StepNavStep, string> = {
   N1: '정보 입력',
   N2: '이미지 분석',
   N3: '섹션 확인',
   N4: '번역 중',
-  N5: '번역 중',
+  N5: '번역 결과 검수',
   N6: '저장 및 내보내기',
 };
 

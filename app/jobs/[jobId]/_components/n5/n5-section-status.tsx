@@ -1,6 +1,6 @@
 'use client';
 
-import { getSignalTone } from '@/lib/n5/adapter';
+import { SHOW_INPAINT_RESIDUAL_BADGE, getSignalTone } from '@/lib/n5/adapter';
 import type { SectionStatusViewModel, SignalBadge, SignalTone } from '@/lib/n5/adapter';
 import { TaskRetryButton } from './n5-task-retry';
 
@@ -113,11 +113,10 @@ function SectionStatusRows({
   const hasTagRow = status.restoredInN3 || status.verdictLabels.length > 0;
   return (
     <>
-      {status.failedStages.length > 0 && (
+      {/* 실행 실패 · 되살린 섹션 · 판정 배지는 좌측 뷰어에만 둔다(최신 Figma) — 우측 패널은 같은 행을 다시 그리지 않는다 */}
+      {variant === 'canvas' && status.failedStages.length > 0 && (
         <div data-testid={`${testIdPrefix}-failed`} className="flex h-[26px] items-center gap-2">
-          <StatusTag tone="warning" fixedWidth={variant === 'panel'}>
-            실행 실패
-          </StatusTag>
+          <StatusTag tone="warning">실행 실패</StatusTag>
           {status.failedStages.map((stage) => (
             <span key={stage} className="text-[12px] leading-[normal] font-light tracking-[-0.04em] whitespace-nowrap text-[#ff6a38]">
               {STAGE_LABELS[stage]}
@@ -129,7 +128,7 @@ function SectionStatusRows({
           )}
         </div>
       )}
-      {hasTagRow && (
+      {variant === 'canvas' && hasTagRow && (
         <div data-testid={`${testIdPrefix}-tags`} className={`flex items-center ${variant === 'canvas' ? 'gap-2' : 'flex-wrap gap-1'}`}>
           {status.restoredInN3 && <StatusTag tone="neutral">N3에서 되살린 섹션</StatusTag>}
           {status.verdictLabels.map((label) => (
@@ -137,7 +136,8 @@ function SectionStatusRows({
           ))}
         </div>
       )}
-      {status.warningLabel && (
+      {/* 인페인팅 잔존율 배지(처리 실패 · 품질 주의)는 이후 범위 — 값은 받아 두고 보이지 않는다 */}
+      {SHOW_INPAINT_RESIDUAL_BADGE && status.warningLabel && (
         <div className="flex">
           <StatusTag tone="neutral">{status.warningLabel}</StatusTag>
         </div>

@@ -261,11 +261,13 @@ function SectionStatusHeader({
 /** n5-panel.tsx BlockNumberBadge와 같은 규칙 — leading-none으로 폰트
  *  line-height가 만드는 수직 오프셋을 없애 숫자를 정중앙에 둔다(N5 3차
  *  디테일 정렬, 좌/우 배지가 같은 컴포넌트 톤을 공유하므로 동일하게 고친다). */
+// Figma Icon Button Circle(20) — 기본 #171717(602:5025) · 선택 #FF6A38(602:5019), 숫자는 흰색. 좌우 배지가 같은 규칙이다(n5-panel.tsx BlockNumberBadge)
 function BlockPinBadge({ index, isSelected }: { index: number; isSelected: boolean }) {
   return (
     <span
-      className={`flex size-5 shrink-0 items-center justify-center rounded-full text-[11px] leading-none ${
-        isSelected ? 'bg-[#ff6a38] text-white' : 'border border-[#eaeaea] bg-white text-[#171717]'
+      data-selected={isSelected ? 'true' : 'false'}
+      className={`flex size-5 shrink-0 items-center justify-center rounded-full text-[11px] leading-none text-white ${
+        isSelected ? 'bg-[#ff6a38]' : 'bg-[#171717]'
       }`}
     >
       {index}
@@ -877,7 +879,16 @@ function ImageLayer({
   selectedSectionId,
   onSelectBlock,
   onSelectSection,
+  productLabelsBySection,
+  highlightedLabelSectionId,
+  onSelectProductLabel,
 }: {
+  /** 제품 라벨 블록(isExcluded=true · role=product_label) — 번역하지 않고 원본을 유지한다. 번호·편집·끌기 대상이 아니다 */
+  productLabelsBySection: ReadonlyMap<number, BlockViewModel[]>;
+  /** 패널 「제품 라벨 N개」 요약으로 강조 중인 섹션 */
+  highlightedLabelSectionId: number | null;
+  /** 캔버스의 제품 라벨을 누르면 패널의 그 섹션 요약으로 간다 */
+  onSelectProductLabel: (sectionId: number) => void;
   slices: CanvasSlice[];
   blocksBySection: Map<number, BlockViewModel[]>;
   /** 우측 panel과 같은 번호(BlockNumberBadge)를 canvas 배지에도 쓰기 위한 공유 인덱스 */
@@ -914,7 +925,8 @@ function ImageLayer({
   zoom: number;
   selectedBlockId: number | null;
   selectedSectionId: number | null;
-  onSelectBlock: (block: BlockViewModel) => void;
+  /** 캔버스 글 박스 선택. intent='edit' 은 클릭·Enter·번호 배지 — 패널의 그 번역문 칸에 포커스를 넣는다(F-CFM-13 ④). 끌기 시작은 'none' */
+  onSelectBlock: (block: BlockViewModel, intent?: N5CanvasSelectIntent) => void;
   onSelectSection: (sectionId: number) => void;
 }) {
   // 섹션 × 보기(번역 후·번역 전)마다 마지막으로 받은 이미지를 둔다 — 같은 asset 의 새 presigned URL 로는 다시 받지 않는다
@@ -952,7 +964,7 @@ function ImageLayer({
           ? []
           : buildBlockRects(blocksBySection.get(slice.sectionId) ?? [], scale, zoom, slice);
         const selectHandlerOf = (block: BlockViewModel) => () => {
-          if (!consumeDragClick()) onSelectBlock(block);
+          if (!consumeDragClick()) onSelectBlock(block, 'edit');
         };
         return (
           <Fragment key={slice.sectionId}>
@@ -978,7 +990,7 @@ function ImageLayer({
             tabIndex={0}
             // Figma(544:3168)는 section마다 테두리로 구획을 나눈다. border는 안쪽 원점을 1px 밀어 bbox·이미지·중앙선이
             // 어긋나므로, 크기에 영향이 없는 inset 그림자로 그린다.
-            className="relative shrink-0 cursor-pointer shadow-[inset_0_0_0_1px_#eaeaea]"
+            className="group/slice relative shrink-0 cursor-pointer shadow-[inset_0_0_0_1px_#eaeaea]"
             onClick={() => {
               if (!consumeDragClick()) onSelectSection(slice.sectionId);
             }}
@@ -1026,6 +1038,32 @@ function ImageLayer({
                 blockIndexById={blockIndexById}
               />
             )}
+            {/* 제품 라벨 — 블록 클릭 층(z-1)보다 먼저 그려 겹치면 번역 블록이 우선한다. 강조 모양은 Figma 에 없어 선택 색(주황) 테두리로만 보완한다 */}
+            {!isExcluded &&
+              (productLabelsBySection.get(slice.sectionId) ?? []).map((label) => {
+                if (!label.bbox) return null;
+                const rect = getBlockDisplayRect(label.bbox, 0, scale);
+                const highlighted = highlightedLabelSectionId === slice.sectionId;
+                return (
+                  <div
+                    key={label.id}
+                    role="button"
+                    tabIndex={0}
+                    aria-label="제품 라벨 — 원본 유지"
+                    data-testid={`n5-product-label-${label.id}`}
+                    data-highlighted={highlighted ? 'true' : 'false'}
+                    onClick={stopAndRun(() => onSelectProductLabel(slice.sectionId))}
+                    onKeyDown={(e) => {
+                      if (e.key !== 'Enter' && e.key !== ' ') return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onSelectProductLabel(slice.sectionId);
+                    }}
+                    className={`absolute z-[1] cursor-pointer ${highlighted ? 'outline-2 outline-[#ff6a38] outline-solid' : ''}`}
+                    style={{ left: rect.left, top: rect.top, width: rect.width, height: rect.height }}
+                  />
+                );
+              })}
             {orderForHitLayer(blockRects).map(({ block, hitRect }) => (
               <BlockHitArea key={block.id} blockId={block.id} hitRect={hitRect} onSelect={selectHandlerOf(block)} />
             ))}
@@ -1051,32 +1089,41 @@ function ImageLayer({
               // 같은 slice 내부에 absolute로 얹을 뿐이라, 스택 재배치가 일어나지 않는다.
               // Figma 1821:49608 「N5 / 제외하기」 — 아래 이미지는 흐리게(CSS blur 4px) 그대로 두고 그 위에 #707070 24% 를 얹는다.
               // 이미지 자체 opacity 는 낮추지 않는다. 결과 이미지를 가리는 불투명 판이 아니다. 범위는 섹션 하나(slice) 그대로다
+              // key — 아래 [제외하기] 묶음(opacity 전환)과 같은 DOM 을 재사용하면 제외 직후 오버레이가 그 전환을 이어받아 반투명하게 보인다
               <div
+                key="excluded"
                 data-testid={`n5-section-excluded-${slice.sectionId}`}
-                className="absolute inset-0 flex flex-col items-center justify-center gap-2 overflow-hidden"
+                className="absolute inset-0 z-[3] flex items-center justify-center overflow-hidden"
                 style={{ backgroundColor: 'rgba(112, 112, 112, 0.24)', backdropFilter: 'blur(4px)', WebkitBackdropFilter: 'blur(4px)' }}
               >
-                <p className="text-[14px] leading-[normal] tracking-[-0.14px] whitespace-nowrap text-[#171717]">저장 시 제외됨 · 위아래가 붙습니다</p>
-                {/* N3 에서 제외된 섹션은 N5 에서 되살리지 않는다(SEC-03: 409 INVALID_STATE) — 버튼을 내지 않는다 */}
-                {slice.canRestore && (
-                  // Figma Button Secondary · XS(57:1440)
-                  <button
-                    type="button"
-                    data-testid={`n5-section-restore-${slice.sectionId}`}
-                    disabled={isSaving || isEditLocked}
-                    aria-busy={isSaving}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onRestoreSection(slice.sectionId);
-                    }}
-                    className="rounded-[4px] border border-[#eaeaea] bg-white px-3 py-[5px] text-[12px] leading-[normal] tracking-[-0.24px] text-[#171717] hover:bg-[#f5f5f5] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-white"
-                  >
-                    되돌리기
-                  </button>
-                )}
+                {/* 되돌리기 모달(1898:45712) — 흰 바탕 radius 4 · 위 16 · 아래 12 · 좌우 28 · 간격 12. 제목 SemiBold 20 · 버튼 Primary 12 */}
+                <div data-testid={`n5-section-excluded-card-${slice.sectionId}`} className="flex w-max flex-col items-stretch gap-3 rounded-[4px] bg-white px-7 pt-4 pb-3 leading-[normal]">
+                  <p className="text-center text-[20px] font-semibold tracking-[-0.4px] whitespace-nowrap text-[#171717]">저장 시 제외됩니다</p>
+                  {/* N3 에서 제외된 섹션은 N5 에서 되살리지 않는다(SEC-03: 409 INVALID_STATE) — 버튼을 내지 않는다 */}
+                  {slice.canRestore && (
+                    <button
+                      type="button"
+                      data-testid={`n5-section-restore-${slice.sectionId}`}
+                      disabled={isSaving || isEditLocked}
+                      aria-busy={isSaving}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onRestoreSection(slice.sectionId);
+                      }}
+                      className="flex h-[30px] items-center justify-center rounded-[4px] bg-[#171717] px-5 text-[12px] tracking-[-0.24px] whitespace-nowrap text-white disabled:cursor-not-allowed disabled:bg-[#f5f5f5] disabled:text-[#999]"
+                    >
+                      되돌리기
+                    </button>
+                  )}
+                </div>
               </div>
             ) : (
-              <div className="absolute top-2 right-2 z-10">
+              // Figma 1860:48214 — 섹션 오른쪽 위 12 · 81×30 · 흰 바탕 radius 4 · 12 Regular #171717.
+              // 섹션에 마우스를 올렸거나 키보드 포커스가 섹션·버튼에 있을 때만 보인다(opacity 로만 숨겨 자리·tab 순서는 그대로다).
+              <div
+                key="exclude-action"
+                className="absolute top-3 right-3 z-10 opacity-0 transition-opacity group-focus-within/slice:opacity-100 group-hover/slice:opacity-100"
+              >
                 <button
                   type="button"
                   data-testid={`n5-section-exclude-${slice.sectionId}`}
@@ -1086,7 +1133,7 @@ function ImageLayer({
                     e.stopPropagation();
                     onExcludeSection(slice.sectionId);
                   }}
-                  className="rounded-full bg-white/90 px-3 py-1.5 text-[12px] font-medium text-[#171717] shadow-[2px_2px_24px_0px_rgba(0,0,0,0.06)] hover:bg-white disabled:cursor-not-allowed disabled:hover:bg-white/90"
+                  className="flex h-[30px] items-center justify-center rounded-[4px] bg-white px-5 text-[12px] leading-[normal] tracking-[-0.24px] whitespace-nowrap text-[#171717] disabled:cursor-not-allowed disabled:text-[#999]"
                 >
                   제외하기
                 </button>
@@ -1162,6 +1209,9 @@ interface Transform {
 
 const INITIAL_TRANSFORM: Transform = { zoom: 1, pan: { x: 0, y: 0 } };
 
+/** 캔버스에서 글 박스를 고른 방식 — 'edit'(클릭·Enter·번호 배지)만 패널 번역문 칸 포커스를 요청한다 */
+export type N5CanvasSelectIntent = 'edit' | 'none';
+
 export function N5Viewport({
   preview,
   blocks: serverBlocks,
@@ -1176,9 +1226,20 @@ export function N5Viewport({
   editSession,
   syncBySection,
   isFontReady,
+  productLabels,
+  highlightedLabelSectionId,
+  productLabelReveal,
+  onSelectProductLabel,
 }: {
   preview: PreviewViewModel;
   blocks: BlockViewModel[];
+  /** 제품 라벨 블록(F-CFM-01 — 개별 번역 카드가 아니라 섹션 요약으로 보인다). 원본 bbox 그대로 그린다 */
+  productLabels: BlockViewModel[];
+  /** 패널 요약으로 강조 중인 섹션(없으면 null) */
+  highlightedLabelSectionId: number | null;
+  /** 「제품 라벨 N개」 요약을 누를 때마다 새 seq — 그 섹션의 첫 라벨을 보이게 한다 */
+  productLabelReveal: { sectionId: number; seq: number } | null;
+  onSelectProductLabel: (sectionId: number) => void;
   /** 섹션별 지문 A/B 일치(N5View) — 같은 저장 입력으로 연결된 섹션만 renderInput 조판을 쓴다 */
   syncBySection: ReadonlyMap<number, SectionInputSync>;
   /** 서버 style 글꼴 준비 여부 */
@@ -1197,7 +1258,8 @@ export function N5Viewport({
    * 이 값을 기준으로 "재실행해야 하는지"를 판단한다.
    */
   revealRequestSeq: number;
-  onSelectBlock: (block: BlockViewModel) => void;
+  /** 캔버스 글 박스 선택. intent='edit' 은 클릭·Enter·번호 배지 — 패널의 그 번역문 칸에 포커스를 넣는다(F-CFM-13 ④). 끌기 시작은 'none' */
+  onSelectBlock: (block: BlockViewModel, intent?: N5CanvasSelectIntent) => void;
   onSelectSection: (sectionId: number) => void;
   /** N5 편집 세션(N5Loaded 소유) — 이력·박스 초안·섹션 저장의 정본이다 */
   editSession: N5EditSessionApi;
@@ -1285,6 +1347,16 @@ export function N5Viewport({
     }
     return map;
   }, [blocks]);
+
+  const productLabelsBySection = useMemo(() => {
+    const map = new Map<number, BlockViewModel[]>();
+    for (const label of productLabels) {
+      const list = map.get(label.sectionId);
+      if (list) list.push(label);
+      else map.set(label.sectionId, [label]);
+    }
+    return map;
+  }, [productLabels]);
 
   // 번호는 section-local index다(section마다 1부터 다시 시작) — job 전체
   // 기준으로 계속 증가하는 전역 번호를 화면 번호로 쓰지 않는다. 우측
@@ -1479,6 +1551,24 @@ export function N5Viewport({
     hasInteractedRef.current = true;
     setTransform((prev) => ({ ...prev, pan: clampPan(nextPan, canvasSizeRef.current, prev.zoom, usable) }));
   }, [selectedBlockId, selectedSectionId, revealRequestSeq, blocks, slices, sliceOffsetYById, preview.scale]);
+
+  // 패널 「제품 라벨 N개 — 원본 유지」 요약 → 그 섹션의 첫 라벨(블록 순서)을 위 선택 이동과 같은 최소 reveal 로 보이게 한다
+  const lastHandledLabelRevealSeqRef = useRef(productLabelReveal?.seq ?? 0);
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el || !productLabelReveal || productLabelReveal.seq === lastHandledLabelRevealSeqRef.current) return;
+    lastHandledLabelRevealSeqRef.current = productLabelReveal.seq;
+    const first = (productLabelsBySection.get(productLabelReveal.sectionId) ?? []).find((label) => label.bbox != null);
+    if (!first?.bbox) return;
+    const local = getBlockDisplayRect(first.bbox, 0, preview.scale);
+    const targetRect = { left: local.left, top: (sliceOffsetYById.get(first.sectionId) ?? 0) + local.top, width: local.width, height: local.height };
+    const usable = computeUsableViewportSize(el.clientWidth, el.clientHeight, readPadding(el));
+    const { zoom, pan } = transformRef.current;
+    const nextPan = computeMinimalRevealPan(pan, zoom, targetRect, usable);
+    if (nextPan === pan) return;
+    hasInteractedRef.current = true;
+    setTransform((prev) => ({ ...prev, pan: clampPan(nextPan, canvasSizeRef.current, prev.zoom, usable) }));
+  }, [productLabelReveal, productLabelsBySection, sliceOffsetYById, preview.scale]);
 
   // ── Space 키 상태 추적 — 텍스트 입력창에 focus가 있으면 pan을 발동하지 않는다 ──
   useEffect(() => {
@@ -1794,7 +1884,8 @@ export function N5Viewport({
             if (!drag.moved) {
               if (Math.hypot(screenDelta.x, screenDelta.y) < BLOCK_DRAG_START_DISTANCE_PX) return; // 아직 클릭이다
               drag.moved = true;
-              if (drag.block.id !== selectedBlockId) onSelectBlock(drag.block);
+              // 끌기는 배치 조작이다 — 선택은 바꾸되 번역문 칸으로 입력 포커스를 옮기지 않는다
+              if (drag.block.id !== selectedBlockId) onSelectBlock(drag.block, 'none');
             }
             const delta = screenDeltaToBboxDelta(screenDelta, preview.scale, drag.zoom);
             const toOriginal = (px: number) => screenDeltaToBboxDelta({ x: px, y: 0 }, preview.scale, drag.zoom).x;
@@ -1854,9 +1945,17 @@ export function N5Viewport({
     <div
       ref={viewportRef}
       data-testid="n5-viewport"
-      // 위 여백은 canvas 시작 위치다(Figma 1080에서 y156). 그 위로 상단 정보와 Section 태그가 놓인다
-      className="group/viewport relative h-full min-w-0 flex-1 touch-none overflow-hidden select-none rounded-[6px] bg-[#f5f5f5] px-6 pt-[clamp(110px,14.45vh,156px)] pb-6"
+      // Figma 544:3168 — 회색 작업 영역은 공통 헤더(0/0/1920/72) 아래 y72 에서 시작한다(헤더와 검사 기준 칩이 겹치지 않는다).
+      // 위 여백은 canvas 시작 위치다(1080 에서 y156 = 72 + 84). 그 위로 검사 기준(y96)과 Section 태그가 놓인다
+      className="group/viewport relative mt-[72px] h-[calc(100%-72px)] min-w-0 flex-1 touch-none overflow-hidden select-none rounded-[6px] bg-[#f5f5f5] px-6 pt-[clamp(56px,7.78vh,84px)] pb-6"
       style={{ cursor }}
+      // 캔버스 조작(클릭·끌기·크기 조정·pan)을 시작하면 패널 번역문 칸의 입력 포커스를 먼저 내려놓는다 — 이후 Space·Ctrl/⌘+Z 가
+      // 캔버스 단축키로 동작한다(칸 안에서는 글자 입력·글자 실행 취소). 글 박스 클릭 선택은 그 뒤 다시 그 칸에 포커스를 넣는다(F-CFM-13 ④).
+      // capture 단계라 손잡이·글 박스가 전파를 멈춰도 먼저 실행된다. 초안은 패널 상태에 남는다(blur 처리 없음)
+      onPointerDownCapture={() => {
+        const active = document.activeElement;
+        if (active instanceof HTMLElement && isTypingTarget(active) && !viewportRef.current?.contains(active)) active.blur();
+      }}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={endPan}
@@ -1876,8 +1975,8 @@ export function N5Viewport({
               버튼이 있는 두 컴포넌트 루트에만 pointer-events-auto를 다시
               켜서(n5-toolbar.tsx), 빈 영역은 클릭이 아래 canvas로 그대로
               통과하게 한다. */}
-          {/* workspace 좌상단 정보(Figma 「N3 섹션 상단」 1507:21672, x152 y46) */}
-          <JobMetaTags meta={jobMeta} testId="n5-job-meta" className="pointer-events-none absolute top-[46px] left-8 z-10" />
+          {/* workspace 좌상단 검사 기준(Figma 「N3 섹션 상단」 1507:21672, x152 y96 = 작업 영역 위 24) */}
+          <JobMetaTags meta={jobMeta} testId="n5-job-meta" className="pointer-events-none absolute top-6 left-8 z-10" />
           {isSnapDebug && <SnapDebugHud values={snapDebug} />}
           {isTypesetQa && viewMode === 'translated' && (
             <div
@@ -2004,6 +2103,9 @@ export function N5Viewport({
               selectedSectionId={selectedSectionId}
               onSelectBlock={onSelectBlock}
               onSelectSection={onSelectSection}
+              productLabelsBySection={productLabelsBySection}
+              highlightedLabelSectionId={highlightedLabelSectionId}
+              onSelectProductLabel={onSelectProductLabel}
             />
             {/* 조정 UI는 「번역 후」 화면에만 있다(F-CFM-15). 「번역 전」은 선택 테두리·번호만 남는다 */}
             {viewMode === 'translated' && selectedBlockCanvasRect && selectedBlockBbox && selectedBlockId != null && selectedSection && (

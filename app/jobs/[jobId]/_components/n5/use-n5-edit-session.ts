@@ -38,6 +38,13 @@ import {
 import { createIdempotencyKey } from '@/lib/api/idempotency';
 import { openTypesetMeasurer, type TypesetMeasurer } from '@/lib/n5/typeset-measurement';
 import { isTypesetRole } from '@/lib/n5/typeset-rules';
+import {
+  judgeUncertainSave,
+  nextUncertainSaveStatus,
+  type UncertainRefetchResult,
+  type UncertainSaveCheck,
+  type UncertainSaveOutcome,
+} from '@/lib/n5/uncertain-save';
 import type { TypesetFontGate } from './use-typeset-font-gate';
 import type { N5SaveNotice } from '@/lib/n5/messages';
 import type { N5ViewMode } from '@/lib/n5/viewport';
@@ -76,6 +83,9 @@ interface N5TranslationValue {
   bbox: BoundingBox | null;
 }
 
+/** 응답을 받지 못한 저장 뒤 서버 상태를 다시 받는 한 번의 기다림 상한(ms) — FE 구현값. 넘으면 「확인하지 못함」으로 두고 잠금은 유지한다 */
+const N5_UNCERTAIN_SAVE_RECONCILE_LIMIT_MS = 15_000;
+
 export function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   const tag = target.tagName;
@@ -95,6 +105,10 @@ export interface N5RerenderTask {
 }
 
 export interface N5EditSessionApi {
+  /** 응답을 받지 못한 저장의 결과를 서버에서 확인하는 중(checking) · 확인하지 못함(unconfirmed). 없으면 null — 있는 동안 편집이 잠긴다 */
+  uncertainSave: { status: 'checking' | 'unconfirmed' } | null;
+  /** [서버 상태 다시 확인] */
+  retryServerCheck: () => void;
   canUndo: boolean;
   canRedo: boolean;
   undo: () => void;
@@ -160,6 +174,10 @@ export interface N5EditSessionApi {
   isServerEditPending: () => boolean;
   /** 저장하지 않은 수정(서버값과 다른 번역 초안 · 배치 미저장)이 있는 블록 — 화면 블록 순서 */
   listUnsavedBlockIds: () => number[];
+  /** 배치 초안만(확정 전 저장 대상) */
+  listUnsavedLayoutBlockIds: () => number[];
+  /** 저장하지 않은 번역문 초안만(확정 때 저장하지 않는다 — 확인창 「저장되지 않은 번역문」) */
+  listUnsavedTranslationBlockIds: () => number[];
   /**
    * [저장하러 가기] 한 블록 저장 — 번역 초안만이면 saveTranslation, 배치만이면 PATCH { trans1(서버 현재 값), revision, layoutAdjust },
    * 둘 다면 PATCH { trans1(초안), revision, layoutAdjust } 한 번. 이미 [확인]으로 저장한 번역문은 다시 보내지 않는다.
@@ -221,6 +239,65 @@ export function useN5EditSession({
   const endServerEdit = useCallback(() => {
     pendingEditsRef.current -= 1;
     setPendingEdits(pendingEditsRef.current);
+  }, []);
+
+  // ── 응답을 받지 못한 저장(F-CFM-03) ─ 서버가 이미 반영했을 수 있다(네트워크 끊김·시간 초과 — ApiRequestError 가 아니다).
+  // 서버 상태(/blocks · /preview)를 다시 받아 결과를 확인할 때까지 호출부의 저장 흐름이 끝나지 않는다 — 그동안 호출부가 잡은 저장 잠금
+  // (pendingEdits · inFlight)이 그대로라 추가 저장·확정·실행 취소·다시 실행·섹션 제외가 시작되지 않는다.
+  // 다시 받기는 한 번에 상한(N5_UNCERTAIN_SAVE_RECONCILE_LIMIT_MS)까지만 기다린다. 넘거나 실패하면 「확인하지 못함」으로 두고 잠금은 풀지 않는다 —
+  // 사용자가 [서버 상태 다시 확인](retryServerCheck)으로 다시 받는다. 확인되면 judgeUncertainSave 로 반영 여부를 정해 호출부가 초안·이력을 맞춘다.
+  // HTTP 응답이 있는 실패(409·4xx·5xx)는 결과가 분명하므로 여기서 기다리지 않는다(null)
+  const [uncertainSave, setUncertainSave] = useState<{ status: 'checking' | 'unconfirmed' } | null>(null);
+  const uncertainRetryRef = useRef<(() => void) | null>(null);
+
+  const refetchServerState = useCallback(async (): Promise<UncertainRefetchResult> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<UncertainRefetchResult>((resolve) => {
+      timer = setTimeout(() => resolve('timeout'), N5_UNCERTAIN_SAVE_RECONCILE_LIMIT_MS);
+    });
+    const work = Promise.all([
+      queryClient.refetchQueries({ queryKey: pixlateKeys.n5Blocks(jobId), exact: true, type: 'all' }, { throwOnError: true }),
+      queryClient.refetchQueries({ queryKey: pixlateKeys.n5Preview(jobId), exact: true, type: 'all' }, { throwOnError: true }),
+    ]).then(
+      (): UncertainRefetchResult => 'ok',
+      (): UncertainRefetchResult => 'failed',
+    );
+    try {
+      return await Promise.race([work, timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }, [jobId, queryClient]);
+
+  const resolveUncertainSave = useCallback(
+    async (err: unknown, check: UncertainSaveCheck | null): Promise<UncertainSaveOutcome | null> => {
+      if (err instanceof ApiRequestError) return null;
+      for (;;) {
+        setUncertainSave({ status: 'checking' });
+        if (nextUncertainSaveStatus(await refetchServerState()) === 'confirmed') break;
+        // 확인하지 못했다 — 잠금은 그대로 두고 사용자가 다시 확인을 누를 때까지 기다린다
+        setUncertainSave({ status: 'unconfirmed' });
+        await new Promise<void>((resolve) => {
+          uncertainRetryRef.current = resolve;
+        });
+      }
+      uncertainRetryRef.current = null;
+      setUncertainSave(null);
+      if (!check) return 'not-applied';
+      const preview = queryClient.getQueryData<{ sections?: { id?: number | null; bucket?: string | null }[] }>(pixlateKeys.n5Preview(jobId));
+      return judgeUncertainSave(check, {
+        blocks: queryClient.getQueryData<ApiTextBlock[]>(pixlateKeys.n5Blocks(jobId)) ?? [],
+        sections: preview?.sections ?? [],
+      });
+    },
+    [jobId, queryClient, refetchServerState],
+  );
+
+  /** [서버 상태 다시 확인] — 확인하지 못한 저장의 결과를 다시 받는다(잠금은 확인될 때까지 그대로) */
+  const retryServerCheck = useCallback(() => {
+    const resume = uncertainRetryRef.current;
+    uncertainRetryRef.current = null;
+    resume?.();
   }, []);
 
   // [저장하러 가기] 최종 저장 잠금 — 사용자 편집 handler 가 같은 tick 에도 바로 읽도록 ref 로 둔다(UI disabled 만 믿지 않는다)
@@ -533,17 +610,24 @@ export function useN5EditSession({
       const logical = logicalLayoutOf(block.id);
       if (!section || !bbox || !logical) return;
       const before: N5FontScaleValue = logical;
-      const stepped = stepFontScale({ bbox, fontScale: logical.fontScale }, direction, section, block.textAlign ?? 'left');
+      // [+][-] 는 영역 중심 기준(PRD v3.6.4 F-CFM-15) — 글자 정렬과 무관하다
+      const stepped = stepFontScale({ bbox, fontScale: logical.fontScale }, direction, section);
       if (!stepped) return;
-      // 폭·기준점은 배율 규칙을 따르고, 높이는 새 글자 크기로 다시 줄바꿈한 결과가 정본이다. 윗변은 그대로 둔다
+      // 폭은 배율 규칙을 따르고, 높이는 새 글자 크기로 다시 줄바꿈한 결과가 정본이다. 세로도 영역 중심을 유지한다(섹션 안으로만 민다)
       const text = translationDrafts.get(block.id)?.draft ?? block.translatedText;
-      // 사용자가 높이를 정한 block 은 폭·기준점만 배율 규칙을 따르고 높이는 그대로 둔다(Auto Height 로 다시 정하지 않는다)
+      // 중심은 화면에 그려진 영역(사용자 초안 ?? 서버 박스 = 논리 박스) 기준이다 — 측정용 Auto Height 박스와 높이가 다를 수 있다
+      const centerY = logical.bbox.y + logical.bbox.height / 2;
+      const recenterY = (box: BoundingBox): BoundingBox => ({
+        ...box,
+        y: Math.min(Math.max(centerY - box.height / 2, 0), Math.max(section.height - box.height, 0)),
+      });
+      // 사용자가 높이를 정한 block 은 폭·기준점만 배율 규칙을 따르고 높이는 그대로 둔다(Auto Height 로 다시 정하지 않는다) — 높이가 같으니 중심도 그대로다
       const isManual = manualHeightRef.current.has(block.id);
-      const fitted = isManual ? null : fitForText(block, text, { ...stepped.bbox, y: bbox.y }, stepped.fontScale, section);
+      const fitted = isManual ? null : fitForText(block, text, stepped.bbox, stepped.fontScale, section);
       const after: N5FontScaleValue = isManual
         ? { bbox: { ...stepped.bbox, y: bbox.y, height: bbox.height }, fontScale: stepped.fontScale }
         : fitted
-          ? { bbox: fitted.box, fontScale: stepped.fontScale }
+          ? { bbox: recenterY(fitted.box), fontScale: stepped.fontScale }
           : stepped;
       applyLayoutDraft(block.id, after);
       const command: N5EditCommand = { kind: 'font-scale', target: { type: 'block', id: block.id }, before, after };
@@ -590,6 +674,14 @@ export function useN5EditSession({
         commitTranslation(blockId, textBeforeSave, response.block?.trans1 ?? text);
         return { started: true, ok: true, revision: response.block?.revision ?? null, rerenderTaskId, block: response.block ?? null };
       } catch (err) {
+        // 응답이 없었으면 서버 상태를 확인할 때까지 기다린다. 이미 반영됐으면 성공과 같이 초안·이력을 맞춘다(이번 응답 task 는 알 수 없다)
+        const uncertain = await resolveUncertainSave(err, { kind: 'translation', blockId, text, sentRevision: latest.revision });
+        if (uncertain === 'applied') {
+          const server = queryClient.getQueryData<ApiTextBlock[]>(pixlateKeys.n5Blocks(jobId))?.find((b) => b.id === blockId) ?? null;
+          updateTranslationDraft(blockId, (prev) => resolveTranslationSaveSucceeded(prev, text));
+          commitTranslation(blockId, textBeforeSave, text);
+          return { started: true, ok: true, revision: server?.revision ?? null, rerenderTaskId: null, block: server };
+        }
         // 초안은 그대로 두고 실패 표시만 켠다(번역문 저장 실패는 입력 유지) — 409 는 기존 충돌 표시로 넘긴다
         updateTranslationDraft(blockId, resolveTranslationSaveFailed);
         let conflict: ApiTextBlock | null = null;
@@ -603,7 +695,7 @@ export function useN5EditSession({
         endServerEdit();
       }
     },
-    [beginServerEdit, clearHistoryConflict, commitTranslation, endServerEdit, jobId, patchBlock, queryClient, setRerenderTask, updateTranslationDraft],
+    [beginServerEdit, clearHistoryConflict, commitTranslation, endServerEdit, jobId, patchBlock, queryClient, resolveUncertainSave, setRerenderTask, updateTranslationDraft],
   );
   /** 칸의 [확인] — 최종 저장 중에는 시작하지 않는다(최종 저장 자체는 saveBlockForConfirm 이 같은 경로를 쓴다) */
   const saveTranslation = useCallback(
@@ -638,8 +730,23 @@ export function useN5EditSession({
             },
           });
           if (bucket === 'exclude') onSectionExcluded(sectionId);
-        } catch {
-          setFailedSectionId(sectionId);
+        } catch (err) {
+          const uncertain = await resolveUncertainSave(err, { kind: 'section', sectionId, bucket });
+          if (uncertain === 'applied') {
+            // 서버가 이미 바꿨다 — 성공과 같이 이력 1단계(화면은 다시 받은 /preview 가 정본)
+            dispatch({
+              type: 'edit-succeeded',
+              command: {
+                kind: bucket === 'exclude' ? 'section-exclude' : 'section-restore',
+                target: { type: 'section', id: sectionId },
+                before: bucket === 'exclude' ? 'include' : 'exclude',
+                after: bucket,
+              },
+            });
+            if (bucket === 'exclude') onSectionExcluded(sectionId);
+          } else {
+            setFailedSectionId(sectionId);
+          }
         } finally {
           pendingSectionIdsRef.current.delete(sectionId);
           setPendingSectionIds(new Set(pendingSectionIdsRef.current));
@@ -647,7 +754,7 @@ export function useN5EditSession({
         }
       })();
     },
-    [beginServerEdit, dispatch, endServerEdit, onSectionExcluded, patchSectionBucket],
+    [beginServerEdit, dispatch, endServerEdit, onSectionExcluded, patchSectionBucket, resolveUncertainSave],
   );
 
   // ── 실행 취소·다시 실행
@@ -700,10 +807,22 @@ export function useN5EditSession({
           const conflict = parsed && isRevisionConflict(parsed) ? getRevisionConflictLatestBlock(parsed) : null;
           if (conflict) setHistoryConflicts((conflicts) => new Map(conflicts).set(blockId, conflict));
         }
+        // 응답이 없었으면 서버 상태를 확인할 때까지 이력 위치·잠금을 그대로 둔다. 이미 반영됐으면 이력도 그 방향으로 옮긴다
+        const uncertain = await resolveUncertainSave(err, { kind: 'translation', blockId, text: value.text, sentRevision: latest.revision });
+        if (uncertain === 'applied') {
+          setBboxDrafts((drafts) => {
+            const next = new Map(drafts);
+            if (value.bbox) next.set(blockId, value.bbox);
+            else next.delete(blockId);
+            return next;
+          });
+          settle(direction, command);
+          return;
+        }
         settle(direction, null);
       }
     },
-    [clearHistoryConflict, dispatch, jobId, patchBlock, queryClient, revealBlock, setRerenderTask, settle],
+    [clearHistoryConflict, dispatch, jobId, patchBlock, queryClient, resolveUncertainSave, revealBlock, setRerenderTask, settle],
   );
 
   const runSectionCommand = useCallback(
@@ -721,11 +840,18 @@ export function useN5EditSession({
         setFailedSectionId((prev) => (prev === sectionId ? null : prev));
         latestRef.current.onSelectSection(sectionId);
         settle(direction, command);
-      } catch {
+      } catch (err) {
+        const uncertain = await resolveUncertainSave(err, { kind: 'section', sectionId, bucket });
+        if (uncertain === 'applied') {
+          setFailedSectionId((prev) => (prev === sectionId ? null : prev));
+          latestRef.current.onSelectSection(sectionId);
+          settle(direction, command);
+          return;
+        }
         settle(direction, null);
       }
     },
-    [dispatch, patchSectionBucket, settle],
+    [dispatch, patchSectionBucket, resolveUncertainSave, settle],
   );
 
   /** 박스 이력의 manual height 여부를 그 방향(실행 취소 = 조작 전, 다시 실행 = 조작 후)으로 되돌린다 */
@@ -795,6 +921,23 @@ export function useN5EditSession({
   }, [redo, undo]);
 
   /** [저장하러 가기] 대상 — 서버값과 다른 번역 초안 · 배치 미저장(보낼 값이 있는 것). 화면 블록 순서 */
+  /** [저장하러 가기]가 저장할 배치(layoutAdjust) 초안이 있는 블록 */
+  const listUnsavedLayoutBlockIds = useCallback(
+    (): number[] => latestRef.current.blocks.filter((block) => pendingLayoutPatch(block.id) != null).map((block) => block.id),
+    [pendingLayoutPatch],
+  );
+  /** [확인]으로 저장하지 않은 번역문 초안(서버값과 다름)이 있는 블록 — 확정 때 저장하지 않고 확인창 항목으로만 알린다 */
+  const listUnsavedTranslationBlockIds = useCallback((): number[] => {
+    const { blocks: latestBlocks, translationDrafts: drafts } = latestRef.current;
+    const serverText = new Map((queryClient.getQueryData<ApiTextBlock[]>(pixlateKeys.n5Blocks(jobId)) ?? []).map((b) => [b.id, b.trans1 ?? '']));
+    return latestBlocks
+      .filter((block) => {
+        const draft = drafts.get(block.id);
+        return draft != null && serverText.has(block.id) && draft.draft !== serverText.get(block.id);
+      })
+      .map((block) => block.id);
+  }, [jobId, queryClient]);
+
   const listUnsavedBlockIds = useCallback((): number[] => {
     const { blocks: latestBlocks, translationDrafts: drafts } = latestRef.current;
     const serverText = new Map((queryClient.getQueryData<ApiTextBlock[]>(pixlateKeys.n5Blocks(jobId)) ?? []).map((b) => [b.id, b.trans1 ?? '']));
@@ -811,13 +954,13 @@ export function useN5EditSession({
     async (blockId: number): Promise<TranslationSaveResult> => {
       const latest = queryClient.getQueryData<ApiTextBlock[]>(pixlateKeys.n5Blocks(jobId))?.find((b) => b.id === blockId);
       if (latest?.revision == null) return { started: false };
-      const draft = latestRef.current.translationDrafts.get(blockId);
-      const text = draft != null && draft.draft !== (latest.trans1 ?? '') ? draft.draft : null;
+      // PRD v3.6.4 F-CFM-09 — [확인]을 누르지 않은 번역문 초안은 자동 저장하지 않는다(그 칸은 서버에 저장된 이전 문장으로 확정 · 확인창 항목).
+      // 여기서는 배치(layoutAdjust)만 보내고 trans1 은 서버 현재 값 그대로다(같은 값은 번역문 변경 없음 — blockPatch no-op 규칙)
+      const text: string | null = null;
       const layoutAdjust = pendingLayoutPatch(blockId);
       if (layoutAdjust == null) {
         setLayoutDirty(blockId, false); // 보낼 배치가 없다(서버 값과 같거나 렌더 대상 아님)
-        if (text == null) return { started: true, ok: true, revision: latest.revision, rerenderTaskId: null, block: null };
-        return saveTranslationImpl(blockId, text);
+        return { started: true, ok: true, revision: latest.revision, rerenderTaskId: null, block: null };
       }
       if (!beginServerEdit()) return { started: false };
       clearHistoryConflict(blockId);
@@ -842,12 +985,15 @@ export function useN5EditSession({
           conflict = parsed && isRevisionConflict(parsed) ? getRevisionConflictLatestBlock(parsed) : null;
           if (conflict) setHistoryConflicts((conflicts) => new Map(conflicts).set(blockId, conflict!));
         }
+        // 응답이 없었으면 서버 상태를 확인할 때까지 기다린 뒤 실패로 둔다(확정하지 않음). 다음 [저장하러 가기]는 다시 받은 최신 revision 으로
+        // 같은 배치를 보낸다 — 이미 반영됐다면 같은 값이라 no-op 이다(blockPatch). 409 를 가정하지 않는다
+        await resolveUncertainSave(err, null);
         return { started: true, ok: false, conflict, error: err };
       } finally {
         endServerEdit();
       }
     },
-    [beginServerEdit, clearHistoryConflict, endServerEdit, jobId, patchBlock, pendingLayoutPatch, queryClient, saveTranslationImpl, setLayoutDirty, setRerenderTask, updateTranslationDraft],
+    [beginServerEdit, clearHistoryConflict, endServerEdit, jobId, patchBlock, pendingLayoutPatch, queryClient, resolveUncertainSave, setLayoutDirty, setRerenderTask, updateTranslationDraft],
   );
 
   const isIdle = session.inFlight === null && pendingEdits === 0;
@@ -860,7 +1006,9 @@ export function useN5EditSession({
     undo,
     redo,
     notice: session.notice,
-    isEditLocked: session.inFlight !== null || isFinalizing,
+    isEditLocked: session.inFlight !== null || isFinalizing || uncertainSave !== null,
+    uncertainSave,
+    retryServerCheck,
     isFinalizing,
     beginFinalizationLock,
     endFinalizationLock,
@@ -889,6 +1037,8 @@ export function useN5EditSession({
     hasPendingServerEdits,
     isServerEditPending,
     listUnsavedBlockIds,
+    listUnsavedLayoutBlockIds,
+    listUnsavedTranslationBlockIds,
     saveBlockForConfirm,
     saveTranslation,
   };

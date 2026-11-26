@@ -20,7 +20,7 @@
 // tsconfig paths 전용이라 Node 단독 실행에서는 풀리지 않는다(타입 전용 import는
 // 실행 시 제거되므로 alias를 써도 무방하다 — 아래 BlockRole/Api* import 참고).
 import { BLOCK_ROLE_LABELS, SECTION_WARNING_LABELS, getSignalLabel } from '../api/labels.ts';
-import { VERDICT_BADGE_LABELS } from '../n3/verdict.ts';
+import { VERDICT_BADGE_LABELS, type VerdictType } from '../n3/verdict.ts';
 import type { ApiSection } from '../api/n3-schema';
 import type { BlockRole, BoundingBox } from '@/lib/api/types';
 import type { N5TextAlign } from './layout-edit';
@@ -109,10 +109,39 @@ export interface RetryTarget {
  * width_overflow 는 사용자에게 수정 요구로 보이지 않는다(팀 QA 결정 — 일반 넘침 안내 제거). 데이터는 그대로 두고 표시만 하지 않는다
  */
 const CELL_SIGNAL_CODES: ReadonlySet<ApiSignalCode> = new Set<ApiSignalCode>(['translation_failed', 'width_overflow']);
+/**
+ * 원문 쪽 신호 — 번역문 검사 결과(블록 칩 + 사유 한 줄)와 섞지 않는다(F-CFM-05). 원문 카드·셀 상태가 따로 보인다.
+ * low_ocr_confidence 는 관리자 전용이라 서버가 셀러 응답에서 뺀다(SignalCode) — 와도 번역문 경고로 보이지 않게 함께 둔다.
+ */
+const SOURCE_SIGNAL_CODES: ReadonlySet<ApiSignalCode> = new Set<ApiSignalCode>(['empty_block', 'low_ocr_confidence']);
 const HIDDEN_SIGNAL_CODES: ReadonlySet<ApiSignalCode> = new Set<ApiSignalCode>(['width_overflow']);
 
+/** 번역문 경고(블록 칩 + 사유 한 줄) — 셀 상태(번역 실패·넘침)와 원문 쪽 신호는 뺀다 */
 export function getSignalRows(badges: SignalBadge[]): SignalBadge[] {
-  return badges.filter((badge) => !CELL_SIGNAL_CODES.has(badge.code));
+  return badges.filter((badge) => !CELL_SIGNAL_CODES.has(badge.code) && !SOURCE_SIGNAL_CODES.has(badge.code));
+}
+
+/**
+ * 원문 상태(F-CFM-05 · PL-26). 서버 신호 empty_block(「원문 없음」)을 원문 유무와 함께 본다 — 빈 문자열만으로 판단하지 않는다.
+ * - recognition-failed: empty_block + 원문이 비어 있음 = 인식 실패 행. 원문 없음 · 번역문 칸 입력 불가
+ * - check: empty_block 이지만 원문 글자가 있음 = 원문을 다시 확인할 블록(사유는 서버 reason 그대로)
+ */
+export type BlockSourceState = { kind: 'recognition-failed' } | { kind: 'check'; reason: string | null } | null;
+
+export function getBlockSourceState(block: Pick<BlockViewModel, 'badges' | 'sourceText'>): BlockSourceState {
+  const signal = block.badges.find((badge) => badge.code === 'empty_block');
+  if (!signal) return null;
+  if (block.sourceText.trim() === '') return { kind: 'recognition-failed' };
+  return { kind: 'check', reason: signal.reason ?? null };
+}
+
+/**
+ * 「글자가 넘칩니다 — 수정이 필요합니다」(F-CFM-05 · F-TRN-04 · Figma 1675:7501). 정본은 /preview render.result.overflow(serverOverflow).
+ * 그 키가 없는 응답(legacy)만 기존 signal(width_overflow)로 본다. null(현재 결과가 아님)은 넘침으로 보지 않는다
+ */
+export function isBlockOverflowing(block: Pick<BlockViewModel, 'serverOverflow' | 'badges'>): boolean {
+  if (block.serverOverflow === 'legacy') return hasWidthOverflowSignal(block.badges);
+  return block.serverOverflow === true;
 }
 
 /** 사용자 화면에 행으로 보이는 signal — 일반 넘침(width_overflow)은 빼고 나머지(금지 표현·필수 문구 등)는 그대로 */
@@ -237,6 +266,23 @@ export function toPreviewStatusInput(
   return { semantic, labels: resolvePreviewSectionLabels(semantic), input: section.input };
 }
 
+/**
+ * 되살린 섹션의 대표 제외 이유 순서(PRD v3.6.4 F-CFM-05 · F-SEC-06 「사유 순서 규제 > 채널 정책 > 채널 판정 실패 > 현지 판정 실패 > 현지 제외」,
+ * 「현지 수정 필수와 확인 필요가 겹치면 수정 필수」). 판정 실패 코드(채널·현지)는 섹션 verdictType 계약에 없어 이 목록에 없다
+ */
+const RESTORED_VERDICT_PRIORITY: readonly VerdictType[] = [
+  'regulatory',
+  'regulatory_conditional',
+  'regulatory_replaceable',
+  'channel_policy',
+  'local_irrelevant',
+  'needs_fix',
+];
+
+export function pickRepresentativeVerdict(types: readonly VerdictType[]): VerdictType | null {
+  return RESTORED_VERDICT_PRIORITY.find((type) => types.includes(type)) ?? null;
+}
+
 export function buildSectionStatus(
   sectionId: number,
   signals: SignalBadge[],
@@ -247,7 +293,11 @@ export function buildSectionStatus(
 ): SectionStatusViewModel {
   const render = findFailedItem(items, 'render', 'section', sectionId);
   const inpaint = findFailedItem(items, 'inpaint', 'section', sectionId);
-  const labels = (section?.verdicts ?? []).flatMap((verdict) => (verdict.verdictType ? [VERDICT_BADGE_LABELS[verdict.verdictType]] : []));
+  const restoredInN3 = section?.exclusionReason === 'restored_by_user';
+  const verdictTypes = (section?.verdicts ?? []).flatMap((verdict) => (verdict.verdictType ? [verdict.verdictType] : []));
+  // N3 에서 되살린 섹션은 제외 이유를 대표 하나만 보인다(PRD v3.6.4 F-CFM-05 — 사유 코드 우선순위 · 수정 필수 > 확인 필요)
+  const representative = restoredInN3 ? pickRepresentativeVerdict(verdictTypes) : null;
+  const labels = (representative ? [representative] : verdictTypes).map((type) => VERDICT_BADGE_LABELS[type]);
   const isLegacy = preview == null || renderStatus === 'excluded';
   // 서버는 N4 최초 생성과 N5 수정 뒤 재렌더를 같은 섹션 시도(render · section)로 만든다 — /tasks 만으로는 둘을 나눌 수 없다.
   // 이번 계약(/preview render)이 있으면 그 섹션의 현재 시도와 이전 결과 유무로 나눈다(preview-state.ts resolvePreviewSectionLabels):
@@ -266,7 +316,7 @@ export function buildSectionStatus(
     failedStages: [...(sectionRenderFailed ? (['render'] as const) : []), ...(inpaint ? (['inpaint'] as const) : [])],
     renderRetry,
     previewUpdateRetry,
-    restoredInN3: section?.exclusionReason === 'restored_by_user',
+    restoredInN3,
     verdictLabels: [...new Set(labels)],
     // 서버는 인페인팅 실행 실패 때 warningBadge=processing_failed 를 함께 둔다(downstream ⑥). 그 실패는 「실행 실패 · 인페인팅」 행이
     // 이미 보이므로 품질 행에 같은 실패를 다시 내지 않는다 — 실행 실패와 품질 경고를 섞지 않는다. /tasks 에 실패 항목이 없을 때만 배지로 남긴다
@@ -288,9 +338,23 @@ export function getSectionStatusRowCount(status: SectionStatusViewModel | undefi
   return (
     (status.failedStages.length > 0 ? 1 : 0) +
     (status.restoredInN3 || status.verdictLabels.length > 0 ? 1 : 0) +
-    (status.warningLabel != null ? 1 : 0) +
     (status.previewNotice != null ? 1 : 0)
   );
+}
+
+/**
+ * 인페인팅 잔존율 배지(warningBadge → warningLabel: 처리 실패·품질 주의)는 이후 범위다(PRD v3.6.4 · 디자인 확인) — 값은 남기되 화면에 내지 않는다.
+ * 인페인팅 「실행」 실패는 failedStages(inpaint)로 따로 보인다
+ */
+export const SHOW_INPAINT_RESIDUAL_BADGE = false;
+
+/**
+ * 우측 패널의 섹션 행 — 최신 Figma(544:3168 · 1244:8641)는 섹션 배지(실행 실패 · 되살린 섹션 · 판정)를 좌측 뷰어에만 둔다.
+ * 패널에는 좌측에 없는 것만 남긴다: 진행 표시 · 미리보기 안내(섹션 [다시 시도]) · 섹션 단위 신호(예: 로고 인식 실패)
+ */
+export function hasPanelSectionStatus(status: SectionStatusViewModel | undefined): boolean {
+  if (!status) return false;
+  return status.progressLabel != null || status.previewNotice != null || status.signals.length > 0;
 }
 
 /**
@@ -310,7 +374,7 @@ export function hasSectionStatus(status: SectionStatusViewModel | undefined): bo
     status.failedStages.length > 0 ||
     status.restoredInN3 ||
     status.verdictLabels.length > 0 ||
-    status.warningLabel != null ||
+    (SHOW_INPAINT_RESIDUAL_BADGE && status.warningLabel != null) ||
     status.signals.length > 0 ||
     status.progressLabel != null ||
     status.previewNotice != null
@@ -387,6 +451,8 @@ export interface BlockViewModel {
   /** isExcluded(API 값, role=product_label 파생)로부터 editable = !isExcluded로 정리한다.
    *  role==='product_label' 여부를 FE에서 다시 계산하지 않는다 — isExcluded가 정본이다. */
   editable: boolean;
+  /** 서버 blockStatus=edited — 사용자가 번역문을 바꿔 저장한 블록(F-CFM-02a 「사용자 수정」). 배치만 바꾼 저장은 바꾸지 않는다(서버 규칙) */
+  userEdited: boolean;
   revision: number;
   /** 원본 bbox — 셀러 조정으로 바뀌지 않는다 */
   bbox: BoundingBox | null;
@@ -438,6 +504,7 @@ export function toBlockViewModel(dto: ApiTextBlock): BlockViewModel {
     sourceText: dto.sourceKo ?? '',
     translatedText: dto.trans1 ?? '',
     editable: !isExcluded,
+    userEdited: dto.blockStatus === 'edited',
     revision: dto.revision,
     bbox: dto.bbox ? apiBboxToBoundingBox(dto.bbox) : null,
     storedLayout: readStoredLayout(dto),

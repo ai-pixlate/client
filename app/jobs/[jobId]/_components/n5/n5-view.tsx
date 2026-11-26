@@ -33,7 +33,7 @@ import type {
   SectionStatusViewModel,
 } from '@/lib/n5/adapter';
 import type { N5ViewMode } from '@/lib/n5/viewport';
-import { N5Viewport } from './n5-viewport';
+import { N5Viewport, type N5CanvasSelectIntent } from './n5-viewport';
 import { N5Panel, type N5PanelRevealRequest } from './n5-panel';
 import { useN5EditSession } from './use-n5-edit-session';
 import { useN5CheckSync } from './use-n5-check-sync';
@@ -87,10 +87,13 @@ function N5Loaded({
   sectionStatusById,
   blockTaskFailuresById,
   syncBySection,
+  productLabels,
 }: {
   jobId: string;
   preview: PreviewViewModel;
   blocks: BlockViewModel[];
+  /** 제품 라벨 블록(isExcluded=true · role=product_label) — 번역 카드가 아니라 섹션 그룹 헤더 요약으로 보인다(F-CFM-01) */
+  productLabels: BlockViewModel[];
   jobMeta: JobMetaViewModel;
   sectionStatusById: ReadonlyMap<number, SectionStatusViewModel>;
   blockTaskFailuresById: ReadonlyMap<number, BlockTaskFailures>;
@@ -118,17 +121,25 @@ function N5Loaded({
   // 패널 자동 이동 요청 — selection 값이 아니라 "이 대상을 패널에 보여 달라"는 일회성 이벤트다
   const [panelReveal, setPanelReveal] = useState<N5PanelRevealRequest | null>(null);
 
+  // 제품 라벨 강조(F-CFM-01) — 패널 「제품 라벨 N개 — 원본 유지」 요약과 캔버스 라벨이 같은 값을 본다. 선택(블록·섹션)과 별개의 표시다
+  const [highlightedLabelSectionId, setHighlightedLabelSectionId] = useState<number | null>(null);
+  const [productLabelReveal, setProductLabelReveal] = useState<{ sectionId: number; seq: number } | null>(null);
+
   // 선택된 블록이 재조회 뒤 보이지 않게 되면(제외 블록이 되었거나 사라짐) 선택을 푼다 — 보이지 않는 블록의 선택 UI 를 남기지 않는다
   if (selectedBlockId != null && !blocks.some((block) => block.id === selectedBlockId)) setSelectedBlockId(null);
 
-  function selectBlock(block: BlockViewModel, navigation: { canvas: boolean; panel: boolean }) {
+  function selectBlock(block: BlockViewModel, navigation: { canvas: boolean; panel: boolean; focusEditor?: boolean }) {
+    setHighlightedLabelSectionId(null);
     setSelectedBlockId(block.id);
     setSelectedSectionId(block.sectionId);
     if (navigation.canvas) setRevealRequestSeq((seq) => seq + 1);
-    if (navigation.panel) setPanelReveal((prev) => ({ kind: 'block', id: block.id, seq: (prev?.seq ?? 0) + 1 }));
+    if (navigation.panel) {
+      setPanelReveal((prev) => ({ kind: 'block', id: block.id, seq: (prev?.seq ?? 0) + 1, focusEditor: navigation.focusEditor === true }));
+    }
   }
 
   function selectSection(sectionId: number, navigation: { canvas: boolean; panel: boolean }) {
+    setHighlightedLabelSectionId((current) => (current === sectionId ? current : null));
     setSelectedSectionId(sectionId);
     setSelectedBlockId(null);
     if (navigation.canvas) setRevealRequestSeq((seq) => seq + 1);
@@ -136,11 +147,24 @@ function N5Loaded({
   }
 
   // 왼쪽(캔버스) 출처 — block 은 패널에서 그 row 를 보여 주고, section 배경은 선택만 바꾼다
-  const handleSelectBlockFromViewport = (block: BlockViewModel) => selectBlock(block, { canvas: true, panel: true });
+  // F-CFM-13 ④ — 글 박스를 클릭·Enter 로 고르면 패널의 그 번역문 칸에 입력 포커스를 넣는다. 끌기로 고른 것은 넣지 않는다
+  const handleSelectBlockFromViewport = (block: BlockViewModel, intent: N5CanvasSelectIntent = 'none') =>
+    selectBlock(block, { canvas: true, panel: true, focusEditor: intent === 'edit' });
   const handleSelectSectionFromViewport = (sectionId: number) => selectSection(sectionId, { canvas: false, panel: false });
   // 오른쪽(패널) 출처 — 패널은 그대로 두고 캔버스만 그 대상을 보이게 한다
   const handleSelectBlockFromPanel = (block: BlockViewModel) => selectBlock(block, { canvas: true, panel: false });
   const handleSelectSectionFromPanel = (sectionId: number) => selectSection(sectionId, { canvas: true, panel: false });
+  // 제품 라벨 — 패널 요약: 그 섹션 라벨을 모두 강조하고 캔버스를 첫 라벨로 옮긴다. 캔버스 라벨: 강조하고 패널의 그 요약으로 간다
+  function handleSelectProductLabelFromPanel(sectionId: number) {
+    selectSection(sectionId, { canvas: false, panel: false });
+    setHighlightedLabelSectionId(sectionId);
+    setProductLabelReveal((prev) => ({ sectionId, seq: (prev?.seq ?? 0) + 1 }));
+  }
+  function handleSelectProductLabelFromViewport(sectionId: number) {
+    selectSection(sectionId, { canvas: false, panel: false });
+    setHighlightedLabelSectionId(sectionId);
+    setPanelReveal((prev) => ({ kind: 'product-label', id: sectionId, seq: (prev?.seq ?? 0) + 1 }));
+  }
   // 실행 취소·다시 실행이 고른 대상 — 양쪽 모두 보이게 한다
   const handleSelectBlockFromHistory = (block: BlockViewModel) => selectBlock(block, { canvas: true, panel: true });
   const handleSelectSectionFromHistory = (sectionId: number) => selectSection(sectionId, { canvas: true, panel: true });
@@ -203,6 +227,10 @@ function N5Loaded({
           editSession={editSession}
           syncBySection={syncBySection}
           isFontReady={isFontReady}
+          productLabels={productLabels}
+          highlightedLabelSectionId={highlightedLabelSectionId}
+          productLabelReveal={productLabelReveal}
+          onSelectProductLabel={handleSelectProductLabelFromViewport}
         />
         <N5Panel
           jobId={jobId}
@@ -218,6 +246,9 @@ function N5Loaded({
           onSelectBlock={handleSelectBlockFromPanel}
           onSelectSection={handleSelectSectionFromPanel}
           editSession={editSession}
+          productLabels={productLabels}
+          highlightedLabelSectionId={highlightedLabelSectionId}
+          onSelectProductLabel={handleSelectProductLabelFromPanel}
         />
       </div>
     </div>
@@ -277,6 +308,10 @@ export function N5View({ jobId }: { jobId: string }) {
   const syncBySection = synced.syncBySection;
   const visibleBlockIds = new Set(blocksQuery.data.filter(isN5VisibleBlock).map((block) => block.id));
   const blocks = synced.blocks.filter((block) => visibleBlockIds.has(block.id));
+  // 제품 라벨은 서버 role(product_label)과 isExcluded=true 로만 고른다 — 글 내용으로 추측하지 않는다. 브랜드 로고(isExcluded=true, 다른 role)는 넣지 않는다
+  const productLabels = blocksQuery.data
+    .filter((block) => block.isExcluded === true && block.role === 'product_label')
+    .map(toBlockViewModel);
 
   const jobMeta = toJobMetaViewModel(jobQuery.data, countriesQuery.data ?? [], categoriesQuery.data ?? [], REGULATORY_CLASS_LABELS, channelSpecsQuery.data ?? []);
 
@@ -312,6 +347,7 @@ export function N5View({ jobId }: { jobId: string }) {
         sectionStatusById={sectionStatusById}
         blockTaskFailuresById={blockTaskFailuresById}
         syncBySection={syncBySection}
+        productLabels={productLabels}
       />
     </N5TaskRetryProvider>
   );

@@ -1541,6 +1541,8 @@ export const handlers = [
       ...current,
       trans1: body.trans1,
       charCount: body.trans1.length,
+      // 계약(TextBlock.blockStatus): 번역문이 바뀐 저장에서만 edited 가 된다 — 배치만 바꾼 저장은 그대로
+      blockStatus: body.trans1 === current.trans1 ? current.blockStatus : 'edited',
       revision: current.revision + 1,
       layoutAdjust: nextLayout,
       // 번역문이 바뀌면 글 기반 검사를 새 번역문으로 — 해결된 signal 은 응답 block 에서 빠지고 이후 /blocks 에도 다시 나오지 않는다
