@@ -37,7 +37,11 @@ test('확인창 — Figma 구조·실제 데이터 집계, 돌아가기는 요�
   await expect(dialog).toHaveAttribute('aria-modal', 'true');
   await expect(dialog.getByRole('heading', { name: '확인할 항목이 있습니다' })).toBeVisible();
   await expect(dialog).toContainText('해결되지 않은 항목이 남아 있습니다.');
-  await expect(dialog).toContainText('확인하고 저장하면 그대로 최종 렌더링 단계로 이동합니다.');
+  // Figma 1657:10490 문구 — 하단 안내 · [돌아가서 확인하기] · [저장하러 가기]
+  await expect(dialog).toContainText('저장하러 가기를 누르면 그대로 최종 렌더링 단계로 이동합니다.');
+  await expect(page.getByTestId('n5-review-cancel')).toHaveText('돌아가서 확인하기');
+  await expect(page.getByTestId('n5-review-continue')).toHaveText('저장하러 가기');
+  await expect(page.getByTestId('n5-review-group-verification-failed').locator('h3')).toHaveText('검사 실패');
 
   // geometry — 이 fixture 는 10건(6건 이상)이다. 정책(a56dcca): 6건 이상이면 목록을 5번째 항목까지 보이는 높이로 제한하고
   // 목록만 스크롤한다. 모달 높이는 710 고정이 아니라 그 내용에 맞추고(최대 710), 화면 가운데에 둔다.
@@ -113,7 +117,7 @@ test('렌더 대기 section을 누르면 그 section이 선택되고, 우측 그
   const progress = page.getByTestId('n5-section-status-4-progress');
   await expect(progress).toHaveText('렌더 대기 중');
   await expect(progress.locator('span')).toHaveCSS('color', 'rgb(23, 23, 23)'); // 오류 색이 아니다
-  await expect(page.getByTestId('n5-section-status-4-failed')).toHaveCount(0);
+  await expect(page.getByTestId('n5-section-header-4').getByTestId('n5-canvas-section-status-failed')).toHaveCount(0);
 });
 
 test('렌더 진행·실패·제외 section도 우측에 각자 상태가 보이고, 실패는 원본을 보인다', async ({ page }) => {
@@ -132,10 +136,10 @@ test('렌더 진행·실패·제외 section도 우측에 각자 상태가 보이
 
   await click(505);
   await expect(page.getByTestId('n5-section-tag-5')).toHaveAttribute('aria-pressed', 'true');
-  const failed = page.getByTestId('n5-section-status-5-failed');
+  const failed = page.getByTestId('n5-section-header-5').getByTestId('n5-canvas-section-status-failed');
   await expect(failed).toContainText('실행 실패');
   await expect(failed).toContainText('렌더링');
-  await expect(page.getByTestId('n5-section-status-5-render-retry')).toBeEnabled(); // retryable=true 실패 — API-JOB-06 으로 다시 시도할 수 있다
+  await expect(page.getByTestId('n5-section-header-5').getByTestId('n5-canvas-section-status-render-retry')).toBeEnabled(); // retryable=true 실패 — API-JOB-06 으로 다시 시도할 수 있다
   await expect(page.getByTestId('n5-slice-translated-505')).toHaveCSS('background-image', /505-original/);
 
   await click(503);

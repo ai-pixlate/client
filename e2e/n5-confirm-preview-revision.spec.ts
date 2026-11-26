@@ -259,7 +259,7 @@ test('7 — 빈 번역 저장: renderInput 에서 빠진 것을 정상 완료로
   await page.getByTestId('n5-confirm-button').click();
   const dialog = page.getByTestId('n5-review-dialog');
   await expect.poll(async () => (await confirms(page)) > 0 || (await dialog.isVisible()), { timeout: 30_000 }).toBe(true);
-  if (await dialog.isVisible()) await dialog.getByRole('button', { name: '확인하고 저장' }).click();
+  if (await dialog.isVisible()) await dialog.getByRole('button', { name: '저장하러 가기' }).click();
   await expect.poll(() => confirms(page), { timeout: 30_000 }).toBe(1);
   expect(Date.now() - started).toBeLessThan(40_000);
   const { patchRevisions, lastPreview } = await rec(page);
@@ -330,7 +330,7 @@ test('14 — 확인창이 열린 사이 다른 탭 저장 → [확인하고 저�
 
   const other = await externalSave(page, A, 'Other tab during dialog');
   expect(other.status).toBe(200);
-  await dialog.getByRole('button', { name: '확인하고 저장' }).click();
+  await dialog.getByRole('button', { name: '저장하러 가기' }).click();
 
   await expect(page.getByTestId('n5-confirm-error')).toContainText('다른 곳에서 내용이 바뀌어', { timeout: 20_000 });
   await page.waitForTimeout(1_000);

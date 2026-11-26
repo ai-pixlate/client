@@ -27,8 +27,9 @@ test('1920×1080 — 핵심 container가 Figma 좌표에 있다', async ({ page 
   const stepNav = (await page.getByRole('navigation', { name: '작업 진행 단계' }).getByText('정보 입력', { exact: true }).boundingBox())!;
   near(stepNav.x + stepNav.width / 2, 70);
 
+  // 최신 Figma(544:3168): 회색 작업 영역은 공통 헤더(0/0/1920/72) 아래 y72 부터 — 헤더와 검사 기준 칩이 겹치지 않는다
   const workspace = await box(page, 'n5-viewport');
-  expect([workspace.x, workspace.y, workspace.width, workspace.height]).toEqual([120, 0, 1255, 1080]);
+  expect([workspace.x, workspace.y, workspace.width, workspace.height]).toEqual([120, 72, 1255, 1008]);
 
   const panel = await box(page, 'n5-panel');
   near(panel.x, 1427, 1);
@@ -36,7 +37,8 @@ test('1920×1080 — 핵심 container가 Figma 좌표에 있다', async ({ page 
 
   const save = await box(page, 'n5-confirm-button');
   near(save.x, 1428);
-  expect([save.y, save.height]).toEqual([955, 45]);
+  // Figma 604:5593 — [저장하러 가기] 1428/975/433×45(아래 60)
+  expect([save.y, save.height]).toEqual([975, 45]);
   near(save.width, 433, 1);
 
   const undo = await box(page, 'n5-undo-redo');
@@ -44,7 +46,8 @@ test('1920×1080 — 핵심 container가 Figma 좌표에 있다', async ({ page 
 
   const zoom = await box(page, 'n5-zoom-controls');
   near(zoom.x + zoom.width, 1347, 1);
-  near(zoom.y, 20, 1);
+  // Figma 602:5437 — 배율 x1281 y92(작업 영역 위 20)
+  near(zoom.y, 92, 1);
   near(zoom.height, 14, 1);
 
   // Figma에 없는 하단 중앙 도구는 없고, 좌측 하단 도구만 남는다
@@ -68,7 +71,8 @@ test('상단 정보는 실제 Job 값이고 Figma 위치에 있다', async ({ pa
   await expect(meta).not.toContainText('OTC');
   await expect(meta).not.toContainText('선크림');
   const rect = await box(page, 'n5-job-meta');
-  expect([rect.x, rect.y]).toEqual([152, 46]);
+  // Figma 1507:21672 「N3 섹션 상단」 x152 y96(헤더 72 아래 24)
+  expect([rect.x, rect.y]).toEqual([152, 96]);
   expect(rect.height).toBeLessThanOrEqual(29); // 채널이 더해져도 한 줄
   const workspace = await box(page, 'n5-viewport');
   expect(rect.x + rect.width).toBeLessThan(workspace.x + workspace.width);
@@ -254,12 +258,15 @@ test('토글 전환에도 zoom·pan·선택이 유지되고 화면 구조가 그
 
 test('우측 패널 위계 — 목록만 스크롤하고 저장 버튼은 하단에 남으며 내용 폭은 433이다', async ({ page }) => {
   const panel = page.getByTestId('n5-panel');
-  for (const text of ['번역 결과', '직접 수정하기', '번역문', '번역근거']) await expect(panel.getByText(text, { exact: true }).first()).toBeVisible();
+  // 최신 Figma(1256:6916 · 1792:34899): 제목 「번역문 확인 및 수정」, 카드는 번역문 칸 · 원문 · 번역근거. 「직접 수정하기」·「번역문」 라벨은 없다
+  for (const text of ['번역문 확인 및 수정', '원문', '번역근거']) await expect(panel.getByText(text, { exact: true }).first()).toBeVisible();
+  for (const text of ['번역 결과', '직접 수정하기', '번역문']) await expect(panel.getByText(text, { exact: true })).toHaveCount(0);
   await expect(page.getByTestId('n5-section-tag-1')).toBeVisible();
   await expect(page.getByTestId('n5-block-save-9101')).toHaveText('확인');
 
+  // Figma Frame 495 — 첫 Section 태그 y154(제목 y96 + 30 + 28)
   const tag = await box(page, 'n5-section-tag-1');
-  near(tag.y, 130, 1);
+  near(tag.y, 154, 1);
   const editor = page.getByTestId('n5-block-editor-9101');
   const card = (await editor.locator('xpath=..').boundingBox())!;
   near(card.width, 433, 1);
@@ -277,7 +284,7 @@ test('우측 패널 위계 — 목록만 스크롤하고 저장 버튼은 하단
   expect(await box(page, 'n5-confirm-button')).toEqual(confirmBefore);
   // 끝까지 내리면 마지막 블록이 페이드에 가려지지 않고 번역근거 박스까지 보인다
   const lastBox = (await page.getByTestId('n5-panel-fade').boundingBox())!;
-  const lastEvidence = (await panel.getByText('번역근거', { exact: true }).last().boundingBox())!;
+  const lastEvidence = (await page.getByTestId('n5-block-evidence-card').last().boundingBox())!;
   expect(lastEvidence.y + lastEvidence.height).toBeLessThanOrEqual(lastBox.y + 1);
 });
 

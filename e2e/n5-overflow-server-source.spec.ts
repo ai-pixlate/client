@@ -27,14 +27,15 @@ async function serverOverflow(page: Page, id: number): Promise<boolean | null> {
   }, id);
 }
 
-test('서버 overflow=true 여도 일반 넘침 안내는 없고, 수정 → 재렌더 뒤 서버 넘침 값은 그대로 갱신되며 다른 신호는 보인다', async ({ page }) => {
+// PRD v3.6.4 F-CFM-05 · Figma 1675:7501 — 서버 넘침은 셀 상태 「글자가 넘칩니다 — 수정이 필요합니다」로 보인다(이전 팀 QA 결정을 대체).
+// 정본은 /preview render.result.overflow 이고, 표시는 마지막 서버 결과다(입력 중에는 바꾸지 않고 [확인] 저장 → 재렌더 뒤 갱신).
+test('서버 overflow=true 면 셀 상태 「글자가 넘칩니다 — 수정이 필요합니다」, 수정 → 재렌더 뒤 서버 넘침 값으로 갱신되며 다른 신호는 보인다', async ({ page }) => {
   await reachN5(page);
   const panel = page.getByTestId('n5-panel');
 
-  // 9104 — 서버 넘침(true)이지만 안내 없음
+  // 9104 — 서버 넘침(true) → 셀 상태. 「짧은 표현이 필요합니다」·「영역 초과」 칩은 없다
   expect(await serverOverflow(page, 9104)).toBe(true);
-  await expect(page.getByTestId('n5-cell-failure-overflow')).toHaveCount(0);
-  await expect(panel).not.toContainText('글자가 넘칩니다');
+  await expect(page.getByTestId('n5-block-row-9104').getByTestId('n5-cell-failure-overflow')).toHaveText('글자가 넘칩니다 — 수정이 필요합니다');
   await expect(panel).not.toContainText('짧은 표현이 필요합니다');
   await expect(panel).not.toContainText('영역 초과');
   // 다른 확인 신호는 그대로 — 9112 금지 표현, 9110 필수 문구 누락
@@ -49,6 +50,5 @@ test('서버 overflow=true 여도 일반 넘침 안내는 없고, 수정 → 재
   await expect.poll(() => serverOverflow(page, BLOCK), { timeout: 20_000 }).toBe(true);
   await expect(page.getByTestId(`n5-block-row-${BLOCK}`).getByText('재렌더링 중…')).toHaveCount(0, { timeout: 20_000 });
   await expect(editor).toHaveValue('Long '.repeat(50).trim());
-  await expect(page.getByTestId('n5-cell-failure-overflow')).toHaveCount(0);
-  await expect(panel).not.toContainText('글자가 넘칩니다');
+  await expect(page.getByTestId(`n5-block-row-${BLOCK}`).getByTestId('n5-cell-failure-overflow')).toHaveText('글자가 넘칩니다 — 수정이 필요합니다');
 });

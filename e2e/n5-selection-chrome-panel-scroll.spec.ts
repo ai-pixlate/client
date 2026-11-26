@@ -187,8 +187,10 @@ test.describe('우측 패널 — 선택과 자동 이동 분리', () => {
   /** 패널 row 가 패널 스크롤 영역 안에 보이는지(sticky 태그 아래 ~ 아래 끝) */
   async function rowInPanel(page: Page, blockId: number) {
     const body = await box(page, 'n5-panel-body');
+    // 맨 위에는 그 section 의 sticky 태그(태그 28 + 아래 16)가 붙어 있다 — 그 아래부터가 row 가 보이는 영역이다
+    const sticky = await box(page, 'n5-section-tag-sticky-1');
     const row = (await page.getByTestId(`n5-block-row-${blockId}`).boundingBox())!;
-    return row.y >= body.y && row.y + Math.min(row.height, 120) <= body.y + body.height;
+    return row.y >= body.y + sticky.height && row.y + Math.min(row.height, 120) <= body.y + body.height;
   }
 
   for (const mode of ['translated', 'original'] as const) {
@@ -247,13 +249,21 @@ test.describe('우측 패널 — 선택과 자동 이동 분리', () => {
 
     // 이미 보이는 같은 section 의 다른 block — 패널이 움직이지 않는다
     await page.waitForTimeout(600);
+    // 카드 높이에 따라 바로 앞 row 가 sticky 태그 밑에 반쯤 걸릴 수 있다 — 그 row 를 sticky 태그 아래로 완전히 보이게 둔 뒤 확인한다
     const visibleOther = fourth.length > 1 ? fourth[fourth.length - 2] : target;
-    if (await rowInPanel(page, visibleOther)) {
-      const top = await bodyScrollTop(page);
-      await selectOnCanvas(page, visibleOther);
-      await page.waitForTimeout(600);
-      expect(Math.abs((await bodyScrollTop(page)) - top)).toBeLessThanOrEqual(1);
-    }
+    await page.evaluate((id) => {
+      const body = document.querySelector<HTMLElement>('[data-testid="n5-panel-body"]')!;
+      const sticky = document.querySelector<HTMLElement>('[data-testid="n5-section-tag-sticky-1"]')!;
+      const row = document.querySelector<HTMLElement>(`[data-testid="n5-block-row-${id}"]`)!;
+      body.scrollTop += row.getBoundingClientRect().top - (body.getBoundingClientRect().top + sticky.offsetHeight + 8);
+    }, visibleOther);
+    await page.waitForTimeout(100);
+    expect(await rowInPanel(page, visibleOther)).toBe(true);
+    const top = await bodyScrollTop(page);
+    await selectOnCanvas(page, visibleOther);
+    await expect(page.getByTestId(`n5-block-row-${visibleOther}`)).toHaveAttribute('aria-pressed', 'true');
+    await page.waitForTimeout(600);
+    expect(Math.abs((await bodyScrollTop(page)) - top)).toBeLessThanOrEqual(1);
 
     // E — 같은 block 을 다시 고르면(선택 값은 같아도) 수동으로 밀어 둔 row 를 다시 보여 준다
     await selectOnCanvas(page, target);

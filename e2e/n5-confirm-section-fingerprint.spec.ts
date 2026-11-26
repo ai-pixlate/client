@@ -101,7 +101,7 @@ async function confirmOnce(page: Page) {
   await page.getByTestId('n5-confirm-button').click();
   const dialog = page.getByTestId('n5-review-dialog');
   await expect.poll(async () => (await count(page, 'POST confirm')) > 0 || (await dialog.isVisible()), { timeout: 40_000 }).toBe(true);
-  if (await dialog.isVisible()) await dialog.getByRole('button', { name: '확인하고 저장' }).click();
+  if (await dialog.isVisible()) await dialog.getByRole('button', { name: '저장하러 가기' }).click();
   await expect.poll(() => count(page, 'POST confirm'), { timeout: 40_000 }).toBe(1);
 }
 

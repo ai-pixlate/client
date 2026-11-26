@@ -182,7 +182,7 @@ for (const s of SCENARIOS) {
     if (s.notice) await expect(notice).toHaveText(s.notice);
     else await expect(notice).toHaveCount(0);
     // 실패는 「실행 실패」 행 하나(같은 경고를 두 번 내지 않는다)
-    await expect(page.getByTestId(`${status2}-failed`)).toHaveCount(s.failed ? 1 : 0);
+    await expect(page.getByTestId('n5-section-header-2').getByTestId('n5-canvas-section-status-failed')).toHaveCount(s.failed ? 1 : 0);
     // 최신이 아니면 넘침을 내지 않는다
     await expect(page.getByTestId('n5-block-row-9104').getByTestId('n5-cell-failure-overflow')).toHaveCount(0);
     // 다른 섹션은 그대로 최신
@@ -194,7 +194,7 @@ for (const s of SCENARIOS) {
 test('입력 오류 — 원래 코드는 data 속성으로만 확인하고 다시 시도 버튼이 없다', async ({ page }) => {
   await open(page, 'input-error');
   await expect(page.getByTestId(`${status2}-notice`)).toHaveAttribute('data-input-error-code', 'STYLE_RESULT_INVALID');
-  await expect(page.getByTestId(`${status2}-render-retry`)).toHaveCount(0);
+  await expect(page.getByTestId('n5-section-header-2').getByTestId('n5-canvas-section-status-render-retry')).toHaveCount(0);
 });
 
 test('지문 A≠B — 한 번만 다시 불러오고, 계속 다르면 표와 뷰어를 잇지 않은 채 둔다', async ({ page }) => {

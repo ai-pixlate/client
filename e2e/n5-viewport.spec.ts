@@ -532,8 +532,9 @@ test.describe('번역 수정 — PATCH + revision → rerender polling → block
     await page.getByTestId('n5-block-row-9104').click();
     const editor = page.getByTestId('n5-block-editor-9104');
 
-    // 초기 상태: charLimit=120을 넘는 긴 번역문이라 overflow badge가 보인다.
-    await expect(page.getByTestId('n5-block-row-9104').getByText('자동 글자 크기 조정')).toBeVisible();
+    // 초기 상태: 서버 넘침(true) — 셀 상태 「글자가 넘칩니다 — 수정이 필요합니다」(줄여 맞춰도 넘친 블록, PRD v3.6.4)
+    const overflowState = page.getByTestId('n5-block-row-9104').getByTestId('n5-cell-failure-overflow');
+    await expect(overflowState).toBeVisible();
 
     await editor.fill('Patch test recommended.'); // 120자 이내로 축약
     const saveBtn = page.getByTestId('n5-block-save-9104');
@@ -547,11 +548,20 @@ test.describe('번역 수정 — PATCH + revision → rerender polling → block
 
     // PATCH 직후(재렌더 완료 전)에는 overflow/autoAdjust가 여전히 이전 값이다 —
     // FE가 즉시 추측해서 갱신하지 않는다.
-    await expect(page.getByTestId('n5-block-row-9104').getByText('자동 글자 크기 조정')).toBeVisible();
+    await expect(overflowState).toBeVisible();
 
     // 재렌더(mock: 2 poll * 2s) 완료 대기 — done 이후 blocks 재조회로 실제 갱신된다.
     await expect(page.getByText('재렌더링 중…')).toHaveCount(0, { timeout: 10_000 });
-    await expect(page.getByTestId('n5-block-row-9104').getByText('자동 글자 크기 조정')).toHaveCount(0);
+    // 재렌더 완료 → 재조회 뒤 셀 상태는 서버가 다시 준 넘침 값(/preview render.result.overflow)을 그대로 따른다
+    const serverOverflowAfter = await page.evaluate(async () => {
+      const base = location.pathname.replace(/\/$/, '');
+      const preview = (await (await fetch(`${base}/preview`)).json()) as {
+        sections: { render?: { isCurrent?: boolean; result?: { overflow?: Record<string, boolean> | null } | null } | null }[];
+      };
+      const maps = preview.sections.map((s) => (s.render?.isCurrent ? s.render.result?.overflow ?? null : null));
+      return maps.some((map) => map?.['9104'] === true);
+    });
+    await expect(overflowState).toHaveCount(serverOverflowAfter ? 1 : 0);
   });
 });
 

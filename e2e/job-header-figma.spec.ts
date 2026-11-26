@@ -20,7 +20,7 @@ const TITLES: Record<Step, string> = {
   N2: '이미지 분석',
   N3: '섹션 확인',
   N4: '번역 중',
-  N5: '번역 중',
+  N5: '번역 결과 검수',
   N6: '저장 및 내보내기',
 };
 
@@ -36,7 +36,8 @@ const BODY: Partial<Record<Step, { testId: string; box: [number, number, number,
     { testId: 'n3-section-list', box: [1112, 72, 688, 891] },
   ],
   N5: [
-    { testId: 'n5-viewport', box: [120, 0, 1255, 1080] },
+    // N5 Figma(544:3168) — 회색 작업 영역은 헤더(72) 아래에서 시작한다(헤더와 검사 기준 칩이 겹치지 않는다)
+    { testId: 'n5-viewport', box: [120, 72, 1255, 1008] },
     { testId: 'n5-panel', box: [1427, 0, 433, 1080] },
   ],
   N6: [

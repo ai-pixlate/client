@@ -65,8 +65,8 @@ for (const c of CASES) {
       await expect(textLayer(page, 502)).toHaveCount(0);
     }
     // 실패는 기존 「실행 실패」 행 하나 + 기존 다시 시도 버튼(입력 오류·결과 없음은 실패가 아니다)
-    await expect(page.getByTestId(`${status2}-failed`)).toHaveCount(c.failedRow ? 1 : 0);
-    await expect(page.getByTestId(`${status2}-render-retry`)).toHaveCount(c.failedRow ? 1 : 0);
+    await expect(page.getByTestId('n5-section-header-2').getByTestId('n5-canvas-section-status-failed')).toHaveCount(c.failedRow ? 1 : 0);
+    await expect(page.getByTestId('n5-section-header-2').getByTestId('n5-canvas-section-status-render-retry')).toHaveCount(c.failedRow ? 1 : 0);
     // 일반 넘침 안내는 어느 상태에서도 보이지 않는다(팀 QA 결정 — 서버 넘침 값은 그대로 받는다)
     await expect(overflow9104(page)).toHaveCount(0);
   });
@@ -77,8 +77,8 @@ test('섹션 렌더 실행 실패 → 원본 · 「실행 실패 · 렌더링」
   await open(page, 'failed');
   await expect(slice(page, 502)).toHaveAttribute('data-preview-display', 'original-image');
   await expect(slice(page, 502)).toHaveCSS('background-image', /502-original/);
-  await expect(page.getByTestId(`${status2}-failed`)).toContainText('렌더링');
-  await expect(page.getByTestId(`${status2}-render-retry`)).toBeVisible();
+  await expect(page.getByTestId('n5-section-header-2').getByTestId('n5-canvas-section-status-failed')).toContainText('렌더링');
+  await expect(page.getByTestId('n5-section-header-2').getByTestId('n5-canvas-section-status-render-retry')).toBeVisible();
   await expect(page.getByTestId(status2)).not.toContainText('미리보기를 갱신하지 못했습니다');
   // 실패 섹션 때문에 정상 섹션이 원본으로 바뀌지 않는다
   await expect(slice(page, 501)).toHaveAttribute('data-preview-display', 'local-typeset');
@@ -87,7 +87,7 @@ test('섹션 렌더 실행 실패 → 원본 · 「실행 실패 · 렌더링」
 test('N5 재렌더 실패 → 이전 결과 유지 · 「미리보기를 갱신하지 못했습니다」 · [미리보기 다시 시도], 실행 실패 행 없음', async ({ page }) => {
   await open(page, 'update-failed');
   await expect(slice(page, 502)).toHaveAttribute('data-preview-display', 'previous-rendered-image');
-  await expect(page.getByTestId(`${status2}-failed`)).toHaveCount(0);
+  await expect(page.getByTestId('n5-section-header-2').getByTestId('n5-canvas-section-status-failed')).toHaveCount(0);
   await expect(page.getByTestId(`${status2}-notice`)).toContainText('미리보기를 갱신하지 못했습니다');
   await expect(page.getByTestId(`${status2}-preview-retry`)).toBeVisible();
   await expect(slice(page, 501)).toHaveAttribute('data-preview-display', 'local-typeset');

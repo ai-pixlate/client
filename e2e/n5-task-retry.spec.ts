@@ -80,15 +80,15 @@ test('미리보기 갱신 실패 [미리보기 다시 시도] — 재렌더 재�
 test('섹션 렌더 실패 [렌더링 다시 시도] — 서버 render task 로 재시도 → 끝나면 실행 실패 행 해제', async ({ page }) => {
   const posts = trackRetries(page);
   await reachN5(page, { mockScenario: 'n5-errors' });
-  const failedRow = page.getByTestId('n5-section-status-1-failed');
+  const failedRow = page.getByTestId('n5-section-header-1').getByTestId('n5-canvas-section-status-failed');
   await expect(failedRow).toContainText('렌더링');
-  const button = page.getByTestId('n5-section-status-1-render-retry');
+  const button = page.getByTestId('n5-section-header-1').getByTestId('n5-canvas-section-status-render-retry');
   await expect(button).toBeEnabled();
   await button.click();
   expect(posts).toEqual([`/jobs/${MOCK_JOB_ID}/tasks/80001/retry`]);
   // 렌더링 실패가 풀린다(인페인팅 실패는 재시도 계약이 없어 그대로 남는다)
   await expect(failedRow).not.toContainText('렌더링', { timeout: 20_000 });
-  await expect(page.getByTestId('n5-section-status-1-render-retry')).toHaveCount(0);
+  await expect(page.getByTestId('n5-section-header-1').getByTestId('n5-canvas-section-status-render-retry')).toHaveCount(0);
 });
 
 test('재시도 요청이 거절되면(409 RETRY_NOT_ALLOWED) 실패 상태가 그대로 남는다', async ({ page }) => {
@@ -107,9 +107,9 @@ test('재시도 요청이 거절되면(409 RETRY_NOT_ALLOWED) 실패 상태가 �
     };
   });
   // 번역 실패 칸에는 재시도 버튼이 없어(이후 기능) 섹션 렌더 실패 [렌더링 다시 시도]로 확인한다
-  const failedRow = page.getByTestId('n5-section-status-1-failed');
-  await page.getByTestId('n5-section-status-1-render-retry').click();
-  await expect(page.getByTestId('n5-section-status-1-render-retry')).toHaveAttribute('data-retry-state', 'request-failed');
+  const failedRow = page.getByTestId('n5-section-header-1').getByTestId('n5-canvas-section-status-failed');
+  await page.getByTestId('n5-section-header-1').getByTestId('n5-canvas-section-status-render-retry').click();
+  await expect(page.getByTestId('n5-section-header-1').getByTestId('n5-canvas-section-status-render-retry')).toHaveAttribute('data-retry-state', 'request-failed');
   await page.waitForTimeout(1_000);
   await expect(failedRow).toContainText('렌더링');
 });

@@ -64,14 +64,41 @@ test('C 미리보기 실패 — 이 칸 저장의 재렌더가 실패하면 「�
   await editor.fill('실패유도 문장');
   await page.getByTestId('n5-block-save-9102').click();
   await expect(row(page, 9102).getByTestId('n5-cell-failure-preview')).toHaveText('미리보기를 갱신하지 못했습니다', { timeout: 20_000 });
+  // 마지막으로 성공한 미리보기를 유지하고 있음을 알린다 · [다시 시도]와 [확인]이 함께 남는다
+  await expect(row(page, 9102).getByTestId('n5-block-preview-stale-9102')).toHaveText('왼쪽 미리보기는 수정 전 결과입니다');
+  await expect(page.getByTestId('n5-block-preview-retry-9102')).toHaveText('다시 시도');
   await expect(page.getByTestId('n5-block-preview-retry-9102')).toBeEnabled(); // 재렌더 task 의 retryable=true
+  await expect(page.getByTestId('n5-block-save-9102')).toBeVisible();
+  // 저장하지 않은 수정이 있어도 [다시 시도]는 미리보기 재시도만 보낸다 — 서버 저장(PATCH)·재검사는 [확인]에서만이다
+  const writes: string[] = [];
+  page.on('request', (req) => {
+    const path = new URL(req.url()).pathname;
+    if (req.method() === 'PATCH' && path.includes('/blocks/')) writes.push(`PATCH ${path}`);
+    if (req.method() === 'POST' && /\/tasks\/\d+\/retry$/.test(path)) writes.push('RETRY');
+  });
+  await page.getByTestId('n5-block-editor-9102').fill('실패유도 문장 다시');
+  await expect(page.getByTestId('n5-block-unsaved-9102')).toBeVisible();
+  await page.getByTestId('n5-block-preview-retry-9102').click();
+  await expect.poll(() => writes).toContain('RETRY');
+  await page.waitForTimeout(500);
+  expect(writes.filter((w) => w.startsWith('PATCH'))).toEqual([]);
+  // 입력은 그대로 남고 「저장하지 않은 수정」도 그대로다
+  await expect(page.getByTestId('n5-block-editor-9102')).toHaveValue('실패유도 문장 다시');
+  await expect(page.getByTestId('n5-block-unsaved-9102')).toBeVisible();
 });
 
-test('D·E — 일반 넘침 문구는 없고(서버 overflow=true), 받은 autoAdjust 는 「자동 글자 크기 조정 적용됨」으로 보인다', async ({ page }) => {
+test('D·E — 서버 overflow=true 는 「글자가 넘칩니다 — 수정이 필요합니다」, 줄여 맞춰도 넘치면 「글자를 줄여 맞췄습니다」 대신 넘침만 보인다', async ({ page }) => {
   await reachN5(page);
   const r = row(page, 9104);
   await r.scrollIntoViewIfNeeded();
-  await expect(r).not.toContainText('글자가 넘칩니다');
+  // PRD v3.6.4 — 넘침 경고는 조판 조정으로도 들어가지 않은 블록(서버 autoAdjust 85% 이지만 넘침 true)
+  await expect(r.getByTestId('n5-cell-failure-overflow')).toHaveText('글자가 넘칩니다 — 수정이 필요합니다');
+  await expect(r.getByTestId('n5-cell-info-auto-adjust-9104')).toHaveCount(0);
   await expect(r).not.toContainText('짧은 표현이 필요합니다');
-  await expect(r).toContainText('자동 글자 크기 조정 적용됨 (85%)');
+  await expect(r).not.toContainText('자동 글자 크기 조정');
+  // 셀 상태는 [확인]과 같은 줄 왼쪽이다(Figma 1675:7501)
+  const status = (await r.getByTestId('n5-cell-failure-overflow').boundingBox())!;
+  const save = (await page.getByTestId('n5-block-save-9104').boundingBox())!;
+  expect(status.x + status.width).toBeLessThan(save.x);
+  expect(Math.abs(status.y + status.height / 2 - (save.y + save.height / 2))).toBeLessThanOrEqual(4);
 });

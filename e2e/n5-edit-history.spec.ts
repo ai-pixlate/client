@@ -116,18 +116,23 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.describe('글자 크기 [+][-]', () => {
-  test('0.05씩 바뀌고 폭이 같은 비율로 바뀌며(높이는 Auto Height) 정렬 정보가 없으면 왼쪽 위를 유지하고 서버 요청이 없다', async ({ page }) => {
+  // PRD v3.6.4 F-CFM-15 — [+][-] 는 현재 영역의 중심을 기준으로 커지고 줄어든다(글자 정렬과 무관 · 이전의 왼쪽 위 고정 규칙을 대체)
+  test('0.05씩 바뀌고 폭이 같은 비율로 바뀌며(높이는 Auto Height) 영역 중심을 유지하고 서버 요청이 없다', async ({ page }) => {
     const patches = trackPatches(page);
     await selectWithToolbar(page, 9112);
     const start = await localBox(page, 9112);
     expect(await fontScale(page, 9112)).toBe('1');
+    // 중심의 기준은 사용자가 보고 조작하는 영역 = 선택 테두리(글자 높이에 맞춘 Auto Height 영역 바깥 12px)다.
+    // 겹친 클릭 영역(overlay)은 서버 저장 박스라 처음 높이가 다를 수 있다
+    const frameBefore = (await page.getByTestId('n5-block-selection-frame').boundingBox())!;
 
     await page.getByTestId('n5-font-scale-increase').click();
     expect(await fontScale(page, 9112)).toBe('1.05');
     const up = await localBox(page, 9112);
     expect(Math.abs(up.width - start.width * 1.05)).toBeLessThanOrEqual(0.01);
-    expect(Math.abs(up.left - start.left)).toBeLessThanOrEqual(0.01);
-    expect(Math.abs(up.top - start.top)).toBeLessThanOrEqual(0.01);
+    const frameAfter = (await page.getByTestId('n5-block-selection-frame').boundingBox())!;
+    expect(Math.abs(frameAfter.x + frameAfter.width / 2 - (frameBefore.x + frameBefore.width / 2))).toBeLessThanOrEqual(1);
+    expect(Math.abs(frameAfter.y + frameAfter.height / 2 - (frameBefore.y + frameBefore.height / 2))).toBeLessThanOrEqual(1);
 
     await page.getByTestId('n5-font-scale-increase').click();
     expect(await fontScale(page, 9112)).toBe('1.1');

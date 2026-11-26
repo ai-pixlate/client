@@ -4,10 +4,10 @@ import { reachN5 } from './helpers/reach-n5';
 
 // ─────────────────────────────────────────────────────────────────
 // N5 규칙 검사 상태(TextBlock.check — BlockCheck · confirmReview 「규칙 검사 연결」).
-//   in_progress = 「검사 중…」 · [저장하러 가기] 비활성(이유 안내) · 끝날 때까지 /tasks 추적 뒤 /blocks 재조회
+//   in_progress = 「확인 중」 · [저장하러 가기] 비활성(이유 안내) · 끝날 때까지 /tasks 추적 뒤 /blocks 재조회
 //   missing·outdated = 「검사 준비 중」 · 버튼 활성 / failed = 「검사하지 못했습니다」(e2e/n5-status-messages.spec.ts) / settled = 표시 없음
 //   POST /confirm 409 INVALID_STATE · details.reason=check_not_settled → 사용자 오류가 아니라 복구 계약(PM 확정): 오류 안내 없이
-//   N5 에 남아 블록 상태를 바로 재조회 → 「검사 중…」 · 기존 /tasks 2초 추적 → settled 면 다시 저장 가능 · N6 로 가지 않음.
+//   N5 에 남아 블록 상태를 바로 재조회 → 「확인 중」 · 기존 /tasks 2초 추적 → settled 면 다시 저장 가능 · N6 로 가지 않음.
 //   reason 이 다른 409 는 기존 오류 안내 그대로.
 // Mock /blocks 에는 check 가 없어 페이지 안에서 응답의 check 를 바꿔 만든다(window.__check). Mock 이다.
 // ─────────────────────────────────────────────────────────────────
@@ -76,14 +76,25 @@ const setCtl = (page: Page, patch: Partial<Control>) =>
   page.evaluate((patch) => Object.assign((window as unknown as { __ctl: Control }).__ctl, patch), patch);
 const ctl = (page: Page) => page.evaluate(() => (window as unknown as { __ctl: Control }).__ctl);
 
-test('검사 중(in_progress) — 「검사 중…」·[저장하러 가기] 비활성·이유 안내, 검사가 끝나면(settled) 재조회로 풀린다', async ({ page }) => {
+test('검사 중(in_progress) — 「확인 중」·[저장하러 가기] 비활성·이유 안내, 검사가 끝나면(settled) 재조회로 풀린다', async ({ page }) => {
   await controlServer(page, { 9101: 'in_progress' });
   await reachN5(page, { mockScenario: 'n5-clean' });
-  await expect(page.getByTestId('n5-block-check-9101')).toHaveText('검사 중…');
+  await expect(page.getByTestId('n5-block-check-9101')).toHaveText('확인 중');
   const confirm = page.getByTestId('n5-confirm-button');
   await expect(confirm).toBeDisabled();
   await expect(confirm).toHaveAttribute('title', '번역문 검사가 끝나면 저장할 수 있습니다.');
   await expect(page.getByTestId('n5-confirm-check-notice')).toBeVisible();
+  // Figma 1702:11583 저장 차단 안내 — 막는 블록마다 「섹션 N -M · 확인 중 · 끝나면 저장할 수 있습니다」 한 줄(버튼 위)
+  const row = page.getByTestId('n5-confirm-block-row-9101');
+  await expect(row).toContainText('섹션 1 -1');
+  await expect(row).toContainText('확인 중');
+  await expect(row).toContainText('끝나면 저장할 수 있습니다');
+  await expect(row.getByText('확인 중', { exact: true })).toHaveCSS('color', 'rgb(255, 106, 56)');
+  const rowBox = (await row.boundingBox())!;
+  const confirmBox = (await confirm.boundingBox())!;
+  expect(confirmBox.y - (rowBox.y + rowBox.height)).toBeGreaterThanOrEqual(11);
+  expect(confirmBox.y - (rowBox.y + rowBox.height)).toBeLessThanOrEqual(13);
+  await page.screenshot({ path: test.info().outputPath('n5-save-blocked-notice.png') });
 
   // 서버 검사가 끝났다 — /tasks 추적이 /blocks 를 다시 받아 풀린다
   await setCtl(page, { check: { 9101: 'settled' } });
@@ -103,7 +114,7 @@ test('검사 준비 중(missing·outdated) — 「검사 준비 중」, 버튼�
 
 const CHECK_NOT_SETTLED_OLD_ERROR = '번역문 검사가 아직 끝나지 않아 다음 단계로 넘어가지 않았습니다. 검사가 끝나면 다시 저장해 주세요.';
 
-test('A·B·C. 검사 준비 중(outdated) → 확정 → 409 check_not_settled — 오류 안내 없이 바로 「검사 중…」, 기존 /tasks 추적으로 이어져 settled 면 다시 저장할 수 있다', async ({ page }) => {
+test('A·B·C. 검사 준비 중(outdated) → 확정 → 409 check_not_settled — 오류 안내 없이 바로 「확인 중」, 기존 /tasks 추적으로 이어져 settled 면 다시 저장할 수 있다', async ({ page }) => {
   await controlServer(page, { 9101: 'outdated' });
   await reachN5(page, { mockScenario: 'n5-clean' });
   // A. 검사 준비 중 — 버튼은 활성(확정 요청이 복구 경로다)
@@ -117,9 +128,9 @@ test('A·B·C. 검사 준비 중(outdated) → 확정 → 409 check_not_settled 
   // 서버가 확정 요청에서 검사를 등록하고 409 로 답한다 — 그 뒤 /blocks 는 in_progress
   await setCtl(page, { confirm409: true, check: { 9101: 'in_progress' } });
   await confirm.click();
-  await expect(page.getByTestId('n5-block-check-9101')).toHaveText('검사 중…', { timeout: 10_000 });
+  await expect(page.getByTestId('n5-block-check-9101')).toHaveText('확인 중', { timeout: 10_000 });
   await expect(confirm).toBeDisabled();
-  await expect(page.getByTestId('n5-confirm-check-notice')).toHaveText('번역문 검사가 끝나면 저장할 수 있습니다.');
+  await expect(page.getByTestId('n5-confirm-block-row-9101')).toContainText('끝나면 저장할 수 있습니다');
   expect((await ctl(page)).confirmPosts).toBe(1);
 
   // C. 기존 검사 추적(/tasks 2초)으로 이어진다
@@ -150,13 +161,13 @@ test('D. reason 이 check_not_settled 가 아닌 409 INVALID_STATE 는 기존 �
   await expect(page.getByText('번역이 완료되었습니다.')).toHaveCount(0);
 });
 
-test('409 check_not_settled(검사 정보 없음 → in_progress) — N5 에 남아 오류 없이 「검사 중…」·버튼 비활성, N6 로 가지 않는다', async ({ page }) => {
+test('409 check_not_settled(검사 정보 없음 → in_progress) — N5 에 남아 오류 없이 「확인 중」·버튼 비활성, N6 로 가지 않는다', async ({ page }) => {
   await controlServer(page, {});
   await reachN5(page, { mockScenario: 'n5-clean' });
   // 서버가 확정 요청에서 검사를 등록하고 409 로 답한다 — 그 뒤 /blocks 는 in_progress
   await setCtl(page, { confirm409: true, check: { 9101: 'in_progress' } });
   await page.getByTestId('n5-confirm-button').click();
-  await expect(page.getByTestId('n5-block-check-9101')).toHaveText('검사 중…', { timeout: 20_000 });
+  await expect(page.getByTestId('n5-block-check-9101')).toHaveText('확인 중', { timeout: 20_000 });
   expect((await ctl(page)).confirmPosts).toBe(1);
   await expect(page.getByTestId('n5-confirm-button')).toBeDisabled();
   await page.waitForTimeout(1_000);
@@ -190,8 +201,8 @@ for (const finalB of ['settled', 'failed'] as const) {
     // 1. 확정 → 409 check_not_settled(registeredBlockIds=[9101] 만). 재조회한 /blocks 에서는 두 섹션 모두 in_progress
     await setCtl(page, { confirm409: true, check: { [BLOCK_A]: 'in_progress', [BLOCK_B]: 'in_progress' } });
     await confirm.click();
-    await expect(page.getByTestId(`n5-block-check-${BLOCK_A}`)).toHaveText('검사 중…', { timeout: 10_000 });
-    await expect(page.getByTestId(`n5-block-check-${BLOCK_B}`)).toHaveText('검사 중…');
+    await expect(page.getByTestId(`n5-block-check-${BLOCK_A}`)).toHaveText('확인 중', { timeout: 10_000 });
+    await expect(page.getByTestId(`n5-block-check-${BLOCK_B}`)).toHaveText('확인 중');
     await expect(confirm).toBeDisabled();
     expect((await ctl(page)).confirmPosts).toBe(1);
 
@@ -199,7 +210,7 @@ for (const finalB of ['settled', 'failed'] as const) {
     await setCtl(page, { check: { [BLOCK_A]: 'settled', [BLOCK_B]: 'in_progress' } });
     await expect(page.getByTestId(`n5-block-check-${BLOCK_A}`)).toHaveCount(0, { timeout: 15_000 });
     const tasksAtASettled = (await ctl(page)).tasksGets;
-    await expect(page.getByTestId(`n5-block-check-${BLOCK_B}`)).toHaveText('검사 중…');
+    await expect(page.getByTestId(`n5-block-check-${BLOCK_B}`)).toHaveText('확인 중');
     await expect(confirm).toBeDisabled();
     await expect(notice).toHaveText('번역문 검사가 끝나면 저장할 수 있습니다.');
     await expect.poll(async () => (await ctl(page)).tasksGets - tasksAtASettled, { timeout: 10_000 }).toBeGreaterThanOrEqual(2);

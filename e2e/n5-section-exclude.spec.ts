@@ -89,7 +89,8 @@ test.describe('N5 섹션 제외·되돌리기 — 서버 저장', () => {
       return { bg: css.backgroundColor, backdrop: css.backdropFilter, filter: css.filter, opacity: css.opacity };
     });
     expect(style).toEqual({ bg: 'rgba(112, 112, 112, 0.24)', backdrop: 'blur(4px)', filter: 'none', opacity: '1' });
-    await expect(overlay).toContainText('저장 시 제외됨 · 위아래가 붙습니다');
+    // 최신 Figma 되돌리기 모달(1898:45712)의 문구 — 요구 F-CFM-14 「저장 시 제외됩니다」
+    await expect(overlay.getByText('저장 시 제외됩니다', { exact: true })).toBeVisible();
     // 크기·위치 = 제외된 섹션(slice) 그대로
     const slice = (await page.getByTestId('n5-slice-translated-501').boundingBox())!;
     const box = (await overlay.boundingBox())!;
@@ -137,8 +138,8 @@ test.describe('N5 섹션 제외·되돌리기 — 서버 저장', () => {
     const renderedPath = new URL(server.renderedUrl!, page.url()).pathname;
     await expect.poll(async () => (await sliceStyle()).image).toContain(renderedPath);
     expect(await sliceStyle()).toMatchObject({ opacity: '1', filter: 'none' });
-    // 안내 문구와 [되돌리기]는 PRD 그대로다
-    await expect(overlay).toContainText('저장 시 제외됨 · 위아래가 붙습니다');
+    // 안내 문구와 [되돌리기]는 F-CFM-14 · Figma 1898:45712 그대로다
+    await expect(overlay.getByText('저장 시 제외됩니다', { exact: true })).toBeVisible();
     await expect(page.getByTestId('n5-section-restore-501')).toHaveText('되돌리기');
 
     // 되돌리기 → overlay 가 사라지고 포함 표시로 돌아온다
