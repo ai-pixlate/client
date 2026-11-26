@@ -88,37 +88,37 @@ console.log('\n[3] [+][-] — 배율과 박스를 같은 비율로, 중심 유�
   check('nextUserScale 축소(1 − 0.05 = 0.95)', nextUserScale(1, STEP, 'decrease') === 0.95);
   check('step 은 인자 — 0.1 이면 1.2', nextUserScale(1.1, 0.1, 'increase') === 1.2);
 
-  const centered = scaleBoxAndFont({ box: { x: 160, y: 130, width: 80, height: 40 }, currentScale: 1, nextScale: 1.05, section: SECTION, align: 'center' });
-  check('center 확대 — 가로 중심·윗변 유지', near(centered.x + centered.width / 2, 200) && near(centered.y, 130), show(centered));
+  const centered = scaleBoxAndFont({ box: { x: 160, y: 130, width: 80, height: 40 }, currentScale: 1, nextScale: 1.05, section: SECTION });
+  check('확대 — 영역 중심(가로·세로) 유지(PRD v3.6.4 F-CFM-15)', near(centered.x + centered.width / 2, 200) && near(centered.y + centered.height / 2, 150), show(centered));
   check('확대 크기 ×1.05', near(centered.width, 84) && near(centered.height, 42));
 
-  const ratio = scaleBoxAndFont({ box: BOX, currentScale: 1.1, nextScale: 1.15, section: SECTION, align: 'left' });
+  const ratio = scaleBoxAndFont({ box: BOX, currentScale: 1.1, nextScale: 1.15, section: SECTION });
   check('비율 = next/current (1.15/1.1)', near(ratio.width, 80 * (1.15 / 1.1)), show(ratio));
 
-  const right = scaleBoxAndFont({ box: { x: 320, y: 100, width: 80, height: 40 }, currentScale: 1, nextScale: 1.5, section: SECTION, align: 'left' });
+  const right = scaleBoxAndFont({ box: { x: 320, y: 100, width: 80, height: 40 }, currentScale: 1, nextScale: 1.5, section: SECTION });
   check('오른쪽 경계 → 크기 유지하고 안쪽으로(x = W − w)', near(right.x, 400 - 120) && near(right.width, 120), show(right));
-  const left = scaleBoxAndFont({ box: { x: 0, y: 100, width: 80, height: 40 }, currentScale: 1, nextScale: 1.5, section: SECTION, align: 'left' });
+  const left = scaleBoxAndFont({ box: { x: 0, y: 100, width: 80, height: 40 }, currentScale: 1, nextScale: 1.5, section: SECTION });
   check('왼쪽 경계 → x = 0', near(left.x, 0) && near(left.width, 120), show(left));
-  const top = scaleBoxAndFont({ box: { x: 100, y: 0, width: 80, height: 40 }, currentScale: 1, nextScale: 1.5, section: SECTION, align: 'left' });
+  const top = scaleBoxAndFont({ box: { x: 100, y: 0, width: 80, height: 40 }, currentScale: 1, nextScale: 1.5, section: SECTION });
   check('위 경계 → y = 0', near(top.y, 0) && near(top.height, 60), show(top));
-  const bottom = scaleBoxAndFont({ box: { x: 100, y: 260, width: 80, height: 40 }, currentScale: 1, nextScale: 1.5, section: SECTION, align: 'left' });
+  const bottom = scaleBoxAndFont({ box: { x: 100, y: 260, width: 80, height: 40 }, currentScale: 1, nextScale: 1.5, section: SECTION });
   check('아래 경계 → y = H − h', near(bottom.y, 300 - 60), show(bottom));
 
-  check('후보가 섹션 폭보다 크면 null', scaleBoxAndFont({ box: { x: 0, y: 0, width: 390, height: 40 }, currentScale: 1, nextScale: 1.05, section: SECTION, align: 'left' }) === null);
-  check('후보가 섹션 높이보다 크면 null', scaleBoxAndFont({ box: { x: 0, y: 0, width: 40, height: 290 }, currentScale: 1, nextScale: 1.05, section: SECTION, align: 'left' }) === null);
-  const exact = scaleBoxAndFont({ box: { x: 10, y: 10, width: 200, height: 40 }, currentScale: 1, nextScale: 2, section: SECTION, align: 'left' });
+  check('후보가 섹션 폭보다 크면 null', scaleBoxAndFont({ box: { x: 0, y: 0, width: 390, height: 40 }, currentScale: 1, nextScale: 1.05, section: SECTION }) === null);
+  check('후보가 섹션 높이보다 크면 null', scaleBoxAndFont({ box: { x: 0, y: 0, width: 40, height: 290 }, currentScale: 1, nextScale: 1.05, section: SECTION }) === null);
+  const exact = scaleBoxAndFont({ box: { x: 10, y: 10, width: 200, height: 40 }, currentScale: 1, nextScale: 2, section: SECTION });
   check('후보가 섹션 폭과 정확히 같으면 허용(x = 0)', exact !== null && near(exact.width, 400) && near(exact.x, 0), show(exact));
 
-  const up = scaleBoxAndFont({ box: { x: 160, y: 130, width: 80, height: 40 }, currentScale: 1, nextScale: 1.05, section: SECTION, align: 'center' });
-  const back = scaleBoxAndFont({ box: up, currentScale: 1.05, nextScale: 1, section: SECTION, align: 'center' });
+  const up = scaleBoxAndFont({ box: { x: 160, y: 130, width: 80, height: 40 }, currentScale: 1, nextScale: 1.05, section: SECTION });
+  const back = scaleBoxAndFont({ box: up, currentScale: 1.05, nextScale: 1, section: SECTION });
   check('경계에 안 닿으면 확대 후 축소 시 원래 값 복원', sameBox(back, { x: 160, y: 130, width: 80, height: 40 }), show(back));
   const s1 = nextUserScale(1, STEP, 'increase');
   const s2 = nextUserScale(s1, STEP, 'decrease');
   check('배율 +step 후 −step 은 정확히 원래 배율', s2 === 1, String(s2));
 
-  const fracScale = scaleBoxAndFont({ box: { x: 100.5, y: 50.25, width: 33.3, height: 12.7 }, currentScale: 0.85, nextScale: 0.9, section: SECTION, align: 'center' });
+  const fracScale = scaleBoxAndFont({ box: { x: 100.5, y: 50.25, width: 33.3, height: 12.7 }, currentScale: 0.85, nextScale: 0.9, section: SECTION });
   check('소수 배율·좌표 계산(반올림 없음)', near(fracScale.width, 33.3 * (0.9 / 0.85)) && near(fracScale.x + fracScale.width / 2, 100.5 + 33.3 / 2), show(fracScale));
-  check('배율 0 이하는 null', scaleBoxAndFont({ box: BOX, currentScale: 0.05, nextScale: 0, section: SECTION, align: 'left' }) === null);
+  check('배율 0 이하는 null', scaleBoxAndFont({ box: BOX, currentScale: 0.05, nextScale: 0, section: SECTION }) === null);
 
   check('canIncrease: 여유 있음 → true', canIncreaseScale({ box: BOX, currentScale: 1, step: STEP, section: SECTION }));
   check('canIncrease: 이미 섹션 폭과 같음 → false', !canIncreaseScale({ box: { x: 0, y: 0, width: 400, height: 40 }, currentScale: 1, step: STEP, section: SECTION }));
@@ -164,14 +164,14 @@ console.log('\n[8] 제품 step(N5_FONT_SCALE_STEP) — PM 확정 [+][-] 규칙')
   check('0.05 에서는 다음 [-] 불가(배율 0 이하)', !canDecreaseScale({ box: BOX, currentScale: 0.05, step: P, section: SECTION }));
   check('0.10 에서는 [-] 가능', canDecreaseScale({ box: BOX, currentScale: 0.1, step: P, section: SECTION }));
 
-  const up = scaleBoxAndFont({ box: BOX, currentScale: 1, nextScale: nextUserScale(1, P, 'increase'), section: SECTION, align: 'center' });
-  check('박스도 1.05/1.00 비율로 확대 · 가로 중심과 윗변 유지', sameBox(up, { x: 98, y: 100, width: 84, height: 42 }), show(up));
-  const down = up && scaleBoxAndFont({ box: up, currentScale: 1.05, nextScale: nextUserScale(1.05, P, 'decrease'), section: SECTION, align: 'center' });
+  const up = scaleBoxAndFont({ box: BOX, currentScale: 1, nextScale: nextUserScale(1, P, 'increase'), section: SECTION });
+  check('박스도 1.05/1.00 비율로 확대 · 영역 중심 유지', sameBox(up, { x: 98, y: 99, width: 84, height: 42 }), show(up));
+  const down = up && scaleBoxAndFont({ box: up, currentScale: 1.05, nextScale: nextUserScale(1.05, P, 'decrease'), section: SECTION });
   check('확대 후 축소하면 원래 박스로 돌아온다', sameBox(down, BOX), show(down));
 
   const edge = { x: 320, y: 100, width: 80, height: 40 };
-  const shifted = scaleBoxAndFont({ box: edge, currentScale: 1, nextScale: 1.05, section: SECTION, align: 'left' });
-  check('경계를 넘으면 크기는 유지하고 안쪽으로 민다', sameBox(shifted, { x: 316, y: 100, width: 84, height: 42 }), show(shifted));
+  const shifted = scaleBoxAndFont({ box: edge, currentScale: 1, nextScale: 1.05, section: SECTION });
+  check('경계를 넘으면 크기는 유지하고 넘는 만큼만 안쪽으로 민다', sameBox(shifted, { x: 316, y: 99, width: 84, height: 42 }), show(shifted));
 
   const wide = { x: 0, y: 0, width: 390, height: 100 };
   check('다음 확대가 섹션 폭을 넘으면 [+] 불가(390 × 1.05 = 409.5 > 400)', !canIncreaseScale({ box: wide, currentScale: 1, step: P, section: SECTION }));
@@ -251,64 +251,57 @@ console.log('\n[글자 크기] [+][-] 한 번의 결과');
 {
   const section = { width: 1000, height: 400 };
   const start = { bbox: { x: 40, y: 100, width: 500, height: 80 }, fontScale: 1 };
-  const up1 = stepFontScale(start, 'increase', section, 'left');
-  const up2 = stepFontScale(up1, 'increase', section, 'left');
-  const down = stepFontScale(up2, 'decrease', section, 'left');
+  const up1 = stepFontScale(start, 'increase', section);
+  const up2 = stepFontScale(up1, 'increase', section);
+  const down = stepFontScale(up2, 'decrease', section);
   check('1.00 → + → 1.05', up1.fontScale === 1.05, String(up1.fontScale));
   check('1.05 → + → 1.10', up2.fontScale === 1.1, String(up2.fontScale));
   check('1.10 → - → 1.05', down.fontScale === 1.05, String(down.fontScale));
   check('박스가 같은 비율로 바뀐다', near(up1.bbox.width, 525) && near(up1.bbox.height, 84));
-  check('left — 왼쪽 위를 유지한다', up1.bbox.x === 40 && up1.bbox.y === 100);
+  check('영역 중심을 유지한다(가로 290 · 세로 140)', near(up1.bbox.x + up1.bbox.width / 2, 290) && near(up1.bbox.y + up1.bbox.height / 2, 140));
   check('입력 값을 바꾸지 않는다', start.fontScale === 1 && start.bbox.width === 500);
 
   const nearEdge = { bbox: { x: 0, y: 0, width: 500, height: 80 }, fontScale: 1 };
-  const clamped = stepFontScale(nearEdge, 'increase', section, 'left');
+  const clamped = stepFontScale(nearEdge, 'increase', section);
   check('섹션 밖으로 나가면 크기는 그대로 안쪽으로 민다', clamped.bbox.x === 0 && clamped.bbox.y === 0 && near(clamped.bbox.width, 525));
 
-  check('섹션보다 커지면 [+] 불가', stepFontScale({ bbox: { x: 0, y: 0, width: 990, height: 80 }, fontScale: 1 }, 'increase', section, 'left') === null);
-  check('섹션 크기와 같아지는 [+]는 허용', stepFontScale({ bbox: { x: 0, y: 0, width: 800, height: 80 }, fontScale: 1 }, 'increase', { width: 840, height: 400 }, 'left') !== null);
-  check('배율이 0이 되는 [-] 불가', stepFontScale({ bbox: start.bbox, fontScale: 0.05 }, 'decrease', section, 'left') === null);
-  check('배율 0.10 → - → 0.05 는 가능(제품 최소 없음)', stepFontScale({ bbox: start.bbox, fontScale: 0.1 }, 'decrease', section, 'left')?.fontScale === 0.05);
+  check('섹션보다 커지면 [+] 불가', stepFontScale({ bbox: { x: 0, y: 0, width: 990, height: 80 }, fontScale: 1 }, 'increase', section) === null);
+  check('섹션 크기와 같아지는 [+]는 허용', stepFontScale({ bbox: { x: 0, y: 0, width: 800, height: 80 }, fontScale: 1 }, 'increase', { width: 840, height: 400 }) !== null);
+  check('배율이 0이 되는 [-] 불가', stepFontScale({ bbox: start.bbox, fontScale: 0.05 }, 'decrease', section) === null);
+  check('배율 0.10 → - → 0.05 는 가능(제품 최소 없음)', stepFontScale({ bbox: start.bbox, fontScale: 0.1 }, 'decrease', section)?.fontScale === 0.05);
 }
 
-console.log('\n[글자 크기] 정렬 기준점');
+console.log('\n[글자 크기] 영역 중심 기준(PRD v3.6.4 F-CFM-15 — 글자 정렬과 무관)');
 {
   const section = { width: 1000, height: 400 };
   const bbox = { x: 200, y: 100, width: 400, height: 80 };
   const start = { bbox, fontScale: 1 };
   const right = (b) => b.x + b.width;
   const cx = (b) => b.x + b.width / 2;
+  const cy = (b) => b.y + b.height / 2;
 
-  const leftUp = stepFontScale(start, 'increase', section, 'left');
-  check('left + — x·y 동일, 폭·높이 증가', leftUp.bbox.x === 200 && leftUp.bbox.y === 100 && near(leftUp.bbox.width, 420) && near(leftUp.bbox.height, 84));
-  const leftDown = stepFontScale(start, 'decrease', section, 'left');
-  check('left - — x·y 동일, 폭·높이 감소', leftDown.bbox.x === 200 && leftDown.bbox.y === 100 && near(leftDown.bbox.width, 380));
+  const up = stepFontScale(start, 'increase', section);
+  check('+ — 중심(가로·세로) 그대로, 폭·높이 증가', near(cx(up.bbox), cx(bbox)) && near(cy(up.bbox), cy(bbox)) && near(up.bbox.width, 420) && near(up.bbox.height, 84));
+  const down = stepFontScale(start, 'decrease', section);
+  check('- — 중심(가로·세로) 그대로, 폭·높이 감소', near(cx(down.bbox), cx(bbox)) && near(cy(down.bbox), cy(bbox)) && near(down.bbox.width, 380));
 
-  const centerUp = stepFontScale(start, 'increase', section, 'center');
-  check('center + — 가로 중심·y 동일', near(cx(centerUp.bbox), cx(bbox)) && centerUp.bbox.y === 100 && near(centerUp.bbox.width, 420));
-  const centerDown = stepFontScale(start, 'decrease', section, 'center');
-  check('center - — 가로 중심·y 동일', near(cx(centerDown.bbox), cx(bbox)) && centerDown.bbox.y === 100);
-
-  const rightUp = stepFontScale(start, 'increase', section, 'right');
-  check('right + — 오른쪽·y 동일', near(right(rightUp.bbox), right(bbox)) && rightUp.bbox.y === 100 && near(rightUp.bbox.x, 180));
-  const rightDown = stepFontScale(start, 'decrease', section, 'right');
-  check('right - — 오른쪽·y 동일', near(right(rightDown.bbox), right(bbox)) && rightDown.bbox.y === 100);
-
-  // 경계: 기준점을 유지하다 넘는 만큼만 민다
+  // 경계: 중심을 유지하다 넘는 만큼만 안쪽으로 민다(크기는 그대로)
   const atRight = { bbox: { x: 600, y: 100, width: 400, height: 80 }, fontScale: 1 };
-  const leftAtEdge = stepFontScale(atRight, 'increase', section, 'left');
-  check('left — 오른쪽을 넘으면 넘는 만큼만 왼쪽으로', near(leftAtEdge.bbox.x, 580) && near(right(leftAtEdge.bbox), 1000));
+  const rightEdge = stepFontScale(atRight, 'increase', section);
+  check('오른쪽을 넘으면 넘는 만큼만 왼쪽으로', near(rightEdge.bbox.x, 580) && near(right(rightEdge.bbox), 1000) && near(rightEdge.bbox.width, 420));
   const atLeft = { bbox: { x: 0, y: 100, width: 400, height: 80 }, fontScale: 1 };
-  const rightAtEdge = stepFontScale(atLeft, 'increase', section, 'right');
-  check('right — 왼쪽을 넘으면 x = 0', rightAtEdge.bbox.x === 0 && near(rightAtEdge.bbox.width, 420));
-  const centerAtEdge = stepFontScale(atLeft, 'increase', section, 'center');
-  check('center — 왼쪽을 넘으면 x = 0', centerAtEdge.bbox.x === 0);
+  const leftEdge = stepFontScale(atLeft, 'increase', section);
+  check('왼쪽을 넘으면 x = 0', leftEdge.bbox.x === 0 && near(leftEdge.bbox.width, 420));
+  const atTop = { bbox: { x: 100, y: 0, width: 400, height: 80 }, fontScale: 1 };
+  check('위를 넘으면 y = 0', stepFontScale(atTop, 'increase', section).bbox.y === 0);
   const atBottom = { bbox: { x: 100, y: 320, width: 400, height: 80 }, fontScale: 1 };
-  const bottomEdge = stepFontScale(atBottom, 'increase', section, 'left');
-  check('아래를 넘으면 넘는 만큼만 위로', near(bottomEdge.bbox.y, 316) && bottomEdge.bbox.x === 100);
-  for (const align of ['left', 'center', 'right']) {
-    check(`${align} — 섹션보다 커지는 + 불가`, stepFontScale({ bbox: { x: 0, y: 0, width: 990, height: 80 }, fontScale: 1 }, 'increase', section, align) === null);
-  }
+  const bottomEdge = stepFontScale(atBottom, 'increase', section);
+  check('아래를 넘으면 넘는 만큼만 위로 · 가로 중심은 그대로', near(bottomEdge.bbox.y, 316) && near(cx(bottomEdge.bbox), 300));
+  check('섹션보다 커지는 + 불가', stepFontScale({ bbox: { x: 0, y: 0, width: 990, height: 80 }, fontScale: 1 }, 'increase', section) === null);
+  check('[+] 뒤 [-] 는 경계에 닿지 않으면 원래 박스', (() => {
+    const back = stepFontScale(up, 'decrease', section);
+    return near(back.bbox.x, 200) && near(back.bbox.y, 100) && near(back.bbox.width, 400) && near(back.bbox.height, 80);
+  })());
 }
 
 console.log('\n[글자 크기] local 초안 정리');

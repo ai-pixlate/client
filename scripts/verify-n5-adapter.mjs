@@ -20,6 +20,10 @@ import {
   getSectionStatusRowCount,
   getRevisionConflictLatestBlock,
   getSignalRows,
+  hasPanelSectionStatus,
+  getBlockSourceState,
+  isBlockOverflowing,
+  pickRepresentativeVerdict,
   getSignalTone,
   getTranslationFailure,
   hasSectionStatus,
@@ -384,7 +388,17 @@ console.log('\nN5 오류 상태');
     { code: 'width_overflow', reason: 'c' },
     { code: 'empty_block', reason: 'd' },
   ]);
-  check('칸 실패 signal은 행에서 빠진다', getSignalRows(badges).map((b) => b.code).join() === 'prohibited_expression,empty_block');
+  // 번역문 경고 행 = 번역문 검사 결과만 — 셀 상태(번역 실패·넘침)와 원문 쪽 신호(empty_block)는 빠진다(F-CFM-05)
+  check('칸 실패·원문 신호는 번역문 경고 행에서 빠진다', getSignalRows(badges).map((b) => b.code).join() === 'prohibited_expression');
+  const emptyBlock = toSignalBadges([{ code: 'empty_block', reason: '원문을 잘못 읽었을 수 있습니다' }]);
+  check('인식 실패 = empty_block + 원문 없음', getBlockSourceState({ badges: emptyBlock, sourceText: '  ' })?.kind === 'recognition-failed');
+  const check1 = getBlockSourceState({ badges: emptyBlock, sourceText: '세안 후' });
+  check('원문이 있으면 원문 확인(사유는 서버 값)', check1?.kind === 'check' && check1.reason === '원문을 잘못 읽었을 수 있습니다');
+  check('빈 원문이라도 empty_block 신호가 없으면 인식 실패로 보지 않는다', getBlockSourceState({ badges: [], sourceText: '' }) === null);
+  const overflowSignal = toSignalBadges([{ code: 'width_overflow', reason: null }]);
+  check('넘침 — 정본은 render.result.overflow', isBlockOverflowing({ serverOverflow: true, badges: [] }) && !isBlockOverflowing({ serverOverflow: false, badges: overflowSignal }));
+  check('넘침 — 현재 결과가 아니면(null) 넘침이 아니다', !isBlockOverflowing({ serverOverflow: null, badges: overflowSignal }));
+  check('넘침 — 계약 키가 없는(legacy) 응답만 width_overflow 로 본다', isBlockOverflowing({ serverOverflow: 'legacy', badges: overflowSignal }));
   check('톤은 시각 매핑이다', getSignalTone('prohibited_expression') === 'warning' && getSignalTone('empty_block') === 'neutral');
   const t = getTranslationFailure(badges);
   check('번역 실패의 정본은 signal이고 task를 동봉한다', t?.retry?.taskId === 7 && t?.retry?.retryable === true);
@@ -412,10 +426,19 @@ console.log('\nN5 오류 상태');
     verdicts: [{ verdictType: 'regulatory' }, { verdictType: 'regulatory' }, { verdictType: 'needs_fix' }],
   });
   check('실행 실패 단계', status.failedStages.join() === 'render,inpaint' && status.renderRetry?.taskId === 1);
-  check('되살림·품질·판정 배지(중복 제거)', status.restoredInN3 && status.warningLabel === '품질 주의' && status.verdictLabels.join() === '규제 위반,현지 확인 필요');
+  // 되살린 섹션은 대표 사유 하나(PRD v3.6.4 — 규제 > 채널 정책 > … > 현지, 수정 필수 > 확인 필요)
+  check('되살림·품질·대표 판정 배지 하나', status.restoredInN3 && status.warningLabel === '품질 주의' && status.verdictLabels.join() === '규제 위반');
+  check('대표 사유 — 현지 수정 필수 > 현지 확인 필요', pickRepresentativeVerdict(['needs_fix', 'local_irrelevant']) === 'local_irrelevant');
+  check('대표 사유 — 규제 > 채널 정책 > 현지', pickRepresentativeVerdict(['local_irrelevant', 'channel_policy']) === 'channel_policy' && pickRepresentativeVerdict(['channel_policy', 'regulatory']) === 'regulatory');
+  const included = buildSectionStatus(11, [], [], { exclusionReason: null, verdicts: [{ verdictType: 'regulatory_replaceable' }, { verdictType: 'needs_fix' }] });
+  check('되살리지 않은 섹션의 판정 행은 그대로', included.verdictLabels.join() === '규제 표현,현지 확인 필요');
   const running = buildSectionStatus(20, [], items, undefined);
   check('진행 중은 실패가 아니고, Section을 못 받아도 상태 없음이다', running.failedStages.length === 0 && !hasSectionStatus(running));
-  check('행 3개면 이미지까지 134(Figma 1244:8444)', getSectionStatusRowCount(status) === 3 && getSectionCanvasHeaderHeight(status) === 134);
+  // 실행 실패 · 되살림/판정 두 행(품질 주의는 이후 범위라 보이지 않아 행을 차지하지 않는다) — 28 + 16 + 26·2 + 4 + 4 = 104
+  check('실패·되살림 두 행이면 이미지까지 104(품질 주의 행 없음)', getSectionStatusRowCount(status) === 2 && getSectionCanvasHeaderHeight(status) === 104);
+  check('품질 주의만 있는 섹션은 상태 공간을 쓰지 않는다', !hasSectionStatus(buildSectionStatus(41, [], [], { warningBadge: 'quality_warning', verdicts: [] })));
+  check('우측 패널 섹션 행 — 실패·되살림·판정만 있으면 없다(좌측과 중복)', !hasPanelSectionStatus(status));
+  check('우측 패널 섹션 행 — 섹션 신호는 남는다', hasPanelSectionStatus(buildSectionStatus(42, toSignalBadges([{ code: 'logo_match_failed' }]), [], undefined)));
   check('상태가 없으면 공간도 없다', getSectionCanvasHeaderHeight(running) === 0 && getSectionCanvasHeaderHeight(undefined) === 0);
   check('signal만 있으면 canvas 공간을 쓰지 않는다', getSectionCanvasHeaderHeight(buildSectionStatus(40, toSignalBadges([{ code: 'empty_block' }]), [], undefined)) === 0);
   const label = (id, render, list = items) => buildSectionStatus(id, [], list, undefined, render).progressLabel;

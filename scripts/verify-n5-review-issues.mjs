@@ -36,7 +36,7 @@ const input = {
   blocks,
   sectionStatusById: new Map([[1, { failedStages: ['render', 'inpaint'] }], [3, { failedStages: ['render'] }]]),
   blockTaskFailuresById: new Map([[10, { verifyFailed: true }], [14, { verifyFailed: true }]]),
-  failedDraftBlockIds: new Set([10, 14]),
+  unsavedDraftBlockIds: new Set([10, 14]),
 };
 const issues = buildN5ReviewIssues(input);
 const kinds = issues.map((i) => i.kind).sort().join();
@@ -46,7 +46,7 @@ check('미적용 강제 용어는 세지 않는다', issues.filter((i) => i.bloc
 check('번역 실패 없이 빈 칸은 세지 않는다', issues.every((i) => i.blockId !== 13));
 check('번역 실패여도 글이 있으면 세지 않는다', buildN5ReviewIssues({ ...input, blocks: [{ id: 12, sectionId: 2, translatedText: 'typed', badges: [{ code: 'translation_failed' }] }] }).filter((i) => i.kind === 'empty-translation').length === 0);
 const groups = groupN5ReviewIssues(issues);
-check('Figma 순서로 묶는다', groups.map((g) => g.title).join() === '규제 경고,검사실패,번역문 비어 있음,실행 실패,저장하지 못한 번역문', groups.map((g) => g.title).join());
+check('Figma 1657:10490 순서·제목으로 묶는다', groups.map((g) => g.title).join() === '규제 경고,검사 실패,번역문 비어 있음,실행 실패,저장되지 않은 번역문', groups.map((g) => g.title).join());
 check('규제 경고만 Warning', groups.filter((g) => g.isWarning).map((g) => g.kind).join() === 'regulatory-warning');
 const reg = issues.find((i) => i.kind === 'regulatory-warning');
 check('위치 — block', formatN5ReviewIssueLocation(reg) === '섹션 2 -1', formatN5ReviewIssueLocation(reg));
