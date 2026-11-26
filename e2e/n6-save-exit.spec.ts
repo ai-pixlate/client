@@ -27,7 +27,7 @@ const deletes = (rs: Req[]) => rs.filter((r) => r.method === 'DELETE');
 test('저장 성공 → 보관함으로 이동하고 저장한 카드가 보인다 · 초록 저장 완료 글자 없음', async ({ page }) => {
   const requests = track(page);
   await reachN6(page);
-  await expect(page.getByTestId('n6-save-button')).toHaveText('저장하고 보관함으로 가기');
+  await expect(page.getByTestId('n6-save-button')).toHaveText('저장하고 보관함으로 이동');
 
   await page.getByTestId('n6-save-button').click();
   await expect(page).toHaveURL(/\/$/, { timeout: 10_000 });
@@ -216,7 +216,7 @@ test('E. 저장 실패(500) 뒤 나가기 — 저장 완료로 보지 않고 기
 
   await page.getByTestId('n6-save-button').click();
   await expect(page.getByTestId('n6-save-error')).toBeVisible();
-  await expect(page.getByTestId('n6-save-button')).toHaveText('저장하고 보관함으로 가기');
+  await expect(page.getByTestId('n6-save-button')).toHaveText('저장하고 보관함으로 이동');
   await expect(exitGuard(page)).toHaveAttribute('data-exit-guard', 'on');
   await expectCancelDialogThenDismiss(page);
   await expect(page).toHaveURL(N6_URL);

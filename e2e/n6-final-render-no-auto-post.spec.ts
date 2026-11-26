@@ -129,7 +129,8 @@ test('D·E. failed 관측 — 사용자 동작 전 POST /render 0회 · [다시 
   await page.waitForTimeout(4_500); // failed 를 본 뒤에도 자동 재시도가 없다
   expect(await renderPosts(page)).toBe(0);
 
-  await page.getByRole('button', { name: '다시 렌더링' }).click();
+  // 오류 모달(Figma 1271:8338)의 [다시 시도] — 같은 POST /render
+  await page.getByRole('button', { name: '다시 시도' }).click();
   await expect(page.getByTestId('n6-export-panel')).toBeVisible({ timeout: 15_000 });
   expect(await renderPosts(page)).toBe(1);
   const gets = (await log(page)).filter((entry) => entry.startsWith('GET tasks'));

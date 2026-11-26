@@ -383,7 +383,7 @@ test('새 서버 N6 processing · rendering → 렌더 중, 폴링을 이어 간
 test('새 서버 N6 review · awaiting_save + task done → 저장 대기(내보내기 · 저장 가능), 폴링 · 재렌더 요청 없음', async ({ page }) => {
   await openN6(page, tasksBody('review', 'N6', 'awaiting_save', [renderTask({ status: 'done' })]));
   await expect(page.getByTestId('n6-export-panel')).toBeVisible({ timeout: 15_000 });
-  await expect(page.getByRole('button', { name: '저장하고 보관함으로 가기' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: '저장하고 보관함으로 이동' })).toBeEnabled();
   await expect(page.getByTestId('n6-render-retry')).toHaveCount(0);
   const count = await tasksCount(page);
   await page.waitForTimeout(4_500);
@@ -485,6 +485,6 @@ test('새 서버 N5 확정 응답 processing · N6 · rendering → N6 진입 ·
   const seen = await srv(page, 'seen');
   expect(seen).toContain('N6:processing:rendering');
   expect(seen).toContain('N6:review:awaiting_save');
-  await page.getByRole('button', { name: '저장하고 보관함으로 가기' }).click();
+  await page.getByRole('button', { name: '저장하고 보관함으로 이동' }).click();
   await expect(page).toHaveURL(/\/$/, { timeout: 15_000 });
 });

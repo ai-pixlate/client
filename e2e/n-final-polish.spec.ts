@@ -174,16 +174,21 @@ test.describe('N6', () => {
     await page.getByTestId('n5-review-continue').click();
   }
 
-  test('렌더 중 — dim·진행 모달과 비활성 패널이 보이고, 끝나면 완료 화면으로 바뀐다', async ({ page }) => {
+  test('렌더 중 — 뷰어 안 dim·진행 표시와 비활성 저장·다운로드가 보이고, 끝나면 완료 화면으로 바뀐다', async ({ page }) => {
     await confirmToN6(page);
     const dialog = page.getByTestId('n6-render-progress');
     await expect(dialog).toBeVisible({ timeout: 15_000 });
     const writes = recordWrites(page);
 
+    // 진행 표시·dim 은 좌측 뷰어 안에만 있다(뷰어 가운데) — 우측 패널·상단 헤더를 덮지 않는다
     const rect = await box(page, 'n6-render-progress');
+    const viewer = await box(page, 'n6-render-preview');
+    const dim = await box(page, 'n6-render-dim');
     expect(rect.width).toBe(460);
-    expect(Math.abs(rect.x + rect.width / 2 - 960)).toBeLessThanOrEqual(1);
-    expect(Math.abs(rect.y + rect.height / 2 - 540)).toBeLessThanOrEqual(1);
+    expect(dim).toEqual(viewer);
+    expect(Math.abs(rect.x + rect.width / 2 - (viewer.x + viewer.width / 2))).toBeLessThanOrEqual(1);
+    expect(Math.abs(rect.y + rect.height / 2 - (viewer.y + viewer.height / 2))).toBeLessThanOrEqual(1);
+    await expect(page.getByRole('dialog')).toHaveCount(0);
     await expect(dialog).toContainText('최종 렌더 중');
     await expect(dialog).toContainText('창을 닫아도 렌더는 계속 됩니다');
     await expect(page.getByTestId('n6-render-dim')).toBeVisible();
@@ -206,16 +211,43 @@ test.describe('N6', () => {
     expect(writes).toEqual([]);
   });
 
-  test('닫기 — 모달만 닫히고 렌더는 계속되어 완료 화면으로 바뀌며, 그동안 다운로드는 막혀 있다', async ({ page }) => {
+  test('렌더 중 산출물 선택 — 지원 항목만 고를 수 있고 요약이 바뀌며, ✕·Escape 로 닫히지 않고, 완료 뒤 선택이 이어진다', async ({ page }) => {
     await confirmToN6(page);
-    await expect(page.getByTestId('n6-render-progress')).toBeVisible({ timeout: 15_000 });
-    await page.getByTestId('n6-render-close').click();
-    await expect(page.getByTestId('n6-render-progress')).toHaveCount(0);
-    await expect(page.getByTestId('n6-export-panel-pending')).toBeVisible();
-    await expect(page.getByTestId('n6-pending-export')).toBeDisabled();
-    await expect(page.getByRole('heading', { name: '저장 및 내보내기' })).toBeFocused();
+    const progress = page.getByTestId('n6-render-progress');
+    await expect(progress).toBeVisible({ timeout: 15_000 });
+    const writes = recordWrites(page);
+    await expect(progress.getByRole('button')).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await expect(progress).toBeVisible();
+
+    // HTML·PSD 는 렌더 중에도 비활성 · 지원 항목(images/ · content.csv)은 기본 선택에서 바꿀 수 있다(포커스가 갇히지 않는다)
+    await expect(page.locator('#artifact-html')).toBeDisabled();
+    await expect(page.locator('#artifact-psd')).toBeDisabled();
+    const summary = page.getByTestId('n6-selection-summary');
+    await expect(summary).toContainText('선택된 산출물 2개');
+    await page.locator('label[for="artifact-csv"]').click();
+    await expect(page.locator('#artifact-csv')).not.toBeChecked();
+    await expect(page.locator('#artifact-csv')).toBeFocused();
+    await expect(summary).toContainText('선택된 산출물 1개');
+    await expect(summary).toContainText('images/ · export.zip');
+    // 저장·묶음·개별 다운로드는 그대로 막혀 있고 요청도 없다
+    for (const id of ['n6-pending-download-images', 'n6-pending-download-csv', 'n6-pending-export', 'n6-pending-save']) {
+      await expect(page.getByTestId(id)).toBeDisabled();
+    }
+    await expect(page.getByTestId('n6-pending-export')).toHaveText('선택 항목 내보내기');
+
+    // 완료 — 렌더 중 고른 값이 남고, 0개면 묶음 버튼만 막힌다(저장은 선택과 무관)
     await expect(page.getByTestId('n6-export-panel')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByTestId('n6-render-progress')).toHaveCount(0);
+    await expect(progress).toHaveCount(0);
+    await expect(page.locator('#artifact-csv')).not.toBeChecked();
+    await expect(page.locator('#artifact-images')).toBeChecked();
+    await expect(summary).toContainText('선택된 산출물 1개');
+    await expect(page.getByTestId('n6-export-button')).toHaveText('선택 항목 내보내기');
+    await page.locator('label[for="artifact-images"]').click();
+    await expect(summary).toContainText('선택된 산출물 0개');
+    await expect(page.getByTestId('n6-export-button')).toBeDisabled();
+    await expect(page.getByTestId('n6-save-button')).toBeEnabled();
+    expect(writes).toEqual([]);
   });
 
   test('progress 가 없으면 숫자를 만들지 않고 진행 중으로만 보인다', async ({ page }) => {
