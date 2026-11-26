@@ -65,27 +65,112 @@ import { ZoomControls } from './n5/n5-toolbar';
  * 두지 않고 다시 렌더링할 수 없다는 안내만 둔다(Figma 에 이 상태가 없어 같은 자리 · 같은 글자 체계로 최소 보완). [중단](→ N5)은 G17 후속.
  * 저장 대기(awaiting_save)에는 이 화면이 없다 — 저장 대기의 POST /render 는 409 라 부르지 않는다.
  */
-function RenderFailed({ onRetry, retryPending, retryable }: { onRetry: () => void; retryPending: boolean; retryable: boolean }) {
+/**
+ * 최종 렌더 오류 모달 — Figma 1271:8338(일반) · 1700:10405(이미지 경계 이탈). 384 폭 · 안쪽 32 · 간격 24 · ERROR!(58 SemiBold #E5484D).
+ * - general: [중단] [다시 시도]. [다시 시도]는 현재 최종 렌더 task 의 retryable === true 일 때만 보인다(JOB-05 — HTTP error.retryable 과
+ *   섞지 않는다). 실제 요청(POST /render) 성공 뒤 진행 상태로 바뀌는 것은 /tasks polling 이 맡는다
+ * - boundary: [중단] 하나 — 재시도·저장·다운로드 없음. 경계 이탈 판정 필드(boundaryCheck)가 계약에 없어 지금은 이 분기로 들어오지 않는다(BE 대기)
+ * [중단](N6 → N5 복귀)은 서버 계약이 없다 — POST /abort 는 N2·N4 처리 중만 받는다(그 밖 409). FE 라우팅만 바꿔 복귀한 것처럼 하지 않고,
+ * 버튼을 비활성으로 두고 이유를 함께 보인다(BE 계약 대기)
+ */
+type RenderErrorVariant = 'general' | 'boundary';
+
+const RENDER_ERROR_COPY: Record<RenderErrorVariant, { title: string[]; body: string[] }> = {
+  general: {
+    title: ['최종 이미지를 만들지 못했습니다.'],
+    body: ['다시 시도하거나, 중단하고 검수 화면으로 돌아갈 수 있습니다.', '수정한 내용은 유지됩니다.'],
+  },
+  boundary: {
+    title: ['글자가 이미지 밖으로 잘려', '최종 이미지를 만들지 못했습니다.'],
+    body: ['중단하면 검수 화면으로 돌아갑니다. 문장을 줄이거나', '블록의 위치·크기를 조정해 주세요. 수정한 내용은 유지됩니다.'],
+  },
+};
+
+const NOOP = () => {};
+
+function RenderErrorDialog({
+  variant,
+  onRetry,
+  retryPending,
+  retryable,
+  returnFocusRef,
+}: {
+  variant: RenderErrorVariant;
+  onRetry: () => void;
+  retryPending: boolean;
+  retryable: boolean;
+  returnFocusRef: React.RefObject<HTMLElement | null>;
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  // 닫기 버튼이 없는 결정 모달 — Escape 로 닫지 않는다(오류를 가린 채 화면을 쓰게 두지 않는다)
+  useModalDialog(dialogRef, { onClose: NOOP, returnFocusRef });
+  const copy = RENDER_ERROR_COPY[variant];
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
-      <p className="text-[14px] text-red-500" data-testid="n6-render-error">
-        최종 이미지 렌더링에 실패했습니다.
-      </p>
-      {retryable ? (
-        <button
-          type="button"
-          data-testid="n6-render-retry"
-          onClick={onRetry}
-          disabled={retryPending}
-          className="rounded-[6px] bg-[#171717] px-8 py-3.5 text-[14px] font-medium tracking-[-0.03em] text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          {retryPending ? '재시도 중...' : '다시 렌더링'}
-        </button>
-      ) : (
-        <p className="text-[14px] text-[#707070]" data-testid="n6-render-retry-unavailable">
-          이 작업은 다시 렌더링할 수 없습니다.
-        </p>
-      )}
+    <div data-testid="n6-render-error-dim" className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(23,23,23,0.4)]">
+      <div
+        ref={dialogRef}
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="n6-render-error-title"
+        tabIndex={-1}
+        data-testid="n6-render-error"
+        data-variant={variant}
+        className="flex w-[384px] max-w-[calc(100vw-32px)] flex-col items-center gap-6 rounded-[8px] bg-white p-8 shadow-[2px_2px_12px_rgba(0,0,0,0.06)] outline-none"
+      >
+        <div className="flex flex-col items-center gap-4 text-center">
+          <p aria-hidden="true" className="text-[58px] leading-[64px] font-semibold text-[#e5484d]">
+            ERROR!
+          </p>
+          <h2 id="n6-render-error-title" className="text-[20px] leading-[normal] font-semibold tracking-[-0.4px] text-[#171717]">
+            {copy.title.map((line) => (
+              <span key={line} className="block">
+                {line}
+              </span>
+            ))}
+          </h2>
+          <p className="text-[12px] leading-[normal] font-light tracking-[-0.48px] text-[#171717]">
+            {copy.body.map((line) => (
+              <span key={line} className="block">
+                {line}
+              </span>
+            ))}
+          </p>
+        </div>
+        <div className="flex w-[320px] max-w-full flex-col gap-2">
+          <div className="flex h-[45px] w-full gap-4">
+            <button
+              type="button"
+              data-testid="n6-render-abort"
+              disabled
+              aria-describedby="n6-render-abort-note"
+              className="flex min-w-0 flex-1 items-center justify-center rounded-[6px] border border-[#eaeaea] bg-white text-[14px] font-medium tracking-[-0.42px] text-[#171717] disabled:cursor-not-allowed disabled:border-transparent disabled:bg-[#f5f5f5] disabled:text-[#999]"
+            >
+              중단
+            </button>
+            {/* 서버가 재시도 가능하다고 한 task 에만 둔다(retryable=false 면 버튼 없이 안내만 — 기존 계약) */}
+            {variant === 'general' && retryable && (
+              <button
+                type="button"
+                data-testid="n6-render-retry"
+                onClick={onRetry}
+                disabled={retryPending}
+                className="flex min-w-0 flex-1 items-center justify-center rounded-[6px] bg-[#171717] text-[14px] font-medium tracking-[-0.42px] whitespace-nowrap text-white disabled:cursor-not-allowed disabled:bg-[#f5f5f5] disabled:text-[#999]"
+              >
+                {retryPending ? '재시도 중...' : '다시 시도'}
+              </button>
+            )}
+          </div>
+          {/* Figma 에 없는 안내 — 누를 수 없는 이유를 최소로 보완한다 */}
+          <p id="n6-render-abort-note" className="text-center text-[11px] leading-[normal] font-light tracking-[-0.04em] text-[#999]">
+            검수 화면으로 돌아가기는 준비 중입니다.
+          </p>
+          {variant === 'general' && !retryable && (
+            <p data-testid="n6-render-retry-unavailable" className="text-center text-[11px] leading-[normal] font-light tracking-[-0.04em] text-[#999]">
+              이 작업은 다시 렌더링할 수 없습니다.
+            </p>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -119,40 +204,18 @@ function toRenderPercent(progress: number | undefined): number | null {
 }
 
 /** Figma 1271:8267 「최종렌더중」. 동작은 useModalDialog(배경 inert, focus trap, Escape=닫기, 닫으면 제목으로 포커스 복귀) */
-function RenderProgressDialog({
-  percent,
-  onClose,
-  returnFocusRef,
-}: {
-  percent: number | null;
-  onClose: () => void;
-  returnFocusRef: React.RefObject<HTMLElement | null>;
-}) {
-  const dialogRef = useRef<HTMLDivElement>(null);
-  useModalDialog(dialogRef, { onClose, returnFocusRef });
+function RenderProgressOverlay({ percent }: { percent: number | null }) {
+  // 진행 표시는 좌측 뷰어 안에만 덮는다 — 우측 패널에서 산출물을 미리 고를 수 있고, 상단 작업 나가기(기존 가드)도 그대로 쓸 수 있다.
+  // 모달이 아니라 포커스를 가두거나 배경을 막지 않는다. 닫기(✕ · Escape)는 없다(PRD) — 렌더가 끝나거나 실패하면 다른 상태로 바뀐다.
+  // 저장·묶음 다운로드·개별 다운로드는 렌더 중 패널에서 계속 비활성이다
   return (
-    <div data-testid="n6-render-dim" className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(23,23,23,0.4)]">
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
+    <div data-testid="n6-render-dim" className="absolute inset-0 flex items-center justify-center rounded-[8px] bg-[rgba(23,23,23,0.4)] p-4">
+      <section
         aria-labelledby="n6-render-title"
-        tabIndex={-1}
         data-testid="n6-render-progress"
-        className="flex w-[460px] max-w-[calc(100vw-32px)] flex-col gap-9 rounded-[6px] bg-white p-8 shadow-[2px_2px_12px_rgba(0,0,0,0.06)] outline-none"
+        className="flex w-[460px] max-w-full flex-col gap-9 rounded-[6px] bg-white p-8 shadow-[2px_2px_12px_rgba(0,0,0,0.06)]"
       >
         <div className="flex w-full flex-col gap-3">
-          <button
-            type="button"
-            data-testid="n6-render-close"
-            aria-label="닫기"
-            onClick={onClose}
-            className="flex size-8 items-center justify-center rounded-[6px] border border-[#eaeaea] bg-white text-[#171717] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ff6a38]"
-          >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <path d="M4 4L12 12M12 4L4 12" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
-            </svg>
-          </button>
           <div className="flex w-full items-center justify-between">
             <div className="flex flex-col gap-1.5">
               {percent != null && (
@@ -188,7 +251,7 @@ function RenderProgressDialog({
           </div>
           <p className="text-[12px] leading-[normal] font-light tracking-[-0.04em] text-[#999]">창을 닫아도 렌더는 계속 됩니다</p>
         </div>
-      </div>
+      </section>
     </div>
   );
 }
@@ -221,7 +284,7 @@ function PixMark() {
 
 function CompletionBanner() {
   return (
-    <div className="relative h-[150px] w-full shrink-0 overflow-hidden rounded-[8px] bg-[#171717]">
+    <div data-testid="n6-completion-banner" className="relative h-[150px] w-[447px] max-w-full shrink-0 overflow-hidden rounded-[8px] bg-[#171717]">
       <div className="absolute left-[310px] top-[-38px] size-[170px]">
         <div className="absolute inset-[-21.18%]">
           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -254,7 +317,7 @@ function CompletionBanner() {
 /** 렌더 중 배너 — Figma 1262:7624. 위치·크기는 완료 배너와 같고 색과 문구만 다르다 */
 function PreparingBanner() {
   return (
-    <div data-testid="n6-preparing-banner" className="relative h-[150px] w-full shrink-0 overflow-hidden rounded-[8px] bg-[#999]">
+    <div data-testid="n6-preparing-banner" className="relative h-[150px] w-[447px] max-w-full shrink-0 overflow-hidden rounded-[8px] bg-[#999]">
       <div className="absolute top-[36px] left-[-36px] size-[170px]">
         <div className="absolute inset-[-21.18%]">
           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -453,8 +516,8 @@ const ARTIFACT_DISPLAY_ORDER = ['images', 'html', 'csv', 'psd'];
 
 // N6 진입 기본 선택은 images/ + content.csv다(PM 확정 — HTML/PSD는 1.0.0에서
 // 제공하지 않아 기본 선택에서 뺀다). 이 Set 하나가 ExportPanel의 checkbox/개수 summary/"한 번에
-// 내려받기" 대상/handleExport 페이로드까지 전부 공유하는 단일 SSOT다(아래
-// ExportPanel의 `selected` state 초기값으로만 쓰이고, 파생값은 전부 그
+// 내려받기" 대상/handleExport 페이로드까지 전부 공유하는 단일 SSOT다(N6ResultView 의
+// 선택 state 초기값으로만 쓰이고 — 렌더 중 패널과 완료 패널이 그 state 를 함께 쓴다 — 파생값은 전부 그
 // state에서 다시 계산한다) — 화면 표시만 바꾸는 별도 상수를 추가하지 않는다.
 const DEFAULT_SELECTED_TYPES = new Set(['images', 'csv']);
 
@@ -475,17 +538,17 @@ function ArtifactCheckbox({
   onChange: () => void;
 }) {
   return (
-    <span className="relative flex size-[18px] shrink-0 items-center justify-center">
+    <span className="relative flex size-5 shrink-0 items-center justify-center">
       <input
         type="checkbox"
         id={id}
         checked={checked}
         disabled={disabled}
         onChange={onChange}
-        className="peer absolute inset-0 size-[18px] cursor-pointer opacity-0 disabled:cursor-not-allowed"
+        className="peer absolute inset-0 size-5 cursor-pointer opacity-0 disabled:cursor-not-allowed"
       />
       <span
-        className={`pointer-events-none flex size-[18px] items-center justify-center rounded-[4px] border peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-[#ff6a38] ${
+        className={`pointer-events-none flex size-5 items-center justify-center rounded-[4px] border peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-[#ff6a38] ${
           disabled ? 'border-[#eaeaea] bg-[#f5f5f5]' : checked ? 'border-[#ff6a38] bg-white' : 'border-[#eaeaea] bg-white'
         }`}
       >
@@ -499,6 +562,12 @@ function ArtifactCheckbox({
   );
 }
 
+/**
+ * 행 높이 — Figma 643:5523 Frame 321: 첫 행(Output Row 인스턴스 787:5995)은 글 39 아래 20 뒤 구분선(행 60),
+ * 둘째 행부터는 16 뒤 구분선(행 56). 행 사이는 20(gap-5). 이름 줄은 17(Output Name h17)
+ */
+const ROW_DIVIDER_GAP = (first: boolean) => (first ? 'gap-5' : 'gap-4');
+
 /** 행 오른쪽 동작 칸(Figma Button XS 폭 97). 다운로드·안내 문구가 모두 같은 가운데 축에 놓인다 */
 function ArtifactActionSlot({ type, children }: { type: string; children: React.ReactNode }) {
   return (
@@ -509,7 +578,7 @@ function ArtifactActionSlot({ type, children }: { type: string; children: React.
 }
 
 function ComingSoonLabel() {
-  return <span className="text-center text-[12px] font-light tracking-[-0.04em] whitespace-nowrap text-[#999]">12월 제공 예정</span>;
+  return <span className="text-center leading-[normal] text-[12px] font-light tracking-[-0.04em] whitespace-nowrap text-[#999]">12월 제공 예정</span>;
 }
 
 /**
@@ -524,11 +593,13 @@ function ArtifactRow({
   component,
   checked,
   onToggle,
+  first,
 }: {
   jobId: string;
   component: ApiDeliverableComponent;
   checked: boolean;
   onToggle: () => void;
+  first: boolean;
 }) {
   const type = component.type ?? 'unknown';
   const isComingSoon = COMING_SOON_TYPES.has(type);
@@ -551,8 +622,8 @@ function ArtifactRow({
   };
 
   return (
-    <div className="flex w-full flex-col gap-4">
-      <div className="flex w-full items-center gap-4">
+    <div className={`flex w-full flex-col ${ROW_DIVIDER_GAP(first)}`}>
+      <div className="flex w-full items-center gap-4 pr-[5px]">
         <ArtifactCheckbox id={`artifact-${type}`} checked={checked} disabled={disabled} onChange={onToggle} />
         <div className="flex min-w-0 flex-1 items-center gap-2">
           {/* 9/23 — 우측 컬럼에 좌우 20px padding을 새로 주면서(아래 ExportPanel
@@ -562,8 +633,8 @@ function ArtifactRow({
               역할(Figma hierarchy)은 그대로다, 폭 계산 방식만 고정값에서
               가변으로 바꿨다. */}
           <label htmlFor={`artifact-${type}`} className="flex min-w-0 flex-1 flex-col gap-2">
-            <span className={`text-[14px] tracking-[-0.01em] ${disabled ? 'text-[#999]' : 'text-[#171717]'}`}>{label}</span>
-            <span className={`text-[12px] font-light tracking-[-0.04em] ${disabled ? 'text-[#b8b8b8]' : 'text-[#707070]'}`}>
+            <span className={`leading-[17px] text-[14px] tracking-[-0.01em] ${disabled ? 'text-[#999]' : 'text-[#171717]'}`}>{label}</span>
+            <span className={`leading-[normal] text-[12px] font-light tracking-[-0.04em] ${disabled ? 'text-[#b8b8b8]' : 'text-[#707070]'}`}>
               {desc}
             </span>
           </label>
@@ -608,35 +679,65 @@ function ArtifactRow({
   );
 }
 
-const EXPORT_PANEL_CLASS =
-  'flex h-full w-[456px] shrink-0 flex-col gap-8 overflow-x-hidden overflow-y-auto [scrollbar-width:thin] [scrollbar-color:transparent_transparent] hover:[scrollbar-color:#eaeaea_transparent] [&::-webkit-scrollbar]:w-[3px] [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-[2px] [&::-webkit-scrollbar-thumb]:bg-transparent hover:[&::-webkit-scrollbar-thumb]:bg-[#eaeaea]';
+// 패널(Figma 1815:35554) — 배너·산출물 목록·요약은 위에서 쌓이고, CTA 두 개(1271:8326)는 아래 끝에 붙는다.
+// 화면이 낮으면(1440×900 · 1280×720) 위쪽 목록만 패널 안에서 스크롤되고 CTA 는 항상 보인다(페이지 스크롤 없음)
+/** 선택 요약 상자 + 안내(Figma Frame 323). 선택한 지원 산출물 수와 이름을 그대로 보인다 */
+function SelectionSummary({ selectedTypes }: { selectedTypes: string[] }) {
+  const labels = selectedTypes.map((type) => ARTIFACT_LABEL[type] ?? type);
+  return (
+    <div className="flex w-full flex-col gap-1">
+      <div data-testid="n6-selection-summary" className="flex w-full flex-col gap-2 rounded-[4px] bg-[#f5f5f5] p-5">
+        <p className="leading-[17px] text-[14px] font-medium tracking-[-0.03em] text-[#171717]">선택된 산출물 {selectedTypes.length}개</p>
+        <p className="leading-[normal] text-[12px] font-light tracking-[-0.04em] text-[#707070]">
+          {labels.length > 0 ? `${labels.join(' + ')} · export.zip으로 묶어 다운로드합니다.` : '내보낼 항목을 선택해 주세요.'}
+        </p>
+      </div>
+      <p className="leading-[normal] text-[12px] tracking-[-0.02em] text-[#707070]">일부 산출물 생성에 실패해도 성공한 항목은 내려받을 수 있습니다.</p>
+    </div>
+  );
+}
+
+const EXPORT_PANEL_CLASS = 'mt-6 flex min-h-0 w-[456px] shrink-0 flex-col justify-between gap-5 self-stretch';
+const EXPORT_SCROLL_CLASS =
+  'flex min-h-0 flex-col gap-7 overflow-x-hidden overflow-y-auto [scrollbar-width:thin] [scrollbar-color:transparent_transparent] hover:[scrollbar-color:#eaeaea_transparent] [&::-webkit-scrollbar]:w-[3px] [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-[2px] [&::-webkit-scrollbar-thumb]:bg-transparent hover:[&::-webkit-scrollbar-thumb]:bg-[#eaeaea]';
 
 /**
  * 렌더 중 패널 — Figma 1262:7603. 렌더가 끝나기 전에는 산출물 데이터가 없어 고정된 행 구조만 보이고 모든 조작을 막는다.
  * 요청을 만드는 코드가 없다. 행 이름은 완료 화면과 같은 화면 문구이고 서버 값이 아니다.
  */
-function PendingExportPanel() {
+function PendingExportPanel({ selected, onToggle }: { selected: Set<string>; onToggle: (type: string) => void }) {
   return (
     <div data-testid="n6-export-panel-pending" className={EXPORT_PANEL_CLASS}>
+      <div className={EXPORT_SCROLL_CLASS}>
       <PreparingBanner />
-      <div className="flex w-full flex-col gap-8 px-5">
-        <div className="mt-3 flex w-full flex-col gap-5">
+      <div className="flex w-full shrink-0 flex-col gap-5">
+        <div className="flex w-full flex-col gap-5">
           <div className="flex flex-col gap-2">
-            <p className="text-[18px] font-medium tracking-[-0.03em] text-[#171717]">산출물 내보내기</p>
-            <p className="text-[12px] font-light tracking-[-0.04em] text-[#707070]">
+            <p className="leading-[normal] text-[18px] font-medium tracking-[-0.03em] text-[#171717]">산출물 내보내기</p>
+            <p className="leading-[normal] text-[12px] font-light tracking-[-0.04em] text-[#707070]">
               필요한 항목을 선택해 개별로 받거나 한 번에 내려받을 수 있습니다.
             </p>
           </div>
-          <div className="flex w-full flex-col gap-7">
+          <div className="flex w-full flex-col gap-5">
             <div className="h-px w-full bg-[#eaeaea]" />
-            {ARTIFACT_DISPLAY_ORDER.map((type) => (
-              <div key={type} className="flex w-full flex-col gap-4">
-                <div className="flex w-full items-center gap-4">
-                  <ArtifactCheckbox id={`artifact-pending-${type}`} checked={false} disabled onChange={() => {}} />
+            {ARTIFACT_DISPLAY_ORDER.map((type, index) => (
+              <div key={type} className={`flex w-full flex-col ${ROW_DIVIDER_GAP(index === 0)}`}>
+                <div className="flex w-full items-center gap-4 pr-[5px]">
+                  {/* 렌더 중에도 지원 산출물(images · csv)은 미리 고를 수 있다 — 선택은 화면 상태일 뿐 요청을 만들지 않고, 완료 뒤 패널이 이어받는다 */}
+                  <ArtifactCheckbox
+                    id={`artifact-${type}`}
+                    checked={!COMING_SOON_TYPES.has(type) && selected.has(type)}
+                    disabled={COMING_SOON_TYPES.has(type)}
+                    onChange={() => onToggle(type)}
+                  />
                   <div className="flex min-w-0 flex-1 items-center gap-2">
-                    <label htmlFor={`artifact-pending-${type}`} className="flex min-w-0 flex-1 flex-col gap-2">
-                      <span className="text-[14px] tracking-[-0.01em] text-[#171717]">{ARTIFACT_LABEL[type]}</span>
-                      <span className="text-[12px] font-light tracking-[-0.04em] text-[#707070]">{ARTIFACT_DESC[type]}</span>
+                    <label htmlFor={`artifact-${type}`} className="flex min-w-0 flex-1 flex-col gap-2">
+                      <span className={`leading-[17px] text-[14px] tracking-[-0.01em] ${COMING_SOON_TYPES.has(type) ? 'text-[#999]' : 'text-[#171717]'}`}>
+                        {ARTIFACT_LABEL[type]}
+                      </span>
+                      <span className={`leading-[normal] text-[12px] font-light tracking-[-0.04em] ${COMING_SOON_TYPES.has(type) ? 'text-[#b8b8b8]' : 'text-[#707070]'}`}>
+                        {ARTIFACT_DESC[type]}
+                      </span>
                     </label>
                     <ArtifactActionSlot type={type}>
                       {COMING_SOON_TYPES.has(type) ? (
@@ -659,37 +760,43 @@ function PendingExportPanel() {
             ))}
           </div>
         </div>
-        <div className="flex w-full flex-col gap-1">
-          <div className="flex w-full flex-col gap-2 rounded-[4px] bg-[#f5f5f5] p-5">
-            <p className="text-[14px] font-medium tracking-[-0.03em] text-[#171717]">선택된 산출물</p>
-            <p className="text-[12px] font-light tracking-[-0.04em] text-[#707070]">선택된 산출물은 zip으로 묶어 다운로드합니다.</p>
-          </div>
-          <p className="text-[12px] tracking-[-0.02em] text-[#707070]">일부 산출물 생성에 실패해도 성공한 항목은 내려받을 수 있습니다.</p>
+        <SelectionSummary selectedTypes={ARTIFACT_DISPLAY_ORDER.filter((type) => !COMING_SOON_TYPES.has(type) && selected.has(type))} />
         </div>
-        <div className="flex w-full flex-col gap-2">
+      </div>
+        <div className="flex w-full shrink-0 flex-col gap-2">
           <button
             type="button"
             disabled
             data-testid="n6-pending-export"
-            className="w-full cursor-not-allowed rounded-[6px] bg-[#f5f5f5] px-8 py-3.5 text-[14px] font-medium tracking-[-0.03em] text-[#999]"
+            className="flex h-[45px] w-full cursor-not-allowed items-center justify-center rounded-[6px] bg-[#f5f5f5] px-8 text-[14px] font-medium tracking-[-0.42px] text-[#999]"
           >
-            저장하고 선택 항목 내보내기
+            {/* 임시 문구 — 완료 패널의 묶음 버튼과 같은 이유(아래 ExportPanel 참고). #160 연동 뒤 「저장하고 선택 항목 내보내기」로 되돌린다 */}
+            선택 항목 내보내기
           </button>
           <button
             type="button"
             disabled
             data-testid="n6-pending-save"
-            className="w-full cursor-not-allowed rounded-[6px] border border-[#eaeaea] bg-white px-8 py-3.5 text-[14px] font-medium tracking-[-0.03em] text-[#999]"
+            className="flex h-[45px] w-full cursor-not-allowed items-center justify-center rounded-[6px] border border-[#eaeaea] bg-white px-8 text-[14px] font-medium tracking-[-0.42px] text-[#999]"
           >
-            저장하고 보관함으로 가기
+            저장하고 보관함으로 이동
           </button>
         </div>
-      </div>
     </div>
   );
 }
 
-function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeliverableComponent[] }) {
+function ExportPanel({
+  jobId,
+  components,
+  selected: selectedState,
+  onToggle,
+}: {
+  jobId: string;
+  components: ApiDeliverableComponent[];
+  selected: Set<string>;
+  onToggle: (type: string) => void;
+}) {
   // 표시 순서만 ARTIFACT_DISPLAY_ORDER로 정렬한다 — component 객체 자체(type
   // 포함)는 그대로라 checkbox/선택 state/handleExport 페이로드의 타입 의미는
   // 전혀 바뀌지 않는다. 정렬 기준에 없는 type이 오면(방어적으로) 맨 뒤로 보낸다
@@ -700,25 +807,18 @@ function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeli
   };
   const orderedComponents = [...components].sort((a, b) => orderRank(a.type ?? '') - orderRank(b.type ?? ''));
 
-  const [selected, setSelected] = useState<Set<string>>(
-    () => new Set(components.filter((c) => c.isActive && DEFAULT_SELECTED_TYPES.has(c.type ?? '')).map((c) => c.type as string)),
+  // 선택은 N6ResultView 가 들고 있다(렌더 중 고른 값을 이어받는다). 서버가 활성이라 한 지원 구성요소만 선택으로 센다 — 표시 순서대로
+  const selected = new Set(
+    orderedComponents
+      .filter((c) => c.isActive && !COMING_SOON_TYPES.has(c.type ?? '') && selectedState.has(c.type ?? ''))
+      .map((c) => c.type as string),
   );
 
   const exportMutation = useExportMutation(jobId);
   const downloadMutation = useExportDownloadMutation(jobId);
   const saveMutation = useSaveJobMutation(jobId);
 
-  const toggle = (type: string) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(type)) next.delete(type);
-      else next.add(type);
-      return next;
-    });
-  };
-
   const hasSelection = selected.size > 0;
-  const selectedLabels = [...selected].map((type) => ARTIFACT_LABEL[type] ?? type);
 
   const isExporting = exportMutation.isPending || downloadMutation.isPending;
 
@@ -764,6 +864,7 @@ function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeli
       // 있는 px-5 wrapper, 아래 참고).
       className={EXPORT_PANEL_CLASS}
     >
+      <div className={EXPORT_SCROLL_CLASS}>
       <CompletionBanner />
 
       {/* 9/23 — Completion Banner 아래 나머지 블록(산출물 목록/선택 요약/버튼)을
@@ -772,48 +873,44 @@ function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeli
           받지 않는다. mt-3(block1의 자체 margin) + 이 아래 panel gap-8(32px)
           = 44px로 Banner→"산출물 내보내기" 간격을 Figma 실측(bottom 258 →
           export top 302)에 맞춘다. */}
-      <div className="flex w-full flex-col gap-8 px-5">
-        <div className="mt-3 flex w-full flex-col gap-5">
+      <div className="flex w-full shrink-0 flex-col gap-5">
+        <div className="flex w-full flex-col gap-5">
           <div className="flex flex-col gap-2">
-            <p className="text-[18px] font-medium tracking-[-0.03em] text-[#171717]">산출물 내보내기</p>
-            <p className="text-[12px] font-light tracking-[-0.04em] text-[#707070]">
+            <p className="leading-[normal] text-[18px] font-medium tracking-[-0.03em] text-[#171717]">산출물 내보내기</p>
+            <p className="leading-[normal] text-[12px] font-light tracking-[-0.04em] text-[#707070]">
               필요한 항목을 선택해 개별로 받거나 한 번에 내려받을 수 있습니다.
             </p>
           </div>
 
-          <div className="flex w-full flex-col gap-7">
+          <div className="flex w-full flex-col gap-5">
             <div className="h-px w-full bg-[#eaeaea]" />
-            {orderedComponents.map((component) => (
+            {orderedComponents.map((component, index) => (
               <ArtifactRow
                 key={component.type ?? 'unknown'}
                 jobId={jobId}
                 component={component}
                 checked={selected.has(component.type ?? '')}
-                onToggle={() => toggle(component.type ?? '')}
+                onToggle={() => onToggle(component.type ?? '')}
+                first={index === 0}
               />
             ))}
           </div>
         </div>
 
-        <div className="flex w-full flex-col gap-1">
-          <div className="flex w-full flex-col gap-2 rounded-[4px] bg-[#f5f5f5] p-5">
-            <p className="text-[14px] font-medium tracking-[-0.03em] text-[#171717]">선택된 산출물 {selected.size}개</p>
-            <p className="text-[12px] font-light tracking-[-0.04em] text-[#707070]">
-              {hasSelection ? `${selectedLabels.join(' + ')} · export.zip으로 묶어 다운로드합니다.` : '내보낼 항목을 선택해 주세요.'}
-            </p>
-          </div>
-          <p className="text-[12px] tracking-[-0.02em] text-[#707070]">
-            일부 산출물 생성에 실패해도 성공한 항목은 내려받을 수 있습니다.
-          </p>
-        </div>
+        <SelectionSummary selectedTypes={[...selected]} />
 
-        <div className="flex w-full flex-col gap-2">
+        </div>
+      </div>
+        <div className="flex w-full shrink-0 flex-col gap-2">
+          {/* 임시 문구 「선택 항목 내보내기」 — Figma 문구는 「저장하고 선택 항목 내보내기」다. 지금 이 버튼은 내보내기(POST /export → 다운로드)만 하고
+              저장하지 않는다. 첫 다운로드를 서버가 완료로 기록하는 다운로드 POST(BE #160)가 배포되면 그 POST 로 바꾸고 문구를 Figma 대로 되돌린다.
+              완료를 흉내 내려고 저장 API 를 먼저 부르지 않는다 */}
           <button
             type="button"
             data-testid="n6-export-button"
             onClick={handleExport}
             disabled={!hasSelection || isExporting}
-            className="w-full rounded-[6px] bg-[#171717] px-8 py-3.5 text-[14px] font-medium tracking-[-0.03em] text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
+            className="flex h-[45px] w-full items-center justify-center rounded-[6px] bg-[#171717] px-8 text-[14px] font-medium tracking-[-0.42px] text-white disabled:cursor-not-allowed disabled:bg-[#f5f5f5] disabled:text-[#999]"
           >
             {exportMutation.isPending ? '내보내는 중...' : '선택 항목 내보내기'}
           </button>
@@ -839,9 +936,9 @@ function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeli
             data-testid="n6-save-button"
             onClick={handleSave}
             disabled={saveMutation.isPending || saveMutation.isSuccess}
-            className="w-full rounded-[6px] border border-[#eaeaea] bg-white px-8 py-3.5 text-[14px] font-medium tracking-[-0.03em] text-[#171717] transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
+            className="flex h-[45px] w-full items-center justify-center rounded-[6px] border border-[#eaeaea] bg-white px-8 text-[14px] font-medium tracking-[-0.42px] text-[#171717] disabled:cursor-not-allowed disabled:text-[#999]"
           >
-            {saveMutation.isPending || saveMutation.isSuccess ? '저장하는 중…' : '저장하고 보관함으로 가기'}
+            {saveMutation.isPending || saveMutation.isSuccess ? '저장하는 중…' : '저장하고 보관함으로 이동'}
           </button>
           {saveMutation.isError && (
             <p className="text-[12px] text-red-500" data-testid="n6-save-error">
@@ -849,7 +946,6 @@ function ExportPanel({ jobId, components }: { jobId: string; components: ApiDeli
             </p>
           )}
         </div>
-      </div>
     </div>
   );
 }
@@ -885,10 +981,18 @@ export function N6ResultView({ jobId }: { jobId: string }) {
 
   const isRenderRunning =
     !tasksQuery.isLoading && !tasksQuery.isError && !renderAmbiguous && !statusUnknown && !renderDone && !renderFailed;
-  // 모달을 닫아도 렌더는 계속된다. 다시 렌더링을 누르면 새 진행이라 다시 보인다
-  const [isRenderDialogClosed, setIsRenderDialogClosed] = useState(false);
-  const closeRenderDialog = useCallback(() => setIsRenderDialogClosed(true), []);
   const headingRef = useRef<HTMLHeadingElement>(null);
+
+  // 산출물 선택 — 렌더 중 패널과 완료 패널이 같은 값을 쓴다(렌더 중 고른 값이 완료 뒤에도 남는다). 기본은 images/ + content.csv
+  const [selectedTypes, setSelectedTypes] = useState<Set<string>>(() => new Set(DEFAULT_SELECTED_TYPES));
+  const toggleSelectedType = useCallback((type: string) => {
+    setSelectedTypes((prev) => {
+      const next = new Set(prev);
+      if (next.has(type)) next.delete(type);
+      else next.add(type);
+      return next;
+    });
+  }, []);
 
   // render가 끝나야만 의미 있는 조회다(렌더 전 deliverables는 항상 빈 목록) —
   // validation은 계약대로 계속 불러오지만(아래 body 참고), 화면에는 쓰지 않는다.
@@ -922,23 +1026,15 @@ export function N6ResultView({ jobId }: { jobId: string }) {
         <p className="text-[14px] text-red-500">최종 렌더 상태를 확인하지 못했습니다. 잠시 후 다시 확인합니다.</p>
       </div>
     );
-  } else if (renderFailed) {
-    body = (
-      <RenderFailed
-        onRetry={() => {
-          setIsRenderDialogClosed(false);
-          renderMutation.mutate();
-        }}
-        retryPending={renderMutation.isPending}
-        retryable={renderPhase.kind === 'failed' && renderPhase.retryable}
-      />
-    );
   } else if (!renderDone) {
-    // 렌더 전에는 최종 이미지가 없어 미리보기 영역은 비어 있다(샘플 이미지를 넣지 않는다)
+    // 렌더 중·실패 — 같은 자리(빈 뷰어 + 렌더 중 패널) 위에 진행 모달 또는 오류 모달이 뜬다(화면이 움직이지 않는다).
+    // 확정 미리보기(/preview)는 N5 계약이라 N6 에서 부르지 않는다 — 렌더 전 뷰어는 비워 둔다(샘플 이미지를 넣지 않는다)
     body = (
       <div className="flex min-h-0 flex-1 gap-[clamp(24px,3.594vw,69px)]">
-        <div data-testid="n6-render-preview" aria-hidden="true" className="min-w-0 flex-1 rounded-[8px] bg-[#f5f5f5]" />
-        <PendingExportPanel />
+        <div data-testid="n6-render-preview" className="relative min-w-0 flex-1 rounded-[8px] bg-[#f5f5f5]">
+          {isRenderRunning && <RenderProgressOverlay percent={renderItem ? toRenderPercent(tasksQuery.data?.progress) : null} />}
+        </div>
+        <PendingExportPanel selected={selectedTypes} onToggle={toggleSelectedType} />
       </div>
     );
   } else if (deliverablesQuery.isLoading || validationQuery.isLoading) {
@@ -971,7 +1067,7 @@ export function N6ResultView({ jobId }: { jobId: string }) {
       // 1440에서도 레이아웃이 깨지지 않는다. transform:scale()은 쓰지 않는다.
       <div className="flex min-h-0 flex-1 gap-[clamp(24px,3.594vw,69px)]">
         <FinalPreview deliverables={deliverables} />
-        <ExportPanel jobId={jobId} components={components} />
+        <ExportPanel jobId={jobId} components={components} selected={selectedTypes} onToggle={toggleSelectedType} />
       </div>
     );
   }
@@ -988,21 +1084,22 @@ export function N6ResultView({ jobId }: { jobId: string }) {
           목표 x=140/1920=7.2917vw를 쓰면 1920에서 정확히 140-80=60px가
           나온다(그래서 상한도 40→60으로 바꿨다) — pr(3.125vw, 60px 상한)과
           gap(3.594vw, 69px 상한) 쪽은 원래도 N6 자체 실측값이라 그대로 둔다. */}
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 pt-10 pr-[clamp(45px,3.125vw,60px)] pb-8 pl-[clamp(0px,calc(7.2917vw_-_80px),60px)]">
-        {/* 예전 제목·설명 행 자리(h30) — 최신 Figma 에서 빠지고 공통 작업 헤더(JobHeader)의 화면명이 대신한다.
-            프리뷰·패널 top 86 을 바꾸지 않도록 높이만 남긴다(Figma 정합은 후속). h1 은 화면 읽기용이자 렌더 진행 창의 포커스 복귀 자리다 */}
-        <div className="h-[30px] shrink-0">
-          <h1 ref={headingRef} tabIndex={-1} className="sr-only">
-            저장 및 내보내기
-          </h1>
-        </div>
+      {/* 최신 Figma(643:5523): 뷰어 x120 y72(헤더 바로 아래) 1215×948 · 패널 x1404 y96(뷰어보다 24 아래, ExportPanel mt-6) · 아래 60 ·
+          뷰어↔패널 69. 렌더 중·오류 시안의 x140 은 상태마다 화면이 움직일 이유가 없어 쓰지 않는다(기본 화면 x120 으로 통일).
+          왼쪽은 S0 rail(80) 을 먼저 빼는 N5 와 같은 공식(1920 에서 40). 화면명은 공통 작업 헤더가 보이고 h1 은 화면 읽기·포커스 복귀용이다 */}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col pt-[72px] pr-[clamp(45px,3.125vw,60px)] pb-[clamp(32px,5.56vh,60px)] pl-[clamp(0px,calc(6.25vw_-_80px),40px)]">
+        <h1 ref={headingRef} tabIndex={-1} className="sr-only">
+          저장 및 내보내기
+        </h1>
 
         {body}
       </div>
-      {isRenderRunning && !isRenderDialogClosed && (
-        <RenderProgressDialog
-          percent={renderItem ? toRenderPercent(tasksQuery.data?.progress) : null}
-          onClose={closeRenderDialog}
+      {renderFailed && (
+        <RenderErrorDialog
+          variant="general"
+          onRetry={() => renderMutation.mutate()}
+          retryPending={renderMutation.isPending}
+          retryable={renderPhase.kind === 'failed' && renderPhase.retryable}
           returnFocusRef={headingRef}
         />
       )}
