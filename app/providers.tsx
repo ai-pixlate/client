@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { shouldRetryQuery } from "@/lib/auth/query-retry";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -10,6 +10,7 @@ import { ensureBackendSession, isApiMockingEnabled, shouldBootstrapBackendSessio
 import { getAuthMode, isLogoutPendingRetryEnabled } from "@/lib/auth/capability";
 import { AUTH_LOGIN_PATH } from "@/lib/auth/constants";
 import { resumePendingLogout } from "@/lib/auth/logout";
+import { AuthEpochQueryClient } from "@/lib/auth/mutation-epoch";
 import { configureAuthRuntime, startAuthTabSync } from "@/lib/auth/runtime";
 
 /**
@@ -57,9 +58,10 @@ function enableMocking(): Promise<void> {
  * enableMocking()이 즉시 resolve하므로 지연 자체가 거의 없다.
  */
 export default function Providers({ children }: { children: React.ReactNode }) {
+  // AuthEpochQueryClient — mutation 실행 중 계정·세션이 바뀌면 이전 계정 결과의 onSuccess(cache 쓰기)를 부르지 않는다(lib/auth/mutation-epoch.ts)
   const [queryClient] = useState(
     () =>
-      new QueryClient({
+      new AuthEpochQueryClient({
         defaultOptions: {
           queries: {
             // 실패 시 무한 재시도로 화면이 계속 로딩 상태에 머무는 것을 방지. 일반 오류는 최대 1회,

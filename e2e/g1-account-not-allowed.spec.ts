@@ -35,8 +35,11 @@ async function openLogin(page: Page, scenario?: Record<string, unknown>) {
 async function loginWith(page: Page, provider: 'kakao' | 'google') {
   await openLogin(page);
   await page.getByTestId(`g1-social-${provider}`).click();
-  await page.waitForURL((url) => url.pathname === '/');
+  // 로그인 후 H0(v3.6.4) → [전체 보관함 보기]로 전체 보관함(M1 '/') — 아래 시나리오는 보관함의 새 작업에서 시작한다
+  await page.waitForURL((url) => url.pathname === '/home');
   await expect(page.getByTestId('auth-notice')).toBeAttached();
+  await page.getByTestId('home-all-library').click();
+  await page.waitForURL((url) => url.pathname === '/');
   await expect(page.getByTestId('library-add-card-link')).toBeVisible({ timeout: 15_000 });
 }
 
@@ -51,10 +54,10 @@ test('소셜 로그인 account_not_allowed — 세션 없이 G1 으로 돌아와
   // 저장소에 access·seller 가 없다
   expect(await page.evaluate(() => JSON.stringify(sessionStorage) + JSON.stringify(localStorage))).not.toMatch(/mock-access/);
 
-  // 정상 계정으로 다시 로그인 — 시작 순간 안내를 지우고 M1 로 간다
+  // 정상 계정으로 다시 로그인 — 시작 순간 안내를 지우고 H0 로 간다
   await setScenario(page, {});
   await page.getByTestId('g1-social-google').click();
-  await page.waitForURL((url) => url.pathname === '/');
+  await page.waitForURL((url) => url.pathname === '/home');
   await page.goto('/login');
   await expect(page.getByTestId('g1-social-error')).toHaveCount(0);
 });

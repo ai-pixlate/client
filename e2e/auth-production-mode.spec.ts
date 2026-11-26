@@ -97,6 +97,9 @@ test.describe('session — NEXT_PUBLIC_AUTH_MODE=session production', () => {
     const calls = await stubBackend(page);
     await page.goto('/login');
     await page.getByTestId('g1-social-kakao').click();
+    // 로그인 후 H0(v3.6.4) → [전체 보관함 보기] → M1
+    await page.waitForURL((url) => url.pathname === '/home');
+    await page.getByTestId('home-all-library').click();
     await page.waitForURL((url) => url.pathname === '/');
     await expect(page.getByRole('heading', { name: '보관함' })).toBeVisible();
     await page.waitForTimeout(300);

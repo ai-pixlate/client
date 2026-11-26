@@ -8,6 +8,8 @@ import { M2_LOGO_ACCEPT, type M2BrandLogo } from '@/lib/brand/m2-form';
 import { M2Button } from './m2-button';
 
 // M2 브랜드 로고 영역 (Figma 753:6373, 폭 568)
+//   제목 행(1809:38557): 브랜드 로고(18 Medium) ↔ 로고 액션(로고 변경 · 삭제, gap 8) — 위 정렬
+//   gap 12 → 안내 문구(12 Light #707070) · gap 2 → 로고 목록(카드 사이 gap 8) · gap 8 → FileUploader
 //   로고 카드(753:6286): 568×200, BG #F5F5F5, radius 6. 표시 칸은 Figma 워드마크 폭(263)·심볼 높이(120).
 //   FileUploader Compact(1100:11870·273:1953·273:1963): Default / DragOver / Invalid.
 //
@@ -39,13 +41,10 @@ export function M2LogoPanel({
 
   return (
     <section aria-labelledby="m2-logo-title" data-testid="m2-logo-panel" className="col-start-3 flex min-h-0 min-w-0 flex-col gap-3">
-      <div className="flex shrink-0 items-center justify-between gap-2">
-        <div className="flex min-w-0 flex-col gap-1 leading-[normal]">
-          <h2 id="m2-logo-title" className="text-[18px] leading-[21px] font-medium tracking-[-0.54px] text-[#171717]">
-            브랜드 로고
-          </h2>
-          <p className="text-[12px] font-light tracking-[-0.48px] text-[#707070]">SVG, PNG, JPG 파일을 등록할 수 있습니다.</p>
-        </div>
+      <div className="flex shrink-0 items-start justify-between gap-2">
+        <h2 id="m2-logo-title" className="text-[18px] leading-[21px] font-medium tracking-[-0.54px] text-[#171717]">
+          브랜드 로고
+        </h2>
         {/* Figma 로고 액션(743:6088). 변경은 교체 의미·계약이 없는 후속 범위다. 삭제는 현재 범위지만 대상을 고르는 체크박스가 없어 미연결이며, 실제 로컬 삭제는 카드의 삭제 버튼이 맡는다 */}
         <div className="flex shrink-0 items-center gap-2">
           <M2Button variant="secondary" size="xs" label="로고 변경" future testId="m2-logo-change" />
@@ -53,24 +52,29 @@ export function M2LogoPanel({
         </div>
       </div>
 
-      {/* 로고가 많아지면 이 목록만 스크롤한다 */}
-      <div className="min-h-0 flex-initial overflow-x-hidden overflow-y-auto">
-        {logos.length > 0 ? (
-          <ul data-testid="m2-logo-list" className="flex flex-col gap-3">
-            {logos.map((logo) => (
-              <LogoCard key={logo.id} logo={logo} editable={editable} onRemove={handleRemove} />
-            ))}
-          </ul>
-        ) : (
-          !editable && (
-            <p className="flex h-[200px] items-center justify-center rounded-[6px] bg-[#f5f5f5] text-[14px] tracking-[-0.14px] text-[#707070]">
-              등록된 로고가 없습니다.
-            </p>
-          )
-        )}
-      </div>
+      <div className="flex min-h-0 flex-col gap-0.5">
+        <p className="shrink-0 text-[12px] leading-[normal] font-light tracking-[-0.48px] text-[#707070]">SVG, PNG, JPG 파일을 등록할 수 있습니다.</p>
+        <div className="flex min-h-0 flex-col gap-2">
+          {/* 로고가 많아지면 이 목록만 스크롤한다 */}
+          <div className="min-h-0 flex-initial overflow-x-hidden overflow-y-auto">
+            {logos.length > 0 ? (
+              <ul data-testid="m2-logo-list" className="flex flex-col gap-2">
+                {logos.map((logo) => (
+                  <LogoCard key={logo.id} logo={logo} editable={editable} onRemove={handleRemove} />
+                ))}
+              </ul>
+            ) : (
+              !editable && (
+                <p className="flex h-[200px] items-center justify-center rounded-[6px] bg-[#f5f5f5] text-[14px] tracking-[-0.14px] text-[#707070]">
+                  등록된 로고가 없습니다.
+                </p>
+              )
+            )}
+          </div>
 
-      {editable && <LogoUploader invalid={invalidFiles} onAddFiles={onAddFiles} buttonRef={uploadButtonRef} />}
+          {editable && <LogoUploader invalid={invalidFiles} onAddFiles={onAddFiles} buttonRef={uploadButtonRef} />}
+        </div>
+      </div>
     </section>
   );
 }

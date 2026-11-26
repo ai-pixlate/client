@@ -21,12 +21,14 @@ import {
 import type { ApiSection, ApiSourceImage } from '@/lib/api/n3-schema';
 import { getN3SectionCardState } from '@/lib/n3/section-card-state';
 import {
+  N3_BOTTOM_INSET,
   N3_COLUMNS,
-  N3_CTA_BLOCK_HEIGHT,
-  N3_HEADER_LEFT_INSET,
+  N3_DETAIL_BOTTOM_GAP,
   N3_INNER_GAP,
+  N3_LEFT_GROUP_TOP,
+  N3_LEFT_INSET,
   N3_OUTER_GAP,
-  N3_WORK_AREA_INSET,
+  N3_RIGHT_INSET,
   N3_WORK_AREA_MAX_WIDTH,
 } from '@/lib/n3/layout';
 import { JobMetaTags } from '../job-meta-tags';
@@ -174,14 +176,10 @@ export function N3View({ jobId }: { jobId: string }) {
 
   return (
     <div className="flex h-full w-full bg-white">
-      {/* Figma 1759:11529 — 제목 top 60(h29) · 작업 영역 top 112 · 아래 48. 작업 영역 높이는 남은 세로(1080에서 920)를 채운다 */}
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col pt-[60px] pb-[clamp(24px,4.44vh,48px)]">
-        <div className="flex shrink-0 items-center gap-[11px] pb-[23px]" style={{ paddingLeft: N3_HEADER_LEFT_INSET }}>
-          <h1 className="text-[24px] leading-[normal] font-semibold tracking-[-0.02em] whitespace-nowrap text-[#171717]">섹션 확인</h1>
-          <p className="truncate text-[14px] tracking-[-0.01em] text-[#707070]">
-            전체 섹션에서 제외 판정을 확인하고, 필요한 경우 번역에 포함하세요.
-          </p>
-        </div>
+      {/* Figma 1759:11529 — 목록 패널은 공통 헤더 바로 아래(y72)에서 시작하고 본문 아래 여백은 60(1080 기준)이다.
+          예전 제목·설명 행은 최신 Figma 에서 빠지고 공통 작업 헤더(JobHeader)의 화면명이 대신한다 — h1 은 화면 읽기용으로만 둔다 */}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col pt-[72px]" style={{ paddingBottom: N3_BOTTOM_INSET }}>
+        <h1 className="sr-only">섹션 확인</h1>
 
         {sectionsQuery.isLoading ? (
           <div className="flex flex-1 items-center justify-center">
@@ -194,41 +192,47 @@ export function N3View({ jobId }: { jobId: string }) {
             </p>
           </div>
         ) : (
-          <div className="flex min-h-0 flex-1" style={{ paddingInline: N3_WORK_AREA_INSET }}>
+          <div className="flex min-h-0 flex-1" style={{ paddingLeft: N3_LEFT_INSET, paddingRight: N3_RIGHT_INSET }}>
             <div
               data-testid="n3-work-area"
               className="mx-auto grid h-full min-h-0 w-full"
               style={{ maxWidth: N3_WORK_AREA_MAX_WIDTH, gridTemplateColumns: N3_COLUMNS, columnGap: N3_OUTER_GAP }}
             >
-              {/* 왼쪽 묶음 — 목록 패널과 같은 높이(작업 영역 − CTA 57)로 세로 가운데(Figma y28.5) */}
-              <div className="flex min-h-0 min-w-0 items-center">
+              {/* 왼쪽 묶음 — 목록 패널보다 24 아래(y96, 진행 단계 top 과 같은 줄)에서 CTA 아래 끝(y1020)까지 */}
+              <div className="flex min-h-0 min-w-0" style={{ paddingTop: N3_LEFT_GROUP_TOP }}>
                 <div
                   data-testid="n3-left-group"
-                  className="grid w-full min-w-0 grid-cols-2"
-                  style={{ height: `calc(100% - ${N3_CTA_BLOCK_HEIGHT})`, columnGap: N3_INNER_GAP }}
+                  className="grid h-full w-full min-w-0 grid-cols-2 items-start"
+                  style={{ columnGap: N3_INNER_GAP }}
                 >
+                  {/* Figma 1759:11592 — 이미지 칸 404×924(가운데 정렬 · 넘치면 자름). 섹션 crop 은 원본 비율 그대로 폭에 맞추고,
+                      칸보다 길면 이 칸만 세로로 스크롤한다(짧으면 세로 가운데) */}
                   <div
                     data-testid="n3-section-image"
                     data-section-id={selectedSection?.id ?? ''}
-                    className="min-h-0 min-w-0 overflow-x-hidden overflow-y-auto rounded-[4px]"
+                    className="flex h-full min-h-0 min-w-0 flex-col overflow-x-hidden overflow-y-auto rounded-[4px]"
                   >
-                    {selectedSection &&
-                      (sourceImagesQuery.isLoading ? (
-                        <p className="pt-4 text-center text-sm text-[#999]">원본 이미지를 불러오는 중...</p>
-                      ) : sourceImagesQuery.isError ? (
-                        <p className="pt-4 text-center text-sm text-[#999]">원본 이미지를 불러오지 못했습니다.</p>
-                      ) : (
-                        <SectionCropThumbnail
-                          key={selectedSection.id}
-                          sourceImage={selectedSourceImage}
-                          bbox={selectedSection.bbox}
-                          targetWidth="100%"
-                          alt={`섹션 ${selectedSection.sectionOrder ?? ''} 이미지`}
-                        />
-                      ))}
+                    {selectedSection && (
+                      <div className="my-auto w-full">
+                        {sourceImagesQuery.isLoading ? (
+                          <p className="pt-4 text-center text-sm text-[#999]">원본 이미지를 불러오는 중...</p>
+                        ) : sourceImagesQuery.isError ? (
+                          <p className="pt-4 text-center text-sm text-[#999]">원본 이미지를 불러오지 못했습니다.</p>
+                        ) : (
+                          <SectionCropThumbnail
+                            key={selectedSection.id}
+                            sourceImage={selectedSourceImage}
+                            bbox={selectedSection.bbox}
+                            targetWidth="100%"
+                            alt={`섹션 ${selectedSection.sectionOrder ?? ''} 이미지`}
+                          />
+                        )}
+                      </div>
+                    )}
                   </div>
 
-                  <div className="min-h-0 min-w-0">
+                  {/* Figma 1759:11821 — 판정 상세 404×863: 아래 끝(y959)이 이미지 칸보다 61 위다 */}
+                  <div className="min-h-0 min-w-0" style={{ height: `calc(100% - ${N3_DETAIL_BOTTOM_GAP})` }}>
                     <DetailPanel
                       section={selectedSection}
                       detail={detailQuery.data?.id === selectedSection?.id ? detailQuery.data : undefined}
@@ -245,9 +249,9 @@ export function N3View({ jobId }: { jobId: string }) {
               <div className="flex min-h-0 min-w-0 flex-col gap-3">
                 <div
                   data-testid="n3-section-list"
-                  className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto rounded-[4px] bg-[#f5f5f5] p-7"
+                  className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto rounded-[4px] bg-[#f5f5f5] px-7 py-6"
                 >
-                  {/* Figma 1759:11536 — 패널 안 28·28, 높이 28, 아래 12 뒤 첫 카드(y68) */}
+                  {/* Figma 1759:11535 — 패널 안 x28 · y24, 높이 28, 아래 12 뒤 첫 카드(y64) */}
                   {jobMeta && <JobMetaTags meta={jobMeta} testId="n3-job-meta" className="h-7 shrink-0" />}
                   {sections.map((section) => (
                     <SectionListCard

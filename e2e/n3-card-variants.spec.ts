@@ -228,12 +228,12 @@ test.describe('N3 작업 조건', () => {
     // 국가·채널은 글자(p), 규제 분류·카테고리는 태그(span)
     expect(await meta(page).locator('p').allTextContents()).toEqual(['미국', '아마존']);
     expect(await meta(page).locator('span').allTextContents()).toEqual(['화장품', category]);
-    // Figma — 패널 안 28 · 높이 28 · 아래 12 뒤 첫 카드
+    // Figma 1759:11535 — 패널 안 x28 · y24 · 높이 28 · 아래 12 뒤 첫 카드
     const list = (await page.getByTestId('n3-section-list').boundingBox())!;
     const row = (await meta(page).boundingBox())!;
     const firstCard = (await page.locator('[data-testid^="n3-section-card-"]').first().boundingBox())!;
     expect(Math.round(row.x - list.x)).toBe(28);
-    expect(Math.round(row.y - list.y)).toBe(28);
+    expect(Math.round(row.y - list.y)).toBe(24);
     expect(Math.round(row.height)).toBe(28);
     expect(Math.round(firstCard.y - (row.y + row.height))).toBe(12);
   });

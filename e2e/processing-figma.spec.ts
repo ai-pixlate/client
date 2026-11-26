@@ -3,7 +3,7 @@ import { type Page, expect, test } from '@playwright/test';
 import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 
 // ─────────────────────────────────────────────────────────────────
-// N2·N4 정상 화면 글자·위치 (Figma 660:4139 · 660:4221) — Chromium, 1920×1080.
+// N2·N4 정상 화면 글자·위치 (Figma 1821:46419 「N2 분석중」 · 1821:48003 「N4 번역중」) — Chromium, 1920×1080.
 // 없는 글꼴 이름이 들어가면 브라우저 기본 글꼴로 그려지고 줄 높이까지 달라져 아래 요소가 밀린다.
 // ─────────────────────────────────────────────────────────────────
 
@@ -27,38 +27,52 @@ async function openStep(page: Page, currentStep: 'N2' | 'N4') {
   await page.goto(`/jobs/${MOCK_JOB_ID}`);
 }
 
-const near = (actual: number, expected: number, label: string) => expect(Math.abs(actual - expected), `${label}: ${actual} ≈ ${expected}`).toBeLessThanOrEqual(3); // 우측 열은 Figma(y60)와 좌측 열 padding(58)을 공유해 2px 차이가 있다
+const near = (actual: number, expected: number, label: string, tolerance = 1) =>
+  expect(Math.abs(actual - expected), `${label}: ${actual} ≈ ${expected}`).toBeLessThanOrEqual(tolerance);
+const nearBox = (box: { x: number; y: number; width: number; height: number }, expected: readonly number[], label: string) =>
+  [box.x, box.y, box.width, box.height].forEach((v, i) => near(v, expected[i], `${label} [x,y,w,h][${i}]`));
 
 for (const c of [
-  { step: 'N2', title: '이미지 분석', headline: '상세페이지의 구조와 문맥을 읽고 있습니다.', logHeadingY: 206, headlineY: 212 },
-  { step: 'N4', title: '번역 중', headline: '번역과 배경 복원을 함께 진행하고 있습니다.', logHeadingY: 206, headlineY: 212 },
+  // Figma x/y/w/h. 로그(「Frame 300」)는 두 화면 모두 패널 세로 가운데(중심 y 558.5)라 높이만 다르다.
+  // groupHeights: 「N2 / Step List」 Step 칸 높이(위아래 12 + 번호·label·상태 줄, 세로 gap 4)
+  { step: 'N2', title: '이미지 분석', logLabel: 'ANALYSIS LOG', log: [1397, 273, 403, 571], groupHeights: [122, 80, 80] },
+  { step: 'N4', title: '번역 중', logLabel: 'TRANSLATION LOG', log: [1397, 243.5, 403, 630], groupHeights: [101, 80, 80, 80] },
 ] as const) {
-  test(`${c.step} — Pretendard 굵기와 헤더·헤드라인·이미지 위치가 Figma와 같다`, async ({ page }) => {
+  test(`${c.step} — Pretendard 굵기와 패널·비주얼·구분선·로그 위치가 Figma와 같다`, async ({ page }) => {
     await openStep(page, c.step);
-    const title = page.getByRole('heading', { name: c.title, exact: true });
-    const headline = page.getByText(c.headline, { exact: true });
+    // 화면별 제목 행은 최신 Figma 에서 빠졌다 — 화면명은 작업용 공통 헤더가 보이고, h1 은 화면 읽기용으로만 남는다
+    await expect(page.getByTestId('job-header-title')).toHaveText(c.title);
+    await expect(page.getByRole('heading', { name: c.title, exact: true })).toHaveClass(/sr-only/);
     const log = page.getByRole('heading', { name: '지금 처리하는 일' });
-    await expect(title).toBeVisible();
-    await expect(headline).toBeVisible();
+    await expect(log).toBeVisible();
+    const font = await log.evaluate((el) => ({ family: getComputedStyle(el).fontFamily, weight: getComputedStyle(el).fontWeight }));
+    expect(font.family).toContain('Pretendard,');
+    expect(font.weight).toBe('600');
+    await expect(page.getByText(c.logLabel, { exact: true })).toBeVisible();
+    // 최신 Figma 에 없는 예전 표시(상태 칩·큰 제목·「전체 분석」 라벨·비주얼 하단 caption)는 그리지 않는다
+    await expect(page.getByText('전체 분석', { exact: true })).toHaveCount(0);
+    await expect(page.getByTestId('processing-visual').locator('p')).toHaveCount(1);
 
-    for (const [locator, weight] of [[title, '600'], [headline, '600'], [log, '600']] as const) {
-      const font = await locator.evaluate((el) => ({ family: getComputedStyle(el).fontFamily, weight: getComputedStyle(el).fontWeight }));
-      expect(font.family).toContain('Pretendard,');
-      expect(font.weight).toBe(weight);
-    }
+    nearBox((await page.getByTestId('processing-panel').boundingBox())!, [120, 96, 1740, 924], 'panel');
+    nearBox((await page.getByTestId('processing-visual').boundingBox())!, [188, 266, 1044, 589], 'visual');
+    nearBox((await page.getByTestId('processing-divider').boundingBox())!, [1316, 266, 1, 589], 'divider');
+    nearBox((await page.getByTestId('processing-log').boundingBox())!, c.log, 'log');
 
-    const t = (await title.boundingBox())!;
-    near(t.x, 140, 'title x');
-    near(t.y, 60, 'title y');
-    near(t.height, 24, 'title h');
-    const h = (await headline.boundingBox())!;
-    near(h.y, c.headlineY, 'headline y');
-    near(h.height, 33, 'headline h');
-    near((await log.boundingBox())!.y, c.logHeadingY, 'log heading y');
-    const visual = (await page.locator('img[src*="ai-processing"]').locator('..').boundingBox())!;
-    near(visual.y, 328, 'visual y');
-    near(visual.height, 520, 'visual h');
-    const bar = (await page.getByRole('progressbar').boundingBox())!;
-    near(bar.y, 820, 'progress y');
+    // 단계 목록(Figma 1821:46431 · 1821:48015) — 묶음 개수·높이, 목록 → 진행률 숫자 간격(54)
+    const groups = page.getByTestId('processing-step');
+    await expect(groups).toHaveCount(c.groupHeights.length);
+    const heights = await groups.evaluateAll((els) => els.map((el) => el.getBoundingClientRect().height));
+    heights.forEach((height, i) => near(height, c.groupHeights[i], `step group ${i + 1} h`));
+    const list = (await page.getByTestId('processing-step-list').boundingBox())!;
+    const bar = page.getByRole('progressbar');
+    const percent = (await bar.locator('xpath=preceding-sibling::*[1]').boundingBox())!;
+    near(percent.y - (list.y + list.height), 54, 'step list → progress gap');
+    // 「Frame 999」 — 숫자 줄 64 · 24 · 막대 3(폭 396) · 8 · 안내
+    const barBox = (await bar.boundingBox())!;
+    near(percent.height, 64, 'progress row h');
+    near(barBox.y - (percent.y + percent.height), 24, 'progress row → bar gap');
+    nearBox(barBox, [1397, barBox.y, 396, 3], 'bar');
+    await expect(bar).toHaveAttribute('aria-label', '전체 진행률');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBe(0);
   });
 }

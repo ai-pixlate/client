@@ -32,6 +32,9 @@ async function loginWith(page: Page, provider: 'kakao' | 'google') {
   await page.goto('/login');
   await expect(page.getByTestId('g1-social')).toBeVisible();
   await page.getByTestId(`g1-social-${provider}`).click();
+  // 로그인 후 H0(v3.6.4) → [전체 보관함 보기]로 전체 보관함(M1 '/')에 간다 — 아래 시나리오는 보관함의 새 작업에서 시작한다
+  await page.waitForURL((url) => url.pathname === '/home');
+  await page.getByTestId('home-all-library').click();
   await page.waitForURL((url) => url.pathname === '/');
   await expect(page.getByRole('heading', { name: '보관함' })).toBeVisible();
 }
@@ -70,16 +73,22 @@ test.describe('F1 — 이전 인증 세대 요청의 늦은 401', () => {
     await expect.poll(() => a.evaluate(() => !!(window as unknown as { __held: unknown }).__held)).toBe(true);
     const refreshBefore = net.count('POST', '/auth/refresh');
 
-    // 다른 탭이 다른 계정으로 로그인했다는 알림 → A 의 인증 세대가 바뀐다(이전 계정 화면을 버리고 M1)
+    // 다른 탭이 다른 계정으로 로그인했다는 알림 → A 의 인증 세대가 바뀐다(이전 계정 화면을 버리고 H0)
     const b = await context.newPage();
     await b.goto('/login');
     await b.evaluate(() => new BroadcastChannel('pixlate-auth').postMessage({ type: 'account-changed', sellerId: 2 }));
-    await a.waitForURL((url) => url.pathname === '/');
+    await a.waitForURL((url) => url.pathname === '/home');
+    // H0 는 새 세대에서 새 계정 세션을 한 번 확인한다(refresh 1 · /auth/me 1 — 공개 진입 확인과 같은 경로). 그 확인이 끝난 뒤를 기준으로 본다
+    await expect(a.getByTestId('home-workspace')).toBeVisible();
+    expect(net.count('POST', '/auth/refresh')).toBe(refreshBefore + 1);
+    const meAfterSwitch = net.count('GET', '/auth/me');
+    expect(meAfterSwitch).toBe(1);
 
     await a.evaluate(() => (window as unknown as { __held: { release: () => void } }).__held.release());
     await a.waitForTimeout(2_000);
-    expect(net.count('POST', '/auth/refresh')).toBe(refreshBefore);
-    expect(net.count('GET', '/auth/me')).toBe(0);
+    // 이전 세대 요청의 늦은 401 은 refresh·/auth/me 를 더 만들지 않는다
+    expect(net.count('POST', '/auth/refresh')).toBe(refreshBefore + 1);
+    expect(net.count('GET', '/auth/me')).toBe(meAfterSwitch);
   });
 });
 

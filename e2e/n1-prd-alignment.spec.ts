@@ -330,14 +330,13 @@ test.describe('규제 분류 · OTC 종류', () => {
       await expect(otcGroup(page).getByRole('radio')).toHaveText([
         '선크림 (Sunscreen)',
         '여드름 (Acne)',
-        '비듬·지루성 피부염·건선 (Dandruff · Seborrheic Dermatitis · Psoriasis)',
+        '비듬 · 지루성 피부염 · 건선 (Dandruff · Seborrheic Dermatitis · Psoriasis)',
         '피부보호제 (Skin Protectant)',
       ]);
     }
-    // 복합만 PRD 한계 고지, OTC 의약품에는 없다
+    // 복합만 한계 고지(Figma 1170:7877), OTC 의약품에는 없다
     const helper = page.getByTestId('n1-regulatory-helper');
-    await expect(helper).toContainText('복합 제품은 고른 OTC 종류와 같은 기준으로 검사합니다(화장품 규칙 포함).');
-    await expect(helper).toContainText('제품이 그 OTC 기준(성분 · 함량 · 시험)을 실제로 충족하는지는 확인하지 않습니다.');
+    await expect(helper).toHaveText('선택한 OTC 종류의 기준과 화장품 규칙을 함께 적용해 검사합니다.성분·함량·시험 요건의 실제 충족 여부는 확인하지 않습니다.');
     await pickRegulatoryClass(page, 'OTC 의약품');
     await expect(helper).toHaveCount(0);
   });
@@ -370,9 +369,6 @@ test.describe('규제 분류 · OTC 종류', () => {
     await pickCategory(page, ['선케어', '선크림']);
     await page.getByRole('checkbox', { name: CONSENT }).check();
     await expect(nextButton(page)).toBeDisabled();
-    await expect(page.getByTestId('n1-otc-type-notice')).toHaveText(
-      'OTC 종류는 아직 작업에 저장되지 않습니다. 저장 기능이 준비되면 반영됩니다.',
-    );
 
     await otcGroup(page).getByRole('radio', { name: '선크림 (Sunscreen)' }).click();
     await expect(nextButton(page)).toBeEnabled();
@@ -395,6 +391,81 @@ test.describe('규제 분류 · OTC 종류', () => {
     expect(patch!.body).not.toMatch(/otc_?type|monograph|M020/i);
     // mock 모드에서는 로그인하지 않는다
     expect(calls.filter((c) => c.path.includes('/auth/'))).toEqual([]);
+  });
+
+  // [다음]은 막힌 이유를 툴팁으로 보이려고 aria-disabled 다(클릭은 된다) — 실제 차단은 handleSubmit 이 한다. 그래서 눌러서 요청이 없는지 본다
+  const jobRequests = (calls: ApiCall[]) => calls.filter((c) => (c.method === 'POST' || c.method === 'PATCH') && c.path.startsWith('/jobs'));
+
+  test('복합 + OTC 종류 미선택 → [다음] 차단 · 눌러도 작업 요청 없음', async ({ page }) => {
+    const calls = await recordApiCalls(page);
+    await page.goto(`/jobs/new?brandId=${MOCK_BRAND_ID}`);
+    await fillBase(page, '화장품+OTC 복합');
+    await pickCategory(page, ['선케어', '선크림']);
+    await page.getByRole('checkbox', { name: CONSENT }).check();
+    await expect(otcGroup(page).locator('[aria-checked="true"]')).toHaveCount(0);
+    await expect(nextButton(page)).toBeDisabled();
+    await expect(page.locator('#n1-next-tooltip')).toContainText('OTC 종류');
+    // aria-disabled 는 Playwright 가 비활성으로 보고 기다린다 — 사용자 클릭처럼 이벤트를 그대로 보낸다
+    await nextButton(page).click({ force: true });
+    await page.waitForTimeout(300);
+    expect(jobRequests(calls)).toEqual([]);
+    expect(new URL(page.url()).pathname).toBe('/jobs/new');
+  });
+
+  test('OTC → 선크림 → 화장품 → 다시 OTC: 이전 종류가 복원되지 않고 다시 고를 때까지 차단', async ({ page }) => {
+    const calls = await recordApiCalls(page);
+    await page.goto(`/jobs/new?brandId=${MOCK_BRAND_ID}`);
+    await fillBase(page, 'OTC 의약품');
+    await pickCategory(page, ['선케어', '선크림']);
+    await page.getByRole('checkbox', { name: CONSENT }).check();
+    await otcGroup(page).getByRole('radio', { name: '선크림 (Sunscreen)' }).click();
+    await expect(nextButton(page)).toBeEnabled();
+
+    await pickRegulatoryClass(page, '화장품');
+    await expect(otcGroup(page)).toHaveCount(0);
+    await pickRegulatoryClass(page, 'OTC 의약품');
+    await expect(otcGroup(page).getByRole('radio', { name: '선크림 (Sunscreen)' })).toHaveAttribute('aria-checked', 'false');
+    await expect(otcGroup(page).locator('[aria-checked="true"]')).toHaveCount(0);
+    await expect(nextButton(page)).toBeDisabled();
+    // aria-disabled 는 Playwright 가 비활성으로 보고 기다린다 — 사용자 클릭처럼 이벤트를 그대로 보낸다
+    await nextButton(page).click({ force: true });
+    await page.waitForTimeout(300);
+    expect(jobRequests(calls)).toEqual([]);
+  });
+
+  test('복합 → OTC 종류 선택 → 잘 모름: OTC 종류 UI가 사라지고 제출 본문에 OTC 종류 값이 없다', async ({ page }) => {
+    const calls = await recordApiCalls(page);
+    await page.goto(`/jobs/new?brandId=${MOCK_BRAND_ID}`);
+    await fillBase(page, '화장품+OTC 복합');
+    await otcGroup(page).getByRole('radio', { name: '여드름 (Acne)' }).click();
+    await pickRegulatoryClass(page, '잘 모름');
+    await expect(otcGroup(page)).toHaveCount(0);
+    await pickCategory(page, ['선케어', '선크림']);
+    await page.getByRole('checkbox', { name: CONSENT }).check();
+    await expect(nextButton(page)).toBeEnabled();
+    await nextButton(page).click();
+    await expect(page).toHaveURL(new RegExp(`/jobs/${MOCK_JOB_ID}$`));
+
+    const patch = calls.find((c) => c.method === 'PATCH' && c.path === `/jobs/${MOCK_JOB_ID}`);
+    expect(patch).toBeTruthy();
+    const body = JSON.parse(patch!.body!);
+    expect(body.regulatoryClass).toBe('unknown');
+    expect(Object.keys(body).sort()).toEqual(
+      ['categoryId', 'imageType', 'keywords', 'productCode', 'productName', 'regulatoryClass', 'specType', 'targetCountry', 'targetLanguage'],
+    );
+    expect(patch!.body).not.toMatch(/otc_?type|monograph|M0\d\d/i);
+  });
+
+  test('OTC ↔ 복합 사이에서는 고른 OTC 종류를 유지한다', async ({ page }) => {
+    await page.getByRole('combobox').nth(0).selectOption('US');
+    await pickRegulatoryClass(page, 'OTC 의약품');
+    const acne = otcGroup(page).getByRole('radio', { name: '여드름 (Acne)' });
+    await acne.click();
+    await pickRegulatoryClass(page, '화장품+OTC 복합');
+    await expect(acne).toHaveAttribute('aria-checked', 'true');
+    await pickRegulatoryClass(page, 'OTC 의약품');
+    await expect(acne).toHaveAttribute('aria-checked', 'true');
+    await expect(otcGroup(page).locator('[aria-checked="true"]')).toHaveCount(1);
   });
 });
 

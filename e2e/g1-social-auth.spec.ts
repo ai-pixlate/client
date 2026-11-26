@@ -46,12 +46,19 @@ async function openLogin(page: Page, scenario?: Scenario) {
   if (scenario) await setScenario(page, scenario);
 }
 
-/** G1 → 제공자 → 콜백 → M1 까지 실제 화면 흐름으로 로그인한다 */
+/** G1 → 제공자 → 콜백 → H0(로그인 후 홈, v3.6.4) 까지 실제 화면 흐름으로 로그인한다 */
 async function loginWith(page: Page, provider: 'kakao' | 'google') {
   await openLogin(page);
   await page.getByTestId(`g1-social-${provider}`).click();
-  await page.waitForURL((url) => url.pathname === '/');
+  await page.waitForURL((url) => url.pathname === '/home');
   await expect(page.getByTestId('auth-notice')).toBeAttached();
+}
+
+/** H0 → [전체 보관함 보기] → 전체 보관함(M1 '/') — 브랜드별 M1 계약 전의 임시 경로(실제 화면 이동) */
+async function toLibrary(page: Page) {
+  await page.getByTestId('home-all-library').click();
+  await page.waitForURL((url) => url.pathname === '/');
+  await expect(page.getByTestId('library-add-card-link')).toHaveAttribute('href', /\/jobs\/new\?brandId=/);
 }
 
 async function storedText(page: Page) {
@@ -60,7 +67,7 @@ async function storedText(page: Page) {
 
 test.describe('소셜 로그인 시작·완료', () => {
   for (const provider of ['kakao', 'google'] as const) {
-    test(`${provider}: start → authorizeUrl → 콜백 → M1, 각 요청 1회`, async ({ page }) => {
+    test(`${provider}: start → authorizeUrl → 콜백 → H0, 각 요청 1회`, async ({ page }) => {
       const auth = recordAuth(page);
       await loginWith(page, provider);
       expect(auth.count('POST', `/auth/social/${provider}/start`)).toBe(1);
@@ -69,8 +76,9 @@ test.describe('소셜 로그인 시작·완료', () => {
       const body = JSON.parse(complete.body!);
       expect(Object.keys(body).sort()).toEqual(['code', 'provider', 'state']);
       expect(body.provider).toBe(provider);
-      // 신규·기존 구분 없이 M1 — 콜백 주소는 기록에 남기지 않는다(replace)
-      expect(new URL(page.url()).pathname).toBe('/');
+      // 신규·기존 구분 없이 H0(v3.6.4 로그인 후 홈) — 콜백 주소는 기록에 남기지 않는다(replace)
+      expect(new URL(page.url()).pathname).toBe('/home');
+      await expect(page.getByTestId('home-workspace')).toBeVisible();
       // access token 은 브라우저 저장소에 없다
       expect(await storedText(page)).not.toMatch(ACCESS_PATTERN);
     });
@@ -81,7 +89,7 @@ test.describe('소셜 로그인 시작·완료', () => {
     await openLogin(page, { completeDelayMs: 400 });
     await page.getByTestId('g1-social-kakao').click();
     await expect(page.getByTestId('g1-callback-working')).toBeVisible();
-    await page.waitForURL((url) => url.pathname === '/');
+    await page.waitForURL((url) => url.pathname === '/home');
     await page.waitForTimeout(300);
     expect(auth.count('POST', '/auth/social')).toBe(1);
   });
@@ -113,7 +121,7 @@ test.describe('소셜 로그인 시작·완료', () => {
     // 새 start 부터 다시 → 선택한 Google 계정으로 M1
     await setScenario(page, {});
     await page.getByTestId('g1-social-google').click();
-    await page.waitForURL((url) => url.pathname === '/');
+    await page.waitForURL((url) => url.pathname === '/home');
     expect(auth.count('POST', '/auth/social/google/start')).toBe(2);
     expect(auth.count('POST', '/auth/social')).toBe(2);
     expect(await page.evaluate(() => sessionStorage.getItem('pixlate:auth:callback-state'))).toBeNull();
@@ -123,7 +131,7 @@ test.describe('소셜 로그인 시작·완료', () => {
     const auth = recordAuth(page);
     await openLogin(page);
     await page.getByTestId('g1-social-kakao').click();
-    await page.waitForURL((url) => url.pathname === '/');
+    await page.waitForURL((url) => url.pathname === '/home');
     // 같은 콜백 주소를 다시 열면(이미 처리된 state) 서버가 state_invalid 를 준다
     const completeBody = JSON.parse(auth.calls.find((c) => c.path === '/auth/social')!.body!);
     await page.goto(`/login/callback/kakao?code=${completeBody.code}&state=${completeBody.state}`);
@@ -142,7 +150,7 @@ test.describe('소셜 로그인 시작·완료', () => {
     await expect(page.getByTestId('g1-social-google')).toHaveAttribute('aria-disabled', 'true');
     await kakao.click({ force: true });
     await page.getByTestId('g1-social-google').click({ force: true });
-    await page.waitForURL((url) => url.pathname === '/');
+    await page.waitForURL((url) => url.pathname === '/home');
     expect(auth.calls.filter((c) => c.path.endsWith('/start'))).toHaveLength(1);
   });
 
@@ -203,7 +211,7 @@ test.describe('소셜 로그인 시작·완료', () => {
     expect(auth.count('GET', '/auth/me')).toBe(0);
     await setScenario(page, {});
     await page.getByTestId('g1-social-kakao').click();
-    await page.waitForURL((url) => url.pathname === '/');
+    await page.waitForURL((url) => url.pathname === '/home');
   });
 
   test('제공자 화면에서 취소하면 완료 요청 없이 안내한다', async ({ page }) => {
@@ -225,6 +233,7 @@ test.describe('401 → refresh → /auth/me', () => {
   test('같은 계정이면 원 요청을 1회 다시 보내고 화면이 그대로 동작한다', async ({ page }) => {
     const auth = recordAuth(page);
     await loginWith(page, 'kakao');
+    await toLibrary(page);
     await setScenario(page, { expireOnce: true });
     await page.getByTestId('library-add-card-link').click();
     await page.waitForURL((url) => url.pathname === '/jobs/new');
@@ -237,16 +246,18 @@ test.describe('401 → refresh → /auth/me', () => {
     expect(new URL(page.url()).pathname).toBe('/jobs/new');
   });
 
-  test('refresh 뒤 다른 계정이면 원 요청을 다시 보내지 않고 M1 으로 가서 계정 전환을 알린다', async ({ page }) => {
+  test('refresh 뒤 다른 계정이면 원 요청을 다시 보내지 않고 H0 으로 가서 계정 전환을 알린다', async ({ page }) => {
     await loginWith(page, 'kakao');
+    await toLibrary(page);
     await setScenario(page, { expireOnce: true, refresh: ['switch:2'] });
     await page.getByTestId('library-add-card-link').click();
-    await page.waitForURL((url) => url.pathname === '/');
+    await page.waitForURL((url) => url.pathname === '/home');
     await expect(page.getByTestId('auth-notice')).toHaveAttribute('data-notice', 'account-changed');
   });
 
   test('refresh_invalid → G1', async ({ page }) => {
     await loginWith(page, 'kakao');
+    await toLibrary(page);
     await setScenario(page, { expireOnce: true, refresh: ['invalid'] });
     await page.getByTestId('library-add-card-link').click();
     await page.waitForURL((url) => url.pathname === '/login');
@@ -255,6 +266,7 @@ test.describe('401 → refresh → /auth/me', () => {
   test('refresh 503 → 세션을 지우지 않고 G1 로 보내지 않으며 일시 오류를 알린다', async ({ page }) => {
     const auth = recordAuth(page);
     await loginWith(page, 'kakao');
+    await toLibrary(page);
     await setScenario(page, { expireOnce: true, refresh: ['unavailable'] });
     await page.getByTestId('library-add-card-link').click();
     await expect(page.getByTestId('auth-notice')).toHaveAttribute('data-notice', 'auth-unavailable');
@@ -274,9 +286,10 @@ test.describe('여러 탭', () => {
     await a.waitForURL((url) => url.pathname === '/login');
   });
 
-  test('다른 탭에서 다른 계정으로 로그인 → 이 탭은 이전 계정 화면을 버리고 M1 + 계정 전환 안내', async ({ context }) => {
+  test('다른 탭에서 다른 계정으로 로그인 → 이 탭은 이전 계정 화면을 버리고 새 계정 H0 + 계정 전환 안내', async ({ context }) => {
     const a = await context.newPage();
     await loginWith(a, 'kakao');
+    await toLibrary(a);
     await a.getByTestId('library-add-card-link').click();
     await a.waitForURL((url) => url.pathname === '/jobs/new');
 
@@ -289,7 +302,7 @@ test.describe('여러 탭', () => {
     const b = await context.newPage();
     await loginWith(b, 'google');
 
-    await a.waitForURL((url) => url.pathname === '/');
+    await a.waitForURL((url) => url.pathname === '/home');
     await expect(a.getByTestId('auth-notice')).toHaveAttribute('data-notice', 'account-changed');
     const wire = await a.evaluate(() => (window as unknown as { __authWire: string[] }).__authWire);
     expect(wire).toContain(JSON.stringify({ type: 'login-complete', sellerId: 2 }));
@@ -299,6 +312,7 @@ test.describe('여러 탭', () => {
   test('다른 탭의 같은 계정 로그인은 이 탭을 움직이지 않는다', async ({ context }) => {
     const a = await context.newPage();
     await loginWith(a, 'kakao');
+    await toLibrary(a);
     await a.getByTestId('library-add-card-link').click();
     await a.waitForURL((url) => url.pathname === '/jobs/new');
     const b = await context.newPage();
@@ -390,7 +404,7 @@ test.describe('logoutPending — 앱 진입', () => {
     await page.waitForURL((url) => url.pathname === '/login');
     await setScenario(page, {});
     await page.getByTestId('g1-social-kakao').click();
-    await page.waitForURL((url) => url.pathname === '/');
+    await page.waitForURL((url) => url.pathname === '/home');
     await expect.poll(() => api.includes('GET /library')).toBe(true);
   });
 });
@@ -460,12 +474,14 @@ test.describe('G1 서버 로그아웃 미완료 — [다시 시도]', () => {
 test.describe('로컬 실서버 인증 시험용 임시 로그아웃 진입점', () => {
   test('일반 Mock 개발 환경에서는 M1 에 보이지 않는다', async ({ page }) => {
     await loginWith(page, 'kakao');
+    await toLibrary(page);
     await expect(page.getByRole('heading', { name: '보관함' })).toBeVisible();
     await expect(page.getByTestId('local-auth-test-logout')).toHaveCount(0);
   });
 
   test('Mock 에서는 세션 사용자용 정식 로그아웃 버튼만 보인다', async ({ page }) => {
     await loginWith(page, 'kakao');
+    await toLibrary(page);
     await expect(page.getByRole('heading', { name: '보관함' })).toBeVisible();
     await expect(page.getByTestId('account-logout')).toBeVisible();
     await expect(page.getByTestId('local-auth-test-logout')).toHaveCount(0);

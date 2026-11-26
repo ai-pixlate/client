@@ -1,9 +1,11 @@
 'use client';
 
-import { Fragment, useId } from 'react';
+import { Fragment } from 'react';
 
 // ─────────────────────────────────────────────────────────────────
-// 좌측 진행 단계 네비게이션 (PRD F-NAV-01) — MVP 는 단계 이동이 없다. 눌러도 이동하지 않고 툴팁으로 12월 기능임을 알린다.
+// 좌측 진행 단계 네비게이션 (PRD F-NAV-01) — 단계 이동이 없다. PRD v3.6.4 수용 ③(12월 · PM 11/10): 단계에 마우스를 올려도
+// 툴팁 · 손가락 커서 · 강조가 나오지 않는다(눌러도 아무 일이 없는 단계가 고장처럼 보이지 않게). 눌러도 URL·단계·서버 상태가
+// 바뀌지 않는다. 완료·현재·미도달 구분(수용 ①)은 그대로다.
 // F-NAV-02(이전 단계 이동)가 오기 전까지 단계 상태에 따라 이동 가능 여부를 나누지 않는다.
 // Figma 진행단계(298:2872)의 6개 variant 를 하나로 그린다 — currentStep 이전은 done,
 // 해당 단계는 current, 이후는 upcoming으로 파생한다. 화면에서는 S0Rail 을 거쳐 쓴다.
@@ -14,7 +16,7 @@ import { Fragment, useId } from 'react';
 // "겹침"으로 보였다(z-index는 페인트 순서만 바꿀 뿐 텍스트의 빈 픽셀을
 // 막지 못한다). line을 배지-배지 사이 갭에만 존재하는 실제 레이아웃
 // 흐름으로 옮기면 라벨의 세로 범위(y)를 애초에 지나가지 않는다.
-// 라벨은 Figma(573:3077) 실측 폭 44px(w-11)로 고정한다 — 6개 라벨 모두
+// 라벨은 Figma(573:3077) 실측 폭 44px(w-11) · 높이 14px(leading-[14px], item 24+14+14=52)로 고정한다 — 6개 라벨 모두
 // 44px 폭에서 줄바꿈 없이 들어간다(실측 최대 폭 42.5px, "정보 입력"/
 // "섹션 확인").
 // ─────────────────────────────────────────────────────────────────
@@ -31,8 +33,6 @@ const STEPS: { id: StepNavStep; label: string }[] = [
 ];
 
 type StepStatus = 'done' | 'current' | 'upcoming';
-
-const STEP_MOVE_TOOLTIP = '단계 이동은 12월 구현 예정입니다.';
 
 export function StepNav({ currentStep }: { currentStep: StepNavStep }) {
   const currentIndex = STEPS.findIndex((s) => s.id === currentStep);
@@ -58,43 +58,24 @@ export function StepNav({ currentStep }: { currentStep: StepNavStep }) {
 }
 
 function StepItem({ label, index, status }: { label: string; index: number; status: StepStatus }) {
-  const tooltipId = useId();
   return (
     <div className="relative flex flex-col items-center">
       <button
         type="button"
         aria-current={status === 'current' ? 'step' : undefined}
         aria-disabled="true"
-        aria-describedby={tooltipId}
         data-step-status={status}
-        // Safari 는 클릭해도 버튼에 포커스를 주지 않는다. 눌렀을 때 안내가 남도록 직접 옮긴다
-        onClick={(event) => event.currentTarget.focus()}
-        onKeyDown={(event) => {
-          if (event.key === 'Escape') event.currentTarget.blur();
-        }}
-        className="peer flex cursor-default flex-col items-center gap-3.5 rounded-[4px] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ff6a38]"
+        className="flex cursor-default flex-col items-center gap-3.5 rounded-[4px] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ff6a38]"
       >
         <StepBadge index={index} status={status} />
         <span
-          className={`block w-11 text-center text-[12px] tracking-[-0.04em] ${
+          className={`block w-11 text-center text-[12px] leading-[14px] tracking-[-0.04em] ${
             status === 'current' ? 'font-normal text-[#171717]' : 'font-light text-[#707070]'
           }`}
         >
           {label}
         </span>
       </button>
-      {/* N1 인증 마크·N3 진행 말풍선과 같은 모양. rail 이 왼쪽 끝이라 단계 오른쪽에 둔다 */}
-      <div
-        id={tooltipId}
-        role="tooltip"
-        className="pointer-events-none invisible absolute top-3 left-full z-40 ml-[14px] -translate-y-1/2 rounded-[8px] border border-[#ff6a38] bg-white p-2.5 text-[12px] leading-[normal] font-light tracking-[-0.04em] whitespace-nowrap text-[#ff6a38] peer-hover:visible peer-focus:visible"
-      >
-        {STEP_MOVE_TOOLTIP}
-        <span
-          aria-hidden="true"
-          className="absolute top-1/2 left-0 size-2.5 -translate-x-1/2 -translate-y-1/2 rotate-45 border-b border-l border-[#ff6a38] bg-white"
-        />
-      </div>
     </div>
   );
 }

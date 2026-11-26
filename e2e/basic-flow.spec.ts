@@ -20,13 +20,17 @@ const TINY_PNG_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 
 test('N1에서 N5 검수 화면까지 기본 작업 흐름을 완료한다', async ({ page }) => {
+  // N2·N4의 정상 2초 polling을 한 테스트에서 연속으로 지나므로
+  // Playwright 기본 30초보다 긴 전체 제한만 둔다. 단계별 assertion timeout은 그대로 유지한다.
+  test.setTimeout(60_000);
+
   const pageErrors: Error[] = [];
   page.on('pageerror', (err) => pageErrors.push(err));
 
   // ── N1: 진입 ──────────────────────────────────────────────
   await page.goto(`/jobs/new?brandId=${MOCK_BRAND_ID}`);
 
-  await expect(page.getByText('이미지 입력')).toBeVisible();
+  await expect(page.getByTestId('job-header-title')).toHaveText('정보 입력');
   await expect(page.getByRole('combobox')).toHaveCount(3);
   await expect(page.getByLabel('파일 선택')).toBeAttached();
   await expect(page.getByRole('button', { name: '다음' })).toBeVisible();
@@ -90,12 +94,12 @@ test('N1에서 N5 검수 화면까지 기본 작업 흐름을 완료한다', asy
   await expect(page.locator('[data-testid^="n3-section-card-"][data-bucket="include"]')).toHaveCount(2);
 
   // ── N3 → N4 ───────────────────────────────────────────────
-  // N4는 N2와 같은 ProcessingStageLayout을 공유하는 Figma(660:4221) 기준
-  // 실제 화면이다(placeholder였던 "번역을 진행하고 있습니다" 문구는 폐기).
+  // N4는 N2와 같은 ProcessingStageLayout을 공유하는 Figma(1821:48003) 기준
+  // 실제 화면이다(placeholder였던 "번역을 진행하고 있습니다" 문구는 폐기). 01 묶음 첫 라벨은 Figma 「배경복원」이다.
   await page.getByRole('button', { name: '이대로 진행' }).click();
-  await expect(page.getByRole('heading', { name: '번역 중' })).toBeVisible();
-  await expect(page.getByText('확정한 섹션을 번역하고 이미지에 적용하고 있습니다.')).toBeVisible();
-  await expect(page.getByText('한글 지우고 배경 채우기')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '번역 중' })).toBeAttached();
+  await expect(page.getByTestId('job-header-title')).toHaveText('번역 중');
+  await expect(page.getByText('배경복원', { exact: true })).toBeVisible();
   await expect(page.getByText('이미지 합성')).toBeVisible();
   await expect(page.getByRole('progressbar')).toBeVisible();
 

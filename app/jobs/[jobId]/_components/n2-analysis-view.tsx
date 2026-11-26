@@ -1,122 +1,76 @@
 import type { ApiAnalysisProgress, ApiJobTaskStatus } from '@/lib/api/job-schema';
 import { n2DisplayedProgressKey } from '@/lib/processing/displayed-progress-storage';
-import { ProcessingStageLayout, type ProcessingStep } from './processing/processing-stage-layout';
+import { ProcessingStageLayout, keepSingleActive, type ProcessingStageGroup, type ProcessingStepState } from './processing/processing-stage-layout';
 import { useDisplayedProgress } from './processing/use-displayed-progress';
 
 // ─────────────────────────────────────────────────────────────────
-// N2 — 분석중 (Figma node 660:4139 기준, 2026-09-18 재정합)
+// N2 — 분석중 (Figma 1821:46419 · 1821:47209 「N2 분석중」, PM 승인 화면 정본)
 //
-// 레이아웃(rail/헤더/회색 패널/비주얼/로그/progress) 자체는 N4와 완전히
-// 동일해(Figma가 N4의 5단계 목록 컴포넌트를 "N2 / Step List"로 그대로
-// 재사용할 정도) ./processing/processing-stage-layout.tsx로 뺐다. 이
-// 파일에는 N2 고유의 것만 남는다:
-// - copy(헤더/헤드라인/로그/5단계 라벨/안내문 텍스트/GIF 하단 caption)
-// - N2의 backend stage(ocr/section/verify)·analysisProgress → 5단계 상태 해석
+// 레이아웃(rail/헤더/회색 패널/비주얼/로그/progress)은 N4와 같아 ./processing/processing-stage-layout.tsx로
+// 뺐다. 이 파일에는 N2 고유의 것만 남는다:
+// - copy(화면명/로그/단계 라벨/안내문 텍스트)
+// - N2의 backend stage(ocr/section/verify)·analysisProgress → 사용자 단계 묶음(01·02·03) 상태 해석
 // - 관측 단계 → 표시 % 상한(숫자 자체는 ./processing/use-displayed-progress.ts)
 //
-// ANALYSIS LOG는 Figma가 항상 고정 5단계(01~05)를 보여준다 — 실제 백엔드는
-// OpenAPI JobTaskStatus.stages 계약상 N2에 coarse 3단계(ocr→section→verify)만
-// 준다. API를 5단계로 바꾸지 않고, 이 파일 안의 resolveCoarseStage/
-// FIVE_STEP_STATES_BY_COARSE_STAGE 두 개로 3→5 presentation 매핑만 흡수한다
-// (컴포넌트 JSX 안에는 조건문을 두지 않는다). 기본 mock 은 이 3단계 대신 단일 'analyze' stage만
-// 주는데, 그때는 ocr(01 진행 중)로 둔다 — 표시 % 로 단계를 추정하지 않는다(10/22 제거: 이전에는
-// mock 경과 시간으로 만든 % 로 02·03·04·05 를 차례로 켰다).
+// 사용자 단계는 Figma 묶음 3개다(01 = 콘텐츠 영역 나누기·전체 텍스트 인식·문단별 역할 파악 / 02 / 03).
+// 묶음 안에 label 이 여러 줄이어도 번호·dot·상태 글자는 하나이고, 「진행 중」은 항상 최대 1개다.
+// 서버가 두 묶음을 가르는 정보를 주지 않는 구간(judge = 02·03)은 앞 묶음만 진행 중, 다음은 대기로 둔다 —
+// top-level progress 로 경계를 지어내지 않는다. 서버 API·stage 는 바꾸지 않는다. 기본 mock 의 단일 'analyze' stage는
+// ocr(01 진행 중)로 둔다.
 //
-// 하나의 backend coarse stage가 진행 중이어도 오른쪽 목록의 여러 시각
-// 항목이 동시에 "진행 중"일 수 있다(section 진행 중 → 02·03 동시 진행
-// 중, verify 진행 중 → 04·05 동시 진행 중) — 이 계약(coarse 3단계)에서는
-// 실제로 그게 맞는 표현이다. N2는 backend가 stage별 progress를 전혀
-// 주지 않으므로(OpenAPI JobTaskStatus — 최상위 progress 1개뿐), 이걸
-// 억지로 02/03·04/05로 쪼개려면 top-level progress로 FE가 그 경계를
-// 지어내야 한다 — 서버가 안 주는 세부 상태를 FE가 추론하는 것이므로 하지
-// 않는다(9/23 재확인: 한 번 이렇게 시도했다가 되돌렸다).
+// 이 해석 로직은 N4와 공유하지 않는다 — N4는 backend stage 어휘 자체가 다르다(inpaint/translate/verify/render).
 //
-// 이 해석 로직은 N4와 절대 공유하지 않는다 — N4는 backend stage 어휘 자체가
-// 다르다(inpaint/translate/verify/render, n4-processing-view.tsx 참고).
-//
-// 9/23 — GIF 하단 caption(주황 title + 회색 description)을 추가했다.
-// 이전엔 backend stage와 무관하게 항상 같은 문구(04 캡션)만 보였다.
-// N2는 02·03(또는 04·05)이 동시에 active라 "active 시각 항목 하나 =
-// caption"이라는 전제를 쓸 수 없다(N4는 이 전제가 성립해서 그렇게
-// 한다) — 대신 caption도 오른쪽 목록과 "같은 coarse stage 값"
-// (resolveCoarseStage 결과, ocr/section/verify/done)을 그대로 참조한다.
-// 즉 하나의 backend stage가 오른쪽에서는 세부 항목 여러 개를 동시에
-// active로 보여주고, GIF에서는 그 stage를 포괄하는 문구 하나로
-// 설명한다 — progress%로 caption이나 substage를 다시 추론하지 않는다.
+// 현재 상태(예: 영역별 판정 재시도 대기 중)는 ANALYSIS LOG 설명 줄 앞에 둔다 — 예전 GIF 하단 caption 자리가 최신 Figma 에서
+// 빠졌다. 오른쪽 목록과 같은 값(coarse stage 또는 analysisProgress)을 참조하고, progress%로 다시 추론하지 않는다.
 // ─────────────────────────────────────────────────────────────────
 
-const HEADLINE_FALLBACK = '상세페이지의 구조와 문맥을 읽고 있습니다.';
 const AUTO_ADVANCE_NOTICE = '분석이 끝나면 섹션 확인 단계로 자동 이동합니다.';
 const PAUSE_BUTTON_TITLE = '분석 중단 기능은 아직 제공되지 않습니다.';
 // 전체 실패 안내(Figma 793:4890). 서버 응답에 사용자용 문구가 없어(errorCode 뿐) 실패 단계를 추측하지 않고 이 문구를 쓴다
 const N2_ERROR = { sectionLabel: 'ANALYSIS STATUS', title: '분석이 중단되었습니다', description: '이미지 분석 중 오류가 발생했습니다.' };
 
-// Figma 660:4139 — 사용자 단계는 3개다. 첫 세 행은 하나의 01 분석 묶음이라 번호와 dot 는 첫 행에만 보인다.
-// 행 높이(5행)와 dot 자리는 그대로 두고 둘째·셋째 행 dot 만 숨긴다(텍스트 x 정렬 유지).
-// 행별 state 계산(아래)은 기존 서버 계약 해석 그대로다 — split/ocr/merge 를 행에 새로 대응시키지 않는다.
-const FIVE_STEP_META: Omit<ProcessingStep, 'state'>[] = [
-  { no: '01', label: '콘텐츠 영역 나누기' },
-  { no: '', label: '전체 텍스트 인식', showDot: false },
-  { no: '', label: '문단별 역할 파악', showDot: false },
-  { no: '02', label: '제품 라벨 자동 제외' },
-  { no: '03', label: '규제 · 현지 적합성 확인' },
+// Figma 1821:46419 · 1821:47209(N2 분석중, PM 승인) — 사용자 단계 묶음은 3개다. 01 묶음은 label 3줄이지만 번호·dot·상태 글자는
+// 하나다. 「진행 중」은 항상 최대 1개다.
+// 02 라벨 — Figma 에는 01 첫 줄과 같은 「콘텐츠 영역 나누기」가 들어 있어(복사 오류로 보인다) 지금 의미 있는 라벨을 유지한다
+// (PM 확인 항목). 01·03 라벨은 Figma 그대로다.
+const STAGE_GROUP_META: Omit<ProcessingStageGroup, 'state'>[] = [
+  { no: '01', labels: ['콘텐츠 영역 나누기', '전체 텍스트 인식', '문단별 역할 파악'] },
+  { no: '02', labels: ['제품 라벨 자동 제외'] },
+  { no: '03', labels: ['규제 · 현지 적합성 확인'] },
 ];
 
-// coarse stage(ocr/section/verify) → 5개 항목 각각의 presentation state.
-// 하나의 backend stage가 진행 중이어도 여러 UI 항목이 동시에 "진행 중"일
-// 수 있다(예: verify 진행 중 → 04·05 동시 진행 중).
-const FIVE_STEP_STATES_BY_COARSE_STAGE: Record<'ocr' | 'section' | 'verify' | 'done', ProcessingStep['state'][]> = {
-  ocr: ['active', 'pending', 'pending', 'pending', 'pending'],
-  section: ['done', 'active', 'active', 'pending', 'pending'],
-  verify: ['done', 'done', 'done', 'active', 'active'],
-  done: ['done', 'done', 'done', 'done', 'done'],
+type GroupStates = readonly [ProcessingStepState, ProcessingStepState, ProcessingStepState];
+
+// coarse stage(ocr/section/verify) → 3개 묶음 상태(analysisProgress 가 없는 레거시 응답).
+// 기존 5행 해석을 묶음으로 옮긴 것이다 — ocr·section 은 01 묶음(구조·텍스트·역할), verify 는 02·03 묶음이다.
+// verify 는 02·03 을 가르는 정보가 없어 앞 묶음(02)만 진행 중, 03 은 대기다(서버가 주지 않는 경계를 만들지 않는다).
+const GROUP_STATES_BY_COARSE_STAGE: Record<'ocr' | 'section' | 'verify' | 'done', GroupStates> = {
+  ocr: ['active', 'pending', 'pending'],
+  section: ['active', 'pending', 'pending'],
+  verify: ['done', 'active', 'pending'],
+  done: ['done', 'done', 'done'],
 };
 
-// coarse stage → GIF 하단 caption. 오른쪽 목록이 참조하는 것과 같은
-// coarse stage 값을 그대로 쓴다(steps에서 active를 다시 찾지 않는다) —
-// section/verify는 시각 항목이 2개씩 걸려 있어 그 둘을 포괄하는 문구
-// 하나로 쓴다.
-// 9/23 재조정 — 흰색 description은 Figma처럼 한 줄이어야 한다(processing-
-// stage-layout.tsx의 whitespace-nowrap 처리 참고). 이전 문구는 Figma 원본
-// 분량보다 길어 실측상 줄바꿈이 났다 — 뜻은 유지하되 분량만 Figma 수준으로
-// 줄였다(font-size를 줄이거나 컨테이너를 늘리는 방식으로 우회하지 않는다).
-const OVERLAY_CAPTION_BY_COARSE_STAGE: Record<'ocr' | 'section' | 'verify', { title: string; description: string }> = {
-  ocr: {
-    title: '텍스트 영역 인식 중',
-    description: '이미지 속 텍스트와 위치를 인식하고 있습니다.',
-  },
-  section: {
-    title: '콘텐츠 구조 분석 중',
-    description: '콘텐츠 영역과 텍스트 역할을 구분하고 있습니다.',
-  },
-  verify: {
-    title: '번역 대상·적합성 확인 중',
-    description: '번역 제외 대상과 현지 적합성을 확인하고 있습니다.',
-  },
+// coarse stage → LOG 현재 상태. 오른쪽 목록이 참조하는 것과 같은 coarse stage 값을 그대로 쓴다 — ocr·section 은 01 묶음,
+// verify 는 02 묶음을 설명한다. 처리 중 'done'(verify=done 이지만 아직 N3 응답 전)에는 verify 문구를 그대로 둔다.
+const STATUS_BY_COARSE_STAGE: Record<keyof typeof GROUP_STATES_BY_COARSE_STAGE, string> = {
+  ocr: '텍스트 영역 인식 중',
+  section: '콘텐츠 구조 분석 중',
+  verify: '번역 대상·적합성 확인 중',
+  done: '번역 대상·적합성 확인 중',
 };
-
-/** 처리 중 'done'(verify=done 이지만 아직 N3 응답 전)에는 마지막 coarse stage(verify)의 caption을
- *  그대로 둔다. 실제 완료(N3 응답) 뒤 완료 표시는 N2_COMPLETION_CAPTION 이다. */
-function resolveOverlayCaption(stage: keyof typeof FIVE_STEP_STATES_BY_COARSE_STAGE) {
-  return OVERLAY_CAPTION_BY_COARSE_STAGE[stage === 'done' ? 'verify' : stage];
-}
 
 /**
- * 실제 완료(currentStep=N3) 응답 뒤 완료 표시 동안의 문구 — Figma 에 별도 완료 상태가 없어 기존 슬롯(상태 태그·visual headline·
- * GIF caption·LOG·progress 안내) 안에서만 최소한으로 바꾼다. 완료 표시 동안 "진행중"·"…하고 있습니다"·
+ * 실제 완료(currentStep=N3) 응답 뒤 완료 표시 동안의 문구 — Figma 에 별도 완료 상태가 없어 기존 슬롯(LOG·progress 안내) 안에서만 최소한으로 바꾼다. 완료 표시 동안 "진행중"·"…하고 있습니다"·
  * "끝나면 이동합니다"가 남아 100%·5행 완료와 서로 다른 말을 하지 않게 한다.
  */
-const N2_COMPLETION_CAPTION = { title: '분석 완료', description: '섹션 확인 단계로 이동합니다.' };
 const N2_COMPLETION_COPY = {
-  statusTag: '완료',
-  headline: '이미지 분석이 완료되었습니다.',
-  visualDescription: '분석 결과를 정리해 섹션 확인 단계로 이동합니다.',
   logHeading: '분석 완료',
   logDescription: '이미지 분석이 완료되었습니다.',
   progressHint: '섹션 확인 단계로 이동합니다.',
 };
 
-function resolveCoarseStage(stages: ApiJobTaskStatus['stages']): keyof typeof FIVE_STEP_STATES_BY_COARSE_STAGE {
+function resolveCoarseStage(stages: ApiJobTaskStatus['stages']): keyof typeof GROUP_STATES_BY_COARSE_STAGE {
   const find = (key: string) => stages?.find((s) => s.key?.toLowerCase() === key);
   const ocr = find('ocr');
   const section = find('section');
@@ -136,21 +90,21 @@ function resolveCoarseStage(stages: ApiJobTaskStatus['stages']): keyof typeof FI
   return 'ocr';
 }
 
-function buildFiveSteps(states: ProcessingStep['state'][]): ProcessingStep[] {
-  return FIVE_STEP_META.map((step, i) => ({ ...step, state: states[i] }));
+function buildStageGroups(states: GroupStates): ProcessingStageGroup[] {
+  const single = keepSingleActive(states);
+  return STAGE_GROUP_META.map((group, i) => ({ ...group, state: single[i] }));
 }
 
 // ─────────────────────────────────────────────────────────────────
 // analysisProgress(선택) 상세 진행 — server 315816e docs/openapi.yaml AnalysisProgress.
 //
-// 기존 N2 화면(Figma 660:4139)을 바꾸지 않는다 — 5단계 목록·progress 레이아웃은 그대로 두고, 서버가
+// N2 화면 구조(단계 묶음·progress 레이아웃)는 그대로 두고, 서버가
 // 이번 poll 에 준 값을 두 수준으로 나눠 쓴다.
 // - 실제 세부 작업(ANALYSIS LOG 설명 줄): 원본·영역 위치와 split/ocr/merge 등 지금 하는 일, 또는 판정 수치
-// - 큰 묶음(5단계 행 · GIF 하단 caption): 분석 묶음(analyze) / 정리(finalize) / 영역별 판정(judge)
-// 원본마다 split → (영역마다) ocr → merge 가 반복되고 그 뒤 finalize · judge 다. activity 를 그대로 행에
-// 연결하면 원본이 바뀔 때 03 → 01 로 돌아가는데, 사용자는 5단계를 전역 순차 과정으로 읽는다(10/22 사용자
-// 테스트). 그래서 analyze running 동안 01~03 을 함께 진행 중으로 둔다 — 셋 중 하나가 지금 서버 작업이라고
-// 주장하지 않는다. judge 에도 04·05 를 가르는 하위 단계가 없어 running 이면 둘 다 진행 중이다.
+// - 큰 묶음(단계 묶음): 분석 묶음(analyze) / 정리(finalize) / 영역별 판정(judge)
+// 원본마다 split → (영역마다) ocr → merge 가 반복되고 그 뒤 finalize · judge 다. analyze running 동안은 01 묶음
+// 하나가 진행 중이다 — split/ocr/merge 중 어느 것인지는 LOG 설명 줄에서만 보인다. judge 에는 02·03 을 가르는 하위
+// 단계가 없어 앞 묶음(02)만 진행 중, 03 은 대기다(진행 중은 항상 최대 1개).
 // - null 은 정보 없음이다 — 0·완료·이전 값·추정값으로 채우지 않고 그 조각을 빼고 쓴다.
 // - 이전 poll 값을 state 에 쌓지 않는다(재시도·새 시도 때 이전 detail 이 남지 않는다).
 // - 표시 % 는 status.progress 가 아니다. phase 가 상한만 연다(analyze 69 · finalize 79 · judge 99) — 숫자는
@@ -178,26 +132,23 @@ const ANALYZE_STATUS_LABEL: Partial<Record<ApiAnalysisProgress['status'], string
   failed: '실패',
 };
 
-// GIF 하단 caption 은 5단계 행과 같은 묶음을 말한다 — split/ocr/merge 는 LOG 설명 줄에서만 구분한다.
-const ANALYZE_RUNNING_CAPTION = { title: '이미지 구조 분석 중', description: '원본마다 영역·텍스트·역할을 분석하고 있습니다.' };
-const FINALIZE_CAPTION = { title: '분석 결과 정리 중', description: '분석 결과를 정리하고 있습니다.' };
-
-const JUDGE_CAPTION_BY_STATUS: Record<ApiAnalysisProgress['status'], { title: string; description: string }> = {
-  waiting: { title: '영역별 판정 대기 중', description: '영역별 판정 시작을 기다리고 있습니다.' },
-  retrying: { title: '영역별 판정 재시도 대기 중', description: '일부 영역 판정을 다시 시도하기 전입니다.' },
-  running: { title: '영역별 판정 중', description: '영역마다 번역 대상과 현지 적합성을 확인하고 있습니다.' },
-  // 판정 실행 실패 종료 — 전체 실패 화면은 isFailed 일 때만이고, 여기선 "판정 중"이라고만 하지 않는다
-  failed: { title: '영역별 판정 중단', description: '영역별 판정을 마치지 못했습니다.' },
+// LOG 현재 상태는 단계 묶음과 같은 묶음을 말한다 — split/ocr/merge 는 설명 줄의 세부 문구에서만 구분한다.
+// judge 의 failed 는 판정 실행 실패 종료일 뿐 작업 전체 실패가 아니다(전체 실패 화면은 isFailed 일 때만) — 「판정 중」이라고만 하지 않는다.
+const JUDGE_STATUS_BY_STATUS: Record<ApiAnalysisProgress['status'], string> = {
+  waiting: '영역별 판정 대기 중',
+  retrying: '영역별 판정 재시도 대기 중',
+  running: '영역별 판정 중',
+  failed: '영역별 판정 중단',
 };
 
-function resolveDetailCaption(detail: ApiAnalysisProgress): { title: string; description: string } {
-  if (detail.phase === 'judge') return JUDGE_CAPTION_BY_STATUS[detail.status];
-  if (detail.status === 'waiting') return { title: '분석 대기 중', description: '분석 시작을 기다리고 있습니다.' };
-  if (detail.status === 'retrying') return { title: '분석 재시도 대기 중', description: '분석을 다시 시도하기 전입니다.' };
-  if (detail.activity === 'finalize') return FINALIZE_CAPTION;
-  if (detail.status === 'running' && detail.activity) return ANALYZE_RUNNING_CAPTION;
+function resolveDetailStatus(detail: ApiAnalysisProgress): string {
+  if (detail.phase === 'judge') return JUDGE_STATUS_BY_STATUS[detail.status];
+  if (detail.status === 'waiting') return '분석 대기 중';
+  if (detail.status === 'retrying') return '분석 재시도 대기 중';
+  if (detail.activity === 'finalize') return '분석 결과 정리 중';
+  if (detail.status === 'running' && detail.activity) return '이미지 구조 분석 중';
   // activity=null 이면 특정 작업을 하고 있다고 추정하지 않는다
-  return { title: '이미지 분석 중', description: '원본 이미지를 분석하고 있습니다.' };
+  return '이미지 분석 중';
 }
 
 function describeActivity(detail: ApiAnalysisProgress): string | null {
@@ -233,51 +184,43 @@ function describeDetailLine(detail: ApiAnalysisProgress): string {
   return parts.join(' · ');
 }
 
-const ALL_PENDING: ProcessingStep['state'][] = ['pending', 'pending', 'pending', 'pending', 'pending'];
+const ALL_PENDING: GroupStates = ['pending', 'pending', 'pending'];
 
-// analyze·running 의 activity → 5단계 행. split/ocr/merge 는 원본마다 반복되는 한 묶음이라 01~03 을 함께
-// 진행 중으로 둔다(원본이 바뀌어도 행이 돌아가지 않는다). finalize 는 모든 원본의 split/ocr/merge 뒤라 01~03
-// 완료를 계약상 알 수 있다.
-// 01~03 이 함께 진행 중이라는 것은 "서버의 세부 단계 3개가 지금 동시에 실행 중"이라는 뜻이 아니다 —
-// "원본별로 반복되는 analyze 작업 묶음이 진행 중"이라는 presentation 이다. 지금 정확히 어느 activity 인지는
-// ANALYSIS LOG 설명 줄(describeDetailLine)에서만 보여 준다.
-const ANALYZE_BUNDLE_ACTIVE: ProcessingStep['state'][] = ['active', 'active', 'active', 'pending', 'pending'];
-const STEP_STATES_BY_ACTIVITY: Record<NonNullable<ApiAnalysisProgress['activity']>, ProcessingStep['state'][]> = {
+// analyze·running 의 activity → 묶음 상태. split/ocr/merge 는 원본마다 반복되는 한 묶음(01)이라 원본이 바뀌어도
+// 01 진행 중 그대로다. finalize 는 모든 원본의 split/ocr/merge 뒤라 01 완료를 계약상 알 수 있다.
+const ANALYZE_BUNDLE_ACTIVE: GroupStates = ['active', 'pending', 'pending'];
+const GROUP_STATES_BY_ACTIVITY: Record<NonNullable<ApiAnalysisProgress['activity']>, GroupStates> = {
   split: ANALYZE_BUNDLE_ACTIVE,
   ocr: ANALYZE_BUNDLE_ACTIVE,
   merge: ANALYZE_BUNDLE_ACTIVE,
-  finalize: ['done', 'done', 'done', 'pending', 'pending'],
+  finalize: ['done', 'pending', 'pending'],
 };
 
 /**
- * analysisProgress 가 있을 때의 5단계 행 상태 — 계약으로 확실히 알 수 있는 것만 표시한다.
- * - analyze: status=running 이고 activity 가 있을 때만 진행 중(split/ocr/merge 는 01~03 함께). waiting/retrying/
- *   activity=null 은 전부 대기.
- * - judge: analyze 가 끝났으므로 01~03 완료. 04·05 는 구분할 하위 단계가 없어 running 이면 둘 다 진행 중,
- *   그 외(waiting/retrying/failed)는 둘 다 대기.
+ * analysisProgress 가 있을 때의 묶음 상태 — 계약으로 확실히 알 수 있는 것만 표시한다.
+ * - analyze: status=running 이고 activity 가 있을 때만 01 진행 중. waiting/retrying/activity=null 은 전부 대기.
+ * - judge: analyze 가 끝났으므로 01 완료. 02·03 을 가르는 하위 단계가 없어 running 이면 앞 묶음(02)만 진행 중, 03 은
+ *   대기다. 그 외(waiting/retrying/failed)는 둘 다 대기. 02·03 은 실제 완료(N3 응답) 뒤 완료 표시에서 함께 완료가 된다.
  */
-function resolveAnalysisProgressStepStates(detail: ApiAnalysisProgress): ProcessingStep['state'][] {
-  if (detail.phase === 'judge') {
-    const judgeState = detail.status === 'running' ? 'active' : 'pending';
-    return ['done', 'done', 'done', judgeState, judgeState];
-  }
-  if (detail.status === 'running' && detail.activity) return STEP_STATES_BY_ACTIVITY[detail.activity];
+function resolveAnalysisProgressGroupStates(detail: ApiAnalysisProgress): GroupStates {
+  if (detail.phase === 'judge') return detail.status === 'running' ? ['done', 'active', 'pending'] : ['done', 'pending', 'pending'];
+  if (detail.status === 'running' && detail.activity) return GROUP_STATES_BY_ACTIVITY[detail.activity];
   return ALL_PENDING;
 }
 
 /**
  * 이번 poll 의 관측 단계가 여는 표시 % 상한. UX 표시 전용 값이며 서버 처리율이 아니다.
- * analysisProgress 가 없으면 coarse stages 로 연다 — OpenAPI 상 ocr 은 분석 시도(분해·OCR·병합 전체),
- * section 은 영역별 판정이다.
+ * 화면에 진행 중으로 보이는 묶음과 같은 기준이다 — analysisProgress 가 없으면 coarse stage 의 묶음(ocr·section → 01,
+ * verify → 02)으로 연다.
  */
 const DISPLAY_CEILING = { analyze: 69, finalize: 79, judge: 99 } as const;
 
-function resolveDisplayCeiling(detail: ApiAnalysisProgress | undefined, coarseStage: keyof typeof FIVE_STEP_STATES_BY_COARSE_STAGE): number {
+function resolveDisplayCeiling(detail: ApiAnalysisProgress | undefined, coarseStage: keyof typeof GROUP_STATES_BY_COARSE_STAGE): number {
   if (detail) {
     if (detail.phase === 'judge') return DISPLAY_CEILING.judge;
     return detail.activity === 'finalize' ? DISPLAY_CEILING.finalize : DISPLAY_CEILING.analyze;
   }
-  return coarseStage === 'ocr' ? DISPLAY_CEILING.analyze : DISPLAY_CEILING.judge;
+  return coarseStage === 'ocr' || coarseStage === 'section' ? DISPLAY_CEILING.analyze : DISPLAY_CEILING.judge;
 }
 
 export function N2AnalysisView({
@@ -296,17 +239,17 @@ export function N2AnalysisView({
   isFailed?: boolean;
   /**
    * 서버가 이미 N2 를 끝냈다(currentStep=N3 응답)는 뜻 — page.tsx 가 다음 화면으로 넘어가기 직전
-   * 완료 표시(100% · 5단계 전부 완료)를 하는 동안만 true 로 넘긴다.
+   * 완료 표시(100% · 모든 묶음 완료)를 하는 동안만 true 로 넘긴다.
    */
   isCompleted?: boolean;
 }) {
   const coarseStage = isCompleted ? 'done' : resolveCoarseStage(status.stages);
-  // 완료 표시(isCompleted)는 N3 응답으로 그린다 — 그 응답엔 analysisProgress 가 없어 기존 5단계 완료로 그린다.
+  // 완료 표시(isCompleted)는 N3 응답으로 그린다 — 그 응답엔 analysisProgress 가 없어 모든 묶음 완료로 그린다.
   const detail = isCompleted ? undefined : status.analysisProgress;
-  // analysisProgress 가 있으면 행도 그 값으로, 없을 때만 기존 coarse stages 해석(레거시 응답 그대로).
-  const stepStates = detail ? resolveAnalysisProgressStepStates(detail) : FIVE_STEP_STATES_BY_COARSE_STAGE[coarseStage];
-  const steps = buildFiveSteps(stepStates);
-  const caption = isCompleted ? N2_COMPLETION_CAPTION : detail ? resolveDetailCaption(detail) : resolveOverlayCaption(coarseStage);
+  // analysisProgress 가 있으면 묶음도 그 값으로, 없을 때만 기존 coarse stages 해석(레거시 응답 그대로).
+  const groupStates = detail ? resolveAnalysisProgressGroupStates(detail) : GROUP_STATES_BY_COARSE_STAGE[coarseStage];
+  const steps = buildStageGroups(groupStates);
+  const logStatus = isCompleted ? undefined : detail ? resolveDetailStatus(detail) : STATUS_BY_COARSE_STAGE[coarseStage];
   // 서버가 analysisProgress 로 대기·재시도 대기·실패라고 알린 동안만 숫자를 그 자리에 둔다(running 이 오면 그 값에서
   // 이어서 오른다). status=failed 는 표시 % 정지일 뿐 전체 실패 판정(isFailed)에 쓰지 않는다. analysisProgress 가 없는
   // 레거시 응답에서는 대기를 추정하지 않는다.
@@ -324,23 +267,16 @@ export function N2AnalysisView({
     <ProcessingStageLayout
       header={{
         title: '이미지 분석',
-        description: '등록한 이미지의 텍스트와 구조를 분석하고 있습니다.',
       }}
-      statusTagLabel={isCompleted ? N2_COMPLETION_COPY.statusTag : '진행중'}
       visual={{
         // 공용 GIF — N2/N4가 같은 자산을 쓴다(별도 복사본 금지).
         src: '/process/ai-processing.gif',
-        headline: isCompleted ? N2_COMPLETION_COPY.headline : HEADLINE_FALLBACK,
-        description: isCompleted
-          ? N2_COMPLETION_COPY.visualDescription
-          : '텍스트만 추출하지 않고, 번역에 필요한 섹션과 판단 근거를 함께 정리합니다.',
         overlayTopLabel: 'SCAN  ·  STRUCTURE  ·  CONTEXT',
-        overlayBottomTitle: caption.title,
-        overlayBottomDescription: caption.description,
       }}
       log={{
         sectionLabel: 'ANALYSIS LOG',
         heading: isCompleted ? N2_COMPLETION_COPY.logHeading : '지금 처리하는 일',
+        status: logStatus,
         description: isCompleted ? N2_COMPLETION_COPY.logDescription : detail ? describeDetailLine(detail) : LOG_DESCRIPTION,
       }}
       steps={steps}

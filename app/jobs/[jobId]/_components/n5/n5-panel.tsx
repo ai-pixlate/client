@@ -21,7 +21,7 @@ import {
 } from '@/lib/n5/adapter';
 import type { BlockTaskFailures, BlockViewModel, PreviewSectionViewModel, RetryTarget, SectionStatusViewModel } from '@/lib/n5/adapter';
 import { PanelSectionStatus, SignalRows } from './n5-section-status';
-import { TaskRetryButton, UpcomingRetryButton } from './n5-task-retry';
+import { TaskRetryButton } from './n5-task-retry';
 import {
   groupExpectedBySection,
   isConfirmPreviewSettling,
@@ -482,41 +482,44 @@ function TranslationEditor({
           </div>
         )}
       </div>
-      {/* Figma 1244:8238·8641 — 재시도 버튼은 번역문 칸 아래에 둔다. 서버가 준 taskId·retryable 로 API-JOB-06 을 부른다(n5-task-retry.tsx) */}
-      {(translationFailure || previewFailure) && (
+      {/* 미리보기 갱신 실패의 [미리보기 다시 시도] — 번역문 칸 아래에 둔다. 서버가 준 taskId·retryable 로 API-JOB-06 을 부른다(n5-task-retry.tsx).
+          번역 실패 칸에는 재시도 버튼을 두지 않는다 — 번역 실패 재시도는 이후 기능이다(PM). Figma 1244:8238 오류 셀도 실패 문구와 [확인]만 둔다.
+          서버가 준 taskId·retryable(getTranslationFailure().retry)은 adapter 에 그대로 둔다 */}
+      {previewFailure && (
         <div className="flex flex-wrap items-center gap-2">
-          {/* 번역 실패의 [다시 시도]·부분 재실행은 12월 범위(PRD F-CFM-05) — 버튼은 보이되 비활성이고 재시도 요청을 보내지 않는다.
-              서버가 준 taskId·retryable(translationFailure.retry)은 그대로 둔다(12월 연결 때 TaskRetryButton 으로 바꾼다) */}
-          {translationFailure && <UpcomingRetryButton label="다시 시도" testId={`n5-block-translate-retry-${block.id}`} />}
-          {previewFailure && (
-            <TaskRetryButton
-              label="미리보기 다시 시도"
-              testId={`n5-block-preview-retry-${block.id}`}
-              target={previewFailure}
-              // 새 재렌더 시도를 이 칸의 재렌더로 이어 추적한다(「재렌더링 중…」 → 끝나면 미리보기 재조회)
-              onRetried={(task) => {
-                if (task.taskId != null) {
-                  editSession.setRerenderTask(block.id, task.taskId, editSession.rerenderTaskByBlock.get(block.id)?.reason ?? 'translation');
-                }
-              }}
-            />
-          )}
+          <TaskRetryButton
+            label="미리보기 다시 시도"
+            testId={`n5-block-preview-retry-${block.id}`}
+            target={previewFailure}
+            // 새 재렌더 시도를 이 칸의 재렌더로 이어 추적한다(「재렌더링 중…」 → 끝나면 미리보기 재조회)
+            onRetried={(task) => {
+              if (task.taskId != null) {
+                editSession.setRerenderTask(block.id, task.taskId, editSession.rerenderTaskByBlock.get(block.id)?.reason ?? 'translation');
+              }
+            }}
+          />
         </div>
       )}
     </div>
   );
 }
 
-/** 번역문 아래 원문 참고 영역(Figma 1069:10267). 원문이 없으면 그리지 않는다 */
+/**
+ * 번역문 아래 원문 참고 카드(Figma 544:3168 → 1792:34883). 흰 바탕·#eaeaea 테두리 카드 안에 「원문」 라벨(12 Light #999)과
+ * 원문(14 Regular #707070)을 4px 간격으로 쌓는다. 원문이 없으면 그리지 않는다. testid 는 원문 텍스트 쪽에 둔다(라벨 제외)
+ */
 function SourceReference({ text }: { text: string }) {
   if (!text) return null;
   return (
-    <p
-      data-testid="n5-block-source-reference"
-      className="mt-1 rounded-[6px] bg-[#f5f5f5] p-5 text-[14px] leading-[normal] tracking-[-0.01em] text-[#707070]"
+    <div
+      data-testid="n5-block-source-reference-card"
+      className="mt-1 flex flex-col gap-1 rounded-[6px] border border-[#eaeaea] bg-white px-5 py-4 leading-[normal]"
     >
-      {text}
-    </p>
+      <p className="text-[12px] font-light tracking-[-0.04em] text-[#999]">원문</p>
+      <p data-testid="n5-block-source-reference" className="text-[14px] tracking-[-0.01em] text-[#707070]">
+        {text}
+      </p>
+    </div>
   );
 }
 
@@ -1011,9 +1014,11 @@ export function N5Panel({
           return;
         }
         if (parsed && isCheckNotSettledError(parsed)) {
-          // 검사가 끝나지 않은 블록이 있다 — 서버가 필요한 검사를 등록했다(registeredBlockIds). 확정하지 않고 N5 에 남아
-          // 블록 검사 상태를 다시 받는다(in_progress 가 되면 버튼이 비활성이 되고 끝날 때까지 추적한다)
-          setConfirmError('번역문 검사가 아직 끝나지 않아 다음 단계로 넘어가지 않았습니다. 검사가 끝나면 다시 저장해 주세요.');
+          // 검사가 끝나지 않은 블록이 있다 — 사용자 오류가 아니라 복구 계약이다(PM 확정). 서버가 이 확정 요청으로 필요한 검사를
+          // 등록했으므로(registeredBlockIds) 오류 안내 없이 N5 에 남아 블록 검사 상태를 바로 다시 받는다. in_progress 가 오면
+          // 「검사 중…」·[저장하러 가기] 비활성이 되고 use-n5-check-sync 의 2초 추적으로 이어진다. 다시 받는 동안은
+          // 확정 잠금(저장하는 중…)이 유지돼 버튼이 먼저 풀리지 않는다. 다른 409·오류는 아래 기존 안내 그대로다.
+          setConfirmError(null);
           await refreshN5Snapshot(queryClient, jobId).catch(() => {
             void queryClient.invalidateQueries({ queryKey: pixlateKeys.n5Blocks(jobId) });
           });

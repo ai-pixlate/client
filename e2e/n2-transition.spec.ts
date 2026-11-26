@@ -3,14 +3,14 @@ import { test, expect, type Page } from '@playwright/test';
 import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 
 // ─────────────────────────────────────────────────────────────────
-// N2 → N3 전환 때 화면 5단계 중 마지막 항목(04·05)이 한 번도 보이지 않고 건너뛰어지는지 검증.
+// N2 → N3 전환 때 화면 단계 묶음 중 마지막 묶음(02·03)이 한 번도 보이지 않고 건너뛰어지는지 검증.
 //
 // 서버가 마지막 stage 를 끝낸 바로 그 poll 에서 currentStep=N3 를 돌려주면, page.tsx 는 N2 를
-// 그 즉시 그리지 않는다. 그 전 poll 이 아직 앞 단계였다면 04·05 는 사용자에게 한 번도 보이지
+// 그 즉시 그리지 않는다. 그 전 poll 이 아직 앞 단계였다면 02·03 은 사용자에게 한 번도 보이지
 // 않는다. 이 파일은 그 응답 순서를 mock 에서 그대로 만들고(lib/msw/handlers.ts
-// __pixlateMockN2Script — stage key 는 이 테스트가 넘긴다), 실제 DOM 에 04·05 가 진행 중 또는
+// __pixlateMockN2Script — stage key 는 이 테스트가 넘긴다), 실제 DOM 에 02·03 이 진행 중 또는
 // 완료로 한 번이라도 그려졌는지를 MutationObserver 로 기록해 확인한다.
-// N3 응답 뒤 완료 표시(100% 와 5단계 전부 완료)는 page.tsx 가 짧게 보여 준다 — 표시 % 흐름 자체는
+// N3 응답 뒤 완료 표시(100% 와 모든 묶음 완료)는 page.tsx 가 짧게 보여 준다 — 표시 % 흐름 자체는
 // n2-analysis-progress.spec.ts 의 'N2 로딩 표현'에서 확인한다.
 // ─────────────────────────────────────────────────────────────────
 
@@ -32,11 +32,14 @@ async function installStepRecorder(page: Page) {
     const w = window as unknown as { __n2StepLog: Record<string, string>[] };
     w.__n2StepLog = [];
     const snapshot = () => {
-      const rows = Array.from(document.querySelectorAll('[data-testid="processing-step-title"]'));
-      if (rows.length !== 5) return;
+      // 사용자 단계 묶음(Figma 1821:46419 — 01·02·03) 번호 → 상태 글자
+      const groups = Array.from(document.querySelectorAll('[data-testid="processing-step"]'));
+      if (groups.length !== 3) return;
       const states: Record<string, string> = {};
-      // 행 키는 화면 위치(01~05행) — 표시 번호는 01 · (빈칸) · (빈칸) · 02 · 03 이다
-      rows.forEach((p, i) => (states[`0${i + 1}`] = (p.nextElementSibling?.textContent ?? '').trim()));
+      groups.forEach((g) => {
+        const no = g.querySelector('[data-testid="processing-step-no"]')?.textContent?.trim() ?? '';
+        states[no] = g.querySelector('[data-testid="processing-step-status"]')?.textContent?.trim() ?? '';
+      });
       const last = w.__n2StepLog[w.__n2StepLog.length - 1];
       if (!last || JSON.stringify(last) !== JSON.stringify(states)) w.__n2StepLog.push(states);
     };
@@ -47,7 +50,7 @@ async function installStepRecorder(page: Page) {
   });
 }
 
-test('N2 마지막 stage 가 끝나자마자 currentStep=N3 가 와도 04·05 가 화면에 한 번은 그려진 뒤 N3 로 넘어간다', async ({
+test('N2 마지막 stage 가 끝나자마자 currentStep=N3 가 와도 02·03 이 화면에 한 번은 그려진 뒤 N3 로 넘어간다', async ({
   page,
 }) => {
   test.setTimeout(60_000);
@@ -78,26 +81,28 @@ test('N2 마지막 stage 가 끝나자마자 currentStep=N3 가 와도 04·05 �
     log.map((s) => s[no]).filter((v, i, arr) => v !== undefined && v !== arr[i - 1]);
   console.log(
     'N2 상태 시퀀스',
-    JSON.stringify(Object.fromEntries(['01', '02', '03', '04', '05'].map((no) => [no, sequenceOf(no)]))),
+    JSON.stringify(Object.fromEntries(['01', '02', '03'].map((no) => [no, sequenceOf(no)]))),
   );
 
-  // 마지막 stage 가 running 으로 한 번도 오지 않았으므로 04·05 는 "진행 중" 없이 대기 → 완료로 바뀐다.
+  // 진행 중은 어느 순간에도 최대 1개다(section 진행 중에도 01 묶음 하나만)
+  for (const s of log) expect(Object.values(s).filter((v) => v === '진행 중').length, JSON.stringify(s)).toBeLessThanOrEqual(1);
+  // 마지막 stage 가 running 으로 한 번도 오지 않았으므로 02·03 은 "진행 중" 없이 대기 → 완료로 바뀐다.
   // N3 응답 뒤에 FE 가 진행 중 상태를 새로 만들지 않는다.
-  expect(sequenceOf('04')).toEqual(['대기', '완료']);
-  expect(sequenceOf('05')).toEqual(['대기', '완료']);
-  // N3 로 넘어가기 직전 5단계 전부 완료 상태가 최소 한 번 그려졌다
-  const allDone = (s: Record<string, string>) => ['01', '02', '03', '04', '05'].every((no) => s[no] === '완료');
+  expect(sequenceOf('02')).toEqual(['대기', '완료']);
+  expect(sequenceOf('03')).toEqual(['대기', '완료']);
+  // N3 로 넘어가기 직전 모든 묶음 완료 상태가 최소 한 번 그려졌다
+  const allDone = (s: Record<string, string>) => ['01', '02', '03'].every((no) => s[no] === '완료');
   expect(log.some(allDone), JSON.stringify(log)).toBe(true);
   expect(allDone(log[log.length - 1]), '마지막으로 그린 N2 상태는 전부 완료').toBe(true);
   // 어느 단계도 뒤로 가지 않는다(진행 중을 반드시 거칠 필요는 없다 — 짧은 stage 는 polling 에 안 잡힐 수 있다)
   const rank: Record<string, number> = { 대기: 0, '진행 중': 1, 완료: 2 };
-  for (const no of ['01', '02', '03', '04', '05']) {
+  for (const no of ['01', '02', '03']) {
     const seq = sequenceOf(no).map((v) => rank[v] ?? -1);
     for (let i = 1; i < seq.length; i += 1) expect(seq[i], `${no}: ${sequenceOf(no).join(' → ')}`).toBeGreaterThan(seq[i - 1]);
   }
 });
 
-/** N2 중간(02·03 진행 중)에 서버가 currentStep=N1 로 돌려보내는 중단/복귀 응답. */
+/** N2 중간(section 진행 중 — 01 묶음 진행 중)에 서버가 currentStep=N1 로 돌려보내는 중단/복귀 응답. */
 const SCRIPT_RETURNING_TO_N1 = [
   { progress: 0, stages: [stage('ocr', 'running'), stage('section', 'pending'), stage('verify', 'pending')] },
   { progress: 0.34, stages: [stage('ocr', 'done'), stage('section', 'running'), stage('verify', 'pending')] },
@@ -131,7 +136,7 @@ test('N2 에서 currentStep=N1 로 돌아가면 5단계 완료 표시 없이 바
     const start = () =>
       new MutationObserver(() => {
         if (w.__n1ResponseAt === undefined || w.__n2GoneAt !== undefined) return;
-        const hasN2Rows = document.querySelector('[data-testid="processing-step-title"]') != null;
+        const hasN2Rows = document.querySelector('[data-testid="processing-step"]') != null;
         if (!hasN2Rows) w.__n2GoneAt = performance.now();
       }).observe(document.documentElement, { childList: true, subtree: true, characterData: true });
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
@@ -150,11 +155,8 @@ test('N2 에서 currentStep=N1 로 돌아가면 5단계 완료 표시 없이 바
   await expect(page.getByRole('heading', { name: '이미지 분석' })).toBeVisible({ timeout: 15_000 });
 
   // 최종 화면은 서버 정본(currentStep=N1)대로 N1 — 완료 표시로 붙잡지 않는다
-  // (N2 의 StepNav 에도 "정보 입력"이 있으므로 N1 일 때만 그리는 페이지 공통 헤더로 확인한다)
-  const n1Header = page.locator('header', { has: page.getByRole('link', { name: '← 뒤로' }) });
-  await expect(n1Header).toBeVisible({ timeout: 6_000 });
-  await expect(n1Header).toContainText('N1');
-  await expect(n1Header).toContainText('정보 입력');
+  // (N2 의 StepNav 에도 "정보 입력"이 있으므로 작업용 공통 헤더의 화면명으로 확인한다)
+  await expect(page.getByTestId('job-header-title')).toHaveText('정보 입력', { timeout: 6_000 });
   await expect(page.getByRole('heading', { name: '이미지 분석' })).toBeHidden();
   expect(steps).toContain('N1');
   expect(steps).not.toContain('N3');
@@ -169,10 +171,10 @@ test('N2 에서 currentStep=N1 로 돌아가면 5단계 완료 표시 없이 바
   expect(timing.n2GoneAt! - timing.n1ResponseAt!).toBeLessThan(600);
 
   const log = await page.evaluate(() => (window as unknown as { __n2StepLog: Record<string, string>[] }).__n2StepLog);
-  // 5단계 전체 완료 presentation 이 한 번도 그려지지 않았다
-  const allDone = (s: Record<string, string>) => ['01', '02', '03', '04', '05'].every((no) => s[no] === '완료');
+  // 모든 묶음 완료 presentation 이 한 번도 그려지지 않았다
+  const allDone = (s: Record<string, string>) => ['01', '02', '03'].every((no) => s[no] === '완료');
   expect(log.length).toBeGreaterThan(0);
   expect(log.some(allDone), JSON.stringify(log)).toBe(false);
-  // 서버가 끝내지 않은 04·05 는 완료로 바뀌지 않았다
-  expect(log.some((s) => s['04'] === '완료' || s['05'] === '완료'), JSON.stringify(log)).toBe(false);
+  // 서버가 끝내지 않은 02·03 은 완료로 바뀌지 않았다
+  expect(log.some((s) => s['02'] === '완료' || s['03'] === '완료'), JSON.stringify(log)).toBe(false);
 });

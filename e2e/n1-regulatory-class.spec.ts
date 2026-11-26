@@ -131,17 +131,14 @@ test.describe('규제 분류 드롭다운', () => {
     await expect(error).toHaveCount(0);
   });
 
-  test('잘 모름·복합 안내 문구', async ({ page }) => {
-    const unknownHelper = page.getByText('잘 모름을 선택하면 화장품 기준으로 검사됩니다.');
-    const combinationHelper = page.getByText('복합 제품은 고른 OTC 종류와 같은 기준으로 검사합니다(화장품 규칙 포함).', { exact: false });
-    await pickRegulatoryClass(page, '화장품');
-    await expect(unknownHelper).toHaveCount(0);
-    await expect(combinationHelper).toHaveCount(0);
-    await pickRegulatoryClass(page, '잘 모름');
-    await expect(unknownHelper).toBeVisible();
+  test('안내 문구는 복합에서만 보인다(화장품·OTC 의약품·잘 모름은 없음)', async ({ page }) => {
+    const helper = page.getByTestId('n1-regulatory-helper');
+    for (const label of ['화장품', 'OTC 의약품', '잘 모름']) {
+      await pickRegulatoryClass(page, label);
+      await expect(helper).toHaveCount(0);
+    }
     await pickRegulatoryClass(page, '화장품+OTC 복합');
-    await expect(combinationHelper).toBeVisible();
-    await expect(unknownHelper).toHaveCount(0);
+    await expect(helper).toContainText('선택한 OTC 종류의 기준과 화장품 규칙을 함께 적용해 검사합니다.');
   });
 
   test('국가를 바꾸면 규제 분류가 「선택」으로 돌아간다', async ({ page }) => {

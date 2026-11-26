@@ -5,6 +5,7 @@ import { MOCK_BRAND_ID, MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 import {
   expectCompletionCopy,
   expectCompletionPresentation,
+  expectSingleActive,
   expectSmoothProcessing,
   formatTimeline,
   onScreen,
@@ -15,16 +16,18 @@ import {
 import { pickRegulatoryClass } from './helpers/n1-regulatory-class';
 
 // ─────────────────────────────────────────────────────────────────
-// N4 — "번역 중" 5단계 표시 회귀 검증 (Figma 660:4221).
+// N4 — "번역 중" 단계 묶음 표시 회귀 검증 (Figma 1821:48003 · 1821:48808).
 //
 // 세 가지를 따로 본다.
-// - 서버에서 관측한 N4 상태(stages: inpaint→translate→verify→render) → 이번 poll 의 행·caption
-// - 화면의 5개 설명 행 — render 하나를 04·05 두 행이 함께 설명한다(서버에 04/05 substage 가 없어
-//   둘 중 하나만 고르거나 04 → 05 순서를 만들지 않는다)
-// - 표시 progress 숫자 — 관측 단계는 상한만 열고, 숫자는 점프·감소 없이 오르며 currentStep=N4 동안 100 이
+// - 서버에서 관측한 N4 상태(stages: inpaint→translate→verify→render) → 이번 poll 의 묶음·caption.
+//   서버는 섹션별로 병렬이라 여러 stage 가 함께 running 일 수 있지만, 화면은 아직 완료되지 않은 가장 앞 묶음 하나만
+//   진행 중이다(「진행 중」 최대 1개).
+// - 화면의 묶음 4개 — 01 = inpaint+translate, 02 = verify, 03·04 = render(서버에 03/04 substage 가 없어 render 동안
+//   03 진행 중 · 04 대기, 03 → 04 순서를 만들지 않는다)
+// - 표시 progress 숫자 — 진행 중 묶음이 상한만 열고, 숫자는 점프·감소 없이 오르며 currentStep=N4 동안 100 이
 //   되지 않는다
 // N4 전체 완료는 서버 currentStep=N5 뿐이다. render=done·progress=1 만으로 완료로 보지 않는다. N5 응답을
-// 받은 뒤에만 N4 화면이 100% 와 5행 완료를 잠깐 보여 주고 N5 로 넘어간다.
+// 받은 뒤에만 N4 화면이 100% 와 모든 묶음 완료를 잠깐 보여 주고 N5 로 넘어간다.
 // 섹션마다 단계가 다른 응답은 lib/msw/handlers.ts __pixlateMockN4Script 로 poll 마다 지정한다.
 // ─────────────────────────────────────────────────────────────────
 
@@ -77,7 +80,7 @@ const TRANSLATE_CAPTION = '번역·용어 맞춤 중';
 type N4Snapshot = { rows: Record<string, string>; progress: number; caption: string };
 
 /**
- * N4 화면의 5단계 행·표시 progress·GIF caption 을 DOM 변화마다 기록한다(연속 중복 제거).
+ * N4 화면의 단계 묶음(01~04)·표시 progress·GIF caption 을 DOM 변화마다 기록한다(연속 중복 제거).
  * N4 heading 이 보이는 동안만 기록한다 — N5 로 넘어간 뒤 값은 섞지 않는다.
  */
 async function recordN4Snapshots(page: Page) {
@@ -88,10 +91,14 @@ async function recordN4Snapshots(page: Page) {
       const snapshot = () => {
         const onN4 = Array.from(document.querySelectorAll('h1, h2, h3')).some((h) => h.textContent?.trim() === '번역 중');
         const bar = document.querySelector('[role="progressbar"]');
-        const rowEls = Array.from(document.querySelectorAll('[data-testid="processing-step-title"]'));
-        if (!onN4 || !bar || rowEls.length !== 5) return;
+        const groups = Array.from(document.querySelectorAll('[data-testid="processing-step"]'));
+        if (!onN4 || !bar || groups.length !== 4) return;
+        // 키는 사용자 단계 묶음 번호(Figma 1821:48015 — 01~04), 값은 그 묶음의 상태 글자 하나
         const rows: Record<string, string> = {};
-        rowEls.forEach((p, i) => (rows[`0${i + 1}`] = (p.nextElementSibling?.textContent ?? '').trim()));
+        groups.forEach((g) => {
+          const no = g.querySelector('[data-testid="processing-step-no"]')?.textContent?.trim() ?? '';
+          rows[no] = g.querySelector('[data-testid="processing-step-status"]')?.textContent?.trim() ?? '';
+        });
         const text = document.body.textContent ?? '';
         const caption = captions.find((c) => text.includes(c)) ?? '';
         const entry = { rows, progress: Number(bar.getAttribute('aria-valuenow')), caption };
@@ -118,13 +125,14 @@ async function recordN4Snapshots(page: Page) {
 const n4Log = (page: Page) => page.evaluate(() => (window as unknown as { __n4Log: N4Snapshot[] }).__n4Log);
 const allDone = (rows: Record<string, string>) => Object.values(rows).every((v) => v === D);
 
-/** N4 동안 공통으로 지켜야 하는 것: 100% 없음 · 5행 전부 완료 없음 · 숫자 감소 없음 */
+/** N4 동안 공통으로 지켜야 하는 것: 100% 없음 · 모든 묶음 완료 없음 · 진행 중 최대 1개 · 숫자 감소 없음 */
 function expectN4Invariants(log: N4Snapshot[]) {
   const dump = JSON.stringify(log);
   expect(log.length, dump).toBeGreaterThan(0);
   for (const entry of log) {
     expect(entry.progress, `N4 동안 100% 금지: ${dump}`).toBeLessThan(100);
-    expect(allDone(entry.rows), `N4 동안 5행 전부 완료 금지: ${dump}`).toBe(false);
+    expect(allDone(entry.rows), `N4 동안 모든 묶음 완료 금지: ${dump}`).toBe(false);
+    expect(Object.values(entry.rows).filter((v) => v === A).length, `진행 중은 최대 1개: ${dump}`).toBeLessThanOrEqual(1);
   }
   for (let i = 1; i < log.length; i += 1) {
     expect(log[i].progress, `표시 progress 감소: ${log.map((e) => e.progress).join(' → ')}`).toBeGreaterThanOrEqual(log[i - 1].progress);
@@ -177,15 +185,16 @@ test('N4 A — 일부 섹션 render=done 이어도 translate 가 running 이면 
   await reachN4(page);
   await expect(page.getByRole('heading', { name: '번역 중' })).toBeVisible({ timeout: 5_000 });
 
-  // tick 1: 현재 관측 가능한 running 은 translate — render=done 을 우선하지 않는다. 응답에 없는 inpaint 는 완료가 아니다
-  await expect.poll(async () => (await n4Log(page)).at(-1)?.rows, { timeout: 10_000 }).toEqual(rowsOf(P, A, P, P, P));
-  await expect(page.getByText(TRANSLATE_CAPTION, { exact: true })).toBeVisible();
+  // tick 1: 현재 관측 가능한 running 은 translate(01 묶음) — render=done 을 우선하지 않는다. 응답에 없는 inpaint 를 완료로
+  // 보지 않으므로 01 묶음은 진행 중 그대로다
+  await expect.poll(async () => (await n4Log(page)).at(-1)?.rows, { timeout: 10_000 }).toEqual(rowsOf(A, P, P, P));
+  await expect(page.getByTestId('processing-log-status')).toHaveText(TRANSLATE_CAPTION);
   const atTranslate = await readProgress(page);
   expect(atTranslate).toBeLessThan(100);
 
-  // tick 2: render running(서버 progress 0.65 → 0.60) — 여전히 N4, 100% 아님, render 표시
-  await expect.poll(async () => (await n4Log(page)).at(-1)?.rows, { timeout: 10_000 }).toEqual(rowsOf(D, D, D, A, A));
-  await expect(page.getByText(RENDER_CAPTION, { exact: true })).toBeVisible();
+  // tick 2: render running(서버 progress 0.65 → 0.60) — 여전히 N4, 100% 아님, render 표시(03 진행 중 · 04 대기)
+  await expect.poll(async () => (await n4Log(page)).at(-1)?.rows, { timeout: 10_000 }).toEqual(rowsOf(D, D, A, P));
+  await expect(page.getByTestId('processing-log-status')).toHaveText(RENDER_CAPTION);
   await expect(page.getByRole('heading', { name: '번역 중' })).toBeVisible();
   const atRender = await readProgress(page);
   expect(atRender).toBeLessThan(100);
@@ -215,16 +224,17 @@ test('N4 B — render=done 이 아니라 서버 currentStep=N5 가 와야 N5 로
   const timeline = formatTimeline(rec);
   const snaps = processingSnaps(rec, '번역 중', 'N5');
   expectSmoothProcessing(snaps, timeline);
-  expect(snaps.some((s) => s.rows === 'DDDDD'), timeline).toBe(false);
-  expect(snaps.some((s) => s.rows === 'PAPPP'), timeline).toBe(true);
-  expect(snaps.some((s) => s.rows === 'DDDAA'), timeline).toBe(true);
+  expect(snaps.some((s) => s.rows === 'DDDD'), timeline).toBe(false);
+  expect(snaps.some((s) => s.rows === 'APPP'), timeline).toBe(true);
+  expect(snaps.some((s) => s.rows === 'DDAP'), timeline).toBe(true);
+  rowSequence(snaps);
   expectCompletionPresentation(rec, '번역 중', 'N5', timeline);
   const steps = rec.polls.map((p) => p.currentStep);
   expect(steps.filter((s) => s === 'N4').length, steps.join(',')).toBeGreaterThanOrEqual(4);
   expect(steps.at(-1)).toBe('N5');
 });
 
-test('N4 C — 첫 render 관측이 progress=0.9 여도 04·05 를 함께 render 로 보이고, 보지 않은 04 단독 단계를 만들지 않는다', async ({
+test('N4 C — 첫 render 관측이 progress=0.9 여도 render 는 03 진행 중 · 04 대기이고, 시간이 지나도 04 로 넘어가지 않는다', async ({
   page,
 }) => {
   test.setTimeout(60_000);
@@ -234,19 +244,17 @@ test('N4 C — 첫 render 관측이 progress=0.9 여도 04·05 를 함께 render
   await reachN4(page);
   await expect(page.getByRole('heading', { name: '번역 중' })).toBeVisible({ timeout: 5_000 });
 
-  await expect.poll(async () => (await n4Log(page)).at(-1)?.rows, { timeout: 10_000 }).toEqual(rowsOf(D, D, D, A, A));
-  await expect(page.getByText(RENDER_CAPTION, { exact: true })).toBeVisible();
-  // 시간이 지나도 04 → 05 로 넘어가는 최소 체류·자동 전환이 없다
+  await expect.poll(async () => (await n4Log(page)).at(-1)?.rows, { timeout: 10_000 }).toEqual(rowsOf(D, D, A, P));
+  await expect(page.getByTestId('processing-log-status')).toHaveText(RENDER_CAPTION);
+  // 시간이 지나도 03 → 04 로 넘어가는 최소 체류·자동 전환이 없다
   await page.clock.fastForward('05:00');
-  await expect.poll(async () => (await n4Log(page)).at(-1)?.rows).toEqual(rowsOf(D, D, D, A, A));
+  await expect.poll(async () => (await n4Log(page)).at(-1)?.rows).toEqual(rowsOf(D, D, A, P));
 
   const log = await n4Log(page);
   expectN4Invariants(log);
-  // 서버가 준 적 없는 "04 만 진행 중"·"05 만 진행 중" 상태가 한 번도 그려지지 않았다
-  for (const e of log) {
-    expect(e.rows['04'], JSON.stringify(log)).toBe(e.rows['05']);
-  }
-  expect(log.every((e) => JSON.stringify(e.rows) === JSON.stringify(rowsOf(D, D, D, A, A))), JSON.stringify(log)).toBe(true);
+  // render 하나를 03·04 가 함께 설명한다 — 서버가 준 적 없는 "04 진행 중"을 그리지 않는다
+  for (const e of log) expect(e.rows['04'], JSON.stringify(log)).toBe(P);
+  expect(log.every((e) => JSON.stringify(e.rows) === JSON.stringify(rowsOf(D, D, A, P))), JSON.stringify(log)).toBe(true);
 });
 
 test('N4 D — jobStatus=failed·render=done·progress=1 이어도 완료가 아니고 N4 오류 화면에 머문다', async ({ page }) => {
@@ -291,17 +299,18 @@ test('N4 D — jobStatus=failed·render=done·progress=1 이어도 완료가 아
 
 // ── 로딩 표현 안정화: 서버 관측 단계 · 표시 % · 실제 완료(N5) 를 분리 ──
 const N4_TITLE = '번역 중';
-const N4_PARALLEL_CAPTION = '여러 번역 작업을 함께 처리 중';
+const INPAINT_CAPTION = '원문 제거·배경 복원 중';
 const N4_COMPLETION_COPY = {
-  headline: '번역 작업이 완료되었습니다.',
-  visualDescription: '번역 결과를 반영해 검수 화면으로 이동합니다.',
   heading: '번역 완료',
   line: '번역과 이미지 적용이 완료되었습니다.',
   hint: '검수 화면으로 이동합니다.',
 };
 
-/** 같은 실행 안에서 행 상태가 바뀐 순서(연속 중복 제거) */
-const rowSequence = (snaps: DomSnap[]) => snaps.map((s) => s.rows).filter((r, i, arr) => r !== arr[i - 1]);
+/** 묶음 상태 시퀀스(연속 중복 제거). 모든 기록에서 진행 중 묶음·「진행 중」 글자가 최대 1개인지도 함께 확인한다 */
+const rowSequence = (snaps: DomSnap[]) => {
+  expectSingleActive(snaps, snaps.map((s) => `${s.rows} active=${s.activeTexts}`).join('\n'));
+  return snaps.map((s) => s.rows).filter((r, i, arr) => r !== arr[i - 1]);
+};
 
 test('N4 E-1 — 빠른 서버(inpaint → render → N5)면 보지 않은 단계를 재생하지 않고, % 는 점프 없이 오르며 N5 응답 뒤에만 100 을 보여 준다', async ({
   page,
@@ -320,8 +329,8 @@ test('N4 E-1 — 빠른 서버(inpaint → render → N5)면 보지 않은 단�
 
   const timeline = formatTimeline(rec);
   const snaps = processingSnaps(rec, N4_TITLE, 'N5');
-  // 관측하지 않은 translate(02)·verify(03) 진행 중을 만들지 않는다
-  expect(rowSequence(snaps), timeline).toEqual(['APPPP', 'DDDAA']);
+  // 관측하지 않은 verify(02) 진행 중을 만들지 않는다
+  expect(rowSequence(snaps), timeline).toEqual(['APPP', 'DDAP']);
   expectSmoothProcessing(snaps, timeline);
   expectCompletionPresentation(rec, N4_TITLE, 'N5', timeline);
 });
@@ -338,16 +347,17 @@ test('N4 E-2 — 기본 순차 mock: 행은 서버 단계 순서대로, % 는 �
   const snaps = processingSnaps(rec, N4_TITLE, 'N5');
   const seq = rowSequence(snaps);
   // 2초 polling 이 놓친 단계는 건너뛸 수 있지만, 순서가 뒤로 가지 않는다
-  const order = ['APPPP', 'DAPPP', 'DDAPP', 'DDDAA'];
+  // inpaint·translate 는 같은 01 묶음이라 그 사이에서는 묶음이 바뀌지 않는다
+  const order = ['APPP', 'DAPP', 'DDAP'];
   for (let i = 1; i < seq.length; i += 1) expect(order.indexOf(seq[i]), timeline).toBeGreaterThan(order.indexOf(seq[i - 1]));
-  expect(seq.at(-1), timeline).toBe('DDDAA');
-  // 04·05 는 render 하나를 함께 설명한다
-  for (const s of snaps) expect(s.rows[3], timeline).toBe(s.rows[4]);
+  expect(seq.at(-1), timeline).toBe('DDAP');
+  // 03·04 는 render 하나를 함께 설명한다 — 처리 중 04 는 대기다
+  for (const s of snaps) expect(s.rows[3], timeline).toBe('P');
   expectSmoothProcessing(snaps, timeline);
   expectCompletionPresentation(rec, N4_TITLE, 'N5', timeline);
 });
 
-test('N4 E-3 — 섹션 병렬: 네 단계가 함께 running 이면 01~05 를 함께 진행 중으로 보이고 % 가 01 구간에 묶이지 않는다', async ({
+test('N4 E-3 — 섹션 병렬: 네 단계가 함께 running 이어도 가장 앞 미완료 묶음(01) 하나만 진행 중이고 % 상한도 01 구간(39)이다', async ({
   page,
 }) => {
   test.setTimeout(90_000);
@@ -364,11 +374,13 @@ test('N4 E-3 — 섹션 병렬: 네 단계가 함께 running 이면 01~05 를 �
 
   const timeline = formatTimeline(rec);
   const snaps = processingSnaps(rec, N4_TITLE, 'N5');
-  // 처음 poll 은 inpaint 하나만 running, 그 뒤에는 서버가 running 이라고 한 단계를 모두 진행 중으로 보인다
-  expect(rowSequence(snaps), timeline).toEqual(['APPPP', 'AAAAA']);
-  expect(snaps.at(-1)!.cap, timeline).toBe(N4_PARALLEL_CAPTION);
+  // 서버 작업은 병렬 그대로지만 화면은 01 묶음 하나만 진행 중이다 — 뒤 묶음을 진행 중으로 올리지 않는다
+  expect(rowSequence(snaps), timeline).toEqual(['APPP']);
+  // caption 도 진행 중 묶음(01)의 running stage 를 설명한다 — 병렬 문구로 바꾸지 않는다
+  expect(new Set(snaps.map((d) => d.cap)), timeline).toEqual(new Set([INPAINT_CAPTION]));
   expectSmoothProcessing(snaps, timeline);
-  expect(snaps.at(-1)!.pct!, `inpaint 구간(19)에 묶이지 않는다\n${timeline}`).toBeGreaterThan(25);
+  // 표시 % 상한은 진행 중 묶음(01) 기준이다 — 뒤쪽 running stage 로 80~90% 까지 열지 않는다
+  for (const d of snaps) expect(d.pct!, `01 묶음 상한(39)\n${timeline}`).toBeLessThanOrEqual(39);
 });
 
 test('N4 E-4 — 같은 브라우저 context 에서 N1 → N5 를 두 번 실행해도 두 실행이 같은 정책으로 보인다', async ({ page }) => {
@@ -391,7 +403,7 @@ test('N4 E-4 — 같은 브라우저 context 에서 N1 → N5 를 두 번 실행
   for (const [i, v] of views.entries()) {
     // 매 실행은 처음(0 근처)에서 시작한다 — 이전 실행의 표시 % 를 이어받지 않는다
     expect(v.snaps[0].pct!, `run ${i + 1} 첫 표시 %\n${both}`).toBeLessThanOrEqual(5);
-    expect(v.snaps[0].rows, `run ${i + 1} 첫 행\n${both}`).toBe('APPPP');
+    expect(v.snaps[0].rows, `run ${i + 1} 첫 묶음\n${both}`).toBe('APPP');
     expectSmoothProcessing(v.snaps, both);
     expectCompletionPresentation(rec, N4_TITLE, 'N5', both, runs[i].from);
   }
@@ -404,9 +416,9 @@ test('N4 E-5 — N4 도중 새로 시작(페이지 이동)한 다음 실행이 �
   test.setTimeout(150_000);
   const rec = await recordProcessing(page);
   await reachN4(page);
-  // 첫 실행을 verify(03) 진행 중에 끊는다 — 화면 unmount 정리 없이 페이지가 바뀐다
-  await expect.poll(() => onScreen(rec.dom, N4_TITLE).at(-1)?.rows, { timeout: 30_000 }).toBe('DDAPP');
-  // 이전 화면을 먼저 떠난 뒤에 두 번째 실행 시각을 잰다 — 그러지 않으면 아직 남아 있던 첫 실행 화면(DDAPP)의 마지막 기록이
+  // 첫 실행을 verify(02) 진행 중에 끊는다 — 화면 unmount 정리 없이 페이지가 바뀐다
+  await expect.poll(() => onScreen(rec.dom, N4_TITLE).at(-1)?.rows, { timeout: 30_000 }).toBe('DAPP');
+  // 이전 화면을 먼저 떠난 뒤에 두 번째 실행 시각을 잰다 — 그러지 않으면 아직 남아 있던 첫 실행 화면(DAPP)의 마지막 기록이
   // 두 번째 실행의 첫 표시로 섞인다(측정 경합). 정리 없이 페이지가 바뀌는 조건은 같다(전체 이동)
   await page.goto('about:blank');
   const secondFrom = Date.now();
@@ -415,13 +427,13 @@ test('N4 E-5 — N4 도중 새로 시작(페이지 이동)한 다음 실행이 �
 
   const timeline = formatTimeline(rec, secondFrom);
   const snaps = processingSnaps(rec, N4_TITLE, 'N5', secondFrom);
-  expect(snaps[0].rows, timeline).toBe('APPPP');
+  expect(snaps[0].rows, timeline).toBe('APPP');
   expect(snaps[0].pct!, `두 번째 실행 첫 표시 %\n${timeline}`).toBeLessThanOrEqual(5);
   expectSmoothProcessing(snaps, timeline);
   expectCompletionPresentation(rec, N4_TITLE, 'N5', timeline, secondFrom);
 });
 
-test('N4 E-6 — N5 응답 뒤 완료 표시 동안 상태 태그·LOG·안내가 모두 완료를 말하고, 그 전에는 완료라고 하지 않는다', async ({ page }) => {
+test('N4 E-6 — N5 응답 뒤 완료 표시 동안 LOG·안내가 모두 완료를 말하고, 그 전에는 완료라고 하지 않는다', async ({ page }) => {
   test.setTimeout(90_000);
   const rec = await recordProcessing(page);
   await setN4Script(page, [
@@ -436,14 +448,12 @@ test('N4 E-6 — N5 응답 뒤 완료 표시 동안 상태 태그·LOG·안내�
   const { first100At, leftAt } = expectCompletionPresentation(rec, N4_TITLE, 'N5', timeline);
   expectCompletionCopy(rec, N4_TITLE, 'N5', N4_COMPLETION_COPY, timeline);
   const processing = processingSnaps(rec, N4_TITLE, 'N5');
-  expect(new Set(processing.map((d) => d.tag)), timeline).toEqual(new Set(['진행중']));
   expect(new Set(processing.map((d) => d.heading)), timeline).toEqual(new Set(['지금 처리하는 일']));
   expect(new Set(processing.map((d) => d.hint)), timeline).toEqual(new Set(['완료되면 검수 화면으로 자동 이동합니다.']));
-  expect(new Set(processing.map((d) => d.headline)), timeline).toEqual(new Set(['번역과 배경 복원을 함께 진행하고 있습니다.']));
   console.log(`N4 100% 노출 ${leftAt - first100At}ms`);
 });
 
-test('N4 E-7 — 병렬 running 은 해당 행을 모두 진행 중으로, render=done 은 완료·상한으로 쓰지 않고, 상한은 running 인 가장 뒤 단계로 연다', async ({
+test('N4 E-7 — 병렬 running 이어도 가장 앞 미완료 묶음 하나만 진행 중이고, render=done 은 완료·상한으로 쓰지 않으며, 상한·caption 은 진행 중 묶음 기준이다', async ({
   page,
 }) => {
   test.setTimeout(90_000);
@@ -457,18 +467,16 @@ test('N4 E-7 — 병렬 running 은 해당 행을 모두 진행 중으로, rende
 
   const timeline = formatTimeline(rec);
   const snaps = processingSnaps(rec, N4_TITLE, 'N5');
-  // A → B → C: 서버가 running 이라고 한 단계만 진행 중. render=done 은 04·05 완료가 아니다
-  // B 에는 inpaint key 가 없다 — 응답에 없는 단계를 완료로 그리지 않는다
-  expect(rowSequence(snaps), timeline).toEqual(['AAAPP', 'PAPPP', 'DDDAA']);
-  const a = snaps.filter((d) => d.rows === 'AAAPP');
-  const b = snaps.filter((d) => d.rows === 'PAPPP');
-  const c = snaps.filter((d) => d.rows === 'DDDAA');
-  // A: 하나의 단계만 지금 작업이라고 말하지 않는다. 01 구간(19)에 묶이지 않는다
-  expect(new Set(a.map((d) => d.cap)), timeline).toEqual(new Set([N4_PARALLEL_CAPTION]));
-  expect(a.at(-1)!.pct!, timeline).toBeGreaterThan(19);
-  // B: translate 만 running — render=done 으로 99 상한을 열지 않는다(02 상한 39 안에 머문다)
-  expect(new Set(b.map((d) => d.cap)), timeline).toEqual(new Set(['번역·용어 맞춤 중']));
-  for (const d of b) expect(d.pct!, timeline).toBeLessThanOrEqual(Math.max(39, b[0].pct!));
+  // A(inpaint·translate·verify running)와 B(translate running · render done · inpaint key 없음)는 모두 01 묶음 진행 중이다.
+  // verify running 이어도 02 를 진행 중으로 올리지 않고, render=done 으로 03·04 를 완료로 그리지 않는다
+  expect(rowSequence(snaps), timeline).toEqual(['APPP', 'DDAP']);
+  const a = snaps.filter((d) => d.rows === 'APPP' && d.cap === INPAINT_CAPTION);
+  const b = snaps.filter((d) => d.rows === 'APPP' && d.cap === '번역·용어 맞춤 중');
+  const c = snaps.filter((d) => d.rows === 'DDAP');
+  expect(a.length, timeline).toBeGreaterThan(0);
+  expect(b.length, timeline).toBeGreaterThan(0);
+  // A·B: 진행 중 묶음(01) 상한 39 안에 머문다 — 뒤쪽 running(verify)·render=done 으로 상한을 열지 않는다
+  for (const d of [...a, ...b]) expect(d.pct!, timeline).toBeLessThanOrEqual(39);
   // C: render running 에서 상한이 열려 계속 오르되, render 하한(60)으로 뛰지 않는다
   expect(c[0].pct!, timeline).toBeGreaterThanOrEqual(b.at(-1)!.pct!);
   expect(c[0].pct!, timeline).toBeLessThan(60);
@@ -479,7 +487,7 @@ test('N4 E-7 — 병렬 running 은 해당 행을 모두 진행 중으로, rende
   expectCompletionCopy(rec, N4_TITLE, 'N5', N4_COMPLETION_COPY, timeline);
 });
 
-test('N4 E-8 — translate running · render done(inpaint key 없음)이면 01 을 완료로 추정하지 않고, render=done 으로 상한을 열지 않는다(02 상한 39)', async ({ page }) => {
+test('N4 E-8 — translate running · render done(inpaint key 없음)이면 01 묶음은 진행 중 그대로이고, render=done 으로 상한을 열지 않는다(01 상한 39)', async ({ page }) => {
   test.setTimeout(90_000);
   const rec = await recordProcessing(page);
   await setN4Script(page, [PARTIAL_RENDER_DONE]);
@@ -489,13 +497,14 @@ test('N4 E-8 — translate running · render done(inpaint key 없음)이면 01 �
 
   const timeline = formatTimeline(rec);
   const snaps = processingSnaps(rec, N4_TITLE, 'N5');
-  // inpaint key 가 응답에 없으므로 01 은 완료가 아니다. render=done 으로 04·05 완료도 아니다
-  expect(new Set(snaps.map((d) => d.rows)), timeline).toEqual(new Set(['PAPPP']));
+  // inpaint key 가 응답에 없으므로 01 은 완료가 아니다. render=done 으로 03·04 완료도 아니다
+  expect(new Set(snaps.map((d) => d.rows)), timeline).toEqual(new Set(['APPP']));
+  rowSequence(snaps);
   for (const d of snaps) expect(d.pct!, timeline).toBeLessThanOrEqual(39);
   expectSmoothProcessing(snaps, timeline);
 });
 
-test('N4 E-9 — inpaint=done 이 명시된 응답에서만 01 을 완료로 그린다', async ({ page }) => {
+test('N4 E-9 — inpaint=done 이어도 translate 가 running 이면 01 묶음은 진행 중이다(묶음은 모든 stage 가 done 일 때만 완료)', async ({ page }) => {
   test.setTimeout(90_000);
   const rec = await recordProcessing(page);
   await setN4Script(page, [
@@ -507,6 +516,31 @@ test('N4 E-9 — inpaint=done 이 명시된 응답에서만 01 을 완료로 그
 
   const timeline = formatTimeline(rec);
   const snaps = processingSnaps(rec, N4_TITLE, 'N5');
-  expect(new Set(snaps.map((d) => d.rows)), timeline).toEqual(new Set(['DAPPP']));
+  expect(new Set(snaps.map((d) => d.rows)), timeline).toEqual(new Set(['APPP']));
+  expect(new Set(snaps.map((d) => d.cap)), timeline).toEqual(new Set(['번역·용어 맞춤 중']));
   for (const d of snaps) expect(d.pct!, timeline).toBeLessThanOrEqual(39);
+  rowSequence(snaps);
+});
+
+test('N4 E-10 — 01 묶음 stage(inpaint·translate)가 모두 done 이고 verify running 이면 02 가 진행 중이다(뒤 render running 은 대기)', async ({ page }) => {
+  test.setTimeout(90_000);
+  const rec = await recordProcessing(page);
+  await setN4Script(page, [
+    {
+      progress: 0.55,
+      stages: [n4Stage('inpaint', 'done'), n4Stage('translate', 'done'), n4Stage('verify', 'running'), n4Stage('render', 'running')],
+    },
+  ]);
+  await reachN4(page);
+  await expect(page.getByRole('heading', { name: N4_TITLE })).toBeVisible({ timeout: 5_000 });
+  await page.waitForTimeout(6_000);
+
+  const timeline = formatTimeline(rec);
+  const snaps = processingSnaps(rec, N4_TITLE, 'N5');
+  expect(new Set(snaps.map((d) => d.rows)), timeline).toEqual(new Set(['DAPP']));
+  expect(new Set(snaps.map((d) => d.cap)), timeline).toEqual(new Set(['규제 기준 확인 중']));
+  // 상한은 02(59) — render running 으로 99 까지 열지 않는다
+  for (const d of snaps) expect(d.pct!, timeline).toBeLessThanOrEqual(59);
+  await expect(page.getByText('진행 중', { exact: true })).toHaveCount(1);
+  rowSequence(snaps);
 });

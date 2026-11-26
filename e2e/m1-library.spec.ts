@@ -41,18 +41,18 @@ test('GET /library 카드 4건 + 추가 생성 카드, 같은 상품도 국가·
   await expect(page.getByTestId('library-grid').getByText('비타민C 세럼')).toHaveCount(3);
 });
 
-test('카드에 상품명·저장일·완료·국가/언어 표시 이름이 보인다', async ({ page }) => {
+test('카드에는 최신 Figma(21:246)대로 상품명과 상태 「완료」만 보인다 — 규격·저장일·국가/언어는 없다', async ({ page }) => {
   const c = card(page, 9002);
-  await expect(c.getByText('비타민C 세럼')).toBeVisible();
-  await expect(c.getByTestId('library-card-date-9002')).toHaveText('2026.10.07');
-  // 카드마다 저장일이 다르게 보인다(같은 날 저장된 9001·9002는 같은 날짜)
-  await expect(page.getByTestId('library-card-date-9001')).toHaveText('2026.10.07');
-  await expect(page.getByTestId('library-card-date-9003')).toHaveText('2026.10.12');
-  await expect(page.getByTestId('library-card-date-9004')).toHaveText('2026.09.19');
-  await expect(c.getByText('완료')).toBeVisible();
-  // 코드값(JP/ja)이 아니라 GET /master/* 표시 이름
-  await expect(c.getByTestId('library-card-locale-9002')).toHaveText('일본일본어');
-  await expect(card(page, 9004).getByTestId('library-card-locale-9004')).toHaveText('아랍에미리트아랍어');
+  await expect(page.getByTestId('library-card-title-9002')).toHaveText('비타민C 세럼');
+  await expect(page.getByTestId('library-card-status-9002')).toHaveText('완료');
+  await expect(page.getByTestId('library-card-status-9002')).toHaveCSS('color', 'rgb(153, 153, 153)');
+  await expect(page.getByTestId('library-card-status-9002')).toHaveCSS('font-size', '12px');
+  await expect(page.getByTestId('library-card-title-9002')).toHaveCSS('font-size', '14px');
+  await expect(page.getByTestId('library-card-title-9002')).toHaveCSS('font-weight', '500');
+  for (const removed of ['library-card-date-9002', 'library-card-spec-9002', 'library-card-locale-9002', 'library-card-version-9002']) {
+    await expect(page.getByTestId(removed)).toHaveCount(0);
+  }
+  await expect(c.getByText('일본')).toHaveCount(0);
 });
 
 test('thumbnailUrl null이면 #F5F5F5 placeholder, 값이 있으면 이미지', async ({ page }) => {
@@ -86,18 +86,17 @@ test('상품명 검색 + 국가 필터(동시 적용)', async ({ page }) => {
   expect(await cardOrder(page)).toHaveLength(4);
 });
 
-test('규격 표시 — N1과 같은 명칭(원본 유지·판매처 맞춤), 날짜 앞에 Figma "M1 카드 사이즈" 순서·간격', async ({ page }) => {
-  await expect(page.getByTestId('library-card-spec-9001')).toHaveText('원본 유지');
-  await expect(page.getByTestId('library-card-spec-9003')).toHaveText('판매처 맞춤');
-  await expect(page.getByTestId('library-card-spec-9003')).toHaveCSS('color', 'rgb(112, 112, 112)');
-  await expect(page.getByTestId('library-card-spec-9003')).toHaveCSS('font-size', '12px');
-  // 1211:6585 — 규격 + gap 12 + 날짜 + gap 4 + 완료
-  const spec = await box(page.getByTestId('library-card-spec-9003'));
-  const date = await box(page.getByTestId('library-card-date-9003'));
-  const done = await box(card(page, 9003).getByText('완료', { exact: true }));
-  expect(spec.x).toBe(120 + 13);
-  near(date.x - (spec.x + spec.width), 12);
-  near(done.x - (date.x + date.width), 4);
+test('카드 내부 — padding 12 · Slot 과 텍스트 gap 8 · 상품명과 상태 gap 4, 선택 checkbox 는 상품명 앞', async ({ page }) => {
+  const c = await box(card(page, 9003));
+  const slot = await box(page.getByTestId('library-card-slot-9003'));
+  const checkbox = await box(page.getByTestId('library-card-select-9003'));
+  const title = await box(page.getByTestId('library-card-title-9003'));
+  const status = await box(page.getByTestId('library-card-status-9003'));
+  expect([slot.x - c.x, slot.y - c.y, slot.width]).toEqual([13, 13, 374]);
+  near(status.y + status.height, c.y + c.height - 13);
+  near(status.y - (title.y + title.height) - (checkbox.height - title.height) / 2, 4);
+  expect(Math.round(checkbox.y) - Math.round(slot.y + slot.height)).toBe(8);
+  expect(title.x - (checkbox.x + checkbox.width)).toBe(8);
 });
 
 test('검색·필터 결과 0건이면 Empty State, "+" 카드는 숨김 — 조건을 되돌리면 목록 복귀', async ({ page }) => {
@@ -189,23 +188,8 @@ test('전체선택은 현재 검색·필터 결과에만 적용되고, 선택 �
   await expect(selectAll).not.toBeChecked();
 });
 
-test('다른 버전 만들기 버튼은 접근성 이름을 갖고, 계약 확정 전에는 Icon Button Circle/XXS Disabled(285:2116)', async ({ page }) => {
-  const btn = page.getByRole('button', { name: '비타민C 세럼 다른 버전 만들기' }).first();
-  await expect(btn).toBeVisible();
-  await expect(btn).toBeDisabled();
-  // Disabled: bg #F5F5F5, border 없음, glyph #999 — opacity로 흐리게 하지 않는다
-  await expect(btn).toHaveCSS('background-color', 'rgb(245, 245, 245)');
-  await expect(btn).toHaveCSS('border-top-color', 'rgba(0, 0, 0, 0)');
-  await expect(btn).toHaveCSS('color', 'rgb(153, 153, 153)');
-  await expect(btn).toHaveCSS('opacity', '1');
-  await expect(btn).toHaveCSS('cursor', 'not-allowed');
-  // Plus 12 glyph(53:1124) — 12 frame 안 inset 20%, 원본 SVG를 mask로 쓰고 색은 currentColor
-  const glyph = btn.locator('[data-glyph-src="/library/icons/plus-12-secondary.svg"]');
-  await expect(glyph).toHaveCSS('background-color', 'rgb(153, 153, 153)');
-  const b = await box(btn);
-  const g = await box(glyph);
-  near(g.x + g.width / 2, b.x + b.width / 2);
-  near(g.y + g.height / 2, b.y + b.height / 2);
+test('다른 버전 만들기 버튼은 최신 카드에 자리가 없어 렌더하지 않는다(계약도 12월 미확정)', async ({ page }) => {
+  await expect(page.getByRole('button', { name: /다른 버전 만들기/ })).toHaveCount(0);
 });
 
 test('검색·국가·정렬 glyph(14) — Select / Dropdown(28:142) border 1 + px 14: 오른쪽 끝이 테두리 바깥에서 15px, 세로 중앙', async ({ page }) => {
@@ -226,7 +210,8 @@ test('좌측 상단 뒤로가기 버튼은 보이지 않고 키보드 포커스�
   await expect(page.getByRole('button', { name: '뒤로 가기' })).toHaveCount(0);
   // 검색창에 닿을 때까지 Tab 순서를 따라가도 뒤로가기 버튼은 없다(dev 도구 버튼이 먼저 올 수 있어 몇 번 허용)
   const visited: string[] = [];
-  for (let i = 0; i < 5; i += 1) {
+  // 공통 헤더(홈·브랜드 관리·내 계정·로그아웃)를 지난 뒤 검색창에 닿는다
+  for (let i = 0; i < 10; i += 1) {
     await page.keyboard.press('Tab');
     const focused = await page.evaluate(() => {
       const el = document.activeElement as HTMLElement | null;
@@ -256,11 +241,9 @@ test('2차 범위 — 다른 화면으로 가는 링크는 새 작업(N1) 하나
   await expect(main.locator('a').first()).toHaveAttribute('href', '/jobs/new?brandId=101');
   await expect(main.locator('a[href="#"], [role="link"]:not(a)')).toHaveCount(0);
 
-  // 후속 범위 — 삭제·다른 버전 만들기는 native disabled, 뒤로가기는 렌더하지 않는다
+  // 후속 범위 — 삭제는 native disabled, 다른 버전 만들기·뒤로가기는 렌더하지 않는다
   await expect(page.getByTestId('library-delete')).toBeDisabled();
-  for (const jobId of [9001, 9002, 9003, 9004]) {
-    await expect(page.getByTestId(`library-card-version-${jobId}`)).toBeDisabled();
-  }
+  await expect(page.getByTestId('library-card-version-9001')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '뒤로 가기' })).toHaveCount(0);
   // "+" 원형 아이콘은 장식이고, 카드 본문은 상세로 가는 버튼·링크가 아니다
   await expect(page.getByTestId('library-add-card').getByRole('button')).toHaveCount(0);
@@ -279,7 +262,6 @@ test('2차 범위 — 화면 안 조작과 후속 범위 버튼은 이동·쓰�
   await page.getByTestId('library-search').fill('세럼');
   await page.getByTestId('library-search').fill('');
   await page.getByTestId('library-delete').click({ force: true });
-  await page.getByTestId('library-card-version-9002').click({ force: true });
   await page.getByTestId('library-download').click();
   const dialog = page.getByRole('dialog');
   await expect(dialog).toBeVisible();
@@ -302,7 +284,7 @@ test('2차 범위 — 새 작업은 기존 N1 경로로 가고, 브랜드·작�
   });
   await page.getByTestId('library-add-card-link').click();
   await expect(page).toHaveURL(/\/jobs\/new\?brandId=101$/);
-  await expect(page.getByRole('heading', { name: '이미지 입력' })).toBeVisible();
+  await expect(page.getByTestId('job-header-title')).toHaveText('정보 입력');
   // brandId 는 GET /brands 응답(브랜드 1개)의 id 다 — FE 가 임의 값을 만들지 않고, 브랜드·작업을 자동으로 만들지 않는다
   expect(new URL(page.url()).searchParams.get('brandId')).toBe('101');
   await page.waitForTimeout(500);
@@ -314,24 +296,24 @@ const box = async (locator: import('@playwright/test').Locator): Promise<Box> =>
 /** 글자 폭이 렌더러마다 소수점 단위로 달라지는 값은 ±1px 안에서 비교한다. */
 const near = (actual: number, expected: number) => expect(Math.abs(actual - expected)).toBeLessThanOrEqual(1);
 
-test('Figma 719:7428 — 1920×1080 위치·크기(제목/필터/action/grid/카드 내부)', async ({ page }) => {
-  // 제목 영역(753:6374): 제목 32 Bold 높이 38, gap 12, 설명 14 Regular 높이 17
-  const title = await box(page.getByRole('heading', { name: '보관함' }));
-  expect([title.x, title.y, title.height]).toEqual([120, 80, 38]);
-  const desc = await box(page.getByText('저장한 결과물과 진행 중인 작업을 한곳에서 관리합니다.'));
-  expect([desc.x, desc.y, desc.height]).toEqual([120, 130, 17]);
+test('Figma 719:7428(2026-11) — 1920×1080 위치·크기(헤더/필터/action/grid/카드)', async ({ page }) => {
+  // 공통 헤더(1806:32280) 72 · 화면명 「보관함」 · [브랜드 관리](1539, 24) — 이전 큰 제목·설명은 없다
+  const header = await box(page.getByTestId('app-header'));
+  expect([header.x, header.y, header.width, header.height]).toEqual([0, 0, 1920, 72]);
+  await expect(page.getByTestId('app-header-title')).toHaveText('보관함');
+  const brand = await box(page.getByTestId('app-header-brand'));
+  expect([brand.x, brand.y, brand.width, brand.height]).toEqual([1539, 24, 72, 24]);
+  await expect(page.getByText('저장한 결과물과 진행 중인 작업을 한곳에서 관리합니다.')).toHaveCount(0);
 
-  // back Icon Button(721:7743)은 12월 M0 연결 전까지 렌더하지 않는다(별도 테스트).
-
-  // 필터1(1069:11738): y187 높이 39, 검색 404 · 국가 124 · 정렬 124, gap 16
+  // 필터1(1069:11738): y96 높이 39, 검색 404 · 국가 124 · 정렬 124, gap 16
   const search = await box(page.getByTestId('library-search'));
   const country = await box(page.getByTestId('library-country-filter'));
   const sort = await box(page.getByTestId('library-sort'));
-  expect([search.x, search.y, search.width, search.height]).toEqual([120, 187, 404, 39]);
+  expect([search.x, search.y, search.width, search.height]).toEqual([120, 96, 404, 39]);
   expect([country.x, country.width, country.height]).toEqual([540, 124, 39]);
   expect([sort.x, sort.width, sort.height]).toEqual([680, 124, 39]);
 
-  // 우측 action(Frame 153): 전체선택 · 다운로드(Tertiary/SM 81×30) · 삭제(Danger/XS 45×24), gap 12, 우측 끝 1801
+  // 우측 action: 전체선택 · 다운로드(Tertiary/SM 81×30) · 삭제(Danger/XS 45×24), gap 12, 우측 끝 1801
   const selectAllLabel = await box(page.getByText('전체선택', { exact: true }));
   const download = await box(page.getByTestId('library-download'));
   const del = await box(page.getByTestId('library-delete'));
@@ -344,25 +326,23 @@ test('Figma 719:7428 — 1920×1080 위치·크기(제목/필터/action/grid/카
   near(del.x + del.width, 1801);
   await expect(page.getByTestId('library-download')).toHaveCSS('font-size', '12px');
 
-  // 카드 grid(721:7647): y250, 폭 1681, 4열 400, column gap 27, row gap 24
+  // 카드 grid(1843:30258): y147, 폭 1681, 4열 400, column gap 27, row gap 40 — 추가 생성 카드가 첫 칸
   const grid = await box(page.getByTestId('library-grid'));
-  expect([grid.x, grid.y, grid.width]).toEqual([120, 250, 1681]);
-  const first = await box(card(page, 9003));
-  const fourth = await box(card(page, 9004));
-  expect([first.x, first.y, first.width, first.height]).toEqual([120, 250, 400, 280]);
-  expect([fourth.x, fourth.y]).toEqual([120 + 3 * (400 + 27), 250]);
+  expect([grid.x, grid.y, grid.width]).toEqual([120, 147, 1681]);
   const add = await box(page.getByTestId('library-add-card'));
-  expect([add.x, add.y, add.width, add.height]).toEqual([120, 250 + 280 + 24, 400, 280]);
+  expect([add.x, add.y, add.width, add.height]).toEqual([120, 147, 400, 264]);
   const addBtn = await box(page.getByTestId('library-add-card-link'));
   expect([addBtn.width, addBtn.height]).toEqual([107, 37]);
+  const first = await box(card(page, 9003));
+  expect([first.x, first.y, first.width, first.height]).toEqual([120 + 427, 147, 400, 264]);
+  const fifth = await box(card(page, 9004));
+  expect([fifth.x, fifth.y]).toEqual([120, 147 + 264 + 40]);
 
-  // 카드 내부: 상단 row y+13, Slot y+49 374×192, placeholder 좌우 4px(366), 하단 row y+253 높이 14
-  const version = await box(page.getByTestId('library-card-version-9003'));
-  expect([version.x, version.y, version.width, version.height]).toEqual([120 + 13 + 374 - 24, 250 + 13, 24, 24]);
+  // 카드 내부: Slot x+13 y+13 폭 374 · 상태 「완료」 아래 끝 = 카드 아래 − 13
   const placeholder = await box(page.getByTestId('library-card-thumbnail-placeholder-9003'));
-  expect([placeholder.x, placeholder.y, placeholder.width, placeholder.height]).toEqual([120 + 13 + 4, 250 + 49, 366, 192]);
-  const footer = await box(page.getByTestId('library-card-date-9003'));
-  expect([footer.y, footer.height]).toEqual([250 + 253, 14]);
+  expect([placeholder.x, placeholder.y, placeholder.width]).toEqual([120 + 427 + 13, 147 + 13, 374]);
+  const status = await box(page.getByTestId('library-card-status-9003'));
+  expect([status.y + status.height, status.height]).toEqual([147 + 264 - 13, 14]);
 });
 
 for (const [width, height] of [
@@ -377,8 +357,8 @@ for (const [width, height] of [
     const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
     expect(scrollWidth).toBeLessThanOrEqual(width);
 
-    // 첫 줄 4장이 서로 다른 열에 있고 모두 viewport 안에 들어온다
-    const row = await Promise.all([9003, 9002, 9001, 9004].map((id) => box(card(page, id))));
+    // 첫 줄 4칸(추가 생성 카드 + 결과 3장)이 서로 다른 열에 있고 모두 viewport 안에 들어온다
+    const row = [await box(page.getByTestId('library-add-card')), ...(await Promise.all([9003, 9002, 9001].map((id) => box(card(page, id)))))];
     expect(new Set(row.map((b) => b.y)).size).toBe(1);
     for (let i = 1; i < row.length; i += 1) expect(row[i].x).toBeGreaterThan(row[i - 1].x + row[i - 1].width);
     for (const b of row) expect(b.x + b.width).toBeLessThanOrEqual(width);
@@ -405,19 +385,21 @@ for (const [width, height] of [
   });
 }
 
-test('긴 상품명은 카드 안에서 말줄임되고 다른 버전 버튼을 밀어내지 않는다', async ({ page }) => {
+test('긴 상품명은 카드 안에서 말줄임되고 checkbox 를 밀어내지 않는다', async ({ page }) => {
   await page.setViewportSize({ width: 1536, height: 864 });
-  const name = card(page, 9003).locator('p[title]');
+  const name = page.getByTestId('library-card-title-9003');
   // 표시 검증 전용 — 렌더된 텍스트만 길게 바꿔 레이아웃을 확인한다(데이터는 바꾸지 않는다)
   await name.evaluate((el) => {
     el.textContent = '[케데헌 한정기획] 마스크팩 5매 8종 (+1매 추가 증정) 아주 긴 상품명 테스트 문자열';
   });
   const truncated = await name.evaluate((el) => el.scrollWidth > el.clientWidth);
   expect(truncated).toBe(true);
+  await expect(name).toHaveAttribute('title', '비타민C 세럼');
   const c = await box(card(page, 9003));
-  const v = await box(page.getByTestId('library-card-version-9003'));
-  expect(v.width).toBe(24);
-  expect(v.x + v.width).toBeLessThanOrEqual(c.x + c.width - 13);
+  const n = await box(name);
+  const cb = await box(page.getByTestId('library-card-select-9003'));
+  expect(cb.width).toBe(20);
+  expect(n.x + n.width).toBeLessThanOrEqual(c.x + c.width - 13);
 });
 
 // ─────────────────────────────────────────────────────────────────

@@ -480,23 +480,24 @@ test('analyze 뒤 화면 이동이 늦어도 [다음]을 다시 보낼 수 없�
 test('1920×1080 — Figma 525:3023 주요 좌표', async ({ page }) => {
   await page.goto('/jobs/new');
   const uploader = (await page.getByTestId('n1-image-dropzone').boundingBox())!;
-  expect([uploader.x, uploader.y, uploader.width, uploader.height]).toEqual([140, 162, 1184, 838]);
+  // 최신 Figma: 제목 행이 빠지고 작업용 헤더가 생겼다 — 업로더 140/147/1184/873 · 우측 패널 1344/96/516/795 · [다음] y975
+  expect([uploader.x, uploader.y, uploader.width, uploader.height]).toEqual([140, 147, 1184, 873]);
   const panel = (await page.getByTestId('n1-category-field').locator('xpath=ancestor::div[contains(@class,"overflow-y-auto")][1]').boundingBox())!;
-  expect([panel.x, panel.y, panel.width]).toEqual([1344, 162, 516]);
+  expect([panel.x, panel.y, panel.width]).toEqual([1344, 96, 516]);
   // 패널 아래 동의 문구 높이가 브라우저 글꼴 계측에 따라 조금 달라진다
-  expect(Math.abs(panel.height - 721)).toBeLessThanOrEqual(2);
+  expect(Math.abs(panel.height - 795)).toBeLessThanOrEqual(2);
   const consent = (await page.getByTestId('n1-consent').boundingBox())!;
   expect(Math.round(consent.x)).toBe(1344);
-  expect(Math.abs(consent.y - 913)).toBeLessThanOrEqual(4);
+  expect(Math.abs(consent.y - 907)).toBeLessThanOrEqual(4);
   const next = (await nextButton(page).boundingBox())!;
-  expect([next.y, next.width, next.height]).toEqual([965, 148, 45]);
-  const exit = (await page.getByRole('button', { name: '보관함으로 나가기' }).boundingBox())!;
-  expect([exit.x, exit.y, exit.width, exit.height]).toEqual([40, 40, 40, 40]);
-  // 우측 패널 입력칸 — Figma Text Input 474×39, 상품명 입력 top 214, 상품코드 입력 top 292
+  expect([next.y, next.width, next.height]).toEqual([975, 148, 45]);
+  // 12월(PRD F-JOB-07 · F-NAV-01)에는 ✕ 가 없다
+  await expect(page.getByTestId('s0-exit')).toHaveCount(0);
+  // 우측 패널 입력칸 — Figma Text Input 474×39, 상품명 입력 top 148, 상품코드 입력 top 226
   const name = (await page.getByPlaceholder('상품 이름을 입력해주세요').boundingBox())!;
   const code = (await page.getByPlaceholder('상품 코드를 입력해주세요').boundingBox())!;
   expect([name.width, name.height]).toEqual([474, 39]);
-  expect(Math.abs(name.y - 214)).toBeLessThanOrEqual(1);
-  expect(Math.abs(code.y - 292)).toBeLessThanOrEqual(2); // 라벨 글꼴 계측 차이(브라우저별)
+  expect(Math.abs(name.y - 148)).toBeLessThanOrEqual(1);
+  expect(Math.abs(code.y - 226)).toBeLessThanOrEqual(2); // 라벨 글꼴 계측 차이(브라우저별)
   await page.screenshot({ path: test.info().outputPath('n1-1920x1080.png') });
 });
