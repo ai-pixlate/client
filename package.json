@@ -25,6 +25,8 @@
     "verify:n5-layout-edit": "node --experimental-strip-types scripts/verify-n5-layout-edit.mjs",
     "verify:n5-review-issues": "node --experimental-strip-types scripts/verify-n5-review-issues.mjs",
     "verify:n5-history": "node --experimental-strip-types scripts/verify-n5-history.mjs",
+    "verify:save-idempotency": "node --experimental-strip-types scripts/verify-save-idempotency.mjs",
+    "verify:n6-interim-preview": "node --experimental-strip-types scripts/verify-n6-interim-preview.mjs",
     "verify:n5-failed-drafts": "node --experimental-strip-types scripts/verify-n5-failed-drafts.mjs",
     "verify:n5-typeset": "node --experimental-strip-types scripts/verify-n5-typeset-rules.mjs",
     "verify:n5-final-output": "node --experimental-strip-types scripts/verify-n5-typeset-final-output.mjs",

@@ -2,6 +2,12 @@ import { type Page, expect, test } from '@playwright/test';
 
 import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 import { reachN5 } from './helpers/reach-n5';
+import { enableN5GeneralHistoryForTest } from './helpers/n5-general-history';
+
+// 보존한 일반 실행 취소·다시 실행 검증 — 12월 화면에서는 숨겼으므로 Mock 전용 스위치를 켠다(e2e/helpers/n5-general-history.ts)
+test.beforeEach(async ({ page }) => {
+  await enableN5GeneralHistoryForTest(page);
+});
 
 // ─────────────────────────────────────────────────────────────────
 // N5 Auto Height(Figma Text의 Auto height)와 Mock 조판 미리보기(?qaTypeset=1).

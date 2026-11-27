@@ -26,7 +26,7 @@ import {
   setLocalValue,
 } from '../lib/n5/history.ts';
 import { N5_SAVE_NOTICE_MESSAGES } from '../lib/n5/messages.ts';
-import { judgeUncertainSave, nextUncertainSaveStatus } from '../lib/n5/uncertain-save.ts';
+import { nextUncertainSaveStatus } from '../lib/n5/uncertain-save.ts';
 
 let pass = 0;
 let fail = 0;
@@ -277,26 +277,13 @@ console.log('\n[9] 여러 종류가 섞인 이력');
   check('섞인 51개 → 50개, 가장 오래된 것 제거', mixed.entries.length === 50 && mixed.entries[0].target.id === 1 && mixed.pointer === 50);
 }
 
-console.log('\n응답을 받지 못한 저장 — 서버 상태 확인 뒤 판정(lib/n5/uncertain-save.ts)');
+console.log('\n결과를 알 수 없는 저장 — 서버 상태 다시 받기 결과(lib/n5/uncertain-save.ts)');
 {
-  // 다시 받기 결과 → 다음 단계. 실패·시간 초과는 「확인하지 못함」이고 잠금을 풀지 않는다(판정하지 않는다)
+  // 다시 받기 결과 → 다음 단계. 실패·시간 초과는 「확인하지 못함」이고 잠금을 풀지 않는다.
+  // 반영 여부는 재조회 값으로 추정하지 않는다 — 같은 키·같은 본문 재전송 결과로 정한다(scripts/verify-save-idempotency.mjs)
   check('다시 받기 성공 → 확인됨', nextUncertainSaveStatus('ok') === 'confirmed');
   check('다시 받기 실패 → 확인하지 못함(잠금 유지)', nextUncertainSaveStatus('failed') === 'unconfirmed');
   check('상한(15초) 초과 → 확인하지 못함(시간만으로 풀지 않는다)', nextUncertainSaveStatus('timeout') === 'unconfirmed');
-
-  const sent = { kind: 'translation', blockId: 7, text: 'New text', sentRevision: 3 };
-  const server = (block, sections = []) => ({ blocks: [block], sections });
-  check('번역문 — 서버 글이 같고 revision 이 올랐으면 반영됨', judgeUncertainSave(sent, server({ id: 7, trans1: 'New text', revision: 4 })) === 'applied');
-  check('번역문 — 서버 글이 다르면 반영 안 됨', judgeUncertainSave(sent, server({ id: 7, trans1: 'Old text', revision: 3 })) === 'not-applied');
-  check('번역문 — 글이 같아도 revision 이 그대로면 이 요청이 반영된 것이 아니다', judgeUncertainSave(sent, server({ id: 7, trans1: 'New text', revision: 3 })) === 'not-applied');
-  check('번역문 — 다른 곳 저장으로 글이 바뀌었으면 반영 안 됨', judgeUncertainSave(sent, server({ id: 7, trans1: 'Other tab', revision: 5 })) === 'not-applied');
-  check('번역문 — 서버에 블록이 없으면 반영 안 됨', judgeUncertainSave(sent, { blocks: [], sections: [] }) === 'not-applied');
-  check('번역문 — 빈 글 저장(null) 도 같은 값으로 본다', judgeUncertainSave({ ...sent, text: '' }, server({ id: 7, trans1: null, revision: 4 })) === 'applied');
-
-  const exclude = { kind: 'section', sectionId: 501, bucket: 'exclude' };
-  check('섹션 — 서버 bucket 이 요청과 같으면 반영됨', judgeUncertainSave(exclude, { blocks: [], sections: [{ id: 501, bucket: 'exclude' }] }) === 'applied');
-  check('섹션 — 서버 bucket 이 그대로면 반영 안 됨', judgeUncertainSave(exclude, { blocks: [], sections: [{ id: 501, bucket: 'include' }] }) === 'not-applied');
-  check('섹션 — 서버 목록에 없으면 반영 안 됨', judgeUncertainSave(exclude, { blocks: [], sections: [] }) === 'not-applied');
 }
 
 console.log(`\n결과: PASS ${pass} / FAIL ${fail}\n`);

@@ -1,6 +1,12 @@
 import { expect, test } from '@playwright/test';
 
 import { reachN5 } from './helpers/reach-n5';
+import { enableN5GeneralHistoryForTest } from './helpers/n5-general-history';
+
+// 보존한 일반 실행 취소·다시 실행 검증 — 12월 화면에서는 숨겼으므로 Mock 전용 스위치를 켠다(e2e/helpers/n5-general-history.ts)
+test.beforeEach(async ({ page }) => {
+  await enableN5GeneralHistoryForTest(page);
+});
 
 // ─────────────────────────────────────────────────────────────────
 // N5 오류 표시(Figma 388:3814) — lib/mock-api/n5-error-fixtures.ts 시나리오로 확인한다. 기본 fixture는 그대로다.

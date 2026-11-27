@@ -1,6 +1,12 @@
 import { type Page, expect, test } from '@playwright/test';
 
 import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
+import { enableN5GeneralHistoryForTest } from './helpers/n5-general-history';
+
+// 보존한 일반 실행 취소·다시 실행 검증 — 12월 화면에서는 숨겼으므로 Mock 전용 스위치를 켠다(e2e/helpers/n5-general-history.ts)
+test.beforeEach(async ({ page }) => {
+  await enableN5GeneralHistoryForTest(page);
+});
 
 // ─────────────────────────────────────────────────────────────────
 // N5 [저장하러 가기] 저장 revision 정합 + 최종 저장 중 편집 잠금.

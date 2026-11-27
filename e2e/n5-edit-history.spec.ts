@@ -2,6 +2,12 @@ import { type Page, test, expect } from '@playwright/test';
 
 import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 import { reachN5 } from './helpers/reach-n5';
+import { enableN5GeneralHistoryForTest } from './helpers/n5-general-history';
+
+// 보존한 일반 실행 취소·다시 실행 검증 — 12월 화면에서는 숨겼으므로 Mock 전용 스위치를 켠다(e2e/helpers/n5-general-history.ts)
+test.beforeEach(async ({ page }) => {
+  await enableN5GeneralHistoryForTest(page);
+});
 
 // ─────────────────────────────────────────────────────────────────
 // N5 통합 편집 이력(F-CFM-03) + 글자 크기 [+][-](F-CFM-15 2차).
@@ -224,9 +230,10 @@ test.describe('섹션 이력', () => {
     await expect(redo).toBeDisabled();
 
     expect(patches).toEqual([
-      { path: '/sections/501', body: { action: 'exclude' } },
-      { path: '/sections/501', body: { action: 'restore' } },
-      { path: '/sections/501', body: { action: 'exclude' } },
+      // 섹션 저장은 서버 revision 을 함께 보낸다(sectionPatch — Mock 은 실제로 바뀐 저장마다 +1)
+      { path: '/sections/501', body: { action: 'exclude', revision: 1 } },
+      { path: '/sections/501', body: { action: 'restore', revision: 2 } },
+      { path: '/sections/501', body: { action: 'exclude', revision: 3 } },
     ]);
   });
 

@@ -120,8 +120,26 @@ async function apiFetch(url, init = {}) {
   return res.json();
 }
 const getSections = () => apiFetch(`/jobs/${JOB}/sections`);
-const updateSection = (sectionId, payload) =>
-  apiFetch(`/jobs/${JOB}/sections/${sectionId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+const updateSection = (sectionId, payload, options) =>
+  apiFetch(`/jobs/${JOB}/sections/${sectionId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', 'Idempotency-Key': options.idempotencyKey },
+    body: JSON.stringify(payload),
+  }).then((data) => ({ data, replayed: false }));
+/** 섹션 저장 한 번의 요청 기록(lib/api/idempotent-patch.ts 와 같은 모양) — 지금 인증 세대로 만든다 */
+let testKeySeq = 0;
+const sectionVars = (sectionId, bucket) => ({
+  request: {
+    operation: 'sectionPatch',
+    jobId: JOB,
+    targetId: sectionId,
+    key: `test-key-${(testKeySeq += 1)}`,
+    body: { action: bucket === 'include' ? 'restore' : 'exclude', revision: 1 },
+    revision: 1,
+    startedAt: Date.now(),
+    authEpoch: getAuthEpoch(),
+  },
+});
 
 /** 한 탭 — app/providers.tsx 와 같은 clearClientData(진행 중 query 취소 + 캐시 비움) */
 function setupTab() {
@@ -169,7 +187,7 @@ console.log('\n[A. 계정 A 저장 중 다른 탭에서 계정 B 로그인 → A
   queryClient.setQueryData(PREVIEW_KEY, { sections: [{ id: 1, bucket: 'include' }, { id: 2, bucket: 'include' }] });
   const epochA = getAuthEpoch();
 
-  const saving = mutation.mutate({ sectionId: 1, bucket: 'exclude' }).then(() => null, (error) => error);
+  const saving = mutation.mutate(sectionVars(1, 'exclude')).then(() => null, (error) => error);
   await server.patchArrived;
   check('A 저장 요청이 서버에 도착·적용됨(응답 대기 중)', bucketOf(server.state, 1) === 'exclude');
   check('A 화면에는 optimistic 반영', bucketOf(queryClient.getQueryData(SECTIONS_KEY), 1) === 'exclude');
@@ -197,7 +215,7 @@ console.log('\n[A. 계정 A 저장 중 다른 탭에서 계정 B 로그인 → A
   const server = createServer();
   setAuthenticated('a1', SELLER_A);
   await queryClient.fetchQuery({ queryKey: SECTIONS_KEY, queryFn: getSections });
-  const saving = mutation.mutate({ sectionId: 1, bucket: 'exclude' }).then(() => null, (error) => error);
+  const saving = mutation.mutate(sectionVars(1, 'exclude')).then(() => null, (error) => error);
   await server.patchArrived;
   handleAuthTabEvent({ type: 'login-complete', sellerId: SELLER_B.id });
   const bData = { include: [], exclude: [], marker: 'B' };
@@ -217,7 +235,7 @@ console.log('\n[B. 계정 A 저장 → 401 → refresh + /auth/me → 계정 B]'
   const server = createServer({ patchFirst401: true, refreshTo: 'b1', meReturns: SELLER_B });
   setAuthenticated('a1', SELLER_A);
   await queryClient.fetchQuery({ queryKey: SECTIONS_KEY, queryFn: getSections });
-  const error = await mutation.mutate({ sectionId: 1, bucket: 'exclude' }).then(() => null, (e) => e);
+  const error = await mutation.mutate(sectionVars(1, 'exclude')).then(() => null, (e) => e);
   await tick();
   const patches = server.calls.filter((c) => c.key === `PATCH /jobs/${JOB}/sections/1`);
   check('원 요청 전송 1회', patches.length === 1, JSON.stringify(patches));
@@ -238,7 +256,7 @@ console.log('\n[C. 서버엔 적용됐지만 FE 는 응답을 버림 → 계정 
   const server = createServer();
   setAuthenticated('a1', SELLER_A);
   await queryClient.fetchQuery({ queryKey: SECTIONS_KEY, queryFn: getSections });
-  const saving = mutation.mutate({ sectionId: 1, bucket: 'exclude' }).then(() => null, (e) => e);
+  const saving = mutation.mutate(sectionVars(1, 'exclude')).then(() => null, (e) => e);
   await server.patchArrived;
   handleAuthTabEvent({ type: 'login-complete', sellerId: SELLER_B.id });
   server.releasePatch();
@@ -282,7 +300,7 @@ console.log('\n[onMutate 의 진행 중 query 취소를 기다리는 사이 계�
     await originalCancel(...args);
     handleAuthTabEvent({ type: 'login-complete', sellerId: SELLER_B.id });
   };
-  const error = await mutation.mutate({ sectionId: 1, bucket: 'exclude' }).then(() => null, (e) => e);
+  const error = await mutation.mutate(sectionVars(1, 'exclude')).then(() => null, (e) => e);
   await tick();
   check('저장 요청을 보내지 않음(PATCH 0회)', server.count(`PATCH /jobs/${JOB}/sections/1`) === 0);
   check('세션 변경 오류로 끝나고 캐시를 다시 만들지 않음', error instanceof AuthSessionChangedError && cacheKeys(queryClient).length === 0, String(error));
@@ -299,7 +317,7 @@ console.log('\n[회귀: 계정이 그대로면 기존 optimistic·rollback·inva
   })();
   setAuthenticated('a1', SELLER_A);
   await queryClient.fetchQuery({ queryKey: SECTIONS_KEY, queryFn: getSections });
-  const error = await mutation.mutate({ sectionId: 1, bucket: 'exclude' }).then(() => null, (e) => e);
+  const error = await mutation.mutate(sectionVars(1, 'exclude')).then(() => null, (e) => e);
   await tick();
   const query = queryClient.getQueryCache().find({ queryKey: SECTIONS_KEY });
   check('같은 계정 저장 실패 → rollback(섹션 1 include)', error instanceof Error && bucketOf(queryClient.getQueryData(SECTIONS_KEY), 1) === 'include');
@@ -311,7 +329,7 @@ console.log('\n[회귀: 계정이 그대로면 기존 optimistic·rollback·inva
   setAuthenticated('a1', SELLER_A);
   await queryClient.fetchQuery({ queryKey: SECTIONS_KEY, queryFn: getSections });
   queryClient.setQueryData(PREVIEW_KEY, { sections: [{ id: 1, bucket: 'include' }] });
-  const saving = mutation.mutate({ sectionId: 1, bucket: 'exclude' });
+  const saving = mutation.mutate(sectionVars(1, 'exclude'));
   await server.patchArrived;
   server.releasePatch();
   await saving;

@@ -1,6 +1,12 @@
 import { type Page, test, expect } from '@playwright/test';
 
 import { reachN5 } from './helpers/reach-n5';
+import { enableN5GeneralHistoryForTest } from './helpers/n5-general-history';
+
+// 보존한 일반 실행 취소·다시 실행 검증 — 12월 화면에서는 숨겼으므로 Mock 전용 스위치를 켠다(e2e/helpers/n5-general-history.ts)
+test.beforeEach(async ({ page }) => {
+  await enableN5GeneralHistoryForTest(page);
+});
 
 // ─────────────────────────────────────────────────────────────────
 // N5 실행 취소·다시 실행(F-CFM-03) — 박스 이동·크기 조절의 local 초안(서버 저장 없음). 혼합 이력은 n5-edit-history.spec.ts.

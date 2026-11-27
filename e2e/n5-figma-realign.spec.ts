@@ -1,6 +1,12 @@
 import { type Page, expect, test } from '@playwright/test';
 
 import { reachN5 } from './helpers/reach-n5';
+import { enableN5GeneralHistoryForTest } from './helpers/n5-general-history';
+
+// 보존한 일반 실행 취소·다시 실행 검증 — 12월 화면에서는 숨겼으므로 Mock 전용 스위치를 켠다(e2e/helpers/n5-general-history.ts)
+test.beforeEach(async ({ page }) => {
+  await enableN5GeneralHistoryForTest(page);
+});
 
 // ─────────────────────────────────────────────────────────────────
 // N5 Figma 재정합(544:3168) — shell·canvas·패널 geometry, 선택 block UI(1512:23496),

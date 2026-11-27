@@ -74,7 +74,7 @@ test.describe('N5 섹션 제외·되돌리기 — 서버 저장', () => {
     await page.getByTestId('n5-section-exclude-501').click();
 
     await expect(page.getByTestId('n5-section-excluded-501')).toBeVisible();
-    expect(patches).toEqual([{ sectionId: '501', body: JSON.stringify({ action: 'exclude' }) }]);
+    expect(patches).toEqual([{ sectionId: '501', body: JSON.stringify({ action: 'exclude', revision: 1 }) }]);
     await expect.poll(() => previewGets.count).toBeGreaterThan(0);
     // 재조회 뒤에도(서버 정본) 제외 상태가 유지되고 되돌리기를 낼 수 있다
     await expect(page.getByTestId('n5-section-restore-501')).toBeVisible();
@@ -176,7 +176,7 @@ test.describe('N5 섹션 제외·되돌리기 — 서버 저장', () => {
 
     await expect(page.getByTestId('n5-section-excluded-503')).toHaveCount(0);
     await expect(page.getByTestId('n5-section-exclude-503')).toBeVisible();
-    expect(patches).toEqual([{ sectionId: '503', body: JSON.stringify({ action: 'restore' }) }]);
+    expect(patches).toEqual([{ sectionId: '503', body: JSON.stringify({ action: 'restore', revision: 1 }) }]);
   });
 
   test('제외 → 되돌리기 왕복 후 다시 조회해도 서버 상태와 같다', async ({ page }) => {

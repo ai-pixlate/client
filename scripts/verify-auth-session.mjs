@@ -18,7 +18,7 @@ import { createAuthChannel, toWireEvent } from '../lib/auth/cross-tab.ts';
 import { logout, resumePendingLogout, retryPendingLogout } from '../lib/auth/logout.ts';
 import { isLogoutPending, markLogoutPending, setLogoutPendingStorageForTest } from '../lib/auth/logout-pending.ts';
 import { configureAuthRuntimeForTest, handleAuthTabEvent, recoverSession } from '../lib/auth/runtime.ts';
-import { getAccessToken, getAuthEpochSignal, getAuthSnapshot, resetAuthStoreForTest, setAuthenticated } from '../lib/auth/session-store.ts';
+import { getAccessToken, getAuthEpoch, getAuthEpochSignal, getAuthSnapshot, resetAuthStoreForTest, setAuthenticated } from '../lib/auth/session-store.ts';
 import { createSessionRecovery } from '../lib/auth/refresh.ts';
 import { completeSocialLogin, resetSocialLoginForTest, startSocialLogin } from '../lib/auth/social-login.ts';
 import { AuthLockTimeoutError, createAuthLock } from '../lib/auth/tab-lock.ts';
@@ -1073,10 +1073,10 @@ function observe(queryClient, options) {
       queryClient: tab.queryClient,
       sectionsKey: SECTIONS,
       previewKey: PREVIEW,
-      update: async (sectionId) => ({ id: sectionId, bucket: 'exclude', excludedStage: 'N5' }),
+      update: async (sectionId) => ({ data: { id: sectionId, bucket: 'exclude', excludedStage: 'N5' }, replayed: false }),
     });
     const { run } = observe(tab.queryClient, options);
-    const error = await run({ sectionId: 1, bucket: 'exclude' });
+    const error = await run({ request: { operation: 'sectionPatch', jobId: '1', targetId: 1, key: 'test-key', body: { action: 'exclude', revision: 1 }, revision: 1, startedAt: Date.now(), authEpoch: getAuthEpoch() } });
     check('M6 section-bucket 같은 세대 → onSuccess 프리뷰 반영 유지', error === null && tab.queryClient.getQueryData(PREVIEW)?.sections?.[0]?.bucket === 'exclude');
   }
   {
@@ -1093,11 +1093,11 @@ function observe(queryClient, options) {
       update: async (sectionId) => {
         resolved.open();
         await hold.promise;
-        return { id: sectionId, bucket: 'exclude', excludedStage: 'N5' };
+        return { data: { id: sectionId, bucket: 'exclude', excludedStage: 'N5' }, replayed: false };
       },
     });
     const { run } = observe(tab.queryClient, options);
-    const running = run({ sectionId: 1, bucket: 'exclude' });
+    const running = run({ request: { operation: 'sectionPatch', jobId: '1', targetId: 1, key: 'test-key', body: { action: 'exclude', revision: 1 }, revision: 1, startedAt: Date.now(), authEpoch: getAuthEpoch() } });
     await resolved.promise;
     handleAuthTabEvent({ type: 'login-complete', sellerId: 2 });
     hold.open();

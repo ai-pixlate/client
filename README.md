@@ -100,6 +100,8 @@ Secret(JWT, access token, password 등)은 절대 Git에 커밋하지 않습니�
 | `npx playwright test e2e/n6-save-exit.spec.ts --project=chromium` | N6 [보관함에 저장] 검증 — 서버 저장 성공 뒤에만 보관함('/')으로 이동, 저장 실패 시 N6 유지·오류·다시 시도, 초록 「보관함에 저장됨」 없음, ✕ 는 저장 전후 모두 보이고 기존 작업 취소 확인창을 엶 — MSW Mock 기준 (Chromium, dev 서버 필요) |
 | `npm run verify:n5-layout-edit` | N5 배치 영역 편집 순수 계산(이동·크기 조절·[+][-]·가운데선 snap, 섹션 경계) 자동 검증 (브라우저 불필요) |
 | `npm run verify:n5-history` | N5 실행 취소·다시 실행 이력 엔진(저장 성공 뒤 commit, 실패 시 불변) 자동 검증 (브라우저 불필요) |
+| `npm run verify:save-idempotency` | 블록·섹션 PATCH 멱등 저장(요청 기록 보존·새 조작 새 키·키 생성 불가 시 미전송·layoutAdjust 형식·재생 헤더·409/5xx/503 분류·no-op 구분)과 응답 유실 복구(같은 키·같은 본문 재전송·결과 불명 동안 잠금 유지·보관 기한·계정 전환·이력 중복 방지) 자동 검증 — 서버는 Mock 멱등 기록 (브라우저 불필요) |
+| `npm run verify:n6-interim-preview` | N6 최종 렌더 진행·실패 중 `/preview` 미리보기 변환(포함 섹션만·근거 없는 이미지 미사용·이전 미리보기 표시·null 빈 상태) 자동 검증 (브라우저 불필요) |
 | `npm run verify:n5-failed-drafts` | N5 번역문 미저장 초안(편집·저장 성공/실패 전이, 실패 칸 집계) 자동 검증 (브라우저 불필요) |
 | `npm run verify:n5-review-issues` | N5 저장 전 확인 항목 집계(F-CFM-09)·겹침 진단 계산 자동 검증 (브라우저 불필요) |
 | `npm run verify:n5-typeset` | N5 HTML/CSS 조판 확정 규칙(역할별 기준 style·원본 폭 배율·사용자 글자 배율·박스 선택·ink overflow 경계와 방향·최종 이미지 경계 이탈 감지·CSS 계약) 순수 함수 자동 검증 (브라우저 불필요) |
