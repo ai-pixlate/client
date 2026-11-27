@@ -88,6 +88,8 @@ export const pixlateKeys = {
   sourceImages: (jobId: string) => ['pixlate', 'job', jobId, 'source-images'] as const,
   n5Blocks: (jobId: string) => ['pixlate', 'job', jobId, 'n5-blocks'] as const,
   n5Preview: (jobId: string) => ['pixlate', 'job', jobId, 'n5-preview'] as const,
+  /** N6 렌더 진행·실패 중 미리보기 — 같은 GET /preview 이지만 N5 snapshot(n5Blocks 와 한 쌍) 캐시와 섞지 않는다 */
+  n6InterimPreview: (jobId: string) => ['pixlate', 'job', jobId, 'n6-interim-preview'] as const,
   n5Task: (jobId: string, taskId: number | null) => ['pixlate', 'job', jobId, 'n5-task', taskId] as const,
   // N3 캐시를 이어받지 않는다 — N4에서 바뀐 warningBadge 등을 N5 진입 시 새로 읽는다
   n5SectionStatus: (jobId: string) => ['pixlate', 'job', jobId, 'n5-section-status'] as const,
@@ -355,6 +357,24 @@ export function useN5PreviewQuery(jobId: string) {
     enabled: !!jobId,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
+  });
+}
+
+/**
+ * N6 최종 렌더 진행·실패 중 좌측 뷰어 미리보기(BE 11-26 — 기존 GET /preview 를 N6 에서도 요청 가능, 신규 API 없음).
+ * 최종 렌더가 끝나면 enabled=false 로 더 받지 않고, 화면도 이 값을 쓰지 않는다(늦게 온 응답이 최종 산출물을 덮지 않는다).
+ * 진입 때마다 새로 받는다(presigned URL · N5 에서 바뀐 구성). 렌더 중 미리보기는 바뀌지 않으므로 polling 하지 않는다
+ */
+export function useN6InterimPreviewQuery(jobId: string, { enabled }: { enabled: boolean }) {
+  return useQuery({
+    queryKey: pixlateKeys.n6InterimPreview(jobId),
+    queryFn: () => getN5Preview(jobId),
+    enabled: !!jobId && enabled,
+    staleTime: 0,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    retry: false,
   });
 }
 

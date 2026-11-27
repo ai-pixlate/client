@@ -15,8 +15,10 @@ import {
   useExportDownloadMutation,
   useExportComponentDownloadMutation,
   useSaveJobMutation,
+  useN6InterimPreviewQuery,
 } from '@/lib/queries/pixlate';
-import type { ApiDeliverable, ApiDeliverableComponent, ApiExportArtifactType } from '@/lib/api/n6-schema';
+import { toN6InterimPreview, type N6InterimPreview } from '@/lib/n6/interim-preview';
+import type { ApiDeliverableComponent, ApiExportArtifactType } from '@/lib/api/n6-schema';
 import { startBrowserDownload } from '@/lib/n6/browser-download';
 import { useModalDialog } from '@/app/_components/use-modal-dialog';
 import { ZoomControls } from './n5/n5-toolbar';
@@ -209,7 +211,7 @@ function RenderProgressOverlay({ percent }: { percent: number | null }) {
   // 모달이 아니라 포커스를 가두거나 배경을 막지 않는다. 닫기(✕ · Escape)는 없다(PRD) — 렌더가 끝나거나 실패하면 다른 상태로 바뀐다.
   // 저장·묶음 다운로드·개별 다운로드는 렌더 중 패널에서 계속 비활성이다
   return (
-    <div data-testid="n6-render-dim" className="absolute inset-0 flex items-center justify-center rounded-[8px] bg-[rgba(23,23,23,0.4)] p-4">
+    <div data-testid="n6-render-dim" className="absolute inset-0 z-20 flex items-center justify-center rounded-[8px] bg-[rgba(23,23,23,0.4)] p-4">
       <section
         aria-labelledby="n6-render-title"
         data-testid="n6-render-progress"
@@ -353,13 +355,29 @@ const MAX_ZOOM = 3;
 const ZOOM_STEP = 0.1;
 const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
 
-function PreviewImage({ deliverable }: { deliverable: ApiDeliverable }) {
+/** 뷰어에 세로로 잇는 이미지 한 장 — 최종 산출물(deliverable)과 렌더 중 미리보기(/preview 섹션)가 같은 캔버스를 쓴다 */
+interface ViewerImage {
+  key: string | number;
+  url: string | null | undefined;
+  alt: string;
+  /** url 이 없을 때 자리에 쓰는 안내. 원본 비율(width·height)이 있으면 그 비율로 자리를 잡는다 */
+  missingText: string;
+  width?: number;
+  height?: number;
+}
+
+function PreviewImage({ image }: { image: ViewerImage }) {
   const [failed, setFailed] = useState(false);
 
-  if (!deliverable.imageUrl || failed) {
+  if (!image.url || failed) {
+    const hasRatio = (image.width ?? 0) > 0 && (image.height ?? 0) > 0;
     return (
-      <div className="flex h-48 w-full flex-col items-center justify-center gap-2 border-b border-[#eaeaea] bg-[#f5f5f5] text-[12px] text-[#999] last:border-b-0">
-        이미지를 불러올 수 없습니다
+      <div
+        data-testid="n6-viewer-image-missing"
+        className={`flex w-full flex-col items-center justify-center gap-2 border-b border-[#eaeaea] bg-[#f5f5f5] text-[12px] text-[#999] last:border-b-0 ${hasRatio ? '' : 'h-48'}`}
+        style={hasRatio ? { aspectRatio: `${image.width} / ${image.height}` } : undefined}
+      >
+        {failed ? '이미지를 불러올 수 없습니다' : image.missingText}
       </div>
     );
   }
@@ -367,17 +385,28 @@ function PreviewImage({ deliverable }: { deliverable: ApiDeliverable }) {
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img
-      src={deliverable.imageUrl}
-      alt="번역 결과 이미지"
+      src={image.url}
+      alt={image.alt}
       className="block w-full border-b border-[#eaeaea] last:border-b-0"
       onError={() => setFailed(true)}
     />
   );
 }
 
-function FinalPreview({ deliverables }: { deliverables: ApiDeliverable[] }) {
+function FinalPreview({
+  images,
+  testId = 'n6-final-preview',
+  emptyText = '표시할 결과 이미지가 없습니다.',
+  notice,
+}: {
+  images: ViewerImage[];
+  testId?: string;
+  emptyText?: string;
+  /** 뷰어 좌상단 안내(렌더 중 미리보기의 「이전 미리보기」 등) */
+  notice?: React.ReactNode;
+}) {
   const [zoom, setZoom] = useState(1);
-  const hasContent = deliverables.length > 0;
+  const hasContent = images.length > 0;
 
   // 9/23 — CSS transform:scale()은 레이아웃 박스 크기(offsetWidth/Height)를
   // 바꾸지 않는다(순수 페인트 단계 연산) — 그래서 scale만으로는 overflow:auto
@@ -422,13 +451,14 @@ function FinalPreview({ deliverables }: { deliverables: ApiDeliverable[] }) {
     const resizeObserver = new ResizeObserver(measureHeight);
     resizeObserver.observe(canvasEl);
     return () => resizeObserver.disconnect();
-  }, [deliverables, canvasWidth]);
+  }, [images, canvasWidth]);
 
   return (
     <div
-      data-testid="n6-final-preview"
+      data-testid={testId}
       className="relative min-w-0 flex-1 overflow-hidden rounded-[8px] bg-[#f5f5f5]"
     >
+      {hasContent && notice && <div className="absolute top-5 left-5 z-10 max-w-[calc(100%-200px)]">{notice}</div>}
       {hasContent && (
         <div className="absolute right-5 top-5 z-10">
           <ZoomControls
@@ -452,7 +482,7 @@ function FinalPreview({ deliverables }: { deliverables: ApiDeliverable[] }) {
       >
         {!hasContent ? (
           <div className="flex h-full items-center justify-center text-[14px] text-[#999]">
-            표시할 결과 이미지가 없습니다.
+            {emptyText}
           </div>
         ) : (
           // 바깥 sizing wrapper — (canvasWidth×zoom, canvasHeight×zoom)의 실제
@@ -478,8 +508,8 @@ function FinalPreview({ deliverables }: { deliverables: ApiDeliverable[] }) {
               className="flex flex-col items-start border border-[#eaeaea] bg-white"
               style={{ width: canvasWidth || undefined, transform: `scale(${zoom})`, transformOrigin: 'top left' }}
             >
-              {deliverables.map((dlv, i) => (
-                <PreviewImage key={dlv.id ?? i} deliverable={dlv} />
+              {images.map((image) => (
+                <PreviewImage key={image.key} image={image} />
               ))}
             </div>
           </div>
@@ -960,6 +990,39 @@ function ExportPanel({
 // 자동으로 보내지 않는다. POST /render 는 사용자가 [다시 렌더링]을 눌렀을 때만 보낸다.
 // ─────────────────────────────────────────────────────────────────
 
+/**
+ * 렌더 진행·실패 중 미리보기 — 최종 산출물과 같은 캔버스(확대·축소 포함)를 쓰되 testId 와 안내로 구분한다.
+ * 이전 입력의 이미지(render.isCurrent = false)가 있으면 그 사실을 알리고, 미리보기가 없는 섹션은 자리만 둔다.
+ * Figma 에 이 안내가 없어 N5 상태 안내 톤(12px · #707070 · 얇은 테두리)으로 최소 보완했다
+ */
+function InterimPreview({ preview }: { preview: N6InterimPreview }) {
+  const messages = [
+    preview.hasStale ? '최근 수정이 반영되기 전의 미리보기입니다.' : null,
+    preview.hasMissing ? '미리보기가 없는 섹션이 있습니다.' : null,
+  ].filter((message): message is string => message != null);
+  return (
+    <FinalPreview
+      testId="n6-interim-preview"
+      images={preview.items.map((item) => ({
+        key: item.sectionId,
+        url: item.url,
+        alt: '최종 렌더 전 미리보기 이미지',
+        missingText: '미리보기가 없습니다',
+        width: item.width,
+        height: item.height,
+      }))}
+      notice={
+        <div data-testid="n6-interim-preview-notice" data-stale={preview.hasStale ? 'true' : 'false'} className="flex flex-col gap-0.5 rounded-[6px] border border-[#eaeaea] bg-white px-3 py-2 text-[12px] leading-[normal] text-[#707070]">
+          <p>최종 결과물이 아닌 미리보기입니다.</p>
+          {messages.map((message) => (
+            <p key={message}>{message}</p>
+          ))}
+        </div>
+      }
+    />
+  );
+}
+
 export function N6ResultView({ jobId }: { jobId: string }) {
   const tasksQuery = useJobTasksQuery(jobId, { polling: true });
   const renderMutation = useN6RenderMutation(jobId);
@@ -997,6 +1060,8 @@ export function N6ResultView({ jobId }: { jobId: string }) {
   // render가 끝나야만 의미 있는 조회다(렌더 전 deliverables는 항상 빈 목록) —
   // validation은 계약대로 계속 불러오지만(아래 body 참고), 화면에는 쓰지 않는다.
   const deliverablesQuery = useDeliverablesQuery(jobId, { enabled: renderDone });
+  // 렌더 진행·실패 중에만 기존 GET /preview 를 받는다(BE 11-26). 렌더가 끝나면 받지 않고, 아래 분기도 최종 산출물만 그린다
+  const interimPreviewQuery = useN6InterimPreviewQuery(jobId, { enabled: !renderDone && !tasksQuery.isLoading && !tasksQuery.isError });
   const validationQuery = useValidationQuery(jobId, { enabled: renderDone });
 
   let body: React.ReactNode;
@@ -1027,11 +1092,21 @@ export function N6ResultView({ jobId }: { jobId: string }) {
       </div>
     );
   } else if (!renderDone) {
-    // 렌더 중·실패 — 같은 자리(빈 뷰어 + 렌더 중 패널) 위에 진행 모달 또는 오류 모달이 뜬다(화면이 움직이지 않는다).
-    // 확정 미리보기(/preview)는 N5 계약이라 N6 에서 부르지 않는다 — 렌더 전 뷰어는 비워 둔다(샘플 이미지를 넣지 않는다)
+    // 렌더 중·실패 — 같은 자리(미리보기 뷰어 + 렌더 중 패널) 위에 진행 모달 또는 오류 모달이 뜬다(Figma 1262:7603 — dim 아래 페이지가 보인다).
+    // 뷰어는 기존 GET /preview 의 섹션 미리보기다(최종 산출물 아님). 서버가 이미지를 주지 않으면 비워 두고 안내만 한다(임의 이미지 금지)
+    const interim = interimPreviewQuery.isSuccess ? toN6InterimPreview(interimPreviewQuery.data) : null;
     body = (
       <div className="flex min-h-0 flex-1 gap-[clamp(24px,3.594vw,69px)]">
-        <div data-testid="n6-render-preview" className="relative min-w-0 flex-1 rounded-[8px] bg-[#f5f5f5]">
+        <div data-testid="n6-render-preview" data-preview-state={interim ? 'shown' : interimPreviewQuery.isPending ? 'loading' : interimPreviewQuery.isError ? 'error' : 'empty'} className="relative flex min-w-0 flex-1 rounded-[8px] bg-[#f5f5f5]">
+          {interim ? (
+            <InterimPreview preview={interim} />
+          ) : (
+            !interimPreviewQuery.isPending && (
+              <div data-testid="n6-interim-preview-empty" className="flex flex-1 items-center justify-center px-6 text-center text-[14px] text-[#999]">
+                {interimPreviewQuery.isError ? '미리보기를 불러오지 못했습니다.' : '표시할 미리보기가 없습니다.'}
+              </div>
+            )
+          )}
           {isRenderRunning && <RenderProgressOverlay percent={renderItem ? toRenderPercent(tasksQuery.data?.progress) : null} />}
         </div>
         <PendingExportPanel selected={selectedTypes} onToggle={toggleSelectedType} />
@@ -1066,7 +1141,9 @@ export function N6ResultView({ jobId }: { jobId: string }) {
       // FinalPreview(flex-1)만 남는 공간을 그만큼 더/덜 받는 방식이라 1536/
       // 1440에서도 레이아웃이 깨지지 않는다. transform:scale()은 쓰지 않는다.
       <div className="flex min-h-0 flex-1 gap-[clamp(24px,3.594vw,69px)]">
-        <FinalPreview deliverables={deliverables} />
+        <FinalPreview
+          images={deliverables.map((dlv, i) => ({ key: dlv.id ?? `dlv-${i}`, url: dlv.imageUrl, alt: '번역 결과 이미지', missingText: '이미지를 불러올 수 없습니다' }))}
+        />
         <ExportPanel jobId={jobId} components={components} selected={selectedTypes} onToggle={toggleSelectedType} />
       </div>
     );

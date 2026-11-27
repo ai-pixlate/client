@@ -60,6 +60,7 @@ import {
   FitControls,
   UndoRedoControls,
 } from './n5-toolbar';
+import { isN5GeneralHistoryEnabled } from '@/lib/n5/release-scope';
 import { isTypingTarget, type N5EditSessionApi } from './use-n5-edit-session';
 
 // ─────────────────────────────────────────────────────────────────
@@ -2044,24 +2045,28 @@ export function N5Viewport({
           {/* Figma 544:3168 「After」(1512:23333) — 캔버스 좌하단 독립 그룹. 캔버스 왼쪽 24px(viewport
               padding과 같은 값), 화면 아래 31px. viewport 기준이라 우측 검수 패널 폭과 무관하다.
               viewport의 pointer·pan·zoom 처리에는 연결하지 않는다. */}
-          <div data-testid="n5-undo-redo-wrap" className="absolute bottom-[31px] left-6 z-10">
-            {/* Figma에 실패 표현이 없어 섹션 저장 실패 안내와 같은 형식으로 버튼 위에 둔다 */}
-            {editSession.notice && (
-              <p
-                role="alert"
-                data-testid="n5-history-notice"
-                className="absolute bottom-[56px] left-0 w-[280px] rounded-[6px] border border-[#eaeaea] bg-white px-3 py-2 text-[11px] text-red-500"
-              >
-                {N5_SAVE_NOTICE_MESSAGES[editSession.notice]}
-              </p>
-            )}
-            <UndoRedoControls
-              canUndo={editSession.canUndo}
-              canRedo={editSession.canRedo}
-              onUndo={editSession.undo}
-              onRedo={editSession.redo}
-            />
-          </div>
+          {/* 12월 범위에서는 일반 실행 취소·다시 실행을 숨긴다(PM 11-26 · lib/n5/release-scope.ts) — 이력 구현은 그대로 두고 그리지만 않는다.
+              섹션 제외 뒤 [되돌리기]는 섹션 카드 쪽 동작이라 영향이 없다 */}
+          {isN5GeneralHistoryEnabled() && (
+            <div data-testid="n5-undo-redo-wrap" className="absolute bottom-[31px] left-6 z-10">
+              {/* Figma에 실패 표현이 없어 섹션 저장 실패 안내와 같은 형식으로 버튼 위에 둔다 */}
+              {editSession.notice && (
+                <p
+                  role="alert"
+                  data-testid="n5-history-notice"
+                  className="absolute bottom-[56px] left-0 w-[280px] rounded-[6px] border border-[#eaeaea] bg-white px-3 py-2 text-[11px] text-red-500"
+                >
+                  {N5_SAVE_NOTICE_MESSAGES[editSession.notice]}
+                </p>
+              )}
+              <UndoRedoControls
+                canUndo={editSession.canUndo}
+                canRedo={editSession.canRedo}
+                onUndo={editSession.undo}
+                onRedo={editSession.redo}
+              />
+            </div>
+          )}
 
           <div
             data-testid="n5-canvas"
