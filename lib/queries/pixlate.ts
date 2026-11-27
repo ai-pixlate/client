@@ -49,6 +49,7 @@ import {
   n4DisplayedProgressKey,
 } from '@/lib/processing/displayed-progress-storage';
 import type { ApiBlockPatch, ApiConfirmRequest, ApiJob, ApiJobTaskStatus, ApiTextBlock } from '@/lib/api/n5-schema';
+import { IDEMPOTENT_PATCH_TIMEOUT_MS, type IdempotentPatchRequest } from '@/lib/api/idempotent-patch';
 import type { ApiExportRequest, ApiExportArtifactType } from '@/lib/api/n6-schema';
 import { sectionBucketMutationOptions } from '@/lib/queries/section-bucket-mutation';
 import { shouldRetryQuery } from '@/lib/auth/query-retry';
@@ -406,13 +407,15 @@ export function usePatchN5BlockMutation(jobId: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ blockId, payload, idempotencyKey }: { blockId: number; payload: ApiBlockPatch; idempotencyKey?: string | null }) =>
-      patchN5Block(jobId, blockId, payload, { idempotencyKey }),
-    onSuccess: (response) => {
-      const updated = response.block;
-      if (!updated) return;
+    // 요청 기록(lib/api/idempotent-patch.ts)의 대상 · 키 · 본문을 그대로 보낸다 — 결과 불명 뒤 재전송도 같은 기록이다
+    mutationFn: ({ request }: { request: IdempotentPatchRequest<ApiBlockPatch> }) =>
+      patchN5Block(jobId, request.targetId, request.body, { idempotencyKey: request.key, timeoutMs: IDEMPOTENT_PATCH_TIMEOUT_MS }),
+    onSuccess: ({ data: response, replayed }) => {
       // 성공한 저장만 경계를 만든다(실패·409 는 onSuccess 가 아니다) — 이 저장 전에 시작한 snapshot 은 이 값을 덮지 못한다
       markN5SnapshotBoundary(jobId);
+      // 재생 응답의 block 은 최초 요청 때 값이라 그 뒤 저장을 되돌릴 수 있다 — 캐시를 덮지 않고 호출부가 서버를 다시 조회한다
+      const updated = response.block;
+      if (!updated || replayed) return;
       queryClient.setQueryData<ApiTextBlock[]>(pixlateKeys.n5Blocks(jobId), (prev) =>
         prev ? prev.map((b) => (b.id === updated.id ? mergePatchedBlockIntoSnapshot(b, updated) : b)) : prev,
       );
@@ -810,7 +813,7 @@ export function useUpdateSectionBucketMutation(jobId: string) {
       queryClient,
       sectionsKey: pixlateKeys.sections(jobId),
       previewKey: pixlateKeys.n5Preview(jobId),
-      update: (sectionId, payload) => updateSectionBucket(jobId, sectionId, payload),
+      update: (sectionId, payload, options) => updateSectionBucket(jobId, sectionId, payload, options),
     }),
   );
 }

@@ -3,8 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
-import { ApiRequestError } from '@/lib/api/pixlate';
-import type { ApiLayoutAdjustPatch, ApiTextBlock } from '@/lib/api/n5-schema';
+import type { ApiBlockPatch, ApiLayoutAdjustPatch, ApiTextBlock } from '@/lib/api/n5-schema';
 import type { BoundingBox } from '@/lib/api/types';
 import {
   canRestoreSectionInN5,
@@ -36,19 +35,25 @@ import {
   toLayoutBox,
 } from '@/lib/n5/layout-adjust';
 import { createIdempotencyKey } from '@/lib/api/idempotency';
+import {
+  createIdempotentPatchRequest,
+  describePatchSuccess,
+  findLayoutAdjustProblems,
+  recordCommitOnce,
+  type IdempotentPatchRequest,
+  type PatchFailure,
+} from '@/lib/api/idempotent-patch';
+import { getAuthEpoch } from '@/lib/auth/session-store';
 import { openTypesetMeasurer, type TypesetMeasurer } from '@/lib/n5/typeset-measurement';
 import { isTypesetRole } from '@/lib/n5/typeset-rules';
-import {
-  judgeUncertainSave,
-  nextUncertainSaveStatus,
-  type UncertainRefetchResult,
-  type UncertainSaveCheck,
-  type UncertainSaveOutcome,
-} from '@/lib/n5/uncertain-save';
+import type { UncertainRefetchResult } from '@/lib/n5/uncertain-save';
+import { isN5GeneralHistoryEnabled } from '@/lib/n5/release-scope';
 import type { TypesetFontGate } from './use-typeset-font-gate';
 import type { N5SaveNotice } from '@/lib/n5/messages';
 import type { N5ViewMode } from '@/lib/n5/viewport';
 import { pixlateKeys, usePatchN5BlockMutation, useUpdateSectionBucketMutation } from '@/lib/queries/pixlate';
+import { sectionActionOf, type SectionPatchBody } from '@/lib/queries/section-bucket-mutation';
+import { useSaveRecovery, type SaveRunResult } from '@/lib/queries/use-save-recovery';
 
 // ─────────────────────────────────────────────────────────────────
 // N5 편집 세션(F-CFM-03) — N5Loaded 하나가 소유하고 캔버스(N5Viewport)와 패널(N5Panel)이 함께 쓴다.
@@ -67,6 +72,14 @@ import { pixlateKeys, usePatchN5BlockMutation, useUpdateSectionBucketMutation } 
 // renderInput 이 연결된 블록은 표시와 같은 서버 style 8키로 잰다(역할 기본값으로 다시 재지 않는다). 그 글꼴이 준비되지 않았으면
 // 재지 않는다. 연결이 없는 블록(Mock·QA·이전 계약 응답)은 역할 기본값으로 잰다.
 // 잴 수 없는 블록(글이 비었거나 조판 역할이 아니거나 폰트가 준비되지 않음)은 기존 자유 크기 조절을 쓴다.
+//
+// 멱등 저장(blockPatch · sectionPatch 「저장 공통」) — 번역문 [확인] · 배치 저장 · 섹션 제외/되돌리기 · 실행 취소/다시 실행의 서버 저장은
+// 사용자 조작마다 요청 기록(대상 · 키 · 본문 · revision · 시작 시각) 하나를 만들어 Idempotency-Key 와 함께 보낸다. 결과를 알 수 없으면
+// 같은 기록을 다시 보내 결과를 확인하고(lib/queries/use-save-recovery.ts), 확인될 때까지 저장 잠금을 풀지 않는다.
+// 키를 안전하게 만들 수 없거나 본문 형식이 잘못됐으면(NaN · Infinity · undefined 좌표) 보내지 않고 저장 실패로 둔다.
+// 같은 기록의 성공은 이력에 한 번만 남긴다(recordCommitOnce). 값이 바뀌지 않은 저장(no-op — 응답 revision 이 그대로)은 이력을 남기지 않는다.
+//
+// 릴리스 범위(lib/n5/release-scope.ts) — 일반 실행 취소·다시 실행은 12월 화면에서 숨긴다(버튼 · 캔버스 단축키). 이력 · 저장 구현은 그대로 둔다.
 //
 // 잠금
 // - 서버 실행 취소·다시 실행이 진행 중이면(session.inFlight) 새 편집·실행 취소·다시 실행을 시작하지 않는다.
@@ -192,10 +205,44 @@ export interface N5EditSessionApi {
   saveTranslation: (blockId: number, text: string) => Promise<TranslationSaveResult>;
 }
 
+/** 키를 안전하게 만들 수 없거나 본문 형식이 잘못돼 보내지 않은 저장 — 서버에 아무것도 보내지 않았다 */
+export class UnsafeSaveRequestError extends Error {
+  readonly reason: string;
+  readonly problems: string[];
+  constructor(reason: string, problems: string[]) {
+    super(
+      reason === 'key-unavailable'
+        ? '이 브라우저에서 저장 요청을 안전하게 만들 수 없어 저장하지 않았습니다.'
+        : reason === 'invalid-revision'
+          ? '서버에서 확인한 최신 상태가 없어 저장하지 않았습니다. 화면을 새로 고친 뒤 다시 시도해 주세요.'
+          : '저장할 값에 잘못된 숫자가 있어 저장하지 않았습니다.',
+    );
+    this.name = 'UnsafeSaveRequestError';
+    this.reason = reason;
+    this.problems = problems;
+  }
+}
+
+/** 결과를 알 수 없던 저장의 반영 여부를 단정할 수 없음 — 서버 현재 값을 다시 받았다 */
+export class UncertainSaveResultError extends Error {
+  constructor() {
+    super('저장 결과를 확인하지 못했습니다. 서버에서 다시 받은 값을 확인한 뒤 다시 저장해 주세요.');
+    this.name = 'UncertainSaveResultError';
+  }
+}
+
 export type TranslationSaveResult =
   | { started: false }
   | { started: true; ok: true; revision: number | null; rerenderTaskId: number | null; /** 서버 정본(PATCH 응답 block). 보낼 것이 없어 PATCH 하지 않았으면 null */ block: ApiTextBlock | null }
   | { started: true; ok: false; conflict: ApiTextBlock | null; error: unknown };
+
+/** 섹션 저장 결과가 실제 변경인가 — no-op(이미 같은 상태 · revision 그대로)은 이력을 남기지 않는다 */
+function isSectionChange(
+  request: IdempotentPatchRequest<SectionPatchBody>,
+  result: SaveRunResult<{ data: { revision?: number | null }; replayed: boolean }>,
+): boolean {
+  return result.kind === 'applied' && describePatchSuccess(request.revision, result.response.data.revision, result.response.replayed).changed !== false;
+}
 
 export function useN5EditSession({
   jobId,
@@ -241,15 +288,11 @@ export function useN5EditSession({
     setPendingEdits(pendingEditsRef.current);
   }, []);
 
-  // ── 응답을 받지 못한 저장(F-CFM-03) ─ 서버가 이미 반영했을 수 있다(네트워크 끊김·시간 초과 — ApiRequestError 가 아니다).
-  // 서버 상태(/blocks · /preview)를 다시 받아 결과를 확인할 때까지 호출부의 저장 흐름이 끝나지 않는다 — 그동안 호출부가 잡은 저장 잠금
-  // (pendingEdits · inFlight)이 그대로라 추가 저장·확정·실행 취소·다시 실행·섹션 제외가 시작되지 않는다.
-  // 다시 받기는 한 번에 상한(N5_UNCERTAIN_SAVE_RECONCILE_LIMIT_MS)까지만 기다린다. 넘거나 실패하면 「확인하지 못함」으로 두고 잠금은 풀지 않는다 —
-  // 사용자가 [서버 상태 다시 확인](retryServerCheck)으로 다시 받는다. 확인되면 judgeUncertainSave 로 반영 여부를 정해 호출부가 초안·이력을 맞춘다.
-  // HTTP 응답이 있는 실패(409·4xx·5xx)는 결과가 분명하므로 여기서 기다리지 않는다(null)
-  const [uncertainSave, setUncertainSave] = useState<{ status: 'checking' | 'unconfirmed' } | null>(null);
-  const uncertainRetryRef = useRef<(() => void) | null>(null);
-
+  // ── 결과를 알 수 없는 저장(F-CFM-03) ─ 연결 끊김 · 응답 유실 · 시간 초과 · 커밋 여부가 불명확한 5xx. 서버가 이미 반영했을 수 있다.
+  // 같은 요청 기록(키 · 본문)을 다시 보내 결과를 확인한다(lib/queries/use-save-recovery.ts). 확인될 때까지 호출부의 저장 흐름이 끝나지 않아
+  // 호출부가 잡은 저장 잠금(pendingEdits · inFlight)이 그대로다 — 추가 저장 · 확정 · 실행 취소/다시 실행 · 섹션 제외가 시작되지 않는다.
+  // 서버 상태 다시 받기는 한 번에 상한(N5_UNCERTAIN_SAVE_RECONCILE_LIMIT_MS)까지만 기다리고, 넘거나 실패하면 「확인하지 못함」으로 둔다 —
+  // 잠금은 풀지 않고 사용자가 [서버 상태 다시 확인](retryServerCheck)을 누를 때까지 기다린다.
   const refetchServerState = useCallback(async (): Promise<UncertainRefetchResult> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<UncertainRefetchResult>((resolve) => {
@@ -269,36 +312,62 @@ export function useN5EditSession({
     }
   }, [jobId, queryClient]);
 
-  const resolveUncertainSave = useCallback(
-    async (err: unknown, check: UncertainSaveCheck | null): Promise<UncertainSaveOutcome | null> => {
-      if (err instanceof ApiRequestError) return null;
-      for (;;) {
-        setUncertainSave({ status: 'checking' });
-        if (nextUncertainSaveStatus(await refetchServerState()) === 'confirmed') break;
-        // 확인하지 못했다 — 잠금은 그대로 두고 사용자가 다시 확인을 누를 때까지 기다린다
-        setUncertainSave({ status: 'unconfirmed' });
-        await new Promise<void>((resolve) => {
-          uncertainRetryRef.current = resolve;
-        });
-      }
-      uncertainRetryRef.current = null;
-      setUncertainSave(null);
-      if (!check) return 'not-applied';
-      const preview = queryClient.getQueryData<{ sections?: { id?: number | null; bucket?: string | null }[] }>(pixlateKeys.n5Preview(jobId));
-      return judgeUncertainSave(check, {
-        blocks: queryClient.getQueryData<ApiTextBlock[]>(pixlateKeys.n5Blocks(jobId)) ?? [],
-        sections: preview?.sections ?? [],
-      });
+  const { state: uncertainSave, retry: retryServerCheck, run: runSave } = useSaveRecovery(refetchServerState);
+  /** 성공을 이력에 남긴 요청 기록 키 — 같은 기록의 성공(재전송 · 재생 확인 포함)을 두 번 남기지 않는다 */
+  const committedKeysRef = useRef(new Set<string>());
+
+  /**
+   * 블록 저장 요청 기록. revision 은 서버가 준 현재 값(/blocks 캐시)만 쓴다. 키를 만들 수 없거나 본문 형식이 잘못되면 null —
+   * 키 없이 조용히 보내지 않는다. 잘못된 좌표를 0 · null 로 바꾸거나 반올림하지 않는다(null 은 조정 해제라는 뜻이 있다).
+   */
+  const createBlockRequest = useCallback(
+    (blockId: number, body: ApiBlockPatch): IdempotentPatchRequest<ApiBlockPatch> | UnsafeSaveRequestError => {
+      const problems = findLayoutAdjustProblems(body.layoutAdjust);
+      if (typeof body.trans1 !== 'string') problems.push('trans1');
+      if (problems.length > 0) return new UnsafeSaveRequestError('invalid-body', problems);
+      const created = createIdempotentPatchRequest(
+        { operation: 'blockPatch', jobId, targetId: blockId, body, authEpoch: getAuthEpoch() },
+        { now: Date.now, createKey: createIdempotencyKey },
+      );
+      return created.ok ? created.request : new UnsafeSaveRequestError(created.reason, created.problems ?? []);
     },
-    [jobId, queryClient, refetchServerState],
+    [jobId],
   );
 
-  /** [서버 상태 다시 확인] — 확인하지 못한 저장의 결과를 다시 받는다(잠금은 확인될 때까지 그대로) */
-  const retryServerCheck = useCallback(() => {
-    const resume = uncertainRetryRef.current;
-    uncertainRetryRef.current = null;
-    resume?.();
-  }, []);
+  /** 섹션 저장 요청 기록 — revision 은 /preview 캐시(서버 정본)의 섹션 revision. 없으면 만들지 않는다(임의 revision 금지) */
+  const createSectionRequest = useCallback(
+    (sectionId: number, bucket: SectionBucket): IdempotentPatchRequest<SectionPatchBody> | UnsafeSaveRequestError => {
+      const revision = queryClient
+        .getQueryData<{ sections?: { id?: number | null; revision?: number | null }[] }>(pixlateKeys.n5Preview(jobId))
+        ?.sections?.find((section) => section.id === sectionId)?.revision;
+      if (revision == null) return new UnsafeSaveRequestError('invalid-revision', ['revision']);
+      const created = createIdempotentPatchRequest(
+        { operation: 'sectionPatch', jobId, targetId: sectionId, body: { action: sectionActionOf(bucket), revision }, authEpoch: getAuthEpoch() },
+        { now: Date.now, createKey: createIdempotencyKey },
+      );
+      return created.ok ? created.request : new UnsafeSaveRequestError(created.reason, created.problems ?? []);
+    },
+    [jobId, queryClient],
+  );
+
+  /** 블록 저장 한 번(첫 전송 + 결과 불명 복구) */
+  const runBlockSave = useCallback(
+    (request: IdempotentPatchRequest<ApiBlockPatch>) => runSave(request, () => patchBlock({ request })),
+    [patchBlock, runSave],
+  );
+  const runSectionSave = useCallback(
+    (request: IdempotentPatchRequest<SectionPatchBody>) => runSave(request, () => patchSectionBucket({ request })),
+    [patchSectionBucket, runSave],
+  );
+
+  /** 재생 응답의 block 은 그때 값이다 — 복구가 다시 받은 /blocks 캐시의 현재 값을 쓴다 */
+  const serverBlockAfter = useCallback(
+    (blockId: number, response: { block?: ApiTextBlock | null }, replayed: boolean): ApiTextBlock | null =>
+      replayed
+        ? (queryClient.getQueryData<ApiTextBlock[]>(pixlateKeys.n5Blocks(jobId))?.find((b) => b.id === blockId) ?? null)
+        : (response.block ?? null),
+    [jobId, queryClient],
+  );
 
   // [저장하러 가기] 최종 저장 잠금 — 사용자 편집 handler 가 같은 tick 에도 바로 읽도록 ref 로 둔다(UI disabled 만 믿지 않는다)
   const finalizingRef = useRef(false);
@@ -660,6 +729,15 @@ export function useN5EditSession({
     [dispatch, fitForText],
   );
 
+  /** 409 REVISION_CONFLICT 의 서버 최신 블록 — 기존 충돌 표시로 넘긴다(서버값으로 초안을 덮지 않는다) */
+  const recordConflict = useCallback((blockId: number, failure: PatchFailure | null, error: unknown): ApiTextBlock | null => {
+    if (failure?.kind !== 'revision-conflict') return null;
+    const parsed = parseApiError((error as { body?: unknown } | null)?.body);
+    const conflict = parsed && isRevisionConflict(parsed) ? getRevisionConflictLatestBlock(parsed) : null;
+    if (conflict) setHistoryConflicts((conflicts) => new Map(conflicts).set(blockId, conflict));
+    return conflict;
+  }, []);
+
   const saveTranslationImpl = useCallback(
     async (blockId: number, text: string): Promise<TranslationSaveResult> => {
       const latest = queryClient.getQueryData<ApiTextBlock[]>(pixlateKeys.n5Blocks(jobId))?.find((b) => b.id === blockId);
@@ -667,35 +745,37 @@ export function useN5EditSession({
       clearHistoryConflict(blockId);
       const textBeforeSave = latest.trans1 ?? '';
       try {
-        const response = await patchBlock({ blockId, payload: { trans1: text, revision: latest.revision } });
-        const rerenderTaskId = getRerenderTaskId(response);
-        setRerenderTask(blockId, rerenderTaskId, 'translation');
-        updateTranslationDraft(blockId, (prev) => resolveTranslationSaveSucceeded(prev, text));
-        commitTranslation(blockId, textBeforeSave, response.block?.trans1 ?? text);
-        return { started: true, ok: true, revision: response.block?.revision ?? null, rerenderTaskId, block: response.block ?? null };
-      } catch (err) {
-        // 응답이 없었으면 서버 상태를 확인할 때까지 기다린다. 이미 반영됐으면 성공과 같이 초안·이력을 맞춘다(이번 응답 task 는 알 수 없다)
-        const uncertain = await resolveUncertainSave(err, { kind: 'translation', blockId, text, sentRevision: latest.revision });
-        if (uncertain === 'applied') {
-          const server = queryClient.getQueryData<ApiTextBlock[]>(pixlateKeys.n5Blocks(jobId))?.find((b) => b.id === blockId) ?? null;
+        const request = createBlockRequest(blockId, { trans1: text, revision: latest.revision });
+        if (request instanceof UnsafeSaveRequestError) {
+          updateTranslationDraft(blockId, resolveTranslationSaveFailed);
+          return { started: true, ok: false, conflict: null, error: request };
+        }
+        const result = await runBlockSave(request);
+        if (result.kind === 'applied') {
+          const { data: response, replayed } = result.response;
+          const { changed } = describePatchSuccess(request.revision, response.block?.revision, replayed);
+          const rerenderTaskId = getRerenderTaskId(response);
+          // 값이 바뀌지 않은 저장(no-op)은 새 task 를 만들지 않았다 — 진행 중인 재렌더 추적을 null 로 덮지 않는다
+          if (changed !== false) setRerenderTask(blockId, rerenderTaskId, 'translation');
           updateTranslationDraft(blockId, (prev) => resolveTranslationSaveSucceeded(prev, text));
-          commitTranslation(blockId, textBeforeSave, text);
-          return { started: true, ok: true, revision: server?.revision ?? null, rerenderTaskId: null, block: server };
+          // 이력은 실제로 값이 바뀐 저장만, 같은 기록은 한 번만(재생 응답의 trans1 은 보낸 글과 같다)
+          if (changed !== false && recordCommitOnce(committedKeysRef.current, request.key)) {
+            commitTranslation(blockId, textBeforeSave, replayed ? text : (response.block?.trans1 ?? text));
+          }
+          const block = serverBlockAfter(blockId, response, replayed);
+          return { started: true, ok: true, revision: block?.revision ?? null, rerenderTaskId, block };
         }
-        // 초안은 그대로 두고 실패 표시만 켠다(번역문 저장 실패는 입력 유지) — 409 는 기존 충돌 표시로 넘긴다
+        if (result.kind === 'abandoned') return { started: true, ok: false, conflict: null, error: null };
+        // 초안은 그대로 두고 실패 표시만 켠다(번역문 저장 실패는 입력 유지) — 409 는 기존 충돌 표시로 넘긴다.
+        // 결과 불명 뒤 반영 여부를 단정할 수 없는 경우(unknown)도 성공으로 보지 않는다 — 다시 받은 서버 값과 초안이 함께 보인다
         updateTranslationDraft(blockId, resolveTranslationSaveFailed);
-        let conflict: ApiTextBlock | null = null;
-        if (err instanceof ApiRequestError && err.status === 409) {
-          const parsed = parseApiError(err.body);
-          conflict = parsed && isRevisionConflict(parsed) ? getRevisionConflictLatestBlock(parsed) : null;
-          if (conflict) setHistoryConflicts((conflicts) => new Map(conflicts).set(blockId, conflict!));
-        }
-        return { started: true, ok: false, conflict, error: err };
+        const conflict = recordConflict(blockId, result.failure, result.error);
+        return { started: true, ok: false, conflict, error: result.error ?? new UncertainSaveResultError() };
       } finally {
         endServerEdit();
       }
     },
-    [beginServerEdit, clearHistoryConflict, commitTranslation, endServerEdit, jobId, patchBlock, queryClient, resolveUncertainSave, setRerenderTask, updateTranslationDraft],
+    [beginServerEdit, clearHistoryConflict, commitTranslation, createBlockRequest, endServerEdit, jobId, queryClient, recordConflict, runBlockSave, serverBlockAfter, setRerenderTask, updateTranslationDraft],
   );
   /** 칸의 [확인] — 최종 저장 중에는 시작하지 않는다(최종 저장 자체는 saveBlockForConfirm 이 같은 경로를 쓴다) */
   const saveTranslation = useCallback(
@@ -718,22 +798,20 @@ export function useN5EditSession({
       setFailedSectionId((prev) => (prev === sectionId ? null : prev));
       void (async () => {
         try {
-          // mutateAsync — 섹션마다 따로 끝을 기다린다(mutate 의 호출별 콜백은 마지막 호출에만 불린다)
-          await patchSectionBucket({ sectionId, bucket });
-          dispatch({
-            type: 'edit-succeeded',
-            command: {
-              kind: bucket === 'exclude' ? 'section-exclude' : 'section-restore',
-              target: { type: 'section', id: sectionId },
-              before: bucket === 'exclude' ? 'include' : 'exclude',
-              after: bucket,
-            },
-          });
-          if (bucket === 'exclude') onSectionExcluded(sectionId);
-        } catch (err) {
-          const uncertain = await resolveUncertainSave(err, { kind: 'section', sectionId, bucket });
-          if (uncertain === 'applied') {
-            // 서버가 이미 바꿨다 — 성공과 같이 이력 1단계(화면은 다시 받은 /preview 가 정본)
+          const request = createSectionRequest(sectionId, bucket);
+          if (request instanceof UnsafeSaveRequestError) {
+            setFailedSectionId(sectionId);
+            return;
+          }
+          // 섹션마다 따로 끝을 기다린다(mutate 의 호출별 콜백은 마지막 호출에만 불린다). 결과 불명이면 같은 기록으로 확인한다
+          const result = await runSectionSave(request);
+          if (result.kind === 'abandoned') return;
+          if (result.kind !== 'applied') {
+            setFailedSectionId(sectionId);
+            return;
+          }
+          // 화면은 다시 받은 /preview 가 정본이다. 이력은 실제로 바뀐 저장만, 같은 기록은 한 번만 남긴다
+          if (isSectionChange(request, result) && recordCommitOnce(committedKeysRef.current, request.key)) {
             dispatch({
               type: 'edit-succeeded',
               command: {
@@ -743,10 +821,8 @@ export function useN5EditSession({
                 after: bucket,
               },
             });
-            if (bucket === 'exclude') onSectionExcluded(sectionId);
-          } else {
-            setFailedSectionId(sectionId);
           }
+          if (bucket === 'exclude') onSectionExcluded(sectionId);
         } finally {
           pendingSectionIdsRef.current.delete(sectionId);
           setPendingSectionIds(new Set(pendingSectionIdsRef.current));
@@ -754,7 +830,7 @@ export function useN5EditSession({
         }
       })();
     },
-    [beginServerEdit, dispatch, endServerEdit, onSectionExcluded, patchSectionBucket, resolveUncertainSave],
+    [beginServerEdit, createSectionRequest, dispatch, endServerEdit, onSectionExcluded, runSectionSave],
   );
 
   // ── 실행 취소·다시 실행
@@ -789,9 +865,18 @@ export function useN5EditSession({
         settle(direction, null);
         return;
       }
-      try {
-        const response = await patchBlock({ blockId, payload: { trans1: value.text, revision: latest.revision } });
-        setRerenderTask(blockId, getRerenderTaskId(response), 'history');
+      // 실행 취소·다시 실행도 새 사용자 조작이다 — 새 요청 기록(새 키)
+      const request = createBlockRequest(blockId, { trans1: value.text, revision: latest.revision });
+      if (request instanceof UnsafeSaveRequestError) {
+        settle(direction, null);
+        return;
+      }
+      const result = await runBlockSave(request);
+      if (result.kind === 'applied' && recordCommitOnce(committedKeysRef.current, request.key)) {
+        const { data: response, replayed } = result.response;
+        if (describePatchSuccess(request.revision, response.block?.revision, replayed).changed !== false) {
+          setRerenderTask(blockId, getRerenderTaskId(response), 'history');
+        }
         // 저장에 성공한 뒤에만 그 글의 박스로 돌아간다. 초안이 없던 때로 돌아가면 서버 박스를 다시 쓴다
         setBboxDrafts((drafts) => {
           const next = new Map(drafts);
@@ -800,29 +885,14 @@ export function useN5EditSession({
           return next;
         });
         settle(direction, command);
-      } catch (err) {
-        // 409 — 서버값으로 덮어쓰지 않고 기존 충돌 표시로 넘긴다. 사용자가 [최신 값 불러오기]를 고를 때만 바뀐다
-        if (err instanceof ApiRequestError && err.status === 409) {
-          const parsed = parseApiError(err.body);
-          const conflict = parsed && isRevisionConflict(parsed) ? getRevisionConflictLatestBlock(parsed) : null;
-          if (conflict) setHistoryConflicts((conflicts) => new Map(conflicts).set(blockId, conflict));
-        }
-        // 응답이 없었으면 서버 상태를 확인할 때까지 이력 위치·잠금을 그대로 둔다. 이미 반영됐으면 이력도 그 방향으로 옮긴다
-        const uncertain = await resolveUncertainSave(err, { kind: 'translation', blockId, text: value.text, sentRevision: latest.revision });
-        if (uncertain === 'applied') {
-          setBboxDrafts((drafts) => {
-            const next = new Map(drafts);
-            if (value.bbox) next.set(blockId, value.bbox);
-            else next.delete(blockId);
-            return next;
-          });
-          settle(direction, command);
-          return;
-        }
-        settle(direction, null);
+        return;
       }
+      // 409 — 서버값으로 덮어쓰지 않고 기존 충돌 표시로 넘긴다. 사용자가 [최신 값 불러오기]를 고를 때만 바뀐다.
+      // 결과 불명 뒤 단정할 수 없는 경우도 이력 위치를 옮기지 않는다
+      if (result.kind === 'failed' || result.kind === 'unknown') recordConflict(blockId, result.failure, result.error);
+      settle(direction, null);
     },
-    [clearHistoryConflict, dispatch, jobId, patchBlock, queryClient, resolveUncertainSave, revealBlock, setRerenderTask, settle],
+    [clearHistoryConflict, createBlockRequest, dispatch, jobId, queryClient, recordConflict, revealBlock, runBlockSave, setRerenderTask, settle],
   );
 
   const runSectionCommand = useCallback(
@@ -835,23 +905,21 @@ export function useN5EditSession({
         return;
       }
       dispatch({ type: 'save-started', operation: direction });
-      try {
-        await patchSectionBucket({ sectionId, bucket });
+      const request = createSectionRequest(sectionId, bucket);
+      if (request instanceof UnsafeSaveRequestError) {
+        settle(direction, null);
+        return;
+      }
+      const result = await runSectionSave(request);
+      if (result.kind === 'applied' && recordCommitOnce(committedKeysRef.current, request.key)) {
         setFailedSectionId((prev) => (prev === sectionId ? null : prev));
         latestRef.current.onSelectSection(sectionId);
         settle(direction, command);
-      } catch (err) {
-        const uncertain = await resolveUncertainSave(err, { kind: 'section', sectionId, bucket });
-        if (uncertain === 'applied') {
-          setFailedSectionId((prev) => (prev === sectionId ? null : prev));
-          latestRef.current.onSelectSection(sectionId);
-          settle(direction, command);
-          return;
-        }
-        settle(direction, null);
+        return;
       }
+      settle(direction, null);
     },
-    [dispatch, patchSectionBucket, resolveUncertainSave, settle],
+    [createSectionRequest, dispatch, runSectionSave, settle],
   );
 
   /** 박스 이력의 manual height 여부를 그 방향(실행 취소 = 조작 전, 다시 실행 = 조작 후)으로 되돌린다 */
@@ -868,7 +936,7 @@ export function useN5EditSession({
 
   const runHistory = useCallback(
     (direction: HistoryDirection) => {
-      if (!isHistoryAvailable || layoutDraggingRef.current || finalizingRef.current) return;
+      if (!isHistoryAvailable || !isN5GeneralHistoryEnabled() || layoutDraggingRef.current || finalizingRef.current) return;
       if (!canStartSave(sessionRef.current) || pendingEditsRef.current > 0) return;
       const { history } = sessionRef.current;
       const command = direction === 'undo' ? peekUndo(history) : peekRedo(history);
@@ -907,8 +975,10 @@ export function useN5EditSession({
   const undo = useCallback(() => runHistory('undo'), [runHistory]);
   const redo = useCallback(() => runHistory('redo'), [runHistory]);
 
-  // 단축키 — 입력칸의 글자 실행 취소와 열린 확인창은 가로채지 않는다(F-CFM-03)
+  // 단축키 — 입력칸의 글자 실행 취소와 열린 확인창은 가로채지 않는다(F-CFM-03).
+  // 12월 범위에서는 일반 실행 취소·다시 실행을 숨겨 캔버스 단축키를 듣지 않는다(lib/n5/release-scope.ts) — 브라우저 기본 동작도 막지 않는다
   useEffect(() => {
+    if (!isN5GeneralHistoryEnabled()) return;
     function handleKeyDown(e: KeyboardEvent) {
       if (!(e.ctrlKey || e.metaKey) || e.altKey || e.key.toLowerCase() !== 'z') return;
       if (isTypingTarget(e.target) || document.querySelector('[role="dialog"][aria-modal="true"]')) return;
@@ -966,34 +1036,31 @@ export function useN5EditSession({
       clearHistoryConflict(blockId);
       try {
         // 번역 초안과 배치를 한 요청으로 — revision 은 실행 시점 최신, 저장(revision +1)·재렌더도 한 번
-        const response = await patchBlock({
-          blockId,
-          payload: { trans1: text ?? latest.trans1 ?? '', revision: latest.revision, layoutAdjust },
-          idempotencyKey: createIdempotencyKey(),
-        });
-        const rerenderTaskId = getRerenderTaskId(response);
-        setRerenderTask(blockId, rerenderTaskId, text != null ? 'translation' : 'layout');
-        if (text != null) updateTranslationDraft(blockId, (prev) => resolveTranslationSaveSucceeded(prev, text));
-        setLayoutDirty(blockId, false);
-        return { started: true, ok: true, revision: response.block?.revision ?? null, rerenderTaskId, block: response.block ?? null };
-      } catch (err) {
-        // local 초안(번역문·배치)은 그대로 — 확정하지 않고 N5 에 남는다. 409 는 기존 충돌 표시로
-        if (text != null) updateTranslationDraft(blockId, resolveTranslationSaveFailed);
-        let conflict: ApiTextBlock | null = null;
-        if (err instanceof ApiRequestError && err.status === 409) {
-          const parsed = parseApiError(err.body);
-          conflict = parsed && isRevisionConflict(parsed) ? getRevisionConflictLatestBlock(parsed) : null;
-          if (conflict) setHistoryConflicts((conflicts) => new Map(conflicts).set(blockId, conflict!));
+        const request = createBlockRequest(blockId, { trans1: text ?? latest.trans1 ?? '', revision: latest.revision, layoutAdjust });
+        if (request instanceof UnsafeSaveRequestError) return { started: true, ok: false, conflict: null, error: request };
+        const result = await runBlockSave(request);
+        if (result.kind === 'applied') {
+          const { data: response, replayed } = result.response;
+          const { changed } = describePatchSuccess(request.revision, response.block?.revision, replayed);
+          const rerenderTaskId = getRerenderTaskId(response);
+          if (changed !== false) setRerenderTask(blockId, rerenderTaskId, text != null ? 'translation' : 'layout');
+          if (text != null) updateTranslationDraft(blockId, (prev) => resolveTranslationSaveSucceeded(prev, text));
+          setLayoutDirty(blockId, false);
+          // 재생 응답이면 다시 받은 /blocks 의 현재 값을 정본 기대값으로 쓴다(그때 block 이 아니라)
+          const block = serverBlockAfter(blockId, response, replayed);
+          return { started: true, ok: true, revision: block?.revision ?? null, rerenderTaskId, block };
         }
-        // 응답이 없었으면 서버 상태를 확인할 때까지 기다린 뒤 실패로 둔다(확정하지 않음). 다음 [저장하러 가기]는 다시 받은 최신 revision 으로
-        // 같은 배치를 보낸다 — 이미 반영됐다면 같은 값이라 no-op 이다(blockPatch). 409 를 가정하지 않는다
-        await resolveUncertainSave(err, null);
-        return { started: true, ok: false, conflict, error: err };
+        if (result.kind === 'abandoned') return { started: true, ok: false, conflict: null, error: null };
+        // local 초안(번역문·배치)은 그대로 — 확정하지 않고 N5 에 남는다. 409 는 기존 충돌 표시로.
+        // 결과 불명 뒤 단정할 수 없으면(unknown) 실패로 둔다 — 다음 [저장하러 가기]는 다시 받은 최신 revision 으로 새 요청(새 키)을 보낸다
+        if (text != null) updateTranslationDraft(blockId, resolveTranslationSaveFailed);
+        const conflict = recordConflict(blockId, result.failure, result.error);
+        return { started: true, ok: false, conflict, error: result.error ?? new UncertainSaveResultError() };
       } finally {
         endServerEdit();
       }
     },
-    [beginServerEdit, clearHistoryConflict, endServerEdit, jobId, patchBlock, pendingLayoutPatch, queryClient, resolveUncertainSave, setLayoutDirty, setRerenderTask, updateTranslationDraft],
+    [beginServerEdit, clearHistoryConflict, createBlockRequest, endServerEdit, jobId, pendingLayoutPatch, queryClient, recordConflict, runBlockSave, serverBlockAfter, setLayoutDirty, setRerenderTask, updateTranslationDraft],
   );
 
   const isIdle = session.inFlight === null && pendingEdits === 0;
@@ -1001,8 +1068,8 @@ export function useN5EditSession({
   const isServerEditPending = useCallback(() => sessionRef.current.inFlight !== null || pendingEditsRef.current > 0, []);
 
   return {
-    canUndo: isHistoryAvailable && isIdle && !isFinalizing && canUndo(session.history),
-    canRedo: isHistoryAvailable && isIdle && !isFinalizing && canRedo(session.history),
+    canUndo: isHistoryAvailable && isIdle && !isFinalizing && uncertainSave === null && canUndo(session.history),
+    canRedo: isHistoryAvailable && isIdle && !isFinalizing && uncertainSave === null && canRedo(session.history),
     undo,
     redo,
     notice: session.notice,

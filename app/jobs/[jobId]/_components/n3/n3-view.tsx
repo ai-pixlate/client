@@ -1,9 +1,15 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
+import { createIdempotencyKey } from '@/lib/api/idempotency';
+import { createIdempotentPatchRequest } from '@/lib/api/idempotent-patch';
 import { ApiRequestError } from '@/lib/api/pixlate';
+import { getAuthEpoch } from '@/lib/auth/session-store';
+import type { UncertainRefetchResult } from '@/lib/n5/uncertain-save';
+import { sectionActionOf } from '@/lib/queries/section-bucket-mutation';
+import { useSaveRecovery } from '@/lib/queries/use-save-recovery';
 import { REGULATORY_CLASS_LABELS } from '@/lib/job/regulatory-class-labels';
 import { toJobMetaViewModel } from '@/lib/n5/adapter';
 import {
@@ -32,6 +38,7 @@ import {
   N3_WORK_AREA_MAX_WIDTH,
 } from '@/lib/n3/layout';
 import { JobMetaTags } from '../job-meta-tags';
+import { SaveRecoveryNotice } from '../save-recovery-notice';
 import { DetailPanel } from './detail-panel';
 import { SectionCropThumbnail } from './section-crop-thumbnail';
 import { SectionListCard } from './section-list-card';
@@ -111,6 +118,11 @@ function ProceedBubble({
   );
 }
 
+/** 결과를 알 수 없는 섹션 저장 뒤 /sections 다시 받기 한 번의 상한(ms) — N5 와 같은 FE 구현값. 넘으면 「확인하지 못함」으로 두고 잠금은 유지한다 */
+const N3_UNCERTAIN_SAVE_RECONCILE_LIMIT_MS = 15_000;
+
+const UNSAFE_SECTION_SAVE_NOTICE = '섹션 상태를 안전하게 저장할 수 없어 바꾸지 않았습니다. 화면을 새로 고친 뒤 다시 시도해 주세요.';
+
 export function N3View({ jobId }: { jobId: string }) {
   const queryClient = useQueryClient();
   const sectionsQuery = useSectionsQuery(jobId);
@@ -129,6 +141,31 @@ export function N3View({ jobId }: { jobId: string }) {
 
   const [selectedSectionId, setSelectedSectionId] = useState<number | null>(null);
   const [proceedError, setProceedError] = useState<string | null>(null);
+
+  // 섹션 제외·되살리기 저장(sectionPatch 「저장 공통」) — 조작마다 요청 기록(키 · { action, revision })을 만들고, 결과를 알 수 없으면
+  // 같은 기록으로 다시 확인한다(lib/queries/use-save-recovery.ts). 확인될 때까지 다른 섹션 저장과 [이대로 진행]을 막는다
+  const refetchSections = useCallback(async (): Promise<UncertainRefetchResult> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<UncertainRefetchResult>((resolve) => {
+      timer = setTimeout(() => resolve('timeout'), N3_UNCERTAIN_SAVE_RECONCILE_LIMIT_MS);
+    });
+    const work = queryClient
+      .refetchQueries({ queryKey: pixlateKeys.sections(jobId), exact: true, type: 'all' }, { throwOnError: true })
+      .then(
+        (): UncertainRefetchResult => 'ok',
+        (): UncertainRefetchResult => 'failed',
+      );
+    try {
+      return await Promise.race([work, timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }, [jobId, queryClient]);
+  const recovery = useSaveRecovery(refetchSections);
+  // 저장 한 번(첫 전송 + 복구)이 끝날 때까지 — 같은 tick 의 연속 클릭도 막도록 ref 를 정본으로 둔다
+  const sectionSavingRef = useRef(false);
+  const [isSectionSaving, setIsSectionSaving] = useState(false);
+  const isBucketLocked = mutation.isPending || isSectionSaving || recovery.state !== null;
 
   const sections = useMemo(
     () => sortByOrder([...(sectionsQuery.data?.exclude ?? []), ...(sectionsQuery.data?.include ?? [])]),
@@ -149,12 +186,40 @@ export function N3View({ jobId }: { jobId: string }) {
     // 기본 선택은 "첫 제외 섹션"으로 파생된다 — 고정하지 않으면 bucket이 바뀌는 순간
     // 다른 섹션으로 선택이 넘어간다. 버튼은 선택을 바꾸지 않으므로 지금 선택을 고정한다.
     if (selectedSectionId == null) setSelectedSectionId(effectiveSelectedId);
+    if (sectionSavingRef.current || recovery.state !== null) return;
     setProceedError(null);
-    mutation.mutate({ sectionId: section.id, bucket: getN3SectionCardState(section).targetBucket });
+    // revision 은 서버가 준 현재 섹션 값만 쓴다. 없거나 키를 안전하게 만들 수 없으면 키 없이 보내지 않는다
+    const created =
+      section.revision != null
+        ? createIdempotentPatchRequest(
+            {
+              operation: 'sectionPatch',
+              jobId,
+              targetId: section.id,
+              body: { action: sectionActionOf(getN3SectionCardState(section).targetBucket), revision: section.revision },
+              authEpoch: getAuthEpoch(),
+            },
+            { now: Date.now, createKey: createIdempotencyKey },
+          )
+        : null;
+    if (!created?.ok) {
+      setProceedError(UNSAFE_SECTION_SAVE_NOTICE);
+      return;
+    }
+    const { request } = created;
+    sectionSavingRef.current = true;
+    setIsSectionSaving(true);
+    // 실패 표시는 기존 그대로(낙관적 반영 되돌림 + 서버 목록 재조회 — section-bucket-mutation.ts)
+    void recovery
+      .run(request, () => mutation.mutateAsync({ request }))
+      .finally(() => {
+        sectionSavingRef.current = false;
+        setIsSectionSaving(false);
+      });
   }
 
   function handleProceed() {
-    if (proceedMutation.isPending || hasNoIncluded) return;
+    if (proceedMutation.isPending || hasNoIncluded || sectionSavingRef.current || recovery.state !== null) return;
     setProceedError(null);
     proceedMutation.mutate(undefined, {
       onError: (err) => {
@@ -171,7 +236,7 @@ export function N3View({ jobId }: { jobId: string }) {
 
   // 전 섹션 제외는 aria-disabled로 막는다 — native disabled면 hover·focus가 닿지 않아 이유를 볼 수 없다.
   // 실제 요청은 handleProceed가 막는다.
-  const isCtaDisabled = proceedMutation.isPending || !sectionsQuery.isSuccess;
+  const isCtaDisabled = proceedMutation.isPending || !sectionsQuery.isSuccess || isBucketLocked;
   const isCtaBlocked = isCtaDisabled || hasNoIncluded;
 
   return (
@@ -238,7 +303,7 @@ export function N3View({ jobId }: { jobId: string }) {
                       detail={detailQuery.data?.id === selectedSection?.id ? detailQuery.data : undefined}
                       isDetailLoading={detailQuery.isLoading}
                       isDetailError={detailQuery.isError}
-                      isMutating={mutation.isPending}
+                      isMutating={isBucketLocked}
                       onChangeBucket={() => selectedSection && changeBucket(selectedSection)}
                     />
                   </div>
@@ -259,7 +324,7 @@ export function N3View({ jobId }: { jobId: string }) {
                       section={section}
                       sourceImage={findSourceImage(sourceImagesQuery.data, section.sourceImageId)}
                       isSelected={section.id === effectiveSelectedId}
-                      isMutating={mutation.isPending}
+                      isMutating={isBucketLocked}
                       onSelect={() => setSelectedSectionId(section.id ?? null)}
                       onChangeBucket={() => changeBucket(section)}
                     />
@@ -268,6 +333,7 @@ export function N3View({ jobId }: { jobId: string }) {
                 </div>
 
                 <div className="group relative shrink-0">
+                  <SaveRecoveryNotice state={recovery.state} onRetry={recovery.retry} testIdPrefix="n3" />
                   {/* Figma 1437:15953 — CTA 위 orange 말풍선. 서버가 거절한 진행 오류는 계속 보이고, 전 섹션 제외 안내는 hover·focus에만 보인다 */}
                   {proceedError ? (
                     <ProceedBubble role="alert" testId="n3-proceed-notice">

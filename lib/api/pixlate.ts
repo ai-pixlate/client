@@ -1,3 +1,4 @@
+import { isReplayedResponse } from '@/lib/api/idempotent-patch';
 import { ensureBackendSession } from '@/lib/api/session';
 import { reportJobStateConflict } from '@/lib/api/job-state-conflict';
 import { fetchWithSessionRecovery } from '@/lib/auth/authorized-request';
@@ -226,22 +227,23 @@ export function getSectionDetail(jobId: string, sectionId: number): Promise<ApiS
 }
 
 /**
- * N3(버튼)·N5(휴지통) 공용 PATCH. body는 실제 계약대로 { action }이다 —
+ * N3(버튼)·N5(휴지통) 공용 PATCH. body는 실제 계약대로 { action, revision }이다 —
  * bucket 값을 그대로 보내지 않는다. exclude→include 이동은 action='restore',
  * include→exclude 이동은 action='exclude'. excludedStage는 서버가 현재
  * currentStep 기준으로 기록하므로 FE가 보내지 않는다. 응답은 갱신된 전체
  * Section이다.
+ *
+ * sectionPatch 「저장 공통」 — Idempotency-Key 를 보내면 revision 이 필수다(lib/api/idempotent-patch.ts).
+ * 409(REVISION_CONFLICT details.current · DUPLICATE · INVALID_STATE)를 호출부가 error.code 로 가르도록 raw body 를 보존하는
+ * ApiRequestError 를 던지고, 성공 응답은 재생 헤더(Idempotent-Replayed) 여부와 함께 돌려준다.
  */
-export function updateSectionBucket(
+export async function updateSectionBucket(
   jobId: string,
   sectionId: number,
   payload: ApiSectionPatch,
-): Promise<ApiSection> {
-  return apiFetch<ApiSection>(`/jobs/${jobId}/sections/${sectionId}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
+  options: IdempotentPatchOptions = {},
+): Promise<IdempotentPatchResponse<ApiSection>> {
+  return sendIdempotentPatch<ApiSection>(`/jobs/${jobId}/sections/${sectionId}`, payload, options);
 }
 
 /**
@@ -297,25 +299,44 @@ export function getN5Preview(jobId: string): Promise<ApiReviewPreview> {
 /**
  * 번역문 수정 (API-CFM-02, v3.4.2). revision 낙관적 잠금 — 불일치 시 409
  * REVISION_CONFLICT(ApiRequestError로 던짐, body에 원본 Error 응답 보존).
- * idempotencyKey(선택) — blockPatch 「저장 공통」의 Idempotency-Key. 사용자 조작마다 새 키이고,
- * 같은 키는 같은 조작의 같은 본문 재전송에만 쓴다(lib/api/idempotency.ts). 없으면 헤더를 싣지 않는다.
+ * idempotencyKey — blockPatch 「저장 공통」의 Idempotency-Key. 사용자 조작마다 새 키이고,
+ * 같은 키는 같은 조작의 같은 본문 재전송에만 쓴다(lib/api/idempotent-patch.ts). 성공 응답은 재생 여부와 함께 돌려준다 —
+ * 재생 응답의 block 은 최초 요청 때 값이라 화면 캐시를 덮지 않는다(lib/queries/pixlate.ts usePatchN5BlockMutation).
  */
 export async function patchN5Block(
   jobId: string,
   blockId: number,
   payload: ApiBlockPatch,
-  options: { idempotencyKey?: string | null } = {},
-): Promise<ApiBlockPatchResponse> {
+  options: IdempotentPatchOptions = {},
+): Promise<IdempotentPatchResponse<ApiBlockPatchResponse>> {
+  return sendIdempotentPatch<ApiBlockPatchResponse>(`/jobs/${jobId}/blocks/${blockId}`, payload, options);
+}
+
+export interface IdempotentPatchOptions {
+  idempotencyKey?: string | null;
+  /** 응답 대기 상한(ms). 넘으면 요청을 끊고 TimeoutError — 서버 커밋 여부를 알 수 없는 결과 불명이다 */
+  timeoutMs?: number;
+}
+
+export interface IdempotentPatchResponse<T> {
+  data: T;
+  /** 응답 헤더 Idempotent-Replayed: true — 같은 키·같은 요청의 최초 응답 재생 */
+  replayed: boolean;
+}
+
+/** 블록·섹션 PATCH 공통 전송. 같은 본문 객체는 같은 JSON 으로 직렬화된다(요청 기록의 본문은 freeze 돼 바뀌지 않는다) */
+async function sendIdempotentPatch<T>(url: string, payload: unknown, options: IdempotentPatchOptions): Promise<IdempotentPatchResponse<T>> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (options.idempotencyKey) headers['Idempotency-Key'] = options.idempotencyKey;
-  const res = await authorizedFetch(`/jobs/${jobId}/blocks/${blockId}`, {
+  const res = await authorizedFetch(url, {
     method: 'PATCH',
     headers,
     body: JSON.stringify(payload),
+    signal: options.timeoutMs != null ? AbortSignal.timeout(options.timeoutMs) : undefined,
   });
   const body = await res.json().catch(() => null);
   if (!res.ok) throw new ApiRequestError(res.status, body);
-  return body as ApiBlockPatchResponse;
+  return { data: body as T, replayed: isReplayedResponse(res.headers) };
 }
 
 /**

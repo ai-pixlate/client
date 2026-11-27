@@ -2,12 +2,35 @@ import type { MutationOptions, QueryClient, QueryKey } from '@tanstack/query-cor
 
 import type { ApiSection, ApiSectionBucket, ApiSectionList, ApiSectionPatch } from '../api/n3-schema.ts';
 import type { ApiReviewPreview } from '../api/n5-schema.ts';
+import { IDEMPOTENT_PATCH_TIMEOUT_MS, type IdempotentPatchRequest } from '../api/idempotent-patch.ts';
 import { AuthSessionChangedError } from '../auth/authorized-request.ts';
 import { getAuthEpoch } from '../auth/session-store.ts';
 
+/** 섹션 PATCH 본문 — { action, revision }. Idempotency-Key 를 보내므로 revision 은 필수다(sectionPatch 1. 형식) */
+export type SectionPatchBody = ApiSectionPatch & { revision: number };
+
+/**
+ * 섹션 저장 한 번 = 요청 기록 하나(lib/api/idempotent-patch.ts createIdempotentPatchRequest — 대상 · 키 · 본문 · revision · 시작 시각).
+ * 결과 불명 뒤 재전송은 같은 기록을 다시 넘긴다(새 키 · 새 revision 을 만들지 않는다).
+ */
 export interface SectionBucketVariables {
-  sectionId: number;
-  bucket: ApiSectionBucket;
+  request: IdempotentPatchRequest<SectionPatchBody>;
+}
+
+export interface SectionPatchResult {
+  data: ApiSection;
+  /** Idempotent-Replayed: true — 최초 요청의 응답 재생. 본문이 그때 값일 수 있어 캐시에 쓰지 않고 재조회로 맞춘다 */
+  replayed: boolean;
+}
+
+/** action → 옮겨 갈 bucket(restore = include, exclude = exclude) */
+export function bucketOfSectionAction(action: ApiSectionPatch['action']): ApiSectionBucket {
+  return action === 'restore' ? 'include' : 'exclude';
+}
+
+/** bucket → action. 섹션 저장 본문을 만드는 곳(N3 · N5)이 같이 쓴다 */
+export function sectionActionOf(bucket: ApiSectionBucket): ApiSectionPatch['action'] {
+  return bucket === 'include' ? 'restore' : 'exclude';
 }
 
 export interface SectionBucketContext {
@@ -20,7 +43,7 @@ export interface SectionBucketMutationDeps {
   queryClient: QueryClient;
   sectionsKey: QueryKey;
   previewKey: QueryKey;
-  update: (sectionId: number, payload: ApiSectionPatch) => Promise<ApiSection>;
+  update: (sectionId: number, payload: SectionPatchBody, options: { idempotencyKey: string; timeoutMs: number }) => Promise<SectionPatchResult>;
 }
 
 /**
@@ -42,13 +65,13 @@ export function sectionBucketMutationOptions({
   sectionsKey,
   previewKey,
   update,
-}: SectionBucketMutationDeps): MutationOptions<ApiSection, Error, SectionBucketVariables, SectionBucketContext> {
+}: SectionBucketMutationDeps): MutationOptions<SectionPatchResult, Error, SectionBucketVariables, SectionBucketContext> {
   return {
-    mutationFn: ({ sectionId, bucket }) => {
-      const action: ApiSectionPatch['action'] = bucket === 'include' ? 'restore' : 'exclude';
-      return update(sectionId, { action });
-    },
-    onMutate: async ({ sectionId, bucket }) => {
+    // 기록의 대상 · 키 · 본문을 그대로 보낸다 — 재전송도 같은 값이다
+    mutationFn: ({ request }) => update(request.targetId, request.body, { idempotencyKey: request.key, timeoutMs: IDEMPOTENT_PATCH_TIMEOUT_MS }),
+    onMutate: async ({ request }) => {
+      const sectionId = request.targetId;
+      const bucket = bucketOfSectionAction(request.body.action);
       const epoch = getAuthEpoch();
       await queryClient.cancelQueries({ queryKey: sectionsKey });
       // 기다리는 사이 계정·세션이 바뀌었으면 이전 계정 저장을 새 세션으로 보내지 않는다(onMutate 오류 → mutationFn 미실행)
@@ -74,14 +97,26 @@ export function sectionBucketMutationOptions({
 
       return { previous, epoch };
     },
-    onSuccess: (saved, _vars, context) => {
+    onSuccess: ({ data: saved, replayed }, _vars, context) => {
       if (!isSameAuthSession(context)) return;
+      // 재생 응답은 최초 요청 때 값이다 — 프리뷰에 쓰지 않는다(onSettled 재조회가 현재 상태를 가져온다)
+      if (replayed) return;
+      // N3 목록도 서버가 준 revision 으로 — 재조회가 끝나기 전에 다음 섹션 저장을 시작해도 오래된 revision 을 보내지 않는다
+      if (saved.revision != null) {
+        const withRevision = (list: ApiSection[] | undefined) => list?.map((s) => (s.id === saved.id ? { ...s, revision: saved.revision } : s));
+        queryClient.setQueryData<ApiSectionList>(sectionsKey, (prev) =>
+          prev ? { ...prev, include: withRevision(prev.include), exclude: withRevision(prev.exclude) } : prev,
+        );
+      }
       queryClient.setQueryData<ApiReviewPreview>(previewKey, (prev) =>
         prev?.sections
           ? {
               ...prev,
               sections: prev.sections.map((s) =>
-                s.id === saved.id ? { ...s, bucket: saved.bucket ?? s.bucket, excludedStage: saved.excludedStage ?? null } : s,
+                s.id === saved.id
+                  ? // 다음 섹션 저장(되돌리기 등)이 재조회 전에도 서버가 준 revision 을 쓰게 함께 반영한다
+                    { ...s, bucket: saved.bucket ?? s.bucket, excludedStage: saved.excludedStage ?? null, revision: saved.revision ?? s.revision }
+                  : s,
               ),
             }
           : prev,

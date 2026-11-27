@@ -50,6 +50,7 @@ import {
 } from '@/lib/queries/pixlate';
 import { ViewModeToggle } from './n5-toolbar';
 import type { N5EditSessionApi } from './use-n5-edit-session';
+import { SaveRecoveryNotice } from '../save-recovery-notice';
 
 /** [저장하러 가기]가 재렌더 완료를 기다리는 polling 주기(계약 기본 2초)와 상한(약 3분) */
 const N5_CONFIRM_RERENDER_POLL_MS = 2_000;
@@ -1404,26 +1405,8 @@ export function N5Panel({
 
       {/* 목록 끝(y911, Figma Frame 495) ↔ [저장하러 가기](y975) 사이 64 — 「모든 섹션 제외」 안내(1898:46613)가 이 자리에 버튼 위로 뜬다 */}
       <div className="shrink-0 pt-[clamp(24px,5.93vh,64px)]">
-        {editSession.uncertainSave && (
-          // Figma 에 없는 상태 — 기존 오류 안내 톤으로 최소 보완. 확인될 때까지 저장·확정·실행 취소가 잠긴다는 것과 다시 확인 경로를 둔다
-          <div role="status" data-testid="n5-uncertain-save-notice" data-status={editSession.uncertainSave.status} className="mb-2 flex flex-col gap-1 text-[12px] leading-[normal]">
-            {editSession.uncertainSave.status === 'checking' ? (
-              <p className="text-[#707070]">저장 결과를 서버에서 확인하는 중입니다. 확인될 때까지 저장·실행 취소를 할 수 없습니다.</p>
-            ) : (
-              <>
-                <p className="text-red-500">저장 결과를 확인하지 못했습니다. 서버 상태를 확인할 때까지 저장·확정·실행 취소를 할 수 없습니다.</p>
-                <button
-                  type="button"
-                  data-testid="n5-uncertain-save-retry"
-                  onClick={editSession.retryServerCheck}
-                  className="flex h-6 w-fit items-center rounded-[4px] border border-[#eaeaea] bg-white px-3 text-[12px] tracking-[-0.02em] text-[#171717] hover:bg-[#f5f5f5]"
-                >
-                  서버 상태 다시 확인
-                </button>
-              </>
-            )}
-          </div>
-        )}
+        {/* 결과를 알 수 없는 저장 — 확인될 때까지 저장·확정이 잠긴다(N3 와 같은 안내) */}
+        <SaveRecoveryNotice state={editSession.uncertainSave} onRetry={editSession.retryServerCheck} testIdPrefix="n5" />
         {confirmError && (
           <p data-testid="n5-confirm-error" className="mb-2 text-[12px] text-red-500">
             {confirmError}
