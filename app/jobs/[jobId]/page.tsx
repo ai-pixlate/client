@@ -2,6 +2,7 @@
 
 import { use, useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 
 import { JobHeader } from '@/app/jobs/_components/job-header';
 import { useJobExitGuard, type ExitGuardStatus } from '@/app/jobs/_components/job-exit-guard';
@@ -129,6 +130,13 @@ export default function Page({
   };
   // 중단 요청 중에는 나가기(작업 취소 DELETE)를 잡아 둔다 — 같은 작업에 중단과 취소가 겹쳐 나가지 않게
   const exitGuard = useJobExitGuard({ jobId, status: exitStatus, recheck: recheckExitStatus, locked: jobAbort.pending });
+  // 서버 currentStep=N1(draft) — N2 중단 복귀 등. N1 화면은 /jobs/new 하나라, 같은 작업 id 로 그 화면을 열어 서버 값으로 복원한다
+  // (새 작업을 만들지 않는다). 취소된 작업은 옮기지 않고 아래 종료 안내를 둔다
+  const router = useRouter();
+  const isServerN1 = !isCancelled && currentStep === 'N1';
+  useEffect(() => {
+    if (isServerN1) router.replace(`/jobs/new?jobId=${encodeURIComponent(jobId)}`);
+  }, [isServerN1, jobId, router]);
   // 취소된 작업은 단계 화면이 아니다 — 단계를 모를 때와 같이 화면명·현재 단계를 그리지 않는다
   const screenStep = isCancelled ? undefined : displayStep;
   const hasScreen = SCREEN_STEPS.includes(screenStep);

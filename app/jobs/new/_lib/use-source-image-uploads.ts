@@ -2,10 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { apiErrorCode } from '@/lib/api/pixlate';
+import { useQueryClient } from '@tanstack/react-query';
+
+import { apiErrorCode, getSourceImages } from '@/lib/api/pixlate';
 import type { ApiSourceImageUploadResult } from '@/lib/api/job-schema';
 import type { ApiSourceImage } from '@/lib/api/n3-schema';
 import {
+  pixlateKeys,
   useDeleteSourceImageMutation,
   useReorderSourceImagesMutation,
   useUploadSourceImagesMutation,
@@ -29,8 +32,14 @@ export type SourceImageUpload =
 
 export interface LocalImage {
   localId: string;
-  file: File;
-  /** 썸네일 미리보기용 objectURL — 제거/언마운트 시 revoke한다(메모리 누수 방지). */
+  /** 이 화면에서 고른 파일. 기존 작업 복원으로 서버에서 받은 원본은 파일이 없다(null — 다시 올리지 않는다) */
+  file: File | null;
+  /** 화면 이름 — 고른 파일은 파일명, 서버 원본은 업로드 순서(SourceImage 에 파일명 필드가 없다) */
+  name: string;
+  /**
+   * 썸네일 — 고른 파일은 objectURL(제거/언마운트 시 revoke), 서버 원본은 SRC-01 의 presigned fileUrl(5분 만료 · 저장하지 않는다).
+   * 불러오기에 실패하면 SRC-01 을 다시 받아 같은 원본의 새 URL 로 바꾼다(refreshServerPreview — 유효기간을 가정하지 않는다).
+   */
   previewUrl: string;
   upload: SourceImageUpload;
   /** 업로드 완료 파일의 서버 DELETE 진행 중 */
@@ -90,6 +99,29 @@ export function matchUploadResults<T extends { localId: string; file: File }>(
   return matched;
 }
 
+/** objectURL 만 해제한다 — 서버 presigned URL 은 해제 대상이 아니다 */
+function releasePreview(image: LocalImage): void {
+  if (image.previewUrl.startsWith('blob:')) URL.revokeObjectURL(image.previewUrl);
+}
+
+/** 기존 작업 복원 — 서버 원본(uploadOrder 순)을 업로드 완료 항목으로 둔다 */
+function fromServerImages(sourceImages: readonly ApiSourceImage[]): LocalImage[] {
+  return sourceImages.flatMap((image, index) =>
+    image.id == null
+      ? []
+      : [
+          {
+            localId: `server_${image.id}`,
+            file: null,
+            name: `원본 이미지 ${index + 1}`,
+            previewUrl: image.fileUrl ?? '',
+            upload: { status: 'done', sourceImageId: image.id },
+            deleting: false,
+          } satisfies LocalImage,
+        ],
+  );
+}
+
 function serverOrderOf(sourceImages: ApiSourceImage[] | undefined): number[] | null {
   if (!sourceImages) return null;
   const ids = [...sourceImages]
@@ -102,22 +134,33 @@ function sameOrder(a: number[], b: number[]): boolean {
   return a.length === b.length && a.every((id, i) => id === b[i]);
 }
 
-export function useSourceImageUploads() {
+/** initialServerImages — 기존 작업 N1 복원 때 SRC-01 응답(첫 렌더의 값만 쓴다) */
+export function useSourceImageUploads(initialServerImages?: readonly ApiSourceImage[]) {
   const uploadMutation = useUploadSourceImagesMutation();
   const deleteMutation = useDeleteSourceImageMutation();
   const reorderMutation = useReorderSourceImagesMutation();
 
-  const [images, setImagesState] = useState<LocalImage[]>([]);
+  const [initialImages] = useState(() => fromServerImages(initialServerImages ?? []));
+  const [images, setImagesState] = useState<LocalImage[]>(initialImages);
   // 비동기 업로드 결과가 최신 목록(그 사이 추가·정렬·삭제 반영)에 적용되도록 ref를 정본으로
   // 두고 state는 렌더용 사본으로만 쓴다. ref는 이벤트·비동기 콜백에서만 쓴다(render 중 금지).
-  const imagesRef = useRef<LocalImage[]>([]);
+  const imagesRef = useRef<LocalImage[]>(initialImages);
   const commit = useCallback((update: (prev: LocalImage[]) => LocalImage[]) => {
     imagesRef.current = update(imagesRef.current);
     setImagesState(imagesRef.current);
   }, []);
 
   // 서버가 마지막으로 알려준 원본 순서(sourceImageId). null이면 알 수 없음 — 최종 진행 전 reorder로 맞춘다.
-  const serverOrderRef = useRef<number[] | null>([]);
+  // 복원한 원본은 서버 순서 그대로다(fromServerImages 가 uploadOrder 순으로 만든다)
+  const serverOrderRef = useRef<number[] | null>(
+    initialImages.flatMap((img) => (img.upload.status === 'done' ? [img.upload.sourceImageId] : [])),
+  );
+
+  const queryClient = useQueryClient();
+  // 썸네일 URL 갱신 — 이미 한 번 재조회의 계기가 된 URL 은 다시 계기로 쓰지 않는다(같은 URL 이 또 실패해도 반복 재조회하지 않는다).
+  // 여러 썸네일이 함께 실패하면 진행 중인 재조회 하나를 같이 쓴다
+  const refreshedForUrlRef = useRef(new Set<string>());
+  const refreshInFlightRef = useRef<Promise<void> | null>(null);
 
   /** 업로드와 무관한 서버 요청 실패(삭제 등) 안내 */
   const [notice, setNotice] = useState<string | null>(null);
@@ -137,6 +180,7 @@ export function useSourceImageUploads() {
       const newItems: LocalImage[] = files.map((file, i) => ({
         localId: `local_${stamp}_${i}`,
         file,
+        name: file.name,
         previewUrl: URL.createObjectURL(file),
         upload: { status: 'idle' },
         deleting: false,
@@ -166,7 +210,7 @@ export function useSourceImageUploads() {
     (localId: string) => {
       commit((prev) => {
         const removed = prev.find((img) => img.localId === localId);
-        if (removed) URL.revokeObjectURL(removed.previewUrl);
+        if (removed) releasePreview(removed);
         return prev.filter((img) => img.localId !== localId);
       });
     },
@@ -196,7 +240,7 @@ export function useSourceImageUploads() {
         dropLocal(localId);
       } catch {
         commit((prev) => prev.map((img) => (img.localId === localId ? { ...img, deleting: false } : img)));
-        setNotice(`${target.file.name} 파일을 삭제하지 못했습니다. 다시 시도해 주세요.`);
+        setNotice(`${target.name} 파일을 삭제하지 못했습니다. 다시 시도해 주세요.`);
       }
     },
     [commit, deleteMutation, dropLocal],
@@ -204,7 +248,9 @@ export function useSourceImageUploads() {
 
   const uploadItems = useCallback(
     async (jobId: string, items: LocalImage[]) => {
-      for (const batch of splitUploadBatches(items)) {
+      // 파일이 있는 항목만 올린다 — 서버 원본(복원)은 이미 업로드 완료라 여기에 오지 않는다
+      const uploadable = items.filter((img): img is LocalImage & { file: File } => img.file !== null);
+      for (const batch of splitUploadBatches(uploadable)) {
         const localIds = batch.map((img) => img.localId);
         setUpload(localIds, { status: 'uploading' });
         try {
@@ -252,10 +298,44 @@ export function useSourceImageUploads() {
     [reorderMutation],
   );
 
+  /**
+   * 서버 원본 썸네일(presigned)을 불러오지 못했을 때 — SRC-01 을 한 번 다시 받아 같은 sourceImageId 의 새 fileUrl 로 바꾼다.
+   * 실패한 URL 마다 최대 1회 · polling·타이머·원본 재업로드 없음. 이 화면에서 고른 파일(objectURL)은 대상이 아니다.
+   * 재조회가 실패하거나 같은 URL 을 다시 주면 그대로 둔다(썸네일만 비고 원본·진행은 영향 없음).
+   */
+  const refreshServerPreview = useCallback(
+    async (jobId: string | null, localId: string) => {
+      const target = imagesRef.current.find((img) => img.localId === localId);
+      if (!jobId || !target || target.file !== null || target.upload.status !== 'done') return;
+      if (!target.previewUrl || refreshedForUrlRef.current.has(target.previewUrl)) return;
+      refreshedForUrlRef.current.add(target.previewUrl);
+      if (!refreshInFlightRef.current) {
+        refreshInFlightRef.current = queryClient
+          .fetchQuery({ queryKey: pixlateKeys.sourceImages(jobId), queryFn: () => getSourceImages(jobId), staleTime: 0, retry: false })
+          .then((fresh) => {
+            const urlById = new Map(fresh.flatMap((img) => (img.id != null && img.fileUrl ? [[img.id, img.fileUrl] as const] : [])));
+            commit((prev) =>
+              prev.map((img) => {
+                if (img.file !== null || img.upload.status !== 'done') return img;
+                const next = urlById.get(img.upload.sourceImageId);
+                return next && next !== img.previewUrl ? { ...img, previewUrl: next } : img;
+              }),
+            );
+          })
+          .catch(() => undefined)
+          .finally(() => {
+            refreshInFlightRef.current = null;
+          });
+      }
+      await refreshInFlightRef.current;
+    },
+    [commit, queryClient],
+  );
+
   // 언마운트 시 남은 미리보기 objectURL을 모두 해제한다.
   useEffect(() => {
     return () => {
-      imagesRef.current.forEach((img) => URL.revokeObjectURL(img.previewUrl));
+      imagesRef.current.forEach(releasePreview);
     };
   }, []);
 
@@ -273,5 +353,6 @@ export function useSourceImageUploads() {
     uploadPending,
     retryImage,
     syncServerOrder,
+    refreshServerPreview,
   };
 }

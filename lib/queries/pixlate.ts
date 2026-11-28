@@ -409,6 +409,21 @@ export function useSourceImagesQuery(jobId: string) {
   });
 }
 
+/**
+ * 기존 작업의 N1 복원(N2 [중단] 복귀 등)에 쓰는 세 조회 — JOB-05(단계 확인) · JOB-03(N1 입력값) · SRC-01(원본 목록).
+ * cache 가 새것으로 남아 있어도(staleTime) 화면을 열 때마다 서버에서 다시 받는다 — 복원 초기값은 중단 뒤의 서버 정본이어야 한다.
+ * 같은 key 를 다른 화면과 함께 쓴다(polling 하지 않는다).
+ */
+export function useN1RestoreQueries(jobId: string) {
+  return useQueries({
+    queries: [
+      { queryKey: pixlateKeys.tasks(jobId), queryFn: () => getJobTasks(jobId), retry: retryTasksQuery, refetchOnMount: 'always' as const },
+      { queryKey: pixlateKeys.job(jobId), queryFn: () => getJob(jobId), refetchOnMount: 'always' as const },
+      { queryKey: pixlateKeys.sourceImages(jobId), queryFn: () => getSourceImages(jobId), refetchOnMount: 'always' as const },
+    ],
+  });
+}
+
 // ─────────────────────────────────────────────
 // N5 — 실제 계약(v3.4.2) 조회.
 // ─────────────────────────────────────────────

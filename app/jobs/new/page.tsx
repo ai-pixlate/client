@@ -1,6 +1,7 @@
 'use client';
 
 import { Fragment, Suspense, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 
 import {
@@ -9,7 +10,10 @@ import {
   useMasterCategoriesQuery,
   usePatchJobMutation,
   useJobCancellationRecheck,
+  useN1RestoreQueries,
 } from '@/lib/queries/pixlate';
+import { isJobNotFoundError } from '@/lib/api/pixlate';
+import { isCancelledJob } from '@/lib/api/job-status';
 import type { ApiRegulatoryClass } from '@/lib/api/job-schema';
 import { isApiMockingEnabled } from '@/lib/api/session';
 import { REGULATORY_CLASS_LABELS } from '@/lib/job/regulatory-class-labels';
@@ -28,6 +32,7 @@ import {
 } from './_lib/category-tree';
 import { isImeComposingKeyEvent } from './_lib/ime';
 import { N1_SIZE_CHANGE_BLOCK_LINES, getN1SubmitBlockMessages, isN1Ready, resolveN1BrandId, requiresOtcType } from './_lib/n1-readiness';
+import { buildRestoredN1, parseRestoreJobId, type RestoredN1 } from './_lib/n1-restore';
 import { INITIAL_SIZE_SELECTION, sizeSelectionReducer } from './_lib/size-selection';
 import { useSourceImageUploads } from './_lib/use-source-image-uploads';
 import { JobHeader } from '../_components/job-header';
@@ -490,6 +495,80 @@ export default function NewJobPage() {
 }
 
 function NewJobPageInner() {
+  // ?jobId= 가 있으면 기존 작업의 N1 이다(N2 [중단] → 서버 draft/N1 복귀 등) — 서버 값으로 복원한 뒤 같은 작업으로 이어 쓴다.
+  // 없으면 작업이 아직 없는 새 N1 이다(지금까지와 같다)
+  const restoreJobId = parseRestoreJobId(useSearchParams().get('jobId'));
+  return restoreJobId ? <RestoredN1Gate key={restoreJobId} jobId={restoreJobId} /> : <N1Form restored={null} />;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// 기존 작업 N1 복원 — JOB-05 로 서버 단계가 N1(draft)인지 먼저 확인하고, JOB-03 · SRC-01 을 서버에서 새로 받은 뒤에만 입력 화면을 연다.
+// - 서버가 N1 이 아니거나 취소된 작업이면 작업 화면(/jobs/{id})으로 옮긴다 — 그 화면이 서버 단계·취소 안내를 그린다.
+// - 받은 값은 입력 화면의 첫 값으로만 쓴다. 한 번 연 뒤의 재조회(창 focus 등)가 입력 중인 값을 덮거나 화면을 닫지 않게 고정한다.
+// - 실패하면 입력 화면을 비운 채 열지 않는다(빈 값으로 저장해 서버 값을 지우지 않게) — 다시 받거나 보관함으로 돌아간다.
+// Figma 에 별도 상태가 없어 작업 화면(/jobs/{id})의 조회 중·없는 작업 문구와 같은 모양을 쓴다.
+// ─────────────────────────────────────────────────────────────────
+
+const RESTORE_LINK_CLASS =
+  'rounded-[6px] border border-[#eaeaea] bg-white px-4 py-2 text-[14px] leading-[17px] text-[#171717] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ff6a38]';
+
+function RestoredN1Gate({ jobId }: { jobId: string }) {
+  const router = useRouter();
+  const [tasks, job, sources] = useN1RestoreQueries(jobId);
+  const [restored, setRestored] = useState<RestoredN1 | null>(null);
+
+  const isServerN1 = tasks.isSuccess && !isCancelledJob(tasks.data) && tasks.data.currentStep === 'N1';
+  const isElsewhere = tasks.isSuccess && !isServerN1;
+  const queries = [tasks, job, sources];
+  const isFresh = queries.every((q) => q.isSuccess && q.isFetchedAfterMount && !q.isFetching);
+  // 처음 서버 값을 모두 받은 순간 한 번만 고정한다(렌더 중 「이전 값에서 state 조정」 패턴 — effect 안 setState 를 쓰지 않는다)
+  if (!restored && isServerN1 && isFresh && job.data && sources.data) {
+    setRestored(
+      buildRestoredN1(jobId, job.data, sources.data, {
+        countries: COUNTRY_OPTIONS.map((o) => o.value),
+        languages: LANGUAGE_OPTIONS.map((o) => o.value),
+      }),
+    );
+  }
+
+  useEffect(() => {
+    if (!restored && isElsewhere) router.replace(`/jobs/${encodeURIComponent(jobId)}`);
+  }, [restored, isElsewhere, jobId, router]);
+
+  if (restored) return <N1Form restored={restored} />;
+
+  const failed = queries.find((q) => q.isError);
+  const isNotFound = failed ? isJobNotFoundError(failed.error) : false;
+  return (
+    <div className="flex h-screen w-full flex-col items-center justify-center gap-4 bg-white" data-testid="n1-restore">
+      {!failed && <span className="text-sm text-gray-400">작업 정보를 불러오고 있습니다.</span>}
+      {failed && (
+        <div role="alert" className="flex flex-col items-center gap-4">
+          <p className="text-sm text-[#171717]">
+            {isNotFound ? '작업을 찾을 수 없거나 접근할 수 없습니다.' : '작업 정보를 불러오지 못했습니다.'}
+          </p>
+          <div className="flex gap-2">
+            {!isNotFound && (
+              <button
+                type="button"
+                data-testid="n1-restore-retry"
+                className={RESTORE_LINK_CLASS}
+                onClick={() => queries.forEach((q) => void q.refetch())}
+              >
+                다시 불러오기
+              </button>
+            )}
+            <Link href="/" className={RESTORE_LINK_CLASS}>
+              보관함으로 돌아가기
+            </Link>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function N1Form({ restored }: { restored: RestoredN1 | null }) {
   // Client Component page에 Next.js가 넘겨주는 searchParams prop(Promise)은
   // 최초 진입(하드 로드)에서만 정확하고, 같은 경로에서 쿼리스트링만 바뀌는
   // 클라이언트 사이드(soft) 네비게이션에서는 갱신되지 않는다(Next.js 공식
@@ -499,7 +578,10 @@ function NewJobPageInner() {
   // useSearchParams()로 바꿔 URL을 실제 source of truth로 삼는다.
   const searchParamsObj = useSearchParams();
   // Mock에서만 기존 fixture로 보완한다. 실서버에서 쿼리가 없으면 임의 값을 만들지 않고 안내한다.
-  const brandId = resolveN1BrandId(searchParamsObj.get('brandId'), isApiMockingEnabled() ? MOCK_BRAND_ID : null);
+  // 기존 작업은 그 작업의 브랜드다(주소의 brandId 를 섞지 않는다)
+  const brandId = restored
+    ? (restored.brandId ?? '')
+    : resolveN1BrandId(searchParamsObj.get('brandId'), isApiMockingEnabled() ? MOCK_BRAND_ID : null);
 
   const router = useRouter();
   const createMutation = useCreateJobMutation();
@@ -507,32 +589,33 @@ function NewJobPageInner() {
   const analyzeMutation = useAnalyzeJobMutation();
 
   // ── 폼 상태 ─────────────────────────────────────────────────────
-  const [targetCountry, setTargetCountry] = useState('');
-  const [targetLanguage, setTargetLanguage] = useState('');
-  const [regulatoryClass, setRegulatoryClass] = useState<ApiRegulatoryClass | ''>('');
+  // 기존 작업 복원이면 서버 값이 첫 값이다(_lib/n1-restore.ts — 규격 탭 포함). OTC 종류·책임 동의는 서버 값이 없어 다시 고른다
+  const [targetCountry, setTargetCountry] = useState(restored?.targetCountry ?? '');
+  const [targetLanguage, setTargetLanguage] = useState(restored?.targetLanguage ?? '');
+  const [regulatoryClass, setRegulatoryClass] = useState<ApiRegulatoryClass | ''>(restored?.regulatoryClass ?? '');
   // OTC 종류 — 화면 선택 상태만 둔다(서버 저장 계약 없음, OTC_TYPE_OPTIONS 주석)
   const [otcType, setOtcType] = useState<string | null>(null);
   // F-ACC-04 동의 — FE 진행 조건으로만 쓴다. 동의 시각·consentId·/consents 호출은 두지 않는다(PM 결정)
   const [hasAcceptedResponsibility, setHasAcceptedResponsibility] = useState(false);
   // category_master id(leaf). PATCH /jobs/{jobId}의 categoryId로 그대로 보낸다
-  const [categoryId, setCategoryId] = useState<number | null>(null);
+  const [categoryId, setCategoryId] = useState<number | null>(restored?.categoryId ?? null);
   // 필수값 오류는 해당 필드를 한 번 건드린 뒤에만 보인다(처음부터 모든 칸을 오류로 칠하지 않는다)
   const [touched, setTouched] = useState({ productName: false, category: false, regulatoryClass: false, size: false });
   // 사이즈 선택 — 화면 상태만 둔다. 서버로는 보내지 않는다(_lib/size-selection.ts)
-  const [sizeSelection, dispatchSizeSelection] = useReducer(sizeSelectionReducer, INITIAL_SIZE_SELECTION);
+  const [sizeSelection, dispatchSizeSelection] = useReducer(sizeSelectionReducer, restored?.sizeSelection ?? INITIAL_SIZE_SELECTION);
   const sizeSectionRef = useRef<HTMLDivElement>(null);
-  const [keywords, setKeywords] = useState<string[]>([]);
+  const [keywords, setKeywords] = useState<string[]>(restored?.keywords ?? []);
   const [keywordInput, setKeywordInput] = useState('');
   // 원본 이미지 — 파일별 업로드 상태(idle/uploading/done/failed)와 서버 sourceImageId는 hook이 소유한다.
-  const { images, notice: uploadNotice, isBusy: isUploadBusy, hasFailed: hasUploadFailed, addFiles, reorderImages, removeImage, uploadPending, retryImage, syncServerOrder } =
-    useSourceImageUploads();
+  const { images, notice: uploadNotice, isBusy: isUploadBusy, hasFailed: hasUploadFailed, addFiles, reorderImages, removeImage, uploadPending, retryImage, syncServerOrder, refreshServerPreview } =
+    useSourceImageUploads(restored?.sourceImages);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // productName/productCode — Figma(525:3023)에서 새로 보이는 입력 필드이자
   // 실제 OpenAPI(JobPatch/Job) 필드명 그대로(CLAUDE.md: productName 필수,
   // productCode 선택). PATCH /jobs/{jobId}로 보낸다.
-  const [productName, setProductName] = useState('');
-  const [productCode, setProductCode] = useState('');
+  const [productName, setProductName] = useState(restored?.productName ?? '');
+  const [productCode, setProductCode] = useState(restored?.productCode ?? '');
 
   const [isDragOver, setIsDragOver] = useState(false);
 
@@ -660,7 +743,8 @@ function NewJobPageInner() {
   // PATCH/analyze를 호출하지 않는다. 한 번 만든 draft는 재제출·개별 재시도에서
   // 계속 쓴다(PRD F-SRC-01 — 실패했다고 새 job을 만들지 않는다).
 
-  const [draftJobId, setDraftJobId] = useState<string | null>(null);
+  // 기존 작업 복원이면 그 작업 id 로 시작한다 — [다음]은 POST /jobs 없이 같은 작업에 PATCH · analyze 한다(새 작업을 만들지 않는다)
+  const [draftJobId, setDraftJobId] = useState<string | null>(restored?.jobId ?? null);
   // POST /jobs 네트워크 중복 방지용. 같은 draft 생성 시도(성공 전 재요청)에서만 재사용한다.
   const idempotencyKeyRef = useRef<string | null>(null);
   const [submitError, setSubmitError] = useState<unknown>(null);
@@ -925,10 +1009,16 @@ function NewJobPageInner() {
                             없음. 카드 배경이 이미 #eee라 이미지가 축소
                             표시될 때 생기는 여백은 그대로 카드 배경색이
                             채운다(세로형은 좌우, 가로형은 상하 letterbox). */}
-                        {/* eslint-disable-next-line @next/next/no-img-element -- 로컬 blob: objectURL이라 next/image 최적화 대상이 아니다 */}
-                        <img src={img.previewUrl} alt={img.file.name} className="h-full w-full object-contain" />
+                        {/* eslint-disable-next-line @next/next/no-img-element -- 로컬 blob: objectURL·만료되는 presigned URL이라 next/image 최적화 대상이 아니다 */}
+                        <img
+                          src={img.previewUrl || undefined}
+                          alt={img.name}
+                          className="h-full w-full object-contain"
+                          // 기존 작업 원본(presigned)을 불러오지 못하면 SRC-01 로 URL 만 한 번 새로 받는다(hook 이 URL 마다 1회로 제한)
+                          onError={() => void refreshServerPreview(draftJobId, img.localId)}
+                        />
                         <SourceImageUploadStatus
-                          fileName={img.file.name}
+                          fileName={img.name}
                           upload={img.upload}
                           onRetry={() => handleRetryUpload(img.localId)}
                           retryDisabled={isSubmitting || !draftJobId}
@@ -938,7 +1028,7 @@ function NewJobPageInner() {
                           onClick={() => void removeImage(draftJobId, img.localId)}
                           // 업로드 중에는 삭제할 수 없다(서버 결과를 기다린다). 업로드 완료 파일은 서버 DELETE 후 지운다.
                           disabled={img.upload.status === 'uploading' || img.deleting || isSubmitting}
-                          aria-label={`${img.file.name} 삭제`}
+                          aria-label={`${img.name} 삭제`}
                           // top/right를 %로 둬서(12px÷244px≈4.92%) 카드가
                           // 축소돼도 여백 비율이 그대로 유지된다 — 버튼
                           // 자체 크기(24px)는 클릭 타겟 확보를 위해 고정.
