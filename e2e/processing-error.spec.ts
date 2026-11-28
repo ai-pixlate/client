@@ -5,7 +5,8 @@ import { MOCK_JOB_ID } from '@/lib/mock-api/fixtures';
 // ─────────────────────────────────────────────────────────────────
 // N2·N4 전체 실패 화면 (Figma 793:4890 · 795:4820) — Chromium. 위치는 최신 shell(헤더 72 · 패널 y96)인 793:4890 기준이다 —
 // 795:4820 은 예전 헤더 92 · 패널 y116 이라 위치값은 쓰지 않고, N4 도 같은 위치를 확인한다.
-// 폴링 응답의 currentStep·jobStatus·items 만 고정한다. [다시 시도]·[중단]은 abort/resume API 전까지 동작이 없다.
+// 폴링 응답의 currentStep·jobStatus·items 만 고정한다. [다시 시도]는 재시도 계약 연동 전까지 동작이 없다.
+// [중단](POST /abort → N3·N1 복귀)의 요청·복귀·오류 처리는 e2e/processing-abort.spec.ts 가 맡는다.
 // ─────────────────────────────────────────────────────────────────
 
 test.skip(({ browserName }) => browserName !== 'chromium', '처리 오류 화면 검증은 Chromium 기준이다');
@@ -125,7 +126,7 @@ for (const c of CASES) {
     expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBe(0);
   });
 
-  test(`${c.step} [다시 시도]·[중단]은 요청과 이동 없이 화면을 그대로 둔다`, async ({ page }) => {
+  test(`${c.step} [다시 시도]는 요청과 이동 없이 화면을 그대로 두고, [중단]은 누를 수 있다`, async ({ page }) => {
     await openWith(page, { currentStep: c.step, jobStatus: 'failed' });
     await expect(errorPanel(page)).toBeVisible();
     const url = page.url();
@@ -133,18 +134,23 @@ for (const c of CASES) {
     page.on('request', (r) => {
       if (r.method() !== 'GET') writes.push(`${r.method()} ${new URL(r.url()).pathname}`);
     });
-    for (const button of [retry(page), abort(page)]) {
-      await expect(button).toHaveAttribute('aria-disabled', 'true');
-      // Playwright 는 aria-disabled 도 비활성으로 보므로 네이티브 속성을 직접 본다
-      expect(await button.evaluate((el: HTMLButtonElement) => el.disabled)).toBe(false);
-      await button.click({ force: true });
-    }
+    await expect(retry(page)).toHaveAttribute('aria-disabled', 'true');
+    // Playwright 는 aria-disabled 도 비활성으로 보므로 네이티브 속성을 직접 본다
+    expect(await retry(page).evaluate((el: HTMLButtonElement) => el.disabled)).toBe(false);
+    await retry(page).click({ force: true });
     await page.waitForTimeout(300);
     expect(writes).toEqual([]);
     expect(page.url()).toBe(url);
     await expect(errorPanel(page)).toBeVisible();
     await expect(page.getByTestId('s0-exit-dialog')).toHaveCount(0);
-    // 포커스는 받을 수 있다
+    // [중단]은 abort 계약에 연결돼 활성이다(누르지 않는다 — 요청·복귀는 processing-abort.spec.ts). 위치·크기는 위 Figma 검증 그대로
+    await expect(abort(page)).not.toHaveAttribute('aria-disabled', 'true');
+    await expect(abort(page)).not.toHaveAttribute('aria-busy', 'true');
+    expect(await abort(page).evaluate((el: HTMLButtonElement) => el.disabled)).toBe(false);
+    await expect(abort(page)).toHaveText('중단');
+    // 두 버튼 모두 포커스를 받을 수 있다
+    await retry(page).focus();
+    await expect(retry(page)).toBeFocused();
     await abort(page).focus();
     await expect(abort(page)).toBeFocused();
   });
