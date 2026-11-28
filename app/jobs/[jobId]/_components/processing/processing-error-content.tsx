@@ -6,7 +6,8 @@
 // PRD 오류 화면 동작은 [다시 시도]·[중단](F-JOB-08)뿐이다. Figma 시안에 남은 [일시 정지]·[작업취소]는 쓰지 않는다 —
 // 작업 취소는 S0 ✕ 가 맡는다. Figma 의 실패 단계 문구·72% 는 예시라 옮기지 않고, 움직이지 않는 Figma 이미지를 쓴다.
 //
-// onRetry·onAbort 는 abort/resume API 가 연결되면 넘긴다. 지금은 넘기지 않으므로 모습은 그대로 두고 눌러도 아무 일도 하지 않는다.
+// [중단]은 POST /jobs/{jobId}/abort(API-JOB-07)에 연결돼 있다 — 요청·재조회는 page.tsx 의 useJobAbort 가 맡고, 여기는 넘겨받은
+// 요청 중 상태와 안내 문구만 그린다. [다시 시도]는 새 재시도 계약(jobRetry) 연동 전까지 onRetry 를 넘기지 않아 눌러도 아무 일도 하지 않는다.
 // ─────────────────────────────────────────────────────────────────
 
 export interface ProcessingErrorState {
@@ -16,7 +17,14 @@ export interface ProcessingErrorState {
   description: string;
   onRetry?: () => void;
   onAbort?: () => void;
+  /** 중단 요청을 보내고 서버 상태를 다시 확인하는 중 — [중단]을 누를 수 없게 하고 진행 문구를 보인다 */
+  abortPending?: boolean;
+  /** 중단하지 못했거나 결과를 확인하지 못했을 때의 안내. 설명 아래 같은 alert 영역에 둔다(버튼 위치는 그대로) */
+  abortNotice?: string | null;
 }
+
+/** 화면(N2·N4)이 page.tsx 에서 받아 오류 상태에 그대로 더하는 [중단] 연결 값 */
+export type ProcessingErrorAbort = Pick<ProcessingErrorState, 'onAbort' | 'abortPending' | 'abortNotice'>;
 
 const ACTION_BASE =
   'box-border flex h-[37px] min-w-0 flex-1 items-center justify-center rounded-[6px] px-5 text-[14px] leading-[17px] font-medium tracking-[-0.42px] whitespace-nowrap focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ff6a38]';
@@ -77,6 +85,13 @@ export function ProcessingErrorContent({
                 {error.description}
               </p>
             </div>
+            {/* 중단 실패·미확인 안내 — Figma 에 없는 상태라 새 상자를 만들지 않고 설명과 같은 글자 크기로 한 줄 더한다.
+                색만으로 알리지 않고 문장으로 알린다. 아래 버튼 묶음은 열 바닥에 붙어 있어 위치가 바뀌지 않는다 */}
+            {error.abortNotice && (
+              <p data-testid="processing-error-abort-notice" className="text-[12px] tracking-[-0.48px] text-[#e5484d]">
+                {error.abortNotice}
+              </p>
+            )}
           </div>
 
           <div className="flex w-full max-w-[405px] gap-5">
@@ -100,13 +115,20 @@ export function ProcessingErrorContent({
             <button
               type="button"
               data-testid="processing-error-abort"
-              onClick={error.onAbort}
-              aria-disabled={error.onAbort ? undefined : true}
-              className={`${ACTION_BASE} border border-[#eaeaea] bg-white text-[#171717]`}
+              // 요청 중에는 native disabled 대신 aria-disabled 로 막는다 — 포커스가 버튼에 남아 결과 안내까지 이어서 읽힌다
+              onClick={error.abortPending ? undefined : error.onAbort}
+              aria-disabled={error.onAbort && !error.abortPending ? undefined : true}
+              aria-busy={error.abortPending ? true : undefined}
+              className={`${ACTION_BASE} border border-[#eaeaea] bg-white text-[#171717] ${error.abortPending ? 'cursor-progress text-[#999]' : ''}`}
             >
               {/* Figma Card/Action/Pause 16. 시안의 두 번째 자리를 [중단]이 쓴다 */}
-              <img alt="" aria-hidden="true" src="/process/icons/pause-16.svg" className="block size-4 max-w-none shrink-0" />
-              <span className="px-2">중단</span>
+              <img
+                alt=""
+                aria-hidden="true"
+                src="/process/icons/pause-16.svg"
+                className={`block size-4 max-w-none shrink-0 ${error.abortPending ? 'opacity-40' : ''}`}
+              />
+              <span className="px-2">{error.abortPending ? '중단하는 중' : '중단'}</span>
             </button>
           </div>
         </div>

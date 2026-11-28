@@ -1129,6 +1129,30 @@ interface MockN1Draft {
 
 let n1Draft: MockN1Draft | null = null;
 let mockJobCancelled = false;
+/**
+ * analyze 가 받은 N1 draft — 실제 서버는 분석을 시작해도 작업의 N1 값·원본을 지우지 않는다. N2 중단(POST /abort)으로 draft/N1 에
+ * 돌아오면 이 값을 다시 N1 draft 로 쓴다(JOB-03 · SRC-01 이 같은 값을 돌려준다).
+ */
+let analyzedN1Draft: MockN1Draft | null = null;
+/** ?scenario=n2-error·n4-error 고정 실패를 [중단]이 풀었다 — 그 뒤 GET /tasks 는 jobState 그대로 돌려준다 */
+let processingErrorScenarioAborted = false;
+
+/**
+ * e2e 전용 — 값(배열)이 있으면 POST /abort 마다 앞에서 하나씩 꺼내 그 방식으로 응답한다(마지막 항목은 반복하지 않고 소진 뒤 정상 처리).
+ * - 'invalid-state': 상태를 바꾸지 않고 409 INVALID_STATE
+ * - 'server-error': 상태를 바꾸지 않고 500 INTERNAL_ERROR
+ * - 'drop-after-commit': 중단은 처리하고(상태 변경) 응답은 네트워크 오류로 잃는다(응답 유실 재현)
+ * - 'drop-before-commit': 상태를 바꾸지 않고 네트워크 오류
+ * - { delayMs }: 그만큼 기다린 뒤 정상 처리(요청 중 상태·중복 클릭 재현)
+ */
+const MOCK_ABORT_SCRIPT_FLAG = '__pixlateMockAbortScript';
+type MockAbortScriptStep = 'invalid-state' | 'server-error' | 'drop-after-commit' | 'drop-before-commit' | { delayMs: number };
+
+function takeAbortScriptStep(): MockAbortScriptStep | null {
+  const script = (globalThis as Record<string, unknown>)[MOCK_ABORT_SCRIPT_FLAG];
+  if (!Array.isArray(script) || script.length === 0) return null;
+  return script.shift() as MockAbortScriptStep;
+}
 
 /** 계약: JPG·PNG만 허용 (그 외는 파일별 UNSUPPORTED_FORMAT 실패) */
 function isAcceptedSourceImage(file: File): boolean {
@@ -1259,6 +1283,8 @@ export const handlers = [
     // (리셋 기준값이 N2인 이유는 위 jobState 선언부 주석 참고)
     resetJobState();
     n1Draft = { patch: {}, sourceImages: [], nextSourceImageId: 101, failedOnce: new Set() };
+    analyzedN1Draft = null;
+    processingErrorScenarioAborted = false;
     mockJobCancelled = false;
 
     const draft: ApiJob = {
@@ -1387,6 +1413,53 @@ export const handlers = [
   }),
 
   // ──────────────────────────────────────────
+  // 처리 중단·직전 화면 복귀 (API-JOB-07, POST /jobs/:jobId/abort). 명세: N2·N4 처리 중만(아니면 409 INVALID_STATE), 진행 task 는
+  // cancelled, N2 → draft/N1 · N4 → review/N3. 응답은 BE 회신 기준 현재 서버 모양 { returnTo, jobId } 다(명세는 { returnTo, job } —
+  // FE 는 어느 쪽도 화면 전환 근거로 쓰지 않는다). 실패 상태(failed) 허용 여부는 명세에 명시되지 않아(BE 확인 필요) mock 은 받는다.
+  // 작업 취소(DELETE)와 달리 작업·N1 값·섹션 포함 상태를 남긴다.
+  // ──────────────────────────────────────────
+  http.post('/jobs/:jobId/abort', async ({ params, request }) => {
+    const jobId = params.jobId as string;
+    if (jobId !== MOCK_JOB_ID || mockJobCancelled) return contractError(404, 'NOT_FOUND', `Job '${jobId}' not found`);
+
+    const step = takeAbortScriptStep();
+    if (step === 'invalid-state') return contractError(409, 'INVALID_STATE', '지금 상태에서는 중단할 수 없습니다');
+    if (step === 'server-error') return contractError(500, 'INTERNAL_ERROR', '중단 처리 중 오류가 발생했습니다');
+    if (step === 'drop-before-commit') return HttpResponse.error();
+    if (step && typeof step === 'object') await new Promise((resolve) => setTimeout(resolve, step.delayMs));
+
+    // ?scenario=n2-error·n4-error 는 GET /tasks 가 jobState 와 상관없이 실패를 돌려준다 — 그 단계에서 중단한 것으로 본다
+    const scenarioStep = processingErrorScenarioAborted ? null : getProcessingErrorScenarioStep(request.referrer);
+    const from = scenarioStep ?? jobState.currentStep;
+    const isProcessing = scenarioStep != null || jobState.status === 'processing' || jobState.status === 'failed';
+    if ((from !== 'N2' && from !== 'N4') || !isProcessing) {
+      return contractError(409, 'INVALID_STATE', 'N2·N4 처리 중에만 중단할 수 있습니다');
+    }
+
+    // 진행 task 를 cancelled 로 — mock 진행·실패 script 를 모두 거둔다(다시 진행하면 새 실행이다)
+    const flags = globalThis as Record<string, unknown>;
+    flags[MOCK_N2_SCRIPT_FLAG] = undefined;
+    flags[MOCK_N4_SCRIPT_FLAG] = undefined;
+    flags[MOCK_N4_FAIL_FLAG] = undefined;
+    if (scenarioStep) processingErrorScenarioAborted = true;
+    let returnTo: 'N1' | 'N3';
+    if (from === 'N2') {
+      returnTo = 'N1';
+      n1Draft = analyzedN1Draft ?? { patch: {}, sourceImages: [], nextSourceImageId: 101, failedOnce: new Set() };
+      jobState = { ...jobState, currentStep: 'N1', userFacingStatus: 'draft', status: 'draft' };
+      jobProcessingPollCount = 0;
+    } else {
+      returnTo = 'N3';
+      // 섹션 포함·제외(sectionState)와 revision 은 그대로 둔다 — 서버가 N3 상태를 초기화하지 않는다
+      jobState = { ...jobState, currentStep: 'N3', userFacingStatus: 'section_review', status: 'review' };
+      n4PollIndex = 0;
+    }
+
+    if (step === 'drop-after-commit') return HttpResponse.error();
+    return HttpResponse.json({ returnTo, jobId: jobState.id });
+  }),
+
+  // ──────────────────────────────────────────
   // N1 → N2 — 분석 시작 (API-ANL-01)
   //
   // draft 생성만으로 분석이 자동 시작되지 않는다 — 이 호출이 게이트다
@@ -1400,6 +1473,7 @@ export const handlers = [
     if (!n1Draft) return contractError(409, 'INVALID_STATE', 'draft 작업이 아닙니다');
     if (n1Draft.sourceImages.length === 0) return contractError(400, 'VALIDATION_ERROR', '원본 이미지가 필요합니다');
     if (!n1Draft.patch.productName) return contractError(400, 'VALIDATION_ERROR', 'productName이 필요합니다');
+    analyzedN1Draft = n1Draft;
     n1Draft = null;
 
     jobState = { ...jobState, currentStep: 'N2', userFacingStatus: 'analyzing', status: 'processing' };
@@ -1548,6 +1622,8 @@ export const handlers = [
   http.get('/jobs/:jobId/source-images', ({ params }) => {
     const jobId = params.jobId as string;
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
+    // N1(draft)에서는 그 draft 에 올린 원본이다 — N2 중단 뒤 N1 복원이 같은 목록을 받는다
+    if (jobState.currentStep === 'N1' && n1Draft) return HttpResponse.json(sortedDraftImages(n1Draft));
     return HttpResponse.json(mockN3SourceImages);
   }),
 
@@ -1609,6 +1685,22 @@ export const handlers = [
 
     const jobId = params.jobId as string;
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
+    // N1(draft) — PATCH 로 저장한 N1 값을 함께 돌려준다(N2 중단 뒤 N1 복원)
+    if (jobState.currentStep === 'N1' && n1Draft) {
+      const { productName, productCode, targetCountry, regulatoryClass, targetLanguage, specType, categoryId, keywords, imageType } = n1Draft.patch;
+      return HttpResponse.json({
+        ...jobState,
+        specType: specType ?? jobState.specType,
+        productName: productName ?? null,
+        productCode: productCode ?? null,
+        targetCountry: targetCountry ?? null,
+        regulatoryClass: regulatoryClass ?? null,
+        targetLanguage: targetLanguage ?? null,
+        categoryId: categoryId ?? null,
+        keywords: keywords ?? [],
+        imageType: imageType ?? null,
+      } satisfies ApiJob);
+    }
     return HttpResponse.json(jobState);
   }),
 
@@ -1719,7 +1811,7 @@ export const handlers = [
     if (jobId !== MOCK_JOB_ID) return notFound(`Job '${jobId}' not found`);
 
     // ?scenario=n2-error·n4-error — 단계를 진행시키지 않고 전체 실패 화면에 고정한다
-    const errorScenarioStep = getProcessingErrorScenarioStep(request.referrer);
+    const errorScenarioStep = processingErrorScenarioAborted ? null : getProcessingErrorScenarioStep(request.referrer);
     if (errorScenarioStep) {
       return HttpResponse.json({
         jobStatus: 'failed',

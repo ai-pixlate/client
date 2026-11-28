@@ -1,5 +1,6 @@
 import type { ApiAnalysisProgress, ApiJobTaskStatus } from '@/lib/api/job-schema';
 import { n2DisplayedProgressKey } from '@/lib/processing/displayed-progress-storage';
+import type { ProcessingErrorAbort } from './processing/processing-error-content';
 import { ProcessingStageLayout, keepSingleActive, type ProcessingStageGroup, type ProcessingStepState } from './processing/processing-stage-layout';
 import { useDisplayedProgress } from './processing/use-displayed-progress';
 
@@ -25,7 +26,6 @@ import { useDisplayedProgress } from './processing/use-displayed-progress';
 // ─────────────────────────────────────────────────────────────────
 
 const AUTO_ADVANCE_NOTICE = '분석이 끝나면 섹션 확인 단계로 자동 이동합니다.';
-const PAUSE_BUTTON_TITLE = '분석 중단 기능은 아직 제공되지 않습니다.';
 // 전체 실패 안내(Figma 793:4890). 서버 응답에 사용자용 문구가 없어(errorCode 뿐) 실패 단계를 추측하지 않고 이 문구를 쓴다
 const N2_ERROR = { sectionLabel: 'ANALYSIS STATUS', title: '분석이 중단되었습니다', description: '이미지 분석 중 오류가 발생했습니다.' };
 
@@ -228,9 +228,12 @@ export function N2AnalysisView({
   status,
   isCompleted = false,
   isFailed = false,
+  abort,
 }: {
   jobId: string;
   status: ApiJobTaskStatus;
+  /** [중단](API-JOB-07) — page.tsx 의 useJobAbort 가 넘긴다. 처리 중 버튼(Figma 일시 정지 자리)과 전체 실패 화면 [중단]이 같은 값을 쓴다 */
+  abort?: ProcessingErrorAbort;
   /**
    * N2 전체 분석 실패(currentStep=N2 && jobStatus=failed) — page.tsx 가 그 조건으로만 넘긴다.
    * failedCount·stages.section=failed·progress<1·analysisProgress.status=failed 만으로는 true 가 아니다
@@ -282,9 +285,10 @@ export function N2AnalysisView({
       steps={steps}
       progressPercent={progressPercent}
       progressHint={isCompleted ? N2_COMPLETION_COPY.progressHint : AUTO_ADVANCE_NOTICE}
-      pauseButtonTitle={PAUSE_BUTTON_TITLE}
+      // 처리 중 [중단] — 완료 표시(isCompleted) 동안은 이미 다음 단계라 누를 수 없다
+      abort={isCompleted ? undefined : abort}
       failedItems={failedItems}
-      error={isFailed ? N2_ERROR : undefined}
+      error={isFailed ? { ...N2_ERROR, ...abort } : undefined}
     />
   );
 }

@@ -8,7 +8,7 @@ import { useJobExitGuard, type ExitGuardStatus } from '@/app/jobs/_components/jo
 import { S0Rail } from '@/app/jobs/_components/s0-rail';
 import type { StepNavStep } from '@/app/jobs/_components/step-nav';
 import { isJobNotFoundError } from '@/lib/api/pixlate';
-import { useJobCancellationRecheck, useJobQuery, useJobTasksQuery } from '@/lib/queries/pixlate';
+import { useJobAbort, useJobCancellationRecheck, useJobQuery, useJobTasksQuery } from '@/lib/queries/pixlate';
 import { isCancelledJob } from '@/lib/api/job-status';
 import type { ApiJobTaskStatus } from '@/lib/api/job-schema';
 import { COMPLETION_PRESENTATION_MS } from '@/lib/processing/displayed-progress';
@@ -65,7 +65,11 @@ export default function Page({
   // currentStep으로 화면을 분기한다. N2View / N4ProcessingView는 이 결과를
   // status props로 전달받아 재사용한다. currentStep/userFacingStatus는 서버
   // 응답 그대로 쓴다 — 여기서 다시 계산하지 않는다.
-  const tasksQuery = useJobTasksQuery(jobId, { polling: true });
+  // [중단](API-JOB-07) — 처리 중·오류 화면 공용. 요청·재조회·안내는 hook 이 맡고, 화면 전환은 재조회로 바뀐 currentStep 이 정한다.
+  // 요청 중에는 2초 polling 을 멈춘다 — 중단 처리 전 상태를 담은 늦은 응답이 복귀한 화면을 처리 단계로 되돌리지 않게(재조회는 hook 이 한다).
+  // 처리 완료와 경합하면 서버 정본을 따른다(409 → 재조회 결과가 N3·N5 등이면 그 화면)
+  const jobAbort = useJobAbort(jobId);
+  const tasksQuery = useJobTasksQuery(jobId, { polling: !jobAbort.pending });
   const currentStep = tasksQuery.data?.currentStep;
 
   // 완료 표시(위 COMPLETION_TRANSITIONS 주석) — 렌더 중 조건부 setState("이전 값에서 state 조정" 패턴)로
@@ -123,7 +127,8 @@ export default function Page({
     if (isCancelledJob(job.data)) return 'not-found';
     return job.data.isSaved ? 'saved' : 'active';
   };
-  const exitGuard = useJobExitGuard({ jobId, status: exitStatus, recheck: recheckExitStatus });
+  // 중단 요청 중에는 나가기(작업 취소 DELETE)를 잡아 둔다 — 같은 작업에 중단과 취소가 겹쳐 나가지 않게
+  const exitGuard = useJobExitGuard({ jobId, status: exitStatus, recheck: recheckExitStatus, locked: jobAbort.pending });
   // 취소된 작업은 단계 화면이 아니다 — 단계를 모를 때와 같이 화면명·현재 단계를 그리지 않는다
   const screenStep = isCancelled ? undefined : displayStep;
   const hasScreen = SCREEN_STEPS.includes(screenStep);
@@ -193,6 +198,7 @@ export default function Page({
                   status={completion?.status ?? tasksQuery.data}
                   isCompleted={completion?.step === 'N2'}
                   isFailed={isN2Failed}
+                  abort={{ onAbort: () => void jobAbort.abort('N2'), abortPending: jobAbort.pending, abortNotice: jobAbort.notice }}
                 />
               )}
               {displayStep === 'N3' && <N3View jobId={jobId} />}
@@ -202,6 +208,7 @@ export default function Page({
                   status={completion?.status ?? tasksQuery.data}
                   isCompleted={completion?.step === 'N4'}
                   isFailed={isN4Failed}
+                  abort={{ onAbort: () => void jobAbort.abort('N4'), abortPending: jobAbort.pending, abortNotice: jobAbort.notice }}
                 />
               )}
               {displayStep === 'N5' && <N5View jobId={jobId} />}

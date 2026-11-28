@@ -1,5 +1,6 @@
 import type { ApiJobTaskStatus } from '@/lib/api/job-schema';
 import { n4DisplayedProgressKey } from '@/lib/processing/displayed-progress-storage';
+import type { ProcessingErrorAbort } from './processing/processing-error-content';
 import { ProcessingStageLayout, keepSingleActive, type ProcessingStageGroup, type ProcessingStepState } from './processing/processing-stage-layout';
 import { hasProcessingFailure, useDisplayedProgress } from './processing/use-displayed-progress';
 
@@ -34,7 +35,6 @@ import { hasProcessingFailure, useDisplayedProgress } from './processing/use-dis
 // ─────────────────────────────────────────────────────────────────
 
 const N4_AUTO_ADVANCE_NOTICE = '완료되면 검수 화면으로 자동 이동합니다.';
-const N4_PAUSE_BUTTON_TITLE = '번역 중단 기능은 아직 제공되지 않습니다.';
 
 // Figma 1821:48015 「N2 / Step List」(N4) — 묶음 4개, 라벨은 Figma 그대로다.
 const STAGE_GROUP_META: Omit<ProcessingStageGroup, 'state'>[] = [
@@ -174,9 +174,12 @@ export function N4ProcessingView({
   status,
   isCompleted = false,
   isFailed = false,
+  abort,
 }: {
   jobId: string;
   status: ApiJobTaskStatus;
+  /** [중단](API-JOB-07) — page.tsx 의 useJobAbort 가 넘긴다. 처리 중 버튼(Figma 일시 정지 자리)과 전체 실패 화면 [중단]이 같은 값을 쓴다 */
+  abort?: ProcessingErrorAbort;
   /** N4 전체 실패(currentStep=N4 && jobStatus=failed) — page.tsx 가 그 조건으로만 넘긴다. 일부 항목 실패만으로는 true 가 아니다 */
   isFailed?: boolean;
   /**
@@ -215,11 +218,12 @@ export function N4ProcessingView({
       steps={steps}
       progressPercent={displayedProgress}
       progressHint={isCompleted ? N4_COMPLETION_COPY.progressHint : N4_AUTO_ADVANCE_NOTICE}
-      pauseButtonTitle={N4_PAUSE_BUTTON_TITLE}
+      // 처리 중 [중단] — 완료 표시(isCompleted) 동안은 이미 다음 단계라 누를 수 없다
+      abort={isCompleted ? undefined : abort}
       // 부분 실패 항목(unitType·unitId·errorCode)은 내부 진단 정보라 N4 화면에 내지 않는다 — 블록·섹션 오류는 N5 에서 확인한다.
       // 진행 멈춤(hasProcessingFailure)·전체 실패(jobStatus=failed) 판정은 그대로다
       failedItems={[]}
-      error={isFailed ? N4_ERROR : undefined}
+      error={isFailed ? { ...N4_ERROR, ...abort } : undefined}
     />
   );
 }

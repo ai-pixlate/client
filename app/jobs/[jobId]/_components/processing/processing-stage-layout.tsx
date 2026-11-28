@@ -16,7 +16,7 @@
 // 어느 한쪽에 맞지 않는 값이 새어 들어갈 위험이 있다.
 // ─────────────────────────────────────────────────────────────────
 
-import { ProcessingErrorContent, type ProcessingErrorState } from './processing-error-content';
+import { ProcessingErrorContent, type ProcessingErrorAbort, type ProcessingErrorState } from './processing-error-content';
 
 export type ProcessingStepState = 'done' | 'active' | 'pending';
 
@@ -72,8 +72,12 @@ export interface ProcessingStageLayoutProps {
   steps: ProcessingStageGroup[];
   progressPercent: number;
   progressHint: string;
-  /** 일시정지 버튼은 비활성 상태로만 존재한다(중단 API가 계약에 없음) — 이유 설명 문구. */
-  pauseButtonTitle: string;
+  /**
+   * 처리 중 [중단](PRD v3.6.4 F-JOB-08 · 화면정의서 N2·N3 — N2 → N1 · N4 → N3, 작업은 삭제하지 않는다). Figma 의 일시 정지 아이콘 자리를
+   * 그대로 쓴다 — 일시 정지·이어서 처리가 아니다. 오류 화면 [중단]과 같은 요청·잠금·재조회(useJobAbort)를 쓴다.
+   * onAbort 가 없으면(완료 표시 중 등) 누를 수 없다.
+   */
+  abort?: ProcessingErrorAbort;
   failedItems: ProcessingFailedItem[];
   /** job 전체 실패(jobStatus=failed)일 때만 넘긴다. 패널 내용을 오류 화면으로 바꾼다. 부분 실패는 failedItems 로 표시한다 */
   error?: ProcessingErrorState;
@@ -141,10 +145,11 @@ export function ProcessingStageLayout({
   steps,
   progressPercent,
   progressHint,
-  pauseButtonTitle,
+  abort,
   failedItems,
   error,
 }: ProcessingStageLayoutProps) {
+  const canAbort = Boolean(abort?.onAbort) && !abort?.abortPending;
   return (
     <div className="flex h-full w-full bg-white">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -263,15 +268,20 @@ export function ProcessingStageLayout({
                         <span className="font-medium leading-[normal] text-[18px] tracking-[-0.03em] text-[#999]">%</span>
                       </div>
 
-                      {/* 중단 API가 계약에 없어(범위 밖) 클릭해도 아무 일도
-                          하지 않는 버튼을 만들지 않는다. "보여주되 비활성 +
-                          이유 설명"으로 최소 보완한다. */}
+                      {/* 처리 중 [중단] — Figma 일시 정지 버튼(28×28 · 테두리 #eaeaea · 흰 바탕 · 아이콘)의 위치·크기·모양을 그대로 쓴다.
+                          요청 중에는 aria-disabled · aria-busy 로 막고(포커스 유지) 흐리게 둔다. 누를 수 없는 동안(onAbort 없음)은 예전처럼 비활성이다 */}
                       <button
                         type="button"
-                        disabled
-                        aria-disabled="true"
-                        title={pauseButtonTitle}
-                        className="flex size-7 shrink-0 cursor-not-allowed items-center justify-center rounded-[4px] border border-[#eaeaea] bg-white opacity-60"
+                        data-testid="processing-abort"
+                        aria-label={abort?.abortPending ? '중단하는 중' : '중단'}
+                        title="중단"
+                        disabled={!abort?.onAbort}
+                        aria-disabled={canAbort ? undefined : true}
+                        aria-busy={abort?.abortPending ? true : undefined}
+                        onClick={canAbort ? abort?.onAbort : undefined}
+                        className={`flex size-7 shrink-0 items-center justify-center rounded-[4px] border border-[#eaeaea] bg-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ff6a38] ${
+                          canAbort ? 'cursor-pointer' : abort?.abortPending ? 'cursor-progress opacity-60' : 'cursor-not-allowed opacity-60'
+                        }`}
                       >
                         <PauseIcon />
                       </button>
@@ -292,9 +302,16 @@ export function ProcessingStageLayout({
                       />
                     </div>
 
-                    <p className="mt-2 font-light leading-[normal] text-[12px] tracking-[-0.04em] text-[#999]">
-                      {progressHint}
-                    </p>
+                    {/* 안내 줄 — 중단 요청 중·중단하지 못함 안내는 이 자리에서 바꿔 보인다(Figma 에 없는 상태라 새 상자를 만들지 않는다) */}
+                    {abort?.abortNotice ? (
+                      <p role="alert" data-testid="processing-abort-notice" className="mt-2 font-normal leading-[normal] text-[12px] tracking-[-0.04em] text-[#e5484d]">
+                        {abort.abortNotice}
+                      </p>
+                    ) : (
+                      <p className="mt-2 font-light leading-[normal] text-[12px] tracking-[-0.04em] text-[#999]">
+                        {abort?.abortPending ? '작업을 중단하고 있습니다.' : progressHint}
+                      </p>
+                    )}
                   </div>
                 </div>
               </>

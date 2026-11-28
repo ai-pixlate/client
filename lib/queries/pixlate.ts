@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { focusManager, notifyManager, onlineManager, useQueries, useQuery, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { getAuthEpoch } from '@/lib/auth/session-store';
+import { AuthRecoveryError, AuthSessionChangedError } from '@/lib/auth/authorized-request';
 
 import {
   createJob,
@@ -12,6 +13,7 @@ import {
   reorderSourceImages,
   patchJob,
   cancelJob,
+  abortJob,
   getSectionDetail,
   getSections,
   updateSectionBucket,
@@ -53,6 +55,13 @@ import { IDEMPOTENT_PATCH_TIMEOUT_MS, type IdempotentPatchRequest } from '@/lib/
 import type { ApiExportRequest, ApiExportArtifactType } from '@/lib/api/n6-schema';
 import { sectionBucketMutationOptions } from '@/lib/queries/section-bucket-mutation';
 import { shouldRetryQuery } from '@/lib/auth/query-retry';
+import {
+  abortRequestResultOf,
+  resolveAbortOutcome,
+  type AbortFromStep,
+  type AbortRecheck,
+  type AbortRequestResult,
+} from '@/lib/processing/abort-outcome';
 
 /** GET /tasks 재시도 — 404(없는 작업·미소유 작업)는 0회, 그 밖은 전역 정책(인증 최종 실패 0회 · 일반 오류 1회) */
 function retryTasksQuery(failureCount: number, error: unknown): boolean {
@@ -268,6 +277,85 @@ export function useJobCancellationRecheck(jobId: string | null, onCancelled?: ()
       unsubscribe();
     };
   }, [jobId, queryClient]);
+}
+
+// ─────────────────────────────────────────────
+// N2·N4 오류 화면 [중단] — 처리 중단·직전 화면 복귀 (API-JOB-07, POST /jobs/:jobId/abort)
+//
+// 1. 같은 화면의 연속 클릭은 ref 로 막는다(상태 갱신 전에 들어오는 두 번째 클릭 포함).
+// 2. 보내기 전에 진행 중인 tasks 조회를 끊는다 — 중단 전에 출발한 응답이 늦게 와 복귀한 화면을 처리 단계로 되돌리지 않게.
+// 3. 결과와 관계없이(성공·409·응답 유실·5xx) JOB-05 를 서버에서 다시 받아 tasks cache 에 넣는다. 받기 직전에 한 번 더 끊는다
+//    (요청 중 창 focus 등으로 출발한 조회는 중단 처리 전 상태일 수 있다). 재조회 실패는 cache 를 건드리지 않는다.
+// 4. 화면 전환은 page.tsx 가 갱신된 currentStep 을 그대로 그려서 일어난다 — 여기서 라우팅하거나 단계를 만들지 않는다.
+//    서버가 이전 단계(N1·N3)면 섹션·작업·원본 조회를 무효화해 그 화면이 서버 정본을 새로 받게 한다(상태를 초기화하지 않는다).
+// 5. 서버가 아직 같은 단계이거나 재조회에 실패하면 오류 화면에 머물고 안내만 둔다(lib/processing/abort-outcome.ts).
+// 계정 전환·로그아웃(AuthSessionChangedError)은 응답을 버린다 — 화면은 이미 이동 중이라 안내·재조회를 하지 않는다.
+// 작업 취소(DELETE /jobs/:jobId)와 다르다 — 이 hook 은 cancelJob 을 부르지 않는다.
+// ─────────────────────────────────────────────
+
+function httpStatusOf(error: unknown): number | null {
+  return error instanceof ApiRequestError ? error.status : null;
+}
+
+export function useJobAbort(jobId: string) {
+  const queryClient = useQueryClient();
+  const [pending, setPending] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const inFlightRef = useRef(false);
+
+  const abort = useCallback(
+    async (from: AbortFromStep) => {
+      if (inFlightRef.current) return;
+      inFlightRef.current = true;
+      setPending(true);
+      setNotice(null);
+      const tasksKey = pixlateKeys.tasks(jobId);
+      try {
+        await queryClient.cancelQueries({ queryKey: tasksKey });
+        let request: AbortRequestResult;
+        try {
+          await abortJob(jobId);
+          request = 'ok';
+        } catch (error) {
+          if (error instanceof AuthSessionChangedError) return;
+          request = error instanceof AuthRecoveryError ? 'auth' : abortRequestResultOf(httpStatusOf(error));
+        }
+
+        await queryClient.cancelQueries({ queryKey: tasksKey });
+        let recheck: AbortRecheck;
+        try {
+          const data = await getJobTasks(jobId);
+          queryClient.setQueryData(tasksKey, data);
+          recheck = { kind: 'status', currentStep: data.currentStep, isCancelled: isCancelledJob(data) };
+        } catch (error) {
+          if (error instanceof AuthSessionChangedError) return;
+          if (isJobNotFoundError(error)) {
+            // 없는 작업 — page 의 tasks 조회가 다시 받아 「작업을 찾을 수 없음」을 그린다
+            await queryClient.invalidateQueries({ queryKey: tasksKey });
+            recheck = { kind: 'not-found' };
+          } else {
+            recheck = { kind: 'failed' };
+          }
+        }
+
+        const outcome = resolveAbortOutcome(from, request, recheck);
+        if (outcome.kind === 'returned') {
+          // 이전 단계 화면이 서버 정본을 새로 받는다 — N3 섹션(포함·제외·revision) · N1 작업 입력값·원본
+          void queryClient.invalidateQueries({ queryKey: pixlateKeys.sections(jobId) });
+          void queryClient.invalidateQueries({ queryKey: pixlateKeys.job(jobId), exact: true });
+          void queryClient.invalidateQueries({ queryKey: pixlateKeys.sourceImages(jobId) });
+        } else if (outcome.kind === 'stayed' || outcome.kind === 'unverified') {
+          setNotice(outcome.notice);
+        }
+      } finally {
+        inFlightRef.current = false;
+        setPending(false);
+      }
+    },
+    [jobId, queryClient],
+  );
+
+  return { abort, pending, notice };
 }
 
 // ─────────────────────────────────────────────

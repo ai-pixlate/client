@@ -5,7 +5,7 @@ import { fetchWithSessionRecovery } from '@/lib/auth/authorized-request';
 import { getAuthMode } from '@/lib/auth/capability';
 import { getAccessToken, setAccessToken } from '@/lib/auth/session-store';
 import type { ApiBlockPatch, ApiBlockPatchResponse, ApiConfirmRequest, ApiJob, ApiJobAsyncTaskItem, ApiJobTaskStatus, ApiReviewPreview, ApiTextBlock } from '@/lib/api/n5-schema';
-import type { ApiAcceptedTask, ApiJobPatch, ApiSourceImageUploadResult } from '@/lib/api/job-schema';
+import type { ApiAbortResponse, ApiAcceptedTask, ApiJobPatch, ApiSourceImageUploadResult } from '@/lib/api/job-schema';
 import type { ApiSection, ApiSectionList, ApiSectionPatch, ApiSourceImage } from '@/lib/api/n3-schema';
 import type {
   ApiRenderResponse,
@@ -183,6 +183,19 @@ export async function deleteSourceImage(jobId: string, sourceImageId: number): P
 export async function cancelJob(jobId: string): Promise<void> {
   const res = await authorizedFetch(`/jobs/${jobId}`, { method: 'DELETE' });
   if (!res.ok) throw new ApiRequestError(res.status, await res.json().catch(() => null));
+}
+
+/**
+ * 처리 중단·직전 화면 복귀 (API-JOB-07, POST /jobs/{jobId}/abort). 본문·Idempotency-Key 없음. N2 → draft/N1 · N4 → review/N3,
+ * 진행 중 task 는 cancelled. 그 밖의 상태는 409 INVALID_STATE(작업 상태 재확인 신호도 함께 난다 — job-state-conflict.ts).
+ * 작업 취소(DELETE /jobs/{jobId}, archived + 종속 리소스 정리)와 다르다 — 이 요청은 작업을 남긴 채 이전 단계로 돌린다.
+ * 멱등성이 계약에 없어 자동 재전송하지 않는다. 409·응답 유실의 판단은 호출부가 JOB-05 재조회로 한다(raw body 보존).
+ */
+export async function abortJob(jobId: string): Promise<ApiAbortResponse> {
+  const res = await authorizedFetch(`/jobs/${jobId}/abort`, { method: 'POST' });
+  const body: unknown = await res.json().catch(() => null);
+  if (!res.ok) throw new ApiRequestError(res.status, body);
+  return (body ?? {}) as ApiAbortResponse;
 }
 
 /** 원본 순서 재정렬 (API-SRC-03). order는 sourceImageId 배열이다. */

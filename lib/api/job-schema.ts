@@ -41,3 +41,10 @@ export type ApiSourceImageUploadResult = components['schemas']['SourceImageUploa
  * 속성이 없으면 기존 progress·stages·items 로 표시한다. 퍼센트는 제공하지 않는다.
  */
 export type ApiAnalysisProgress = components['schemas']['AnalysisProgress'];
+
+/**
+ * 처리 중단·직전 화면 복귀 응답 (POST /jobs/{jobId}/abort, API-JOB-07). 명세(3.5.10) AbortResponse 는 { returnTo, job } 이고
+ * required 가 없다. BE 회신(11/28 기준)으로 현재 서버는 { returnTo, jobId } 를 주고, 이후 { returnTo, job, jobId } 로 보완할 예정이다.
+ * 그래서 세 키를 모두 선택으로 받고 어느 것도 화면 전환 근거로 쓰지 않는다 — 복귀 여부는 JOB-05 재조회의 currentStep 으로만 정한다.
+ */
+export type ApiAbortResponse = components['schemas']['AbortResponse'] & { jobId?: number | string };
